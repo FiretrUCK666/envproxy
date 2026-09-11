@@ -286,7 +286,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   （全端口 CONNECT 兜底总能发现）。权威来源：`envproxy.ps1` 第 1 节注释、
   `envproxy.sh` 头部“发现来源”注释。
 - **去抖与迟滞阈值是行为契约**：状态连续确认多轮才动手、节点连续失败计数达标才判“断”、
-  真实探测节流（每天约 1–2MB 流量预算就靠它）。调参只改阈值常量，不许绕过计数、改单次
+  真实探测节流（每次不足 1KB、15 秒最多一次，流量预算就靠它）。调参只改阈值常量，不许绕过计数、改单次
   判定。权威来源：两脚本监控主循环（ps 侧 `$script:NodeFailCount -ge 2` 一类计数器）。
 - **只碰用户级环境变量，不碰系统代理**：Windows 写 `HKCU\Environment` + 广播
   （`SendMessageTimeout`），macOS 写 `~/.envproxy/proxy.env` + `launchctl setenv`；

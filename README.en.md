@@ -136,7 +136,7 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | double-round confirm (debounce) | acts only after 2 consecutive confirming rounds — rapid connect/disconnect flapping never writes garbage |
 | node hysteresis | declares "down" only after 2 consecutive probe failures — a shaky node won't cause deletes |
 | multi-endpoint check | 7 connectivity endpoints across vendors/networks (Google main / gstatic / YouTube / Wikipedia / Twitter); **fast-lane first**: normally probes only the "last good endpoint" (milliseconds, 1 request), on failure probes the rest **in parallel**, any success = "up" and becomes the new fast lane — one poisoned/slow network segment can't cause a false delete |
-| probe throttling | real probes at most once per 15 s — saves traffic (~1–2 MB/day, only while proxying) |
+| probe throttling | real probes at most once per 15 s — each well under 1 KB (a few MB ceiling even for 24 h of proxying, only while proxying) |
 | boot alignment | corrects variables immediately at boot — stale dead ports from shutdown wiped instantly |
 | monitor self-exit | folder moved/deleted → monitor notices in 2–3 s and exits, old spot cleaned |
 | locator fallback cleanup | moved then powered off right away (monitor never got to self-exit) → locator cleans the old spot next boot |
@@ -168,10 +168,12 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 
 ## 7. Performance & traffic
 
-- CPU: **~0.2%** (measured over a 30 s window)
-- Memory: ~140 MB (PowerShell runtime overhead, about one browser tab)
-- Traffic: real node probes normally hit **1 endpoint** (~200 bytes each), at most once per 15 s; parallel fallback to the rest only when that endpoint misbehaves (brief, rare). **Generated only while proxying** — no proxying = zero traffic
-- Writes: only once per state change (idempotent), not a byte while stable
+Numbers vary by machine — what follows is the order of magnitude and how to check, not a spec. In Task Manager, look for the powershell process whose command line contains `envproxy.ps1`.
+
+- CPU: effectively invisible. Each probe round takes milliseconds; the cost is basically one PowerShell process sitting there — measured ~0.003% over a 30 s window on this 16-core machine, higher share on fewer cores
+- Memory: tens of MB, almost all PowerShell runtime baseline (working set ~48 MB measured here); the Mac side is just bash, far lighter
+- Traffic: real node probes normally hit **1 endpoint** (well under 1 KB each), at most once per 15 s; parallel fallback to the rest only when that endpoint misbehaves (brief, rare). Even 24 h of proxying stays within a few MB; **no proxying = zero traffic** (off state only scans localhost ports, nothing leaves the machine)
+- Writes: only once per state change (idempotent), not a log byte while stable
 
 ## 8. What's in the folder
 
