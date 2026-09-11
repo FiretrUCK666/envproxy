@@ -69,7 +69,7 @@ $KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 81
 
 # 翻墙软件进程名特征（用于快速预筛，缩小 CONNECT 探测范围）。可自行扩展。
 # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
-#       第二轮的"全端口 CONNECT 探测"也能发现它（见 Find-ProxyPortByConnect）。
+#       第二轮的"全端口 CONNECT 探测"也能发现它（见 Find-CandidatePorts）。
 $ProxyProcessPatterns = @("monocloud", "clash", "mihomo", "verge", "v2ray", "xray",
     "sing-box", "singbox", "hiddify", "shadowsocks", "ss-local", "trojan", "hysteria",
     "neko", "netch", "surge", "outline")
@@ -148,39 +148,32 @@ function Test-HttpProxyBatch([int[]]$Ports) {
     return $null
 }
 
-# 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中。
-# 握手门：只返回"在监听 + CONNECT 握手通过"的端口。本机普通 HTTP 服务
-# （如前端开发服务器常占 8080/8888）也在监听，但 CONNECT 不回 200；
-# 不过门就不能当候选——否则节点验证也会被它的 200 骗过，导致错误注入。
-function Find-ListeningPort {
+# 候选集发现（有序去重，本机零流量）：先已知端口（按表顺序），再可疑进程端口
+# （数字排序），最后按需追加全端口批量探测的尾巴。全部过 CONNECT 握手门——
+# 握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
+# 返回 [int[]]，可能为空。调用方（状态机）按集合签名判断变化并逐个试活；
+# 只要首选不要全集的调用方继续用 Get-ActiveProxyPort（取第一个）。
+function Find-CandidatePorts([bool]$FullScan = $true) {
+    $ordered = @()
     try {
-        # 一次查询拿到全部监听端口，内存过滤已知端口（避免逐端口串行查询的开销）
+        # 一次查询拿到全部监听端口（来源 1 与来源 2 共用，避免重复查询的开销）
         $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
+        $listening = @($listeners.LocalPort | Sort-Object -Unique)
+
+        # 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中
         foreach ($p in $KnownProxyPorts) {
-            if ($listeners.LocalPort -contains $p) {
-                if (Test-HttpProxy $p) { return $p }
+            if (($listening -contains $p) -and ($ordered -notcontains $p)) {
+                if (Test-HttpProxy $p) { $ordered += $p }
             }
         }
-    } catch {}
-    return $null
-}
 
-# 来源 2（万能路径）：CONNECT 握手探测，不依赖进程名、端口号、软件品牌。
-#   FullScan=$true ：第一轮进程预筛 + 第二轮全端口并行批量探测（慢，~1 秒）
-#   FullScan=$false：只做第一轮进程预筛（毫秒级，用于 off 状态的低开销轮询）
-# 谁回答 "200 Connection Established"，谁就是正在工作的 HTTP 代理。
-function Find-ProxyPortByConnect([bool]$FullScan = $true) {
-    try {
-        # 一次性构建 PID -> 进程名 映射（避免逐个查询进程的开销）
+        # 来源 2 第一轮：疑似翻墙软件的进程监听的端口（始终执行，覆盖 99% 常见软件）
+        # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
+        #       第二轮的"全端口 CONNECT 探测"也能发现它（见下）。
         $procMap = @{}
         Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[$_.Id] = $_.ProcessName.ToLower() }
-
-        $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-            Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") }
-
-        # 第一轮：疑似翻墙软件的进程监听的端口（始终执行，覆盖 99% 常见软件）
         $suspectPorts = @()
-        foreach ($l in $listeners) {
+        foreach ($l in ($listeners | Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") })) {
             $pname = $procMap[$l.OwningProcess]
             if (-not $pname) { continue }
             foreach ($pat in $ProxyProcessPatterns) {
@@ -188,30 +181,53 @@ function Find-ProxyPortByConnect([bool]$FullScan = $true) {
             }
         }
         foreach ($p in ($suspectPorts | Sort-Object -Unique)) {
-            if (Test-HttpProxy $p) { return $p }
+            if ($ordered -notcontains $p) {
+                if (Test-HttpProxy $p) { $ordered += $p }
+            }
         }
 
-        # 第二轮：兜底——所有监听端口并行批量握手探测（进程名无特征也能发现）。
+        # 来源 2 第二轮：兜底——所有监听端口并行批量握手探测（进程名无特征也能发现）。
         # 仅在 FullScan 时执行（批量探测约 1 秒，off 状态降频调用以省资源）。
-        if (-not $FullScan) { return $null }
-        $restPorts = @()
-        foreach ($l in $listeners) {
-            if ($suspectPorts -contains $l.LocalPort) { continue }   # 第一轮已测过
-            $restPorts += $l.LocalPort
-        }
-        if ($restPorts.Count -gt 0) {
-            return Test-HttpProxyBatch ($restPorts | Sort-Object -Unique)
+        # 尾巴保持 early-exit 单答案（顺序读全量会拖慢）：未知工具独占时它是唯一的候选，
+        # 已知候选在前时它只是补充——两种情形试活层都能正确收敛。
+        if ($FullScan) {
+            $restPorts = @()
+            foreach ($lp in $listening) {
+                if ($ordered -notcontains $lp) { $restPorts += $lp }
+            }
+            if ($restPorts.Count -gt 0) {
+                $tail = Test-HttpProxyBatch ($restPorts | Sort-Object -Unique)
+                if ($tail -and ($ordered -notcontains $tail)) { $ordered += $tail }
+            }
         }
     } catch {}
+    return $ordered
+}
+
+# 组合发现（薄封装）：只要首选不要全集的调用方（状态显示、更新走代理）继续调这个，
+# 语义与过去一致（第一个候选或 $null）。状态机走集合 + 试活，不调这个。
+# FullScan 控制是否启用昂贵的全端口批量探测（off 状态降频用）。
+function Get-ActiveProxyPort([bool]$FullScan = $true) {
+    $cands = Find-CandidatePorts -FullScan:$FullScan
+    if ($cands -and ($cands.Count -gt 0)) { return $cands[0] }
     return $null
 }
 
-# 组合发现：先走快路径（常见端口，秒级），不中再走万能路径（CONNECT 探测）。
-# FullScan 控制万能路径是否启用昂贵的全端口批量探测（off 状态降频用）。
-function Get-ActiveProxyPort([bool]$FullScan = $true) {
-    $fast = Find-ListeningPort
-    if ($fast) { return $fast }
-    return Find-ProxyPortByConnect -FullScan:$FullScan
+# 有序试活：按候选顺序逐个验证，返回第一个真活的端口或 $null（只读，不写状态）。
+# 规则只有两条：
+#   1) $Preferred（上次验活过、仍在集合里）先按该端口自己的节流缓存试
+#      （窗口内零新增探测，绝不会读到别的端口的结论）；
+#   2) 其余一律当场验（Force）。集合抖动但首选仍活时，不烧探测、不改状态。
+function Confirm-CandidatePort([int[]]$Candidates, $Preferred) {
+    if (-not $Candidates -or ($Candidates.Count -eq 0)) { return $null }
+    if (($null -ne $Preferred) -and ($Candidates -contains $Preferred)) {
+        try { if (Test-NodeAlive ([int]$Preferred)) { return ([int]$Preferred) } } catch {}
+    }
+    foreach ($p in $Candidates) {
+        if (($null -ne $Preferred) -and ($p -eq $Preferred)) { continue }
+        try { if (Test-NodeAlive ([int]$p) -Force:$true) { return ([int]$p) } } catch {}
+    }
+    return $null
 }
 
 # 验证端点（多端点轮换，防止单一端点被干扰/墙导致误判"断开"）。
@@ -347,30 +363,39 @@ function Test-RealConnectivity([int]$Port) {
 }
 
 # 节点连通性判定（15 秒节流 + 迟滞防抖）：
-#   节流：真实探测产生一次外网请求（约 200 字节），15 秒最多探测一次。
+#   节流：真实探测产生一次外网请求（约 200 字节），每端口 15 秒最多探测一次。
 #   迟滞：连续 2 次失败才判"断"（防止节点抖动/慢响应导致状态来回翻转）；
 #         恢复则 1 次成功立即判"通"（重连要快）。
-$script:LastNodeCheck = [datetime]::MinValue
-$script:NodeAlive = $false
-$script:NodeFailCount = 0
+# 分槽：节流缓存按端口分槽（哈希表）——同端口读缓存，换端口一律重验。
+# 多候选试活时，绝不会读到别的端口的旧结论（全局单槽在此会串味）。
+# DIVERGE(Win): Mac 侧 bash 3.2 无关联数组，只记最近一个槽位（见 test_node_alive）；
+# 行为契约一致（同端口节流、异端口重验）。$script:LastGoodEndpoint 两侧都保持全局
+# （只是快路提示，猜错最多浪费一次探测，不影响正确性）。
+$script:NodeState = @{}
 
 function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
-    if (-not $Force -and ((Get-Date) - $script:LastNodeCheck).TotalSeconds -lt 15) {
-        return $script:NodeAlive
+    $st = $script:NodeState["$Port"]
+    if (-not $st) {
+        $st = @{ LastCheck = [datetime]::MinValue; Alive = $false; FailCount = 0 }
+        $script:NodeState["$Port"] = $st
     }
-    $script:LastNodeCheck = Get-Date
+    if (-not $Force) {
+        $age = ((Get-Date) - $st.LastCheck).TotalSeconds
+        if ($age -lt 15) { return $st.Alive }
+    }
+    $st.LastCheck = Get-Date
     $result = Test-RealConnectivity $Port
     if ($result) {
-        $script:NodeFailCount = 0
-        $script:NodeAlive = $true
+        $st.FailCount = 0
+        $st.Alive = $true
     } else {
-        $script:NodeFailCount++
+        $st.FailCount++
         # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则连续 2 次失败才判死
-        if ($Force -or ($script:NodeFailCount -ge 2)) {
-            $script:NodeAlive = $false
+        if ($Force -or ($st.FailCount -ge 2)) {
+            $st.Alive = $false
         }
     }
-    return $script:NodeAlive
+    return $st.Alive
 }
 # 当前真实状态："off" 或 "on:<端口>"
 # 判定标准（三层，缺一不可）：
@@ -380,7 +405,8 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
 # 性能：on 状态每轮只做轻量监听检查，节点验证带 15 秒节流（控制真实请求流量）。
 #       off 状态轻量发现（毫秒级）；全端口批量探测每 10 轮（约 30 秒）一次。
 $script:CachedPort = $null
-$script:LastSeenPort = $null
+$script:LastSeenSet = ""
+$script:LastAlivePort = $null
 $script:Round = 0
 
 function Get-CurrentState {
@@ -402,43 +428,48 @@ function Get-CurrentState {
             $script:CachedPort = $null
             return "off"
         }
-        # 端口停止：可能是"断开→改端口→重连"的过渡期，先睡 2 秒跳过
+        # 端口停止：可能是"断开→改端口→重连/换软件"的过渡期，先睡 2 秒跳过
         Start-Sleep -Seconds 2
-        $newPort = Get-ActiveProxyPort
-        if ($newPort) {
-            # 端口变化：立即真实验证节点（不等节流），改端口重连秒级恢复
-            if (Test-NodeAlive $newPort -Force:$true) {
-                $script:CachedPort = $newPort
-                $script:LastSeenPort = $newPort
-                return "on:$newPort"
-            }
-            return "off"
+        $cands = Find-CandidatePorts -FullScan:$true
+        $script:LastSeenSet = ($cands -join ",")
+        $hit = Confirm-CandidatePort $cands $null   # 旧首选已停，直接走全集
+        if ($hit) {
+            # 过渡后首个验活：立即采用（不等节流），改端口/换软件秒级恢复
+            $script:CachedPort = $hit
+            $script:LastAlivePort = $hit
+            return "on:$hit"
         }
         $script:CachedPort = $null
-        $script:LastSeenPort = $null
         return "off"
     }
 
-    # 无缓存（off 状态）：轻量发现；每 10 轮补一次全端口批量探测
+    # 无缓存（off 状态）：轻量候选集；每 10 轮补一次全端口批量尾巴
     $fullScan = (($script:Round % 10) -eq 0)
-    $newPort = Get-ActiveProxyPort -FullScan:$fullScan
-    if ($newPort) {
-        # 端口"从无到有"= 强信号（重连了）：立即真实验证，不等节流 → 秒级注入
-        if ($script:LastSeenPort -ne $newPort) {
-            $script:LastSeenPort = $newPort
-            if (Test-NodeAlive $newPort -Force:$true) {
-                $script:CachedPort = $newPort
-                return "on:$newPort"
-            }
-            return "off"
+    $cands = Find-CandidatePorts -FullScan:$fullScan
+    $sig = ($cands -join ",")
+    if ($sig -ne $script:LastSeenSet) {
+        # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。
+        # 上次验活的仍在就认回它（缓存结论，零新增探测）；新面孔当场验 → 秒级收敛。
+        $script:LastSeenSet = $sig
+        $pref = $script:LastAlivePort
+        if (($null -ne $pref) -and ($cands -notcontains $pref)) { $pref = $null }
+        $hit = Confirm-CandidatePort $cands $pref
+        if ($hit) {
+            $script:CachedPort = $hit
+            $script:LastAlivePort = $hit
+            return "on:$hit"
         }
-        # 端口一直存在（断开连接但内核活着的场景）：节流验证，防抖优先
-        if (Test-NodeAlive $newPort) {
-            $script:CachedPort = $newPort
-            return "on:$newPort"
+        return "off"
+    }
+    # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先
+    $check = $script:LastAlivePort
+    if ((($null -eq $check) -or ($cands -notcontains $check)) -and ($cands.Count -gt 0)) { $check = $cands[0] }
+    if ($null -ne $check) {
+        if (Test-NodeAlive ([int]$check)) {
+            $script:CachedPort = $check
+            $script:LastAlivePort = $check
+            return "on:$check"
         }
-    } else {
-        $script:LastSeenPort = $null
     }
     return "off"
 }

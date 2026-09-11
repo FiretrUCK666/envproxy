@@ -73,10 +73,12 @@ HOOK_LINE='[ -f "$HOME/.envproxy/proxy.env" ] && . "$HOME/.envproxy/proxy.env"'
 # 监控状态（进程内变量，不落地）
 LAST_GOOD_ENDPOINT=0
 LAST_NODE_CHECK=0
+NODE_CACHE_PORT=""
 NODE_ALIVE=0
 NODE_FAIL_COUNT=0
 CACHED_PORT=""
-LAST_SEEN_PORT=""
+LAST_SEEN_SET=""
+LAST_ALIVE_PORT=""
 ROUND=0
 CURRENT_STATE="off"
 
@@ -202,49 +204,31 @@ test_http_proxy_batch() {
     return 1
 }
 
-# 快路径：一次 lsof 拿全量监听，内存匹配已知端口
-# 握手门：逐个过 CONNECT 握手才算候选（本机开发服务器占 8080/8888 时不过门；
-# 节点验证会被它的 200 骗过，所以门必须设在发现层，见 Windows 侧同名注释）。
-find_listening_port() {
+# 本机监听端口表（排序去重，无状态，可安全用于命令替换）
+get_listening_ports() {
     _ports=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu)
     if [ -z "$_ports" ]; then
         _ports=$(netstat -anvp tcp 2>/dev/null | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu)
     fi
-    [ -n "$_ports" ] || return 1
-    for _kp in $KNOWN_PORTS; do
-        if printf '%s\n' "$_ports" | grep -qx "$_kp"; then
-            if test_http_proxy "$_kp"; then
-                printf '%s' "$_kp"
-                return 0
-            fi
-        fi
-    done
-    return 1
+    printf '%s' "$_ports"
 }
 
-# 万能路径：进程预筛 + 全端口并行握手（无状态函数，可安全用于命令替换）
-find_proxy_port_by_connect() {
-    _full="$1"
+# 可疑进程端口表（排序去重，无状态，可安全用于命令替换）
+get_suspect_ports() {
     _psmap="/tmp/envproxy_ps.$$"
     _lsofout="/tmp/envproxy_lsof.$$"
     ps -ax -o pid=,comm= 2>/dev/null | tr '[:upper:]' '[:lower:]' > "$_psmap" 2>/dev/null || true
     if ! lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null > "$_lsofout"; then
         rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
-        if [ "$_full" = "1" ]; then
-            _all=$(netstat -anvp tcp 2>/dev/null | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-            # shellcheck disable=SC2086
-            if [ -n "$_all" ]; then test_http_proxy_batch $_all; return $?; fi
-        fi
-        return 1
+        printf ''
+        return 0
     fi
     _suspect=""
-    _all=""
     while IFS= read -r _line; do
         case "$_line" in COMMAND*) continue;; esac
         _pid=$(printf '%s' "$_line" | awk '{print $2}')
         _port=$(printf '%s' "$_line" | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | head -n 1)
         [ -n "$_pid" ] && [ -n "$_port" ] || continue
-        _all="$_all $_port"
         _comm=$(grep -E "^ *$_pid " "$_psmap" 2>/dev/null | head -n 1 | awk '{print $2}')
         if [ -n "$_comm" ]; then
             for _pat in $PATTERNS; do
@@ -253,30 +237,64 @@ find_proxy_port_by_connect() {
         fi
     done < "$_lsofout"
     rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
-    _suspect=$(printf '%s' "$_suspect" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-    _all=$(printf '%s' "$_all" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ')
-    for _p in $_suspect; do
-        if test_http_proxy "$_p"; then printf '%s' "$_p"; return 0; fi
-    done
-    if [ "$_full" = "1" ] && [ -n "$_all" ]; then
-        _rest=""
-        for _p in $_all; do
-            _skip=0
-            for _s in $_suspect; do [ "$_p" = "$_s" ] && _skip=1 && break; done
-            [ "$_skip" = "0" ] && _rest="$_rest $_p"
-        done
-        # shellcheck disable=SC2086
-        if [ -n "$_rest" ]; then test_http_proxy_batch $_rest; return $?; fi
-    fi
-    return 1
+    printf '%s' "$_suspect" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ' | sed 's/ $//'
 }
 
-# 组合发现（无状态）：先快路径，不中再万能路径
+# 成员判断：$1 在空格分隔表 $2 里则返回 0
+_in_list() {
+    case " $2 " in *" $1 "*) return 0;; *) return 1;; esac
+}
+
+# 候选集发现（有序去重，本机零流量）：先已知端口（按表顺序），再可疑进程端口
+# （数字排序），最后按需追加全端口批量探测的尾巴。全部过 CONNECT 握手门——
+# 握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
+# 输出空格分隔的端口表（可能为空串，无状态，可安全用于命令替换）。
+# 状态机按集合签名判断变化并逐个试活；只要首选不要全集的调用方继续用
+# get_active_proxy_port（取第一个）。
+find_candidate_ports() {
+    _full="$1"
+    _cands=""
+    _ports=$(get_listening_ports || true)
+    # 来源 1（快路径）：已知端口按表顺序，逐个过门
+    for _kp in $KNOWN_PORTS; do
+        if printf '%s\n' "$_ports" | grep -qx "$_kp"; then
+            if ! _in_list "$_kp" "$_cands"; then
+                if test_http_proxy "$_kp"; then _cands="$_cands $_kp"; fi
+            fi
+        fi
+    done
+    # 来源 2 第一轮：可疑进程端口（数字排序，逐个过门）
+    for _sp in $(get_suspect_ports || true); do
+        if ! _in_list "$_sp" "$_cands"; then
+            if test_http_proxy "$_sp"; then _cands="$_cands $_sp"; fi
+        fi
+    done
+    # 来源 2 第二轮：兜底——全端口并行批量握手（进程名无特征也能发现）。
+    # 仅在 _full=1 时执行（约 1 秒，off 状态降频调用以省资源）。
+    # 尾巴保持 early-exit 单答案：未知工具独占时它是唯一的候选，
+    # 已知候选在前时它只是补充——两种情形试活层都能正确收敛。
+    if [ "$_full" = "1" ]; then
+        _rest=""
+        for _p in $_ports; do
+            if ! _in_list "$_p" "$_cands"; then _rest="$_rest $_p"; fi
+        done
+        if [ -n "$_rest" ]; then
+            # shellcheck disable=SC2086
+            _tail=$(test_http_proxy_batch $_rest || true)
+            if [ -n "$_tail" ] && ! _in_list "$_tail" "$_cands"; then _cands="$_cands $_tail"; fi
+        fi
+    fi
+    printf '%s' "$_cands" | sed 's/^ //'
+}
+
+# 组合发现（薄封装）：只要首选不要全集的调用方（状态显示等）继续调这个，
+# 语义与过去一致（第一个候选或空）。状态机走集合 + 试活，不调这个。
+# _full 控制是否启用全端口批量尾巴（off 状态降频用）。
 get_active_proxy_port() {
     _full="$1"
-    _fast=$(find_listening_port 2>/dev/null || true)
-    if [ -n "$_fast" ]; then printf '%s' "$_fast"; return 0; fi
-    find_proxy_port_by_connect "$_full" 2>/dev/null
+    _c=$(find_candidate_ports "$_full" 2>/dev/null || true)
+    [ -n "$_c" ] || return 1
+    printf '%s' "$_c" | awk '{print $1}'
 }
 
 # ------------------------------------------------------------------------------
@@ -341,16 +359,22 @@ test_real_connectivity() {
 }
 
 # 15 秒节流 + 连续 2 次失败才判死（恢复 1 次即判活）
+# 节流缓存只认“同一端口”（单槽位：bash 3.2 无关联数组）。
+# 同端口 15 秒内直接给缓存结论；换端口一律重验——多候选试活时，
+# 绝不会读到别的端口的旧结论（全局单槽在此会串味）。
+# DIVERGE(Mac): Win 侧用哈希表记全端口（见 Test-NodeAlive），行为契约一致
+# （同端口节流、异端口重验），只是 Mac 侧少记几个槽位。
 test_node_alive() {
     _port="$1"; _force="${2:-0}"
     _now=$(date +%s)
-    if [ "$_force" != "1" ]; then
+    if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then
         _age=$((_now - LAST_NODE_CHECK))
         if [ $_age -lt 15 ]; then
             [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
         fi
     fi
     LAST_NODE_CHECK="$_now"
+    NODE_CACHE_PORT="$_port"
     if test_real_connectivity "$_port"; then
         NODE_FAIL_COUNT=0
         NODE_ALIVE=1
@@ -362,6 +386,30 @@ test_node_alive() {
         fi
         [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
     fi
+}
+
+# 有序试活：按候选顺序逐个验证，首个真活的进 $CONFIRM_HIT，否则空（只读，不写状态）。
+# 规则只有两条：
+#   1) $2（上次验活过、仍在集合里）先用缓存结论试（节流窗口内零新增探测）；
+#   2) 其余一律当场验（force=1）。集合抖动但首选仍活时，不烧探测、不改状态。
+# 有状态：直接调用，结果进 $CONFIRM_HIT，禁止 $(...) 包裹。
+CONFIRM_HIT=""
+
+confirm_candidate_port() {
+    _cands="$1"; _pref="$2"
+    CONFIRM_HIT=""
+    [ -n "$_cands" ] || return 0
+    case "$_pref" in
+        "") ;;
+        *) if _in_list "$_pref" "$_cands"; then
+               if test_node_alive "$_pref" 0; then CONFIRM_HIT="$_pref"; return 0; fi
+           fi;;
+    esac
+    for _p in $_cands; do
+        [ "$_p" = "$_pref" ] && continue
+        if test_node_alive "$_p" 1; then CONFIRM_HIT="$_p"; return 0; fi
+    done
+    return 0
 }
 
 # 当前真实状态（有状态：直接调用，结果进 $CURRENT_STATE，禁止 $(...) 包裹）
@@ -388,44 +436,53 @@ get_current_state() {
             return 0
         fi
         sleep 2
-        _new=$(get_active_proxy_port 1 || true)
-        if [ -n "$_new" ]; then
-            if test_node_alive "$_new" 1; then
-                CACHED_PORT="$_new"
-                LAST_SEEN_PORT="$_new"
-                CURRENT_STATE="on:$_new"
-            else
-                CURRENT_STATE="off"
-            fi
+        _cands=$(find_candidate_ports 1 || true)
+        LAST_SEEN_SET="$_cands"
+        confirm_candidate_port "$_cands" ""
+        if [ -n "$CONFIRM_HIT" ]; then
+            # 过渡后首个验活：立即采用（不等节流），改端口/换软件秒级恢复
+            CACHED_PORT="$CONFIRM_HIT"
+            LAST_ALIVE_PORT="$CONFIRM_HIT"
+            CURRENT_STATE="on:$CONFIRM_HIT"
         else
             CACHED_PORT=""
-            LAST_SEEN_PORT=""
             CURRENT_STATE="off"
         fi
         return 0
     fi
     if [ $((ROUND % 10)) -eq 0 ]; then _full=1; else _full=0; fi
-    _new=$(get_active_proxy_port "$_full" || true)
-    if [ -n "$_new" ]; then
-        if [ "$LAST_SEEN_PORT" != "$_new" ]; then
-            LAST_SEEN_PORT="$_new"
-            if test_node_alive "$_new" 1; then
-                CACHED_PORT="$_new"
-                CURRENT_STATE="on:$_new"
+    _cands=$(find_candidate_ports "$_full" || true)
+    if [ "$_cands" != "$LAST_SEEN_SET" ]; then
+        # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。
+        # 上次验活的仍在就认回它（缓存结论，零新增探测）；新面孔当场验 → 秒级收敛。
+        LAST_SEEN_SET="$_cands"
+        _pref="$LAST_ALIVE_PORT"
+        if [ -n "$_pref" ] && ! _in_list "$_pref" "$_cands"; then _pref=""; fi
+        confirm_candidate_port "$_cands" "$_pref"
+        if [ -n "$CONFIRM_HIT" ]; then
+            CACHED_PORT="$CONFIRM_HIT"
+            LAST_ALIVE_PORT="$CONFIRM_HIT"
+            CURRENT_STATE="on:$CONFIRM_HIT"
+        else
+            CURRENT_STATE="off"
+        fi
+    else
+        # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先
+        _check="$LAST_ALIVE_PORT"
+        if { [ -z "$_check" ] || ! _in_list "$_check" "$_cands"; } && [ -n "$_cands" ]; then
+            _check=$(printf '%s' "$_cands" | awk '{print $1}')
+        fi
+        if [ -n "$_check" ]; then
+            if test_node_alive "$_check" 0; then
+                CACHED_PORT="$_check"
+                LAST_ALIVE_PORT="$_check"
+                CURRENT_STATE="on:$_check"
             else
                 CURRENT_STATE="off"
             fi
         else
-            if test_node_alive "$_new" 0; then
-                CACHED_PORT="$_new"
-                CURRENT_STATE="on:$_new"
-            else
-                CURRENT_STATE="off"
-            fi
+            CURRENT_STATE="off"
         fi
-    else
-        LAST_SEEN_PORT=""
-        CURRENT_STATE="off"
     fi
 }
 

@@ -109,6 +109,7 @@ One-line memory:
 | disconnect/quit the VPN app | no proxy detected → variables deleted | ~8 s after quitting the app; ≤35 s after disconnecting |
 | reconnect on any changed port | new port auto-discovered → value updated | ~10 s |
 | switch to another VPN app | new app's port auto-discovered | seconds |
+| run two VPN apps at once | only the verified-alive one is used (known-port order wins); if it dies, the other takes over | zero clicks |
 | connect/disconnect rapidly within seconds | debounce absorbs it, variables untouched | — |
 | reboot (VPN app still connected at shutdown) | leftover variables corrected at boot | zero clicks |
 | move the whole folder anywhere (anytime, even while monitoring) | old monitor exits itself in 2–3 s and cleans the old spot; restart auto-starts from the new spot | zero clicks |
@@ -147,6 +148,7 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | single-instance lock | exactly one monitor process, never piles up |
 | handshake gate on the fast path | a known port merely listening is not enough — it must also answer the CONNECT handshake, so local dev servers (often on 8080/8888) are never mistaken for proxies |
 | on-port recheck | the locked port gets a zero-traffic local handshake about every 10 rounds; if another program grabs the same port after the proxy quits, the cache is dropped at once instead of waiting out the node throttle |
+| ordered walk-over | candidates are verified in order, last verified-alive first; with two apps running, a dead first yields to a live second, with no extra probes while stable |
 
 ## 6. Troubleshooting
 
