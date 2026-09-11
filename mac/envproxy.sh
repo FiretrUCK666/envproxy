@@ -56,7 +56,7 @@ UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
-KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888"
+KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888 12334"  # 12334 = Hiddify-Next 默认；只记 HTTP/混合口，不记纯 SOCKS 口
 
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。
 PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shadowsocks ss-local trojan hysteria neko netch surge outline"
@@ -203,6 +203,8 @@ test_http_proxy_batch() {
 }
 
 # 快路径：一次 lsof 拿全量监听，内存匹配已知端口
+# 握手门：逐个过 CONNECT 握手才算候选（本机开发服务器占 8080/8888 时不过门；
+# 节点验证会被它的 200 骗过，所以门必须设在发现层，见 Windows 侧同名注释）。
 find_listening_port() {
     _ports=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu)
     if [ -z "$_ports" ]; then
@@ -211,8 +213,10 @@ find_listening_port() {
     [ -n "$_ports" ] || return 1
     for _kp in $KNOWN_PORTS; do
         if printf '%s\n' "$_ports" | grep -qx "$_kp"; then
-            printf '%s' "$_kp"
-            return 0
+            if test_http_proxy "$_kp"; then
+                printf '%s' "$_kp"
+                return 0
+            fi
         fi
     done
     return 1
@@ -280,6 +284,7 @@ get_active_proxy_port() {
 # ------------------------------------------------------------------------------
 test_single_endpoint() {
     _port="$1"; _host="$2"; _path="$3"
+    # --disable（= -q）：不读用户 ~/.curlrc——否则用户配过的 proxy 会劫持这次探测，判据作废。
     _out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy \
         curl --disable -s -D - -o /dev/null --connect-timeout 5 --max-time 6 -x "http://127.0.0.1:$_port" "http://$_host$_path" 2>/dev/null)
     [ -n "$_out" ] || return 1
@@ -364,6 +369,16 @@ get_current_state() {
     ROUND=$((ROUND + 1))
     if [ -n "$CACHED_PORT" ]; then
         if test_port_listening "$CACHED_PORT"; then
+            # 在位复核（约每 10 轮一次，本机零流量）：代理退出后若有别的程序
+            # 占了同一端口，握手不过立即丢缓存，不等 15 秒节点节流。
+            # 置 off 后照常进主循环双轮去抖，不会单轮抖动。
+            if [ $((ROUND % 10)) -eq 0 ]; then
+                if ! test_http_proxy "$CACHED_PORT"; then
+                    CACHED_PORT=""
+                    CURRENT_STATE="off"
+                    return 0
+                fi
+            fi
             if test_node_alive "$CACHED_PORT" 0; then
                 CURRENT_STATE="on:$CACHED_PORT"
             else

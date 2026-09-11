@@ -65,7 +65,7 @@ function Broadcast-EnvironmentChange {
 # 1. 通用代理端口发现（不绑定任何特定软件、不写死端口）
 # ------------------------------------------------------------------------------
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
-$KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888)
+$KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888, 12334)  # 12334 = Hiddify-Next 默认；只记 HTTP/混合口，不记纯 SOCKS 口
 
 # 翻墙软件进程名特征（用于快速预筛，缩小 CONNECT 探测范围）。可自行扩展。
 # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
@@ -148,13 +148,18 @@ function Test-HttpProxyBatch([int[]]$Ports) {
     return $null
 }
 
-# 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中
+# 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中。
+# 握手门：只返回"在监听 + CONNECT 握手通过"的端口。本机普通 HTTP 服务
+# （如前端开发服务器常占 8080/8888）也在监听，但 CONNECT 不回 200；
+# 不过门就不能当候选——否则节点验证也会被它的 200 骗过，导致错误注入。
 function Find-ListeningPort {
     try {
         # 一次查询拿到全部监听端口，内存过滤已知端口（避免逐端口串行查询的开销）
         $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
         foreach ($p in $KnownProxyPorts) {
-            if ($listeners.LocalPort -contains $p) { return $p }
+            if ($listeners.LocalPort -contains $p) {
+                if (Test-HttpProxy $p) { return $p }
+            }
         }
     } catch {}
     return $null
@@ -384,6 +389,13 @@ function Get-CurrentState {
 
     if ($port) {
         if (Test-PortListening $port) {
+            # 在位复核（约每 10 轮一次，本机零流量）：代理退出后若有别的程序
+            # 占了同一端口，握手不过立即丢缓存，不等 15 秒节点节流。
+            # 返回的 off 照常进调用方的双轮去抖，不会单轮抖动。
+            if ((($script:Round % 10) -eq 0) -and (-not (Test-HttpProxy $port))) {
+                $script:CachedPort = $null
+                return "off"
+            }
             # 端口仍在监听：节点验证（15 秒节流，断开连接后内核仍活着时在此识别）
             if (Test-NodeAlive $port) { return "on:$port" }
             # 节点不通：视作关闭（删除变量恢复直连）

@@ -143,6 +143,8 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | shared file stream | zero lock conflicts on log writes; monitor's own truncation never collides |
 | auto-start self-heal | self-checks every 60 s, rebuilds broken locator/auto-start entries |
 | single-instance lock | exactly one monitor process, never piles up |
+| handshake gate on the fast path | a known port merely listening is not enough — it must also answer the CONNECT handshake, so local dev servers (often on 8080/8888) are never mistaken for proxies |
+| on-port recheck | the locked port gets a zero-traffic local handshake about every 10 rounds; if another program grabs the same port after the proxy quits, the cache is dropped at once instead of waiting out the node throttle |
 
 ## 6. Troubleshooting
 
@@ -157,6 +159,9 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | VPN app moved into a very deep directory (D:\a\b\c\d\e\f) | auto-search doesn't cover that depth | double-click "install" once in `win` |
 | update check says "failed" | this machine can't reach GitHub right now (or API rate-limited) | retry later; toggling the VPN on/off and retrying often helps |
 | update aborts halfway | download/extract/verify failed | the old version is untouched — just re-run `5-检查更新` |
+| local proxy has authentication on (username/password) | credential-less handshakes get 407, judged "unusable" — conservative and correct | turn off local auth (off by default), or use a port without auth |
+| terminals inside WSL2 don't pick it up | WSL2 doesn't inherit Windows user env variables by default | expected — set proxy variables inside WSL separately |
+| elevated (Run as administrator) terminals don't pick it up | elevated processes belong to a different admin identity and don't inherit your user's variables | expected — use a normal (non-elevated) terminal |
 | want to go back to before-install | — | double-click "3-一键恢复" in `win`, keep-or-delete log chosen on the spot |
 
 ## 7. Performance & traffic
@@ -195,6 +200,7 @@ Copying the whole `EnvProxy` folder elsewhere as a **backup** is completely harm
 - Boot auto-start, registry, locator **only reference the folder you installed** — backups are never referenced
 - Even if the original folder moves, the locator re-searches ordered by **activity** — the recently used one (with log activity) wins, backups never get picked by mistake
 - Only rule: **don't double-click "`win\1-安装.cmd`" inside the backup** (clicking it promotes the backup to the live install)
+- Keep exactly one install per machine: run "3-一键恢复" at the old spot before installing at the new one, so two monitors never write the same variables
 
 ## 10. Deploy to a friend's / new machine
 
@@ -210,7 +216,7 @@ Needs nothing installed (no Node/Python), no admin rights — stock Windows 10/1
 
 ## 11. Honest technical limits (4 items)
 
-1. **Pure TUN mode** VPN apps (no local HTTP port): TUN already takes over globally (terminal proxies automatically), this tool sees no port → injects nothing → **that's correct behavior**, it's not needed.
+1. **Pure TUN mode** VPN apps (no local HTTP port): TUN already takes over globally (terminal proxies automatically), this tool sees no port → injects nothing → **that's correct behavior**, it's not needed. Outline-style system VPNs and pure-SOCKS setups (no HTTP port) are the same: no local HTTP port means never detected — not a bug.
 2. **"Disconnected" ≠ quit the app**: most apps' "disconnect" button doesn't stop the kernel, the port stays alive. This tool follows "traffic truth": reachable-through = inject, otherwise delete.
 3. **Moved into an extremely deep directory** (past search depth): double-click "install" once in `win` as fallback, everything else is automatic.
 4. **Previously hand-set proxies get taken over**: manually set system/user proxy variables get overwritten on install, deleted (not restored) on uninstall — rare on personal machines; on corporate intranet machines, note down original values first.
@@ -235,9 +241,11 @@ The Mac edition injects the same set of 9 variables (`HTTP_PROXY/http_proxy/HTTP
 
 Install does the same three things: boot auto-start (LaunchAgent) + start monitor now + correct variables on the spot. Later, any weirdness: double-click `1-安装.command` once in `mac` = universal fix.
 
-### 12.3 Four buttons (same semantics as Windows)
+> Fish users: fish can't read the export syntax in `proxy.env` — install bass and add `bass source "$HOME/.envproxy/proxy.env"` to `config.fish`.
 
-> All four buttons live in the `mac` folder: "double-click" below means double-clicking inside `mac`.
+### 12.3 Five buttons (same semantics as Windows)
+
+> All five buttons live in the `mac` folder: "double-click" below means double-clicking inside `mac`.
 
 | Button | Does what |
 |---|---|
