@@ -48,7 +48,7 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 | `HTTP_PROXY` / `http_proxy` | `http://127.0.0.1:port` | proxy for http:// requests |
 | `HTTPS_PROXY` / `https_proxy` | `http://127.0.0.1:port` | proxy for https:// requests |
 | `ALL_PROXY` / `all_proxy` | `http://127.0.0.1:port` | fallback for protocols the specific ones don't cover |
-| `NO_PROXY` | `localhost,127.0.0.1,::1` | local addresses go direct, no proxy |
+| `NO_PROXY` / `no_proxy` | `localhost,127.0.0.1,::1` | local addresses go direct, no proxy |
 | `NODE_USE_ENV_PROXY` | `1` | makes newer Node-based tools (native fetch) honor env proxies |
 
 > Why this form: all proxy values uniformly use the `http://` scheme (never the old `ALL_PROXY=socks5://`). Local proxy ports (MonoCloud/Clash etc.) are mixed ports that answer both HTTP and SOCKS5; but some tools only understand `http://` and reject `socks5://` (e.g. dsh prints "all_proxy names a SOCKS proxy, which is not supported" and skips it). Uniform `http://` works with the most tools, with zero behavior loss.
@@ -175,7 +175,7 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 
 ```
 EnvProxy\
-  win\            Windows edition (4 buttons + core script, Mac users skip this)
+  win\            Windows edition (5 buttons + core script, Mac users skip this)
     1-安装.cmd      install (universal fix)
     2-停止监控.cmd   pause (keeps auto-start)
     3-一键恢复.cmd   uninstall (keep-or-delete log chosen on the spot)
@@ -204,7 +204,7 @@ Copying the whole `EnvProxy` folder elsewhere as a **backup** is completely harm
 
 ## 10. Deploy to a friend's / new machine
 
-1. Get the code onto the new machine (either way): `git clone https://github.com/FiretrUCK666/envproxy.git` (recommended — later updates are just `git pull`); or copy the **whole folder** (USB/drive/zip all fine, just **don't re-save the .ps1 files in a text editor** — that breaks the UTF-8 BOM encoding)
+1. Get the code onto the new machine (either way): `git clone https://github.com/FiretrUCK666/envproxy.git` (recommended); or copy the **whole folder** (USB/drive/zip all fine, just **don't re-save the .ps1 files in a text editor** — that breaks the UTF-8 BOM encoding)
 2. Double-click `win\1-安装.cmd`
 3. Done
 

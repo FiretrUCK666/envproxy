@@ -48,7 +48,7 @@
 | `HTTP_PROXY` / `http_proxy` | `http://127.0.0.1:端口` | http:// 请求的代理 |
 | `HTTPS_PROXY` / `https_proxy` | `http://127.0.0.1:端口` | https:// 请求的代理 |
 | `ALL_PROXY` / `all_proxy` | `http://127.0.0.1:端口` | 兜底变量：具体变量没覆盖到的协议用它 |
-| `NO_PROXY` | `localhost,127.0.0.1,::1` | 本机地址不走代理（直连） |
+| `NO_PROXY` / `no_proxy` | `localhost,127.0.0.1,::1` | 本机地址不走代理（直连） |
 | `NODE_USE_ENV_PROXY` | `1` | 让新版 Node 系工具（原生 fetch）也读环境变量代理 |
 
 > 写法说明：所有代理值统一用 `http://` 协议（而不是旧的 `ALL_PROXY=socks5://`）。本地代理端口（MonoCloud/Clash 等）都是混合端口，HTTP 和 SOCKS5 都能应答；但部分工具只认 `http://`、不支持 `socks5://`（例如 dsh 会打印"all_proxy names a SOCKS proxy, which is not supported"警告并跳过）。统一 `http://` 对所有工具的兼容面最大，行为没有任何损失。
@@ -173,7 +173,7 @@
 
 ```
 EnvProxy\
-  win\            Windows 版（4 个按钮 + 核心脚本，Mac 用户不用看）
+  win\            Windows 版（5 个按钮 + 核心脚本，Mac 用户不用看）
     1-安装.cmd      安装（万能修复）
     2-停止监控.cmd   暂停（保留自启动）
     3-一键恢复.cmd   卸载（日志去留当场选）
@@ -202,7 +202,7 @@ EnvProxy\
 
 ## 十、给朋友/新电脑部署
 
-1. 把代码弄到新电脑（二选一）：`git clone https://github.com/FiretrUCK666/envproxy.git`（推荐，以后更新只需 `git pull`）；或**整文件夹拷贝**（用 U 盘/网盘/压缩包都行，**别用文本编辑器另存过里面的 .ps1 文件**——会破坏 UTF-8 BOM 编码）
+1. 把代码弄到新电脑（二选一）：`git clone https://github.com/FiretrUCK666/envproxy.git`（推荐）；或**整文件夹拷贝**（用 U 盘/网盘/压缩包都行，**别用文本编辑器另存过里面的 .ps1 文件**——会破坏 UTF-8 BOM 编码）
 2. 双击 `win\1-安装.cmd`
 3. 完事
 
