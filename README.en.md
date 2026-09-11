@@ -280,4 +280,6 @@ Copy the whole folder → double-click `1-安装.command` in `mac` → done. No 
 
 This project is MIT-licensed (see `LICENSE`): use, modify, redistribute freely, keep the copyright notice.
 
+To contribute (report bugs, propose changes), read `CONTRIBUTING.md` first (issue format, fork flow, pre-submit gates) — PRs that skip it will be sent back.
+
 Issue? Read section 6 troubleshooting first; still stuck → open an issue: `https://github.com/FiretrUCK666/envproxy/issues`. Include: your OS version, the full output of `4-查看状态` (`win`, or the `mac` counterpart), recent relevant lines of `monitor/monitor.log` under the same folder. To hack on the code, read `CONTRIBUTING.md` first.

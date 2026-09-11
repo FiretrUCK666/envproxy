@@ -278,4 +278,6 @@ EnvProxy/
 
 本项目以 MIT 许可证开源（见 `LICENSE`）：可以随便用、随便改、随便分发，保留版权声明即可。
 
+想贡献代码（报缺陷、提改动）先看 `CONTRIBUTING.md`（提问格式、fork 流程、提交前门禁），直接改完就提 PR 会被打回。
+
 遇到问题先看第六节故障排查；解决不了到仓库 Issues 区提问：`https://github.com/FiretrUCK666/envproxy/issues`。提问时附上：你的系统版本、`win\4-查看状态` 的完整输出、`win\monitor\monitor.log` 最近的相关行（Mac 用户对应 `mac` 下同名文件）。想自己改代码先看 `CONTRIBUTING.md`。
