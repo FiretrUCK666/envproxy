@@ -1,0 +1,26 @@
+name: check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+
+      - name: sh 语法检查（与 AGENTS.md 第 1 条同款）
+        run: |
+          for f in envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: ps1 语法检查（与 AGENTS.md 第 2 条同款）
+        shell: pwsh
+        run: |
+          $tokens = $null; $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
