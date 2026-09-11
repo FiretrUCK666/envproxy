@@ -1,0 +1,6 @@
+# EnvProxy line-ending policy: the repository stores LF everywhere.
+# Current tree is LF-only (including *.cmd and UTF-8-BOM envproxy.ps1) and works
+# on Windows as-is, so no per-platform exceptions. Git preserves the BOM bytes
+# of envproxy.ps1; editors must save it as UTF-8 WITH BOM, and envproxy.sh as
+# LF without BOM (a BOM breaks its shebang). See README sections 10 and 12.6.
+* text=auto eol=lf

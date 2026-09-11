@@ -1,0 +1,20 @@
+# OS junk
+Thumbs.db
+.DS_Store
+
+# editors / IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# EnvProxy runtime state (auto-created by the scripts, machine-local).
+# Never commit: a clone recreates monitor/ on first run (mkdir -p).
+monitor/monitor.log
+monitor/monitor.pid
+monitor/stop.flag
+
+# temp / local bundles (README ships the folder via USB/drive/zip)
+*.tmp
+*.bak
+*.zip
