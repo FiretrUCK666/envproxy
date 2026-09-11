@@ -1,6 +1,35 @@
 # EnvProxy — 终端自动翻墙（环境变量代理）
 
+[![check](https://github.com/FiretrUCK666/envproxy/actions/workflows/check.yml/badge.svg)](https://github.com/FiretrUCK666/envproxy/actions/workflows/check.yml)
+[![release](https://img.shields.io/github/v/release/FiretrUCK666/envproxy)](https://github.com/FiretrUCK666/envproxy/releases)
+[![license](https://img.shields.io/github/license/FiretrUCK666/envproxy)](LICENSE)
+[![stars](https://img.shields.io/github/stars/FiretrUCK666/envproxy)](https://github.com/FiretrUCK666/envproxy/stargazers)
+
+[English](README.en.md)
+
 > 打开翻墙软件 = 终端自动翻墙；关掉 = 终端自动恢复直连。全程零操作、零残留、零管理员权限。
+
+## 目录
+
+<!-- toc:start -->
+
+- [一句话说明它是干什么的](#一句话说明它是干什么的)
+- [一、安装（3 步，5 分钟）](#一安装3-步5-分钟)
+- [二、四个按钮的确切行为（小白必读）](#二四个按钮的确切行为小白必读)
+- [二点五、关于日志（monitor.log）](#二点五关于日志monitorlog)
+- [三、日常使用（装完后什么都不用做）](#三日常使用装完后什么都不用做)
+- [四、它是怎么判断"在不在翻墙"的（大白话）](#四它是怎么判断在不在翻墙的大白话)
+- [五、保护机制（为什么它"稳"）](#五保护机制为什么它稳)
+- [六、故障排查](#六故障排查)
+- [七、性能与流量](#七性能与流量)
+- [八、文件夹里都有什么](#八文件夹里都有什么)
+- [九、关于复制备份文件夹](#九关于复制备份文件夹)
+- [十、给朋友/新电脑部署](#十给朋友新电脑部署)
+- [十一、诚实的技术边界（4 条）](#十一诚实的技术边界4-条)
+- [十二、macOS 版（与 Windows 版行为一致，文件并排共存）](#十二macos-版与-windows-版行为一致文件并排共存)
+- [十三、许可证与问题反馈](#十三许可证与问题反馈)
+
+<!-- toc:end -->
 
 ## 一句话说明它是干什么的
 
@@ -155,9 +184,11 @@ EnvProxy\
 
 ## 十、给朋友/新电脑部署
 
-1. **整文件夹拷贝**（用 U 盘/网盘/压缩包都行，**别用文本编辑器另存过里面的 .ps1 文件**——会破坏 UTF-8 BOM 编码）
+1. 把代码弄到新电脑（二选一）：`git clone https://github.com/FiretrUCK666/envproxy.git`（推荐，以后更新只需 `git pull`）；或**整文件夹拷贝**（用 U 盘/网盘/压缩包都行，**别用文本编辑器另存过里面的 .ps1 文件**——会破坏 UTF-8 BOM 编码）
 2. 双击 `1-安装.cmd`
 3. 完事
+
+以后更新：`git pull` 拉到最新后，再双击一次 `1-安装.cmd`（万能修复：加载新代码并校正一次变量）。
 
 > 编码说明：`envproxy.ps1` / 日志采用 **UTF-8 BOM** 编码，为的是在**任何中文/英文系统的 Windows** 上都能被 PowerShell 5.1 正确读取（无 BOM 时中文系统会按 GBK 读、英文系统按 Latin1 读，都可能报语法错误或乱码）。**如果你日后用编辑器修改过 `envproxy.ps1`，保存时务必保留 UTF-8 BOM**（VS Code / Notepad++ / 记事本选"UTF-8 with BOM"），改完顺手双击一次"安装"让监控加载新代码。
 
