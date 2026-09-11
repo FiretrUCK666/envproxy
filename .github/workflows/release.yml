@@ -56,6 +56,8 @@ jobs:
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在，跳过。"
+          elif [ -f "release-notes/$TAG.md" ]; then
+            gh release create "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG"
           else
             gh release create "$TAG" --generate-notes --title "$TAG"
           fi
