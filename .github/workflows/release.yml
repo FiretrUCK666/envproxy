@@ -21,7 +21,7 @@ jobs:
 
       - name: sh 语法检查（与 AGENTS.md 第 1 条同款）
         run: |
-          for f in mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh; do
+          for f in mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
             bash -n "$f" || exit 1
           done
 

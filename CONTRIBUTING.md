@@ -49,7 +49,7 @@ git clone https://github.com/FiretrUCK666/envproxy.git
 cd envproxy
 
 # 改完自检（与 CI 跑的是同一批）
-bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh
+bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
 ```
 
 `win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
@@ -61,7 +61,7 @@ bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.
 
 ```sh
 # sh 语法（macOS/Git-Bash；CI 同款）
-bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh
+bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
 # ps1 语法（Windows 本机 PowerShell；CI 同款）
 # 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
 # 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转

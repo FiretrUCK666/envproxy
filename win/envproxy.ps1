@@ -6,6 +6,7 @@
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Stop      停止监控
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall 一键恢复
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status    查看状态
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update     检查更新（一键升级，问过才装）
 #     无参数（由开机自启调用）                                         进入监控模式
 #
 #  运行环境：Windows 10/11 自带 PowerShell 5.1。不需要 Node/Python/管理员。
@@ -31,6 +32,8 @@ param(
     [switch]$Uninstall,
     [switch]$Stop,
     [switch]$Status,
+    [switch]$Update,
+    [switch]$Yes,
     [switch]$Purge
 )
 
@@ -904,6 +907,25 @@ function Show-Status {
     if ($cur) { Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green }
     else      { Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray }
 
+    # 版本信息（只读：查不到只提示，不断言、不写文件、不提问）
+    $localVer = Get-LocalVersion
+    if ($localVer) { Write-Host ("本地版本 : v{0}" -f $localVer) -ForegroundColor Green }
+    else           { Write-Host "本地版本 : 未知" -ForegroundColor Yellow }
+    $remoteVer = Get-RemoteVersion
+    if ($remoteVer) {
+        Write-Host ("最新版本 : {0}" -f $remoteVer.Tag) -ForegroundColor Green
+        if ($localVer -and ((Compare-Versions $remoteVer.Version $localVer) -le 0)) {
+            Write-Host "更新状态 : 已是最新" -ForegroundColor Green
+        } elseif ($localVer) {
+            Write-Host "更新状态 : 发现新版，用 5-检查更新 可升级" -ForegroundColor Yellow
+        } else {
+            Write-Host "更新状态 : 可用 5-检查更新 升级" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "最新版本 : 检查失败（网络不可达，稍后重试）" -ForegroundColor Yellow
+        Write-Host "更新状态 : 未知" -ForegroundColor DarkGray
+    }
+
     Write-Host "---------------- 最近日志 ----------------" -ForegroundColor Cyan
     if (Test-Path $LogFile) {
         Get-Content $LogFile -Tail 3 -Encoding UTF8 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
@@ -914,8 +936,227 @@ function Show-Status {
 }
 
 # ------------------------------------------------------------------------------
-# 8. 入口分派
+# 8. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
+# 更新源：GitHub Release（releases/latest → 标签源码包整包覆盖）。
+#   不用 git pull（用户机器未必有 git）、不用单文件拉取（新版增删文件会漏）。
+#   上游默认与 README 克隆地址同源；有 .git 时优先从 git remote 解析
+#   （fork 后 git-clone 的机器自动跟自己的 Release 走）。
+$UpdateRepoDefault = "FiretrUCK666/envproxy"
+
+function Get-UpdateRepo {
+    try {
+        $url = (git config --get remote.origin.url 2>$null)
+        if ($url -and ($url -match 'github\.com[:/]([^/]+)/([^/\s]+)')) {
+            $repo = $Matches[2] -replace '\.git$',''
+            if ($Matches[1] -and $repo) { return ("{0}/{1}" -f $Matches[1], $repo) }
+        }
+    } catch {}
+    return $UpdateRepoDefault
+}
+
+function Get-LocalVersion {
+    try {
+        $root = Split-Path -Parent $ScriptDir
+        $vf = Join-Path $root "VERSION"
+        if (Test-Path $vf) { return ((Get-Content $vf -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) }
+    } catch {}
+    return ""
+}
+
+# 版本比较：按 . 分段逐段数值比（"1.10" > "1.9"；字符串比会错）。
+# 返回 1（A 新）/ 0（相等）/ -1（A 旧）。
+# 注意：PowerShell 变量名不分大小写，$a 即 $A（[string] 参数），赋值会被转回字符串，
+# 因此循环变量必须另起名（$va/$vb），否则逐段数值比会退化成字符串比（"10" < "9"）。
+function Compare-Versions([string]$A, [string]$B) {
+    $pa = @(); $pb = @()
+    foreach ($s in ($A -split '\.')) { if ($s -match '(\d+)') { $pa += [int]$Matches[1] } else { $pa += 0 } }
+    foreach ($s in ($B -split '\.')) { if ($s -match '(\d+)') { $pb += [int]$Matches[1] } else { $pb += 0 } }
+    $n = [Math]::Max($pa.Count, $pb.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $va = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }
+        $vb = if ($i -lt $pb.Count) { $pb[$i] } else { 0 }
+        if ($va -gt $vb) { return 1 }
+        if ($va -lt $vb) { return -1 }
+    }
+    return 0
+}
+
+# 带代理兜底的 HTTPS 取文本：先直连，失败且本地代理 active 时经代理重试一次。
+# DIVERGE(Win): Mac 侧 curl 自动继承环境变量代理，单次调用叠加直连回退即可；
+# Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试。
+function Invoke-UpdateText([string]$Url) {
+    $text = Invoke-UpdateTextVia $Url ""
+    if ($text) { return $text }
+    $port = $null
+    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+    if ($port) { return (Invoke-UpdateTextVia $Url "$port") }
+    return $null
+}
+
+function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
+    $handler = $null; $client = $null
+    try {
+        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        if ($ProxyPort) {
+            $handler.UseProxy = $true
+            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+        } else {
+            $handler.UseProxy = $false
+        }
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(8)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        $task = $client.GetStringAsync($Url)
+        if ($task.Wait(8000)) { return $task.Result }
+        return $null
+    } catch { return $null }
+    finally {
+        if ($client) { try { $client.Dispose() } catch {} }
+        if ($handler) { try { $handler.Dispose() } catch {} }
+    }
+}
+
+# 查最新 Release：返回 @{ Version="1.2.0"; Tag="v1.2.0" }，查不到返回 $null（只读，不抛异常）。
+function Get-RemoteVersion {
+    try {
+        $repo = Get-UpdateRepo
+        $json = Invoke-UpdateText ("https://api.github.com/repos/{0}/releases/latest" -f $repo)
+        if (-not $json) { return $null }
+        $obj = $json | ConvertFrom-Json
+        $tag = ("{0}" -f $obj.tag_name).Trim()
+        if (-not $tag) { return $null }
+        $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
+        if (-not $ver) { return $null }
+        return @{ Version = $ver; Tag = $tag }
+    } catch { return $null }
+}
+
+# 带代理兜底的 HTTPS 下载文件：成功返回 $true。
+function Save-UpdateFile([string]$Url, [string]$DestFile) {
+    if (Save-UpdateFileVia $Url $DestFile "") { return $true }
+    $port = $null
+    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+    if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port") }
+    return $false
+}
+
+function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort) {
+    $handler = $null; $client = $null
+    try {
+        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        if ($ProxyPort) {
+            $handler.UseProxy = $true
+            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+        } else {
+            $handler.UseProxy = $false
+        }
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(60)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        $task = $client.GetByteArrayAsync($Url)
+        if (-not $task.Wait(60000)) { return $false }
+        [System.IO.File]::WriteAllBytes($DestFile, $task.Result)
+        return $true
+    } catch { return $false }
+    finally {
+        if ($client) { try { $client.Dispose() } catch {} }
+        if ($handler) { try { $handler.Dispose() } catch {} }
+    }
+}
+
+function Update-EnvProxy([bool]$AutoYes = $false) {
+    Write-Host "======== EnvProxy 检查更新 ========" -ForegroundColor Cyan
+    $local = Get-LocalVersion
+    if ($local) { Write-Host ("本地版本 : v{0}" -f $local) -ForegroundColor Green }
+    else { Write-Host "本地版本 : 未知" -ForegroundColor Yellow }
+    Write-Host "正在检查最新版本（最多等几秒）..." -ForegroundColor DarkGray
+    $remote = Get-RemoteVersion
+    if (-not $remote) {
+        Write-Host "最新版本 : 检查失败（网络不可达或 GitHub API 限流）" -ForegroundColor Yellow
+        Write-Host "请稍后重试；翻墙开/关换个状态再试一次也常有效。" -ForegroundColor Yellow
+        return
+    }
+    Write-Host ("最新版本 : {0}" -f $remote.Tag) -ForegroundColor Green
+    if ($local -and ((Compare-Versions $remote.Version $local) -le 0)) {
+        Write-Host "已是最新，无需更新。" -ForegroundColor Green
+        return
+    }
+    # 防呆：点的是备份文件夹时警告（正式路径以注册表记录为准）
+    $regPath = $null
+    try { $regPath = (Get-ItemProperty $ScriptPathRegKey -ErrorAction SilentlyContinue).ScriptPath } catch {}
+    if ($regPath -and (("$regPath").ToLower() -ne ("$PSCommandPath").ToLower())) {
+        Write-Host ("注意：你现在点的是 [{0}]，" -f $PSCommandPath) -ForegroundColor Yellow
+        Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
+        Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
+    }
+    if (-not $AutoYes) {
+        $answer = ""
+        try { $answer = Read-Host ("发现新版 {0}，是否更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
+        if ($answer -notmatch '^[Yy]') { Write-Host "已取消，未做任何改动。" -ForegroundColor Yellow; return }
+    }
+    # 下载标签源码包（整包，防漏文件）
+    $repo = Get-UpdateRepo
+    $zipUrl = "https://codeload.github.com/{0}/zip/refs/tags/{1}" -f $repo, $remote.Tag
+    # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
+    $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_'))
+    $zipFile = "$tmpBase.zip"
+    $extractDir = "${tmpBase}-src"
+    try {
+        Write-Host "正在下载新版..." -ForegroundColor Cyan
+        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        if (-not (Save-UpdateFile $zipUrl $zipFile)) { throw "下载失败（网络不可达），未做任何改动。" }
+        Write-Host "正在解压并校验..." -ForegroundColor Cyan
+        Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
+        $top = Get-ChildItem $extractDir -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+        $srcRoot = if ($top) { $top.FullName } else { $extractDir }
+        $srcVer = ""
+        try { $srcVer = ((Get-Content (Join-Path $srcRoot "VERSION") -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) } catch {}
+        if (-not $srcVer -or ($srcVer -ne $remote.Version)) { throw "校验失败（包内 VERSION 与目标版本不一致），未做任何改动。" }
+        if (-not (Test-Path (Join-Path $srcRoot "win\envproxy.ps1"))) { throw "校验失败（包内缺核心文件），未做任何改动。" }
+        # 停监控 → 字节覆盖（跳过 monitor，保日志）→ 走一次万能修复收尾
+        Write-Host "正在安装新版（保留日志，原监控先停）..." -ForegroundColor Cyan
+        Stop-Monitor
+        $projectRoot = Split-Path -Parent $ScriptDir
+        foreach ($item in (Get-ChildItem $srcRoot -Force -ErrorAction Stop)) {
+            if ($item.Name -eq ".git") { continue }
+            if ($item.PSIsContainer) {
+                $dest = Join-Path $projectRoot $item.Name
+                New-Item -Path $dest -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                foreach ($child in (Get-ChildItem $item.FullName -Force -ErrorAction Stop)) {
+                    # win\monitor / mac\monitor：本机运行时黑匣子，永不覆盖
+                    if ($child.Name -eq "monitor") { continue }
+                    Copy-Item $child.FullName $dest -Recurse -Force -ErrorAction Stop
+                }
+            } else {
+                Copy-Item $item.FullName $projectRoot -Force -ErrorAction Stop
+            }
+        }
+        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
+        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        Install-EnvProxy
+        Write-Host ("已更新到 {0}。" -f $remote.Tag) -ForegroundColor Green
+    } catch {
+        Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host "当前旧版未被破坏，可稍后重试；着急就手动下载覆盖后点一次 1-安装。" -ForegroundColor Yellow
+        try { Remove-Item $zipFile -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+}
+
+# ------------------------------------------------------------------------------
+# 9. 入口分派
+# ------------------------------------------------------------------------------
+if ($Update) {
+    Update-EnvProxy -AutoYes:$Yes
+    return
+}
 if ($Install) {
     Install-EnvProxy
     return

@@ -7,6 +7,7 @@
 #     bash envproxy.sh stop        停止监控
 #     bash envproxy.sh uninstall   一键恢复（加 --purge 彻底删除日志，不询问）
 #     bash envproxy.sh status      查看状态
+#     bash envproxy.sh update      检查更新（一键升级，问过才装；加 --yes 跳过确认）
 #     无参数（由 LaunchAgent 调用 locator.sh 间接触发）进入监控模式
 #
 #  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、launchctl。
@@ -48,6 +49,10 @@ PATH_CONF="$ENVPROXY_HOME/path.conf"
 LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
 PLIST_LABEL="com.envproxy.monitor"
 PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+
+# 更新源默认与 README 克隆地址同源；有 .git 时优先从 git remote 解析
+# （fork 后 git-clone 的机器自动跟自己的 Release 走）。
+UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
@@ -655,7 +660,181 @@ run_monitor_loop() {
 }
 
 # ------------------------------------------------------------------------------
-# 9. 子命令
+# 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
+# ------------------------------------------------------------------------------
+# 更新源：GitHub Release（releases/latest → 标签源码包整包覆盖）。
+#   不用 git pull（用户机器未必有 git）、不用单文件拉取（新版增删文件会漏）。
+#   校验通过才覆盖：包内 VERSION 与目标一致 + 核心文件存在，否则中止且不动现版。
+
+get_project_root() {
+    dirname "$SCRIPT_DIR"
+}
+
+get_local_version() {
+    _vf="$(get_project_root)/VERSION"
+    [ -f "$_vf" ] || return 1
+    tr -d ' \t\r\n' < "$_vf" 2>/dev/null
+}
+
+get_update_repo() {
+    if command -v git >/dev/null 2>&1; then
+        _u=$(git config --get remote.origin.url 2>/dev/null || true)
+        case "$_u" in
+            *github.com*)
+                _r=$(printf '%s' "$_u" | sed -E 's#.*github\.com[:/]([^/]+)/([^/]+)#\1/\2#; s#\.git$##')
+                if [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
+                ;;
+        esac
+    fi
+    printf '%s' "$UPDATE_REPO_DEFAULT"
+}
+
+# 版本比较：按 . 分段逐段数值比。输出 1（A 新）/ 0（相等）/ -1（A 旧）。
+compare_versions() {
+    awk -v a="$1" -v b="$2" 'BEGIN{
+        na=split(a,pa,"."); nb=split(b,pb,".");
+        n=(na>nb?na:nb);
+        for(i=1;i<=n;i++){ xa=(i<=na?pa[i]+0:0); xb=(i<=nb?pb[i]+0:0);
+            if(xa>xb){print 1; exit} if(xa<xb){print -1; exit} }
+        print 0 }'
+}
+
+# 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
+# DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
+# Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
+fetch_update_text() {
+    _out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
+        && { printf '%s' "$_out"; return 0; }
+    env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
+}
+
+fetch_update_file() {
+    curl -fsSL --max-time 60 -A "EnvProxyUpdate" -o "$2" "$1" 2>/dev/null && return 0
+    env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$2" "$1" 2>/dev/null
+}
+
+# 查最新 Release：成功时置 REMOTE_VERSION / REMOTE_TAG 并返回 0，否则返回 1（只读）。
+REMOTE_VERSION=""
+REMOTE_TAG=""
+
+get_remote_version() {
+    _repo=$(get_update_repo)
+    _json=$(fetch_update_text "https://api.github.com/repos/$_repo/releases/latest" || true)
+    [ -n "$_json" ] || return 1
+    _tag=$(printf '%s' "$_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+    [ -n "$_tag" ] || return 1
+    REMOTE_TAG="$_tag"
+    REMOTE_VERSION=$(printf '%s' "$_tag" | sed -E 's/^v//')
+    [ -n "$REMOTE_VERSION" ] || return 1
+    return 0
+}
+
+update_envproxy() {
+    _yes="$1"
+    echo "======== EnvProxy 检查更新 ========"
+    _local=$(get_local_version || true)
+    if [ -n "$_local" ]; then echo "本地版本 : v$_local"; else echo "本地版本 : 未知"; fi
+    echo "正在检查最新版本（最多等几秒）..."
+    if ! get_remote_version; then
+        echo "最新版本 : 检查失败（网络不可达或 GitHub API 限流）"
+        echo "请稍后重试；翻墙开/关换个状态再试一次也常有效。"
+        return 0
+    fi
+    echo "最新版本 : $REMOTE_TAG"
+    _cmp=$(compare_versions "$REMOTE_VERSION" "$_local" || true)
+    if [ -n "$_local" ] && [ "$_cmp" -le 0 ] 2>/dev/null; then
+        echo "已是最新，无需更新。"
+        return 0
+    fi
+    # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
+    _reg=""
+    [ -f "$PATH_CONF" ] && _reg=$(head -n 1 "$PATH_CONF" 2>/dev/null | tr -d '\r\n' || true)
+    if [ -n "$_reg" ] && [ "$_reg" != "$SCRIPT_PATH" ]; then
+        echo "注意：你现在点的是 [$SCRIPT_PATH]，"
+        echo "但正式安装在 [$_reg]。"
+        echo "继续会更新【当前这个文件夹】并把它切换为正式安装。"
+    fi
+    if [ "$_yes" != "1" ]; then
+        printf "发现新版 %s，是否更新？[y/N]: " "$REMOTE_TAG"
+        _ans=""
+        if read -r _ans < /dev/tty 2>/dev/null; then :; else _ans=""; fi
+        case "$_ans" in [Yy]*) ;; *) echo "已取消，未做任何改动。"; return 0;; esac
+    fi
+    # 下载标签源码包（整包，防漏文件）
+    _repo=$(get_update_repo)
+    _url="https://codeload.github.com/$_repo/tar.gz/refs/tags/$REMOTE_TAG"
+    # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
+    _safe_tag=$(printf '%s' "$REMOTE_TAG" | tr -c 'A-Za-z0-9._-' '_')
+    _tgz="/tmp/envproxy_update-$_safe_tag.tar.gz"
+    _exdir="/tmp/envproxy_update-$_safe_tag-src"
+    echo "正在下载新版..."
+    rm -f "$_tgz" 2>/dev/null || true
+    rm -rf "$_exdir" 2>/dev/null || true
+    mkdir -p "$_exdir" 2>/dev/null || { echo "更新失败：临时目录建不起，未做任何改动。"; return 0; }
+    if ! fetch_update_file "$_url" "$_tgz"; then
+        echo "更新失败：下载失败（网络不可达），未做任何改动。"
+        rm -f "$_tgz" 2>/dev/null || true
+        rm -rf "$_exdir" 2>/dev/null || true
+        return 0
+    fi
+    echo "正在解压并校验..."
+    if ! tar -xzf "$_tgz" -C "$_exdir" 2>/dev/null; then
+        echo "更新失败：解压失败，未做任何改动。"
+        rm -f "$_tgz" 2>/dev/null || true
+        rm -rf "$_exdir" 2>/dev/null || true
+        return 0
+    fi
+    _top=$(find "$_exdir" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -n 1)
+    if [ -n "$_top" ]; then _src="$_top"; else _src="$_exdir"; fi
+    _srcver=$(tr -d ' \t\r\n' < "$_src/VERSION" 2>/dev/null || true)
+    if [ -z "$_srcver" ] || [ "$_srcver" != "$REMOTE_VERSION" ]; then
+        echo "更新失败：校验失败（包内 VERSION 与目标版本不一致），未做任何改动。"
+        rm -f "$_tgz" 2>/dev/null || true
+        rm -rf "$_exdir" 2>/dev/null || true
+        return 0
+    fi
+    if [ ! -f "$_src/mac/envproxy.sh" ]; then
+        echo "更新失败：校验失败（包内缺核心文件），未做任何改动。"
+        rm -f "$_tgz" 2>/dev/null || true
+        rm -rf "$_exdir" 2>/dev/null || true
+        return 0
+    fi
+    # 停监控 → 字节覆盖（跳过 monitor，保日志）→ 走一次万能修复收尾
+    echo "正在安装新版（保留日志，原监控先停）..."
+    stop_monitor >/dev/null 2>&1 || true
+    _root=$(get_project_root)
+    _copy_ok=1
+    for _e in "$_src"/* "$_src"/.[!.]*; do
+        [ -e "$_e" ] || continue
+        _b=$(basename "$_e" 2>/dev/null || echo "")
+        case "$_b" in .git) continue;; esac
+        if [ -f "$_e" ]; then
+            cp -p "$_e" "$_root/" 2>/dev/null || _copy_ok=0
+        elif [ -d "$_e" ]; then
+            mkdir -p "$_root/$_b" 2>/dev/null || { _copy_ok=0; continue; }
+            for _c in "$_e"/* "$_e"/.[!.]*; do
+                [ -e "$_c" ] || continue
+                _cb=$(basename "$_c" 2>/dev/null || echo "")
+                # mac/monitor 与 win/monitor：本机运行时黑匣子，永不覆盖
+                [ "$_cb" = "monitor" ] && continue
+                cp -pR "$_c" "$_root/$_b/" 2>/dev/null || _copy_ok=0
+            done
+        fi
+    done
+    rm -f "$_tgz" 2>/dev/null || true
+    rm -rf "$_exdir" 2>/dev/null || true
+    if [ "$_copy_ok" != "1" ]; then
+        echo "更新失败：文件写入失败。请点一次 1-安装 修复后重试。"
+        return 0
+    fi
+    install_envproxy
+    echo "已更新到 $REMOTE_TAG。"
+}
+
+# ------------------------------------------------------------------------------
+# 10. 子命令
 # ------------------------------------------------------------------------------
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
@@ -737,6 +916,23 @@ show_status() {
     fi
     _cur=$(get_current_proxy_port 2>/dev/null || true)
     if [ -n "$_cur" ]; then echo "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else echo "代理变量 : 无（直连状态）"; fi
+    # 版本信息（只读：查不到只提示，不写文件、不提问）
+    _local_ver=$(get_local_version || true)
+    if [ -n "$_local_ver" ]; then echo "本地版本 : v$_local_ver"; else echo "本地版本 : 未知"; fi
+    if get_remote_version; then
+        echo "最新版本 : $REMOTE_TAG"
+        _cmp=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
+        if [ -n "$_local_ver" ] && [ "$_cmp" -le 0 ] 2>/dev/null; then
+            echo "更新状态 : 已是最新"
+        elif [ -n "$_local_ver" ]; then
+            echo "更新状态 : 发现新版，用 5-检查更新 可升级"
+        else
+            echo "更新状态 : 可用 5-检查更新 升级"
+        fi
+    else
+        echo "最新版本 : 检查失败（网络不可达，稍后重试）"
+        echo "更新状态 : 未知"
+    fi
     echo "---------------- 最近日志 ----------------"
     if [ -f "$LOG_FILE" ]; then
         tail -n 3 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' || echo "  （暂无日志）"
@@ -747,13 +943,15 @@ show_status() {
 }
 
 # ------------------------------------------------------------------------------
-# 10. 入口分派（兼容大小写与 --/— 前缀，方便 Windows 用户迁移）
+# 11. 入口分派（兼容大小写与 --/— 前缀，方便 Windows 用户迁移）
 # ------------------------------------------------------------------------------
 _CMD="${1:-}"
 _PURGE="0"
+_YES="0"
 if [ $# -gt 0 ]; then
 for _a in "$@"; do
     case "$_a" in --purge|--Purge|-Purge|-purge) _PURGE="1";; esac
+    case "$_a" in --yes|--Yes|-Yes|-yes) _YES="1";; esac
 done
 fi
 # shellcheck disable=SC2001
@@ -764,6 +962,7 @@ case "$_CMD_NORM" in
     stop) stop_monitor; remove_user_env_vars; echo "代理变量已清除，当前恢复直连。";;
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
+    update) update_envproxy "$_YES";;
     "") run_monitor_loop;;
-    *) echo "用法: bash $0 {install|stop|uninstall|status} [--purge]"; exit 1;;
+    *) echo "用法: bash $0 {install|stop|uninstall|status|update} [--purge] [--yes]"; exit 1;;
 esac

@@ -250,8 +250,9 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 | Windows 核心（发现→验证→写入→自启→自愈） | `win\envproxy.ps1` | 参数 `-Install/-Stop/-Uninstall/-Status/-Purge`；无参数进入监控模式。判据细节见文件内分节注释（0.Win32 广播 / 1.端口发现 / 2.用户级变量读写 / 5.日志 / 自启动自愈 / 卸载验尸） |
 | macOS 核心（同语义，双路写入） | `mac\envproxy.sh` | `install/stop/uninstall/status` 子命令；无参数进入监控模式。头部注释写明与 Windows 版的差异（`proxy.env` + `launchctl setenv` 双路） |
 | 搬家重定位模板 | `mac\locator.sh` | 安装时复制到 `~/.envproxy/locator.sh`；按日志活跃度选新位置并清理旧残留 |
-| 终端入口（逻辑全在核心里） | `mac\install.sh` 等 4 个小 `.sh` | 仅 `cd` 到目录后 `exec` 对应子命令 |
-| 双击入口（壳，无逻辑） | `win\` 下 4 个 `.cmd` / `mac\` 下 4 个 `.command` | Windows 壳调 `win\envproxy.ps1` 对应开关；macOS 壳调对应 `.sh`（同目录，搬家必须成组搬） |
+| 在线更新（查 Release→整包覆盖→走安装收尾） | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读（本地/最新/更新状态三行），动手只在更新入口（默认 N 确认、非交互不等待）；先校验后覆盖、跳过 monitor、字节拷贝 |
+| 终端入口（逻辑全在核心里） | `mac\install.sh` 等 5 个小 `.sh` | 仅 `cd` 到目录后 `exec` 对应子命令 |
+| 双击入口（壳，无逻辑） | `win\` 下 5 个 `.cmd` / `mac\` 下 5 个 `.command` | Windows 壳调 `win\envproxy.ps1` 对应开关；macOS 壳调对应 `.sh`（同目录，搬家必须成组搬） |
 | 运行时状态 | `win\monitor\` / `mac\monitor\`（各跟自家核心） | 脚本 `mkdir -p` 自建，**不入库**（见 `.gitignore`）；`stop.flag` 为临时信号，用后即删 |
 
 新增模块时同步更新本表；机制细节以代码注释为准，不复述。
@@ -259,8 +260,9 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 ### 双端对等（win 与 mac 是同一产品的两种实现，不是两个产品）
 
 - **判据是行为，不是文件**：两侧代码永远不会逐行一样，对齐的是使用者可感知的行为——
-  什么条件下注入/删除、注入哪几个变量、去抖与迟滞语义、日志记什么、自启与自愈语义。
-  改完能通过这五条对照，即算对齐。
+  什么条件下注入/删除、注入哪几个变量、去抖与迟滞语义、日志记什么、自启与自愈语义、
+  版本显示与更新确认语义。
+  改完能通过这六条对照，即算对齐。
 - **行为改动双侧同改**：改判据、阈值语义、变量集合、安装/卸载流程，另一侧必须同步改；
   做不到同时改时，先改一侧并在汇报里记一笔待回齐事项，不许静默单侧上线。
 - **单侧 bug 收工前问一句话**：“另一侧有没有同类问题？”——同一判据在另一侧的实现不同，
@@ -299,6 +301,13 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   （优雅退出而非强杀）。布局约束：monitor 必须与核心同目录——两平台定位器都按
   “标记文件名搜候选、同级 monitor.log 排活跃度”工作，搬走任一边都会破坏定位。
   权威来源：`.gitignore`、两核心 `mkdir -p` 与跨位置停止函数。
+- **状态显示只读、更新显式确认**：状态函数只读版本信息（查不到只提示），永不写文件、
+  永不提问；升级只走更新入口，发现新版默认 `N`（回车=不更新），非交互环境直接给提示退出。
+  权威来源：两核心更新节与状态函数。
+- **更新先校验后覆盖、日志永不丢**：下载标签源码包整包覆盖（防漏文件）；包内 `VERSION`
+  与目标一致且核心文件存在才动手，否则中止且现版不动；覆盖跳过 `win\monitor\`/
+  `mac\monitor\`（字节拷贝保编码，只覆盖不删除）。更新源有 `.git` 时从 git remote 解析，
+  否则用与 README 克隆地址同源的内置默认。权威来源：两核心更新节。
 
 ## 构建与验证（改完必跑，全绿才算完成）
 
@@ -306,7 +315,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | # | 命令（仓库根下执行） | 在验证什么 | 门禁 |
 | --- | --- | --- | --- |
-| 1 | `bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh`（macOS/Git-Bash；CI 同款） | sh 语法可解析 | 硬门禁 |
+| 1 | `bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh`（macOS/Git-Bash；CI 同款） | sh 语法可解析 | 硬门禁 |
 | 2 | PowerShell 语法解析 `win\envproxy.ps1`（本机 `powershell` 跑 `Parser::ParseFile`；CI 同款） | ps1 无语法错误、中文无乱码（BOM 完好；必须用语法解析而非仅分词——BOM 损坏报的是解析错误） | 硬门禁 |
 | 3 | Windows 进 `win` 双击一次 `4-查看状态`（或 `bash mac/status.sh`） | 状态/变量/最近日志与预期一致 | 硬门禁 |
 | 4 | 改完核心逻辑后进 `win` 双击一次 `1-安装` 重载，再看一轮状态翻转 | 新代码实际被监控进程加载、注入/删除行为正确 | 建议（改核心必做） |

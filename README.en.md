@@ -15,7 +15,7 @@
 
 - [What it does (in one paragraph)](#what-it-does-in-one-paragraph)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
-- [2. What the four buttons do (must-read for beginners)](#2-what-the-four-buttons-do-must-read-for-beginners)
+- [2. What the five buttons do (must-read for beginners)](#2-what-the-five-buttons-do-must-read-for-beginners)
 - [2.5 About the log (monitor.log)](#25-about-the-log-monitorlog)
 - [3. Daily use (nothing to do after install)](#3-daily-use-nothing-to-do-after-install)
 - [4. How it tells "VPN on or off" (plain words)](#4-how-it-tells-vpn-on-or-off-plain-words)
@@ -65,24 +65,28 @@ Install does three things:
 - Starts the monitor right away
 - Corrects environment variables on the spot (inject what should be injected, clean what should be cleaned)
 
-> Later, to update or fix anything: in the `win` folder, just **double-click `1-安装.cmd` again**. It's the "universal fix button" — no double install, no network break, nothing lost.
+> Later, to upgrade: in the `win` folder, double-click **`5-检查更新.cmd`** (it shows the latest release and installs only after you say yes; log kept).
+>
+> To fix anything: in the `win` folder, just **double-click `1-安装.cmd` again**. It's the "universal fix button" — no double install, no network break, nothing lost.
 
-## 2. What the four buttons do (must-read for beginners)
+## 2. What the five buttons do (must-read for beginners)
 
-> All four buttons live in the `win` folder: "double-click" below means double-clicking inside `win`.
+> All five buttons live in the `win` folder: "double-click" below means double-clicking inside `win`.
 
 | Button | Does what | Leaves behind | When to use |
 |---|---|---|---|
 | **1-安装** | auto-start + start monitor + correct variables | everything in place | first install / whenever "something feels off", click it |
 | **2-停止监控** | stops monitor + **deletes env variables** (back to direct immediately) | **keeps** auto-start + locator + path record (monitor returns on next boot) | pause temporarily, want it back next boot |
 | **3-一键恢复** | stops monitor + deletes variables + **removes auto-start + locator + path record** | log kept or deleted — **you choose on the spot** (default: keep) | you want this feature gone completely |
-| **4-查看状态** | shows monitor/auto-start/VPN/variables/recent log | — | check how it's doing |
+| **4-查看状态** | shows monitor/auto-start/VPN/variables/versions/recent log | — | check how it's doing |
+| **5-检查更新** | checks GitHub for the latest release → **installs only after you say yes** (full-package overwrite, log kept) | version bumped, everything else in place | upgrade when a new release is out |
 
 One-line memory:
 
 - **2-停止 = pause** (comes back by itself next boot)
 - **3-一键恢复 = uninstall, asks "keep the log?"**
 - **1-安装 = universal fix** (whatever the problem, click it)
+- **5-检查更新 = update** (asks first, installs only on your yes)
 
 > Double-clicking "3-一键恢复" **stops and asks**: keep history log? Enter = keep (black box); type `N` + Enter = delete it too. Two choices, no extra buttons.
 >
@@ -151,6 +155,8 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | "detection error" in log | one probe round errored (harmless overall) | ignore, self-recovers; click "install" once if it keeps happening |
 | install prints a pile of "unexpected token ) / }" (syntax errors) | script file encoding damaged: PowerShell 5.1 on non-UTF-8-codepage systems reads BOM-less scripts as ANSI → Chinese text breaks syntax | this version ships UTF-8 BOM at the root (works on any system as-is); if it still errors, the file was re-saved by some text tool — **re-copy an official folder** over it |
 | VPN app moved into a very deep directory (D:\a\b\c\d\e\f) | auto-search doesn't cover that depth | double-click "install" once in `win` |
+| update check says "failed" | this machine can't reach GitHub right now (or API rate-limited) | retry later; toggling the VPN on/off and retrying often helps |
+| update aborts halfway | download/extract/verify failed | the old version is untouched — just re-run `5-检查更新` |
 | want to go back to before-install | — | double-click "3-一键恢复" in `win`, keep-or-delete log chosen on the spot |
 
 ## 7. Performance & traffic
@@ -168,7 +174,8 @@ EnvProxy\
     1-安装.cmd      install (universal fix)
     2-停止监控.cmd   pause (keeps auto-start)
     3-一键恢复.cmd   uninstall (keep-or-delete log chosen on the spot)
-    4-查看状态.cmd   status
+    4-查看状态.cmd   status (with version info)
+    5-检查更新.cmd   update (asks first, one-click upgrade)
     envproxy.ps1    core script (all logic)
     monitor\        runtime folder (auto-created; log kept or deleted per your uninstall choice)
       monitor.log   black-box log (state changes only, 200KB cap with auto-truncate)
@@ -195,7 +202,7 @@ Copying the whole `EnvProxy` folder elsewhere as a **backup** is completely harm
 2. Double-click `win\1-安装.cmd`
 3. Done
 
-To update later: `git pull` for the latest, then double-click `1-安装.cmd` once in `win` (universal fix: loads new code and corrects variables).
+To update later: double-click `5-检查更新.cmd` in `win` — it asks first, then upgrades to the latest release in one click (full-package overwrite, nothing missed; log kept). If you installed via `git clone`, you can also `git pull` and double-click `1-安装.cmd` once in `win` (equivalent fallback: loads new code and corrects variables).
 
 > Encoding note: `win\envproxy.ps1` / logs use **UTF-8 BOM** so PowerShell 5.1 reads them correctly on **any Chinese/English Windows** (without BOM, Chinese systems read GBK and English systems Latin1 — both can cause syntax errors or mojibake). **If you ever edit `win\envproxy.ps1`, save it as UTF-8 with BOM** (VS Code / Notepad++ / Notepad all offer "UTF-8 with BOM"), then double-click "install" once in `win` so the monitor loads the new code.
 
@@ -237,7 +244,8 @@ Install does the same three things: boot auto-start (LaunchAgent) + start monito
 | **1-安装.command** | auto-start + start monitor + correct variables (universal fix) |
 | **2-停止监控.command** | stop monitor + delete variables (keeps auto-start, back next login) |
 | **3-一键恢复.command** | stop monitor + delete variables + remove auto-start/locator/hook, keep-or-delete log asked on the spot |
-| **4-查看状态.command** | monitor/auto-start/VPN/variables/recent log |
+| **4-查看状态.command** | monitor/auto-start/VPN/variables/versions/recent log |
+| **5-检查更新.command** | check latest release + install only after you say yes (one-click upgrade) |
 
 Terminal users can also run (from the project root): `bash mac/install.sh` / `bash mac/stop.sh` / `bash mac/uninstall.sh` (add `--purge` to delete the log too, no questions) / `bash mac/status.sh`. The `.command` files are just "double-click shells", all logic lives in the `.sh` files.
 
@@ -248,8 +256,8 @@ EnvProxy/
   mac/
     envproxy.sh          Mac core (mirrors win\envproxy.ps1, single file, stock commands only)
     locator.sh           locator template (copied to ~/.envproxy/locator.sh on install)
-    install.sh / stop.sh / uninstall.sh / status.sh
-    1-安装.command … 4-查看状态.command (double-click entries)
+    install.sh / stop.sh / uninstall.sh / status.sh / update.sh
+    1-安装.command … 5-检查更新.command (double-click entries)
     monitor/             shared (monitor.log / monitor.pid / stop.flag, same format)
 ```
 
@@ -273,6 +281,7 @@ New:
 ### 12.7 Deploy to a friend's / new Mac
 
 Copy the whole folder → double-click `1-安装.command` in `mac` → done. No Homebrew/Python/Node, no `sudo`, stock macOS 12+ `zsh` is enough.
+To upgrade: double-click `5-检查更新.command` in `mac` (asks first, log kept).
 
 ---
 
