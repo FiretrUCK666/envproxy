@@ -2,8 +2,8 @@
 
 [![check](https://github.com/FiretrUCK666/envproxy/actions/workflows/check.yml/badge.svg)](https://github.com/FiretrUCK666/envproxy/actions/workflows/check.yml)
 [![release](https://img.shields.io/github/v/release/FiretrUCK666/envproxy)](https://github.com/FiretrUCK666/envproxy/releases)
-[![license](https://img.shields.io/github/license/FiretrUCK666/envproxy)](LICENSE)
-[![stars](https://img.shields.io/github/stars/FiretrUCK666/envproxy)](https://github.com/FiretrUCK666/envproxy/stargazers)
+[![license](https://img.shields.io/github/license/FiretrUCK666/envproxy?v=1)](LICENSE)
+[![stars](https://img.shields.io/github/stars/FiretrUCK666/envproxy?v=1)](https://github.com/FiretrUCK666/envproxy/stargazers)
 
 [English](README.en.md)
 
