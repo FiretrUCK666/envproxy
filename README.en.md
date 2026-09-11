@@ -39,7 +39,7 @@ Your VPN app (MonoCloud, Clash, v2rayN, Hiddify… anything with a local proxy p
 
 > Note: it only manages **environment variables** (the command-line world) and never touches the **system proxy** (the browser world). The two worlds don't interfere.
 
-### Variables it injects (since 2026-09, ALL_PROXY uses the http:// form)
+### Variables it injects (`ALL_PROXY` uses the uniform `http://` form)
 
 Written as a set when proxying, deleted as a set when not — all or nothing:
 
