@@ -38,6 +38,8 @@ Your VPN app (MonoCloud, Clash, v2rayN, Hiddify… anything with a local proxy p
 **EnvProxy is the translator**: it watches "is the VPN app actually proxying right now", writes the proxy into environment variables when it is, and deletes them when it isn't. You do nothing.
 
 > Note: it only manages **environment variables** (the command-line world) and never touches the **system proxy** (the browser world). The two worlds don't interfere.
+>
+> TUN users, start here: if you run TUN mode, all traffic — terminals included — is already captured, so you don't need this tool (expected behavior, see section 11 item 1).
 
 ### Variables it injects (`ALL_PROXY` uses the uniform `http://` form)
 
