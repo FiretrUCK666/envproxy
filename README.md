@@ -232,3 +232,11 @@ EnvProxy/
 ### 12.7 给朋友/新 Mac 部署
 
 整文件夹拷贝 → 双击 `1-安装.command` → 完事。不需要 Homebrew/Python/Node，不需要 `sudo`，macOS 12+ 默认 `zsh` 即可。
+
+---
+
+## 十三、许可证与问题反馈
+
+本项目以 MIT 许可证开源（见 `LICENSE`）：可以随便用、随便改、随便分发，保留版权声明即可。
+
+遇到问题先看第六节故障排查；解决不了到仓库 Issues 区提问：`https://github.com/FiretrUCK666/envproxy/issues`。提问时附上：你的系统版本、`4-查看状态` 的完整输出、`monitor/monitor.log` 最近的相关行。想自己改代码先看 `CONTRIBUTING.md`。
