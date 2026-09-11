@@ -228,8 +228,8 @@ AI）理解这个项目的最短路径；哪天仓库只剩本文和代码，也
   （`$KnownProxyPorts` / `KNOWN_PORTS`）、进程名特征（`$ProxyProcessPatterns` / `PATTERNS`）、
   验证端点表（`$CheckEndpoints` / `CHECK_HOSTS`+`CHECK_PATHS`）、去抖与节流阈值
   （双轮确认、连续失败计数、探测节流间隔，见两脚本监控主循环）。
-- **改动生效方式**：改完任一脚本后，在对应平台双击一次 `1-安装`（万能修复：重建自启动、
-  重启监控、加载新代码并当场校正一次变量）。macOS 改完 `envproxy.sh` 须保存为 LF、无 BOM。
+- **改动生效方式**：改完任一脚本后，进对应平台文件夹（`win\`/`mac\`）双击一次 `1-安装`（万能修复：重建自启动、
+  重启监控、加载新代码并当场校正一次变量）。macOS 改完 `mac\envproxy.sh` 须保存为 LF、无 BOM。
 
 ## 项目定位
 
@@ -247,12 +247,12 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | 职责 | 入口文件 | 说明 |
 | --- | --- | --- |
-| Windows 核心（发现→验证→写入→自启→自愈） | `envproxy.ps1` | 参数 `-Install/-Stop/-Uninstall/-Status/-Purge`；无参数进入监控模式。判据细节见文件内分节注释（0.Win32 广播 / 1.端口发现 / 2.用户级变量读写 / 5.日志 / 自启动自愈 / 卸载验尸） |
-| macOS 核心（同语义，双路写入） | `envproxy.sh` | `install/stop/uninstall/status` 子命令；无参数进入监控模式。头部注释写明与 Windows 版的差异（`proxy.env` + `launchctl setenv` 双路） |
-| 搬家重定位模板 | `locator.sh` | 安装时复制到 `~/.envproxy/locator.sh`；按日志活跃度选新位置并清理旧残留 |
-| 终端入口（逻辑全在核心里） | `install.sh/stop.sh/uninstall.sh/status.sh` | 仅 `cd` 到目录后 `exec` 对应子命令 |
-| 双击入口（壳，无逻辑） | `1-安装.cmd` 等 4 个 `.cmd` / 4 个 `.command` | Windows 壳调 `envproxy.ps1` 对应开关；macOS 壳调对应 `.sh` |
-| 运行时状态 | `monitor/`（`monitor.pid`/`monitor.log`/`stop.flag`） | 脚本 `mkdir -p` 自建，**不入库**（见 `.gitignore`）；`stop.flag` 为临时信号，用后即删 |
+| Windows 核心（发现→验证→写入→自启→自愈） | `win\envproxy.ps1` | 参数 `-Install/-Stop/-Uninstall/-Status/-Purge`；无参数进入监控模式。判据细节见文件内分节注释（0.Win32 广播 / 1.端口发现 / 2.用户级变量读写 / 5.日志 / 自启动自愈 / 卸载验尸） |
+| macOS 核心（同语义，双路写入） | `mac\envproxy.sh` | `install/stop/uninstall/status` 子命令；无参数进入监控模式。头部注释写明与 Windows 版的差异（`proxy.env` + `launchctl setenv` 双路） |
+| 搬家重定位模板 | `mac\locator.sh` | 安装时复制到 `~/.envproxy/locator.sh`；按日志活跃度选新位置并清理旧残留 |
+| 终端入口（逻辑全在核心里） | `mac\install.sh` 等 4 个小 `.sh` | 仅 `cd` 到目录后 `exec` 对应子命令 |
+| 双击入口（壳，无逻辑） | `win\` 下 4 个 `.cmd` / `mac\` 下 4 个 `.command` | Windows 壳调 `win\envproxy.ps1` 对应开关；macOS 壳调对应 `.sh`（同目录，搬家必须成组搬） |
+| 运行时状态 | `win\monitor\` / `mac\monitor\`（各跟自家核心） | 脚本 `mkdir -p` 自建，**不入库**（见 `.gitignore`）；`stop.flag` 为临时信号，用后即删 |
 
 新增模块时同步更新本表；机制细节以代码注释为准，不复述。
 
@@ -280,9 +280,11 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 - **编码三条红线**（见硬性规范）：`envproxy.ps1` 必须 UTF-8 **带 BOM**
   （PowerShell 5.1 在中文系统按 ANSI 读无 BOM 文件会语法报错），`envproxy.sh` 必须 LF
   **无 BOM**（BOM 会顶掉 shebang），仓库统一 LF 入库（`.gitattributes`）。
-- **`monitor/` 永不入库**：`monitor.pid`/`monitor.log`/`stop.flag` 是本机运行时状态，
-  脚本自建；跨位置停止信号必须写到**目标自己的目录**（优雅退出而非强杀）。
-  权威来源：`.gitignore`、`envproxy.sh` `mkdir -p` 与跨位置停止函数。
+- **`win\monitor\` 与 `mac\monitor\` 永不入库**：`monitor.pid`/`monitor.log`/`stop.flag`
+  是本机运行时状态，各跟自家核心、脚本自建；跨位置停止信号必须写到**目标自己的目录**
+  （优雅退出而非强杀）。布局约束：monitor 必须与核心同目录——两平台定位器都按
+  “标记文件名搜候选、同级 monitor.log 排活跃度”工作，搬走任一边都会破坏定位。
+  权威来源：`.gitignore`、两核心 `mkdir -p` 与跨位置停止函数。
 
 ## 构建与验证（改完必跑，全绿才算完成）
 
@@ -290,12 +292,12 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | # | 命令（仓库根下执行） | 在验证什么 | 门禁 |
 | --- | --- | --- | --- |
-| 1 | `bash -n envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh`（macOS/Git-Bash；CI 同款） | sh 语法可解析 | 硬门禁 |
-| 2 | PowerShell 语法解析 `envproxy.ps1`（本机 `powershell` 跑 `Parser::ParseFile`；CI 同款） | ps1 无语法错误、中文无乱码（BOM 完好；必须用语法解析而非仅分词——BOM 损坏报的是解析错误） | 硬门禁 |
-| 3 | 改动对应平台双击一次 `4-查看状态`（或 `bash status.sh`） | 状态/变量/最近日志与预期一致 | 硬门禁 |
-| 4 | 改完核心逻辑后双击一次 `1-安装` 重载，再看一轮状态翻转 | 新代码实际被监控进程加载、注入/删除行为正确 | 建议（改核心必做） |
+| 1 | `bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh`（macOS/Git-Bash；CI 同款） | sh 语法可解析 | 硬门禁 |
+| 2 | PowerShell 语法解析 `win\envproxy.ps1`（本机 `powershell` 跑 `Parser::ParseFile`；CI 同款） | ps1 无语法错误、中文无乱码（BOM 完好；必须用语法解析而非仅分词——BOM 损坏报的是解析错误） | 硬门禁 |
+| 3 | Windows 进 `win` 双击一次 `4-查看状态`（或 `bash mac/status.sh`） | 状态/变量/最近日志与预期一致 | 硬门禁 |
+| 4 | 改完核心逻辑后进 `win` 双击一次 `1-安装` 重载，再看一轮状态翻转 | 新代码实际被监控进程加载、注入/删除行为正确 | 建议（改核心必做） |
 
-`monitor/` 状态、已开旧终端窗口不作为验证依据（旧终端不继承新变量是预期行为，
+`win\monitor\`（或 `mac\monitor\`）状态、已开旧终端窗口不作为验证依据（旧终端不继承新变量是预期行为，
 见 `README` 故障排查）。CI（`check.yml` 与 `release.yml` 内嵌的 check job）跑的即第 1–2 条，
 与本地同一批——改验证手段时三处一起改。
 

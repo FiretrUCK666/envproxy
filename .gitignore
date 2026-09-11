@@ -8,11 +8,14 @@ Thumbs.db
 *.swp
 *~
 
-# EnvProxy runtime state (auto-created by the scripts, machine-local).
-# Never commit: a clone recreates monitor/ on first run (mkdir -p).
-monitor/monitor.log
-monitor/monitor.pid
-monitor/stop.flag
+# EnvProxy runtime state (auto-created next to each platform core, machine-local).
+# Never commit: a clone recreates them on first run (mkdir -p).
+win/monitor/monitor.log
+win/monitor/monitor.pid
+win/monitor/stop.flag
+mac/monitor/monitor.log
+mac/monitor/monitor.pid
+mac/monitor/stop.flag
 
 # temp / local bundles (README ships the folder via USB/drive/zip)
 *.tmp

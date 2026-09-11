@@ -10,7 +10,7 @@
 
 - 你用的版本（`git log -1 --format=%H` 的提交号，或“官网文件夹某月版本”）
 - 运行环境（Windows 10/11 或 macOS 版本；翻墙软件名字）
-- `4-查看状态` 的完整输出（**原样粘贴，不要转述**）
+- `4-查看状态` 的完整输出（`win`/`mac` 下同名文件，**原样粘贴，不要转述**）
 - `monitor/monitor.log` 最近的相关行（只记状态变化，不含隐私）
 - 最小复现步骤（如果问题能稳定重现）
 
@@ -49,11 +49,11 @@ git clone https://github.com/FiretrUCK666/envproxy.git
 cd envproxy
 
 # 改完自检（与 CI 跑的是同一批）
-bash -n envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh
+bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh
 ```
 
-`envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
-构建与验证节第 2 条）；改完在对应平台双击 `4-查看状态` 确认行为。
+`win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
+构建与验证节第 2 条）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh` 确认行为。
 
 ## 提交前门禁
 
@@ -61,10 +61,10 @@ bash -n envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh
 
 ```sh
 # sh 语法（macOS/Git-Bash；CI 同款）
-bash -n envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh
+bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh
 # ps1 语法（Windows 本机 PowerShell；CI 同款）
-# 状态冒烟：对应平台双击 4-查看状态，输出与预期一致
-# 核心改动追加：双击 1-安装 重载，看一轮状态翻转
+# 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
+# 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
 ```
 
 这里的命令与 `AGENTS.md` 构建与验证节保持一致，改一处时同步另一处。
@@ -73,7 +73,7 @@ bash -n envproxy.sh locator.sh install.sh stop.sh uninstall.sh status.sh
 
 对贡献者同样成立的几条（**完整规范以 `AGENTS.md` 为准**）：
 
-- `envproxy.ps1` 永远 UTF-8 **带 BOM** 保存，`envproxy.sh` 永远 LF **无 BOM**保存，
+- `win\envproxy.ps1` 永远 UTF-8 **带 BOM** 保存，`mac\envproxy.sh` 永远 LF **无 BOM**保存，
   改一侧不许顺手“统一”另一侧；
 - 只用系统自带命令，不引入 Python/Node/第三方模块；
 - 不写死端口、进程名、路径，新增适配只向端口表/进程名特征追加；
