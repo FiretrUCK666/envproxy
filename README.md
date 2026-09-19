@@ -197,7 +197,6 @@ EnvProxy\
   LICENSE         许可证（MIT）
   CONTRIBUTING.md 贡献指南（提问 / 报缺陷 / 提改动的入口）
   AGENTS.md       给 AI 助手的项目契约（机制与规范；普通使用不必看）
-  tools\          维护者工具（目录/标题同步校验；不随使用分发，普通使用不必看）
   release-notes\  各版本的发布说明
 ```
 

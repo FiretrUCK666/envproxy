@@ -199,7 +199,6 @@ EnvProxy\
   LICENSE         license (MIT)
   CONTRIBUTING.md contribution guide (how to ask, report bugs, propose changes)
   AGENTS.md       project contract for AI assistants (mechanisms and rules; not needed for normal use)
-  tools\          maintainer tooling (TOC/heading sync check; not part of normal use)
   release-notes\  per-release notes
 ```
 
