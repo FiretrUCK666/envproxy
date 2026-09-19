@@ -12,7 +12,7 @@
 #  运行环境：Windows 10/11 自带 PowerShell 5.1。不需要 Node/Python/管理员。
 #
 #  原理（通用，不绑定任何特定翻墙软件）：
-#     监控进程每 2 秒探测一次"本机是否有 HTTP 代理端口正在监听"。
+#     监控进程每 2-3 秒探测一次"本机是否有 HTTP 代理端口正在监听"（on 态 2 秒、off 态 3 秒）。
 #     发现来源（两层，与系统代理/PAC/Core 完全无关，只认端口本身）：
 #       1) 快路径：常见翻墙软件默认端口扫描（$KnownProxyPorts，可自行增删）
 #       2) 万能路径：全端口扫描 + CONNECT 握手探测（进程名预筛提速）
@@ -22,8 +22,10 @@
 #
 #  行为保证：
 #     - 翻墙软件断开/重连/退出/重启/换端口/换软件 → 监控自动跟随，无需任何操作
-#     - 退出翻墙软件后约 8 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，≤35 秒
-#     - 整个文件夹移动到任何位置 → 无需任何操作（监控自退 + 定位器开机自动重新定位）
+#     - 退出翻墙软件后约 5 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，约 30 秒
+#       （本地代理响应挂起、探测跑满超时时最坏约 45 秒）
+#     - 整个文件夹移动 → 无需任何操作（监控自退 + 定位器开机自动重新定位；
+#       自动搜索只覆盖"用户目录 + 其他磁盘根"，搬到范围外时双击一次"安装"接管）
 #     - 无常驻依赖、不改系统代理、不需要管理员
 # ==============================================================================
 
@@ -65,7 +67,9 @@ function Broadcast-EnvironmentChange {
 # 1. 通用代理端口发现（不绑定任何特定软件、不写死端口）
 # ------------------------------------------------------------------------------
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
-$KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888, 12334)  # 12334 = Hiddify-Next 默认；只记 HTTP/混合口，不记纯 SOCKS 口
+# 本表只是"常见入站口"的提速提示：命中它省一轮全端口兜底，不命中也不影响覆盖面。
+# 判决永远走 CONNECT 握手门，所以列入纯 SOCKS 口不会造成误判，只会多一次本机握手。
+$KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888, 12334)  # 12334 = Hiddify-Next 默认
 
 # 翻墙软件进程名特征（用于快速预筛，缩小 CONNECT 探测范围）。可自行扩展。
 # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
@@ -320,7 +324,10 @@ function Test-RealConnectivity([int]$Port) {
         foreach ($i in 0..($CheckEndpoints.Count - 1)) {
             if ($i -eq $last) { continue }
             $e = $CheckEndpoints[$i]
-            try { $tasks[$i] = $client.GetAsync("http://$($e.Host)$($e.Path)") } catch {}
+            # ResponseHeadersRead：只等响应头，不缓冲正文。探测只关心状态码，
+            # 流量预算（每端口 15 秒最多一次、每次不足 1KB）靠这条成立——
+            # 正文一个字节都不读，端点将来换成大响应也不会改变流量口径。
+            try { $tasks[$i] = $client.GetAsync("http://$($e.Host)$($e.Path)", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead) } catch {}
         }
         $deadline = [DateTime]::Now.AddSeconds(6)
         while ($tasks.Count -gt 0 -and [DateTime]::Now -lt $deadline) {
@@ -461,9 +468,17 @@ function Get-CurrentState {
         }
         return "off"
     }
-    # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先
-    $check = $script:LastAlivePort
-    if ((($null -eq $check) -or ($cands -notcontains $check)) -and ($cands.Count -gt 0)) { $check = $cands[0] }
+    # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先。
+    # 不变量：on 只可能来自本轮候选集——候选集是过了"监听 + CONNECT 握手"两道门的，
+    # 从集合之外挑端口（例如沿用上轮记住的端口）会给已经消失的端口报 on：
+    # 既违反三层判据，又会在端口消失后反复清零调用方的去抖计数，
+    # 把"退出软件后秒级删变量"拖成几十秒。故候选集为空 = 本机没有代理在监听，
+    # 节点结论无从谈起，直接 off。
+    $check = $null
+    if ($cands.Count -gt 0) {
+        $check = $script:LastAlivePort
+        if (($null -eq $check) -or ($cands -notcontains $check)) { $check = $cands[0] }
+    }
     if ($null -ne $check) {
         if (Test-NodeAlive ([int]$check)) {
             $script:CachedPort = $check
@@ -571,19 +586,24 @@ if (-not $target -or -not (Test-Path $target)) {
         Where-Object { $_.Root -ne $sysRoot } |
         ForEach-Object { $roots += @{ Path = $_.Root; Depth = 4 } }
 
+    # 先把所有搜索根的结果汇总，再统一按活跃度排序（与 Mac 侧 locator.sh 同一算法）。
+    # 不能"命中第一个根就收工"：那样排序只在一个根内成立，靠前的根（桌面/文稿/下载…）
+    # 里放着的陈旧备份会压过其他盘里真正在用的正本——而"活跃度优先"正是
+    # "备份目录不会被误选"的唯一依据。
+    $candidates = @()
     foreach ($r in $roots) {
-        $candidates = @(Get-ChildItem -Path $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
-        if ($candidates.Count -eq 0) { continue }
-        # 活跃度排序：monitor\monitor.log 最近写入的优先。
-        # 这样"真正在用的项目"永远胜出，用户复制的备份（无日志或日志陈旧）不会被误选。
+        $candidates += @(Get-ChildItem -Path $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
+    }
+    if ($candidates.Count -gt 0) {
+        # 活跃度排序：monitor\monitor.log 最近写入的优先（无日志的排最后），
+        # 同活跃度再看脚本本身的修改时间。这样"真正在用的项目"永远胜出，
+        # 用户复制的备份（日志陈旧或没有日志）不会被误选。
         foreach ($c in $candidates) {
             $logPath = Join-Path (Split-Path -Parent $c.FullName) "monitor\monitor.log"
             $logTime = if (Test-Path $logPath) { (Get-Item $logPath).LastWriteTime } else { [datetime]::MinValue }
             $c | Add-Member -NotePropertyName EnvLogTime -NotePropertyValue $logTime -Force
         }
-        $found = $candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1
-        $target = $found.FullName
-        break
+        $target = ($candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
     }
 }
 if (-not $target) { exit }
@@ -618,16 +638,30 @@ function Update-ScriptPathRecord {
     Set-ItemProperty -Path $ScriptPathRegKey -Name "ScriptPath" -Value $PSCommandPath -ErrorAction SilentlyContinue
 }
 
-# 自启动自愈：定位器文件丢失或 Run 键损坏时自动重建修复（每 60 秒自查一次）
+# 自启动自愈：让固定位置的自启动配置**与当前代码生成的内容一致**——不只是"存在"。
+# 判据是内容而非存在，理由是升级路径：改完脚本若没走"安装"，固定位置里留着的仍是
+# 旧定位器（搜索算法、参数改了都不生效），旧的 Run 值也可能指向被删掉的路径。
+# 每次自查 = 让系统状态收敛到当前代码，不依赖用户记得重装。
+function Test-LauncherCurrent {
+    try {
+        if (-not (Test-Path $LauncherPath)) { return $false }
+        # 行尾与首尾空白不比：Set-Content 落盘的行尾与源码里 here-string 的行尾
+        # 不必逐字节相同，比"生成出来的代码"是否一致就够了。
+        $want = (Get-LauncherContent) -replace "`r`n", "`n"
+        $have = (Get-Content $LauncherPath -Raw -Encoding UTF8 -ErrorAction Stop) -replace "`r`n", "`n"
+        return ($have.Trim() -eq $want.Trim())
+    } catch { return $false }
+}
+
 function Repair-AutoRun {
     try {
         $expected = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath
         $actual = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
-        if (-not (Test-Path $LauncherPath) -or $actual -ne $expected) {
+        if ((-not (Test-LauncherCurrent)) -or $actual -ne $expected) {
             New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
             Set-Content -Path $LauncherPath -Value (Get-LauncherContent) -Encoding UTF8 -ErrorAction SilentlyContinue
             Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction SilentlyContinue
-            Write-MonitorLog "已自动修复开机自启动（定位器/自启动项损坏）"
+            Write-MonitorLog "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
         }
     } catch {}
 }
@@ -819,7 +853,8 @@ function Run-MonitorLoop {
                 $pendingCount = 0
             }
 
-            # 每 30 轮自愈一次自启动配置（定位器/自启动项损坏时自动修复）
+            # 每 30 轮自愈一次自启动配置（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
+            # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
             $repairRound++
             if ($repairRound -ge 30) {
                 $repairRound = 0
@@ -910,7 +945,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
             Remove-Item -Path $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-    # 卸载验尸：确保监控彻底死透——否则它的自愈机制会在 60 秒后重建自启动（复活）
+    # 卸载验尸：确保监控彻底死透——否则它的自愈机制会在下一个自查周期（约 60–90 秒）重建自启动（复活）
     # 这里再查一次并强杀兜底，堵死"卸载后复活"的唯一理论路径
     $ghost = Get-MonitorProcess
     if ($ghost) {

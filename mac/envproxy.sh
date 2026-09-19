@@ -10,8 +10,15 @@
 #     bash envproxy.sh update      检查更新（一键升级，问过才装；加 --yes 跳过确认）
 #     无参数（由 LaunchAgent 调用 locator.sh 间接触发）进入监控模式
 #
-#  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、launchctl。
+#  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、ps、awk、tar、cmp、launchctl。
 #  不需要 Homebrew/Python/Node/管理员，不写任何系统目录。
+#
+#  行为保证（与 Windows 同语义）：
+#     - 翻墙软件断开/重连/退出/重启/换端口/换软件 → 监控自动跟随，无需任何操作
+#     - 退出翻墙软件后约 5 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，约 30 秒
+#       （本地代理响应挂起、探测跑满超时时最坏约 45 秒）
+#     - 停止监控就是真的停止（自启动只在登录时拉起一次，不会把停掉的监控再拉回来）
+#     - 整个文件夹移动 → 监控自退 + 下次登录定位器自动重新定位（可搜索范围同 Windows）
 #
 #  原理（通用，不绑定任何特定翻墙软件，与 Windows 版一致）：
 #     监控进程每 2-3 秒探测一次"本机是否有 HTTP 代理端口正在监听"。
@@ -56,12 +63,19 @@ UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
-KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888 12334"  # 12334 = Hiddify-Next 默认；只记 HTTP/混合口，不记纯 SOCKS 口
+# 因此本表按"常见入站口"收，不按协议收：列入纯 SOCKS 口不会误判，只会多一次本机握手。
+KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888 12334"  # 12334 = Hiddify-Next 默认
 
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。
 PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shadowsocks ss-local trojan hysteria neko netch surge outline"
 
 # 验证端点（与 Windows 版一致：跨厂商/跨域段，快路优先 + 失败并行兜底）。
+# 端点池的两条硬要求，缺一不可：
+#   1) 跨厂商/跨域段——单个域段被干扰时其余端点仍能证明节点活着；
+#   2) 响应体"零字节或极小"——Mac 侧探针是 curl：它没有"读到响应头就停"的开关，
+#      只能把正文收下再丢弃（-o /dev/null），所以正文字节数直接等于流量预算。
+#      现有 7 个端点：5 个 /generate_204（0 字节 204）+ 2 个被墙站点（重定向或 KB 级响应）。
+# 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
 CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org twitter.com"
 CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 / /"
 
@@ -362,8 +376,10 @@ test_real_connectivity() {
 # 节流缓存只认“同一端口”（单槽位：bash 3.2 无关联数组）。
 # 同端口 15 秒内直接给缓存结论；换端口一律重验——多候选试活时，
 # 绝不会读到别的端口的旧结论（全局单槽在此会串味）。
-# DIVERGE(Mac): Win 侧用哈希表记全端口（见 Test-NodeAlive），行为契约一致
-# （同端口节流、异端口重验），只是 Mac 侧少记几个槽位。
+# DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount 各一份，见 Test-NodeAlive）；
+# Mac 侧只有一个槽位（bash 3.2 无关联数组），因此失败计数也是全局的——别的端口失败会累计进
+# 同一个计数。用户可见行为不变：判死只在"首选端口 + 非 Force"这条稳态路径上受计数影响，
+# 候选试活一律 Force 单次判定，双轮去抖会把这点差异吸收掉。
 test_node_alive() {
     _port="$1"; _force="${2:-0}"
     _now=$(date +%s)
@@ -467,10 +483,18 @@ get_current_state() {
             CURRENT_STATE="off"
         fi
     else
-        # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先
-        _check="$LAST_ALIVE_PORT"
-        if { [ -z "$_check" ] || ! _in_list "$_check" "$_cands"; } && [ -n "$_cands" ]; then
-            _check=$(printf '%s' "$_cands" | awk '{print $1}')
+        # 集合稳定：节流单查（上次验活的优先，否则第一个），防抖优先。
+        # 不变量：on 只可能来自本轮候选集——候选集是过了"监听 + CONNECT 握手"两道门的，
+        # 从集合之外挑端口（例如沿用上轮记住的端口）会给已经消失的端口报 on：
+        # 既违反三层判据，又会在端口消失后反复清零调用方的去抖计数，
+        # 把"退出软件后秒级删变量"拖成几十秒。故候选集为空 = 本机没有代理在监听，
+        # 节点结论无从谈起，直接 off。
+        _check=""
+        if [ -n "$_cands" ]; then
+            _check="$LAST_ALIVE_PORT"
+            if [ -z "$_check" ] || ! _in_list "$_check" "$_cands"; then
+                _check=$(printf '%s' "$_cands" | awk '{print $1}')
+            fi
         fi
         if [ -n "$_check" ]; then
             if test_node_alive "$_check" 0; then
@@ -494,6 +518,17 @@ update_path_record() {
     printf '%s\n' "$SCRIPT_PATH" > "$PATH_CONF" 2>/dev/null || true
 }
 
+# plist 的语义 = "登录时把它拉起来"，仅此而已——刻意不声明 KeepAlive。
+#   对齐的依据：Windows 侧的自启动就是一个 Run 键（登录时执行一次），监控被停掉或
+#   自行退出后不会复活。这里若写 KeepAlive，launchd 会在 job 主进程退出后无条件重启它，
+#   而定位器末尾用 exec 把监控变成 job 主进程，于是直接破坏两件事：
+#     - "2-停止监控"停不住：停止后约 10 秒（默认 ThrottleInterval）被自动拉回，
+#       变量跟着重新注入，"暂停到下次登录"的承诺失效；
+#     - 每个启动周期还会多一次无谓的 fork：job 被反复拉起，而定位器的单实例检查
+#       立刻让它退出，如此每 10 秒一轮。
+#   运行期的可靠性交给监控自身（互斥锁 + 自启动自愈），与 Windows 同语义。
+#   将来若真的要"崩溃自动重启"，必须同时让"停止"能被系统表达出来（stop 里 bootout），
+#   否则同一个意图会由两套机制互相打架。
 get_plist_content() {
     cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -507,7 +542,6 @@ get_plist_content() {
     <string>$LOCATOR_PATH</string>
   </array>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
   <key>LowPriorityIO</key><true/>
   <key>Nice</key><integer>10</integer>
@@ -542,17 +576,27 @@ remove_autorun() {
     rm -f "$PLIST_PATH" 2>/dev/null || true
 }
 
+# 自启动自愈：让两处固定位置的产物**与当前代码一致**——不只是"存在"。
+# 判据取内容而非存在，理由是升级路径：改完脚本若没走"安装"，固定位置里留着的仍是
+# 旧 plist / 旧定位器（搜索算法、参数、乃至 KeepAlive 这类语义都会停在旧值上）。
+# 每次自查 = 让系统状态收敛到当前代码，不依赖用户记得重装。
 repair_autorun() {
     _need=0
     [ -f "$PLIST_PATH" ] || _need=1
     [ -f "$LOCATOR_PATH" ] || _need=1
     if [ $_need -eq 0 ]; then
-        grep -qF "$LOCATOR_PATH" "$PLIST_PATH" 2>/dev/null || _need=1
+        # 命令替换会吃掉末尾换行，所以这里比的是"生成出来的代码"是否一致，行尾不算差异。
+        _want_plist=$(get_plist_content)
+        _have_plist=$(cat "$PLIST_PATH" 2>/dev/null)
+        [ "$_have_plist" = "$_want_plist" ] || _need=1
+        if [ -f "$SCRIPT_DIR/locator.sh" ]; then
+            cmp -s "$SCRIPT_DIR/locator.sh" "$LOCATOR_PATH" || _need=1
+        fi
         launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" || _need=1
     fi
     if [ $_need -eq 1 ]; then
         set_autorun || true
-        log_msg "已自动修复开机自启动（定位器/自启动项损坏）"
+        log_msg "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
     fi
 }
 
@@ -714,6 +758,8 @@ run_monitor_loop() {
             _pending=""; _pending_n=0
         fi
         _repair=$((_repair + 1))
+        # 每 30 轮自愈一次自启动配置（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
+        # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
         if [ $_repair -ge 30 ]; then _repair=0; repair_autorun || true; fi
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
     done
@@ -955,9 +1001,10 @@ uninstall_envproxy() {
     _ghost=$(get_monitor_pid || true)
     if [ -n "$_ghost" ]; then kill -9 "$_ghost" 2>/dev/null || true; sleep 0.5; fi
     remove_user_env_vars
-    if [ "$_purge" = "1" ]; then
-        rm -f "$ENVPROXY_HOME/monitor.stdout.log" "$ENVPROXY_HOME/monitor.stderr.log" 2>/dev/null || true
-    fi
+    # launchd 的两个重定向文件（StandardOutPath/StandardErrorPath）是运行时管道，不是黑匣子：
+    # 一律清掉，"恢复到安装前的状态"才成立。唯一的黑匣子是 monitor/monitor.log，
+    # 它的去留由上面那次询问决定。
+    rm -f "$ENVPROXY_HOME/monitor.stdout.log" "$ENVPROXY_HOME/monitor.stderr.log" 2>/dev/null || true
     # 非 purge 也只保留项目内日志：固定目录空了就删，不留空壳
     if [ -d "$ENVPROXY_HOME" ] && [ -z "$(ls -A "$ENVPROXY_HOME" 2>/dev/null)" ]; then
         rmdir "$ENVPROXY_HOME" 2>/dev/null || true

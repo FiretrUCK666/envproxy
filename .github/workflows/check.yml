@@ -24,3 +24,25 @@ jobs:
           $tokens = $null; $errs = $null
           [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
+
+      - name: 编码红线（与 AGENTS.md 第 3 条同款）
+        run: |
+          # 这两条都是"编辑器保存时悄悄违反"的类型，所以让 CI 当判据，不靠人记。
+          if ! head -c 3 win/envproxy.ps1 | od -An -tx1 | tr -d ' \n' | grep -qx efbbbf; then
+            echo "win/envproxy.ps1 缺少 UTF-8 BOM（无 BOM 时中文系统 PowerShell 5.1 会按 ANSI 读，直接语法报错）"
+            exit 1
+          fi
+          for f in mac/*.sh; do
+            if head -c 3 "$f" | od -An -tx1 | tr -d ' \n' | grep -qx efbbbf; then
+              echo "$f 不应带 BOM（BOM 会顶掉 shebang，脚本无法执行）"
+              exit 1
+            fi
+            if grep -q $'\r' "$f"; then
+              echo "$f 必须是 LF 行尾"
+              exit 1
+            fi
+          done
+          echo "编码红线通过"
+
+      - name: 文档目录与标题一致（与 AGENTS.md 第 4 条同款）
+        run: node tools/sync-toc.mjs README.md README.en.md --check

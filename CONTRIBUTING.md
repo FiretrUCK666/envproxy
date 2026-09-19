@@ -41,7 +41,8 @@ EnvProxy 特有的两条：如果问题只在“断开不断内核/节点抖动�
 
 ## 开发环境
 
-零依赖，不用安装任何东西：
+产品本身零依赖，不用安装任何东西；唯一需要 Node 的是"文档目录校验"这个维护者工具
+（`tools/sync-toc.mjs`——只在本地与 CI 跑，不随包发给使用者）：
 
 ```sh
 # 获取代码
@@ -50,7 +51,11 @@ cd envproxy
 
 # 改完自检（与 CI 跑的是同一批）
 bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
+node tools/sync-toc.mjs README.md README.en.md --check
 ```
+
+编码红线（`win\envproxy.ps1` 必须带 BOM、`mac/*.sh` 必须无 BOM 且 LF）同样由 CI 校验：
+编辑器保存时很容易悄悄丢掉 BOM、或把 LF 存成 CRLF，所以别只靠眼睛看。
 
 `win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
 构建与验证节第 2 条）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh` 确认行为。
@@ -60,14 +65,21 @@ bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.
 改完必须全绿才算完成。按顺序：
 
 ```sh
-# sh 语法（macOS/Git-Bash；CI 同款）
+# 1) sh 语法（macOS/Git-Bash；CI 同款）
 bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
-# ps1 语法（Windows 本机 PowerShell；CI 同款）
-# 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
-# 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
+# 2) ps1 语法（Windows 本机 PowerShell；CI 同款）
+# 3) 编码红线：win/envproxy.ps1 带 BOM、mac/*.sh 无 BOM 且 LF（CI 同款）
+# 4) 文档目录与标题一致（改了任一份 README 后必跑；CI 同款）
+node tools/sync-toc.mjs README.md README.en.md --check
+# 5) 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
+# 6) 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
 ```
 
-这里的命令与 `AGENTS.md` 构建与验证节保持一致，改一处时同步另一处。
+增删小节或改标题后，先跑一次不带 `--check` 的 `node tools/sync-toc.mjs README.md README.en.md`
+重生成目录，再 `--check` 复核。
+
+这里的命令与 `AGENTS.md` 构建与验证节保持一致，改一处时同步另一处（外加 `check.yml`
+与 `release.yml` 两个 workflow）。
 
 ## 硬性规范
 
@@ -75,6 +87,8 @@ bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.
 
 - `win\envproxy.ps1` 永远 UTF-8 **带 BOM** 保存，`mac\envproxy.sh` 永远 LF **无 BOM**保存，
   改一侧不许顺手“统一”另一侧；
+- 改了中英任一份 `README` 必须同步另一份，并重跑目录同步（`node tools/sync-toc.mjs
+  README.md README.en.md`）——目录是派生内容，不手工改；
 - 只用系统自带命令，不引入 Python/Node/第三方模块；
 - 不写死端口、进程名、路径，新增适配只向端口表/进程名特征追加；
 - 包装壳（`.cmd`/`.command`/小 `.sh`）不许长逻辑；
