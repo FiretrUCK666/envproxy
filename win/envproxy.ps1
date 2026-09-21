@@ -510,10 +510,13 @@ function Get-CurrentState {
 # DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧写 9 个。
 $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
 
-# 本机地址直连的默认例外集。两种写法都收：`::1` 是给按 shell 惯例裸写 IPv6 的工具，
-# `[::1]` 是给按 URL 字面量解析方括号的那些工具——谁认哪种由工具自己决定，
-# 这里只保证"该走直连的本机地址，两种写法都覆盖到了"。
-$DefaultNoProxy = "localhost,127.0.0.1,::1,[::1]"
+# 本机地址直连的默认例外集，写法遵循 NO_PROXY 的通行规范：IPv6 地址**裸写**。
+# 裸写是各家的共同要求——httpx 的规范示例就是 `NO_PROXY=example.com,::1,localhost,...`，
+# 而且它会自己给 IPv6 补上方括号去构造内部模式（见其 _utils.is_ipv6_hostname 分支）；
+# 预先写成 `[::1]` 会被当成普通域名，生成非法模式，反而让每一次请求都抛
+# `InvalidURL: Invalid port: ':1]'`。也就是说方括号属于 URL 字面量的写法，
+# 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
+$DefaultNoProxy = "localhost,127.0.0.1,::1"
 
 function Get-EnvProxyValue {
     return [Environment]::GetEnvironmentVariable($ProxyVarNames[0], "User")

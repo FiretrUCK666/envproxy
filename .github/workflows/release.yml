@@ -54,6 +54,11 @@ jobs:
           if ($fail) { exit 1 }
           Write-Host '编码红线通过'
 
+      - name: NO_PROXY 写法与兼容性检查
+        run: |
+          python3 -m pip install --quiet httpx
+          python3 tools/check-no-proxy.py
+
   release:
     needs: check
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'

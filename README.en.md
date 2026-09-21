@@ -50,7 +50,7 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 | `HTTP_PROXY` | `http://127.0.0.1:port` | proxy for http:// requests |
 | `HTTPS_PROXY` | `http://127.0.0.1:port` | proxy for https:// requests |
 | `ALL_PROXY` | `http://127.0.0.1:port` | fallback for protocols the specific ones don't cover |
-| `NO_PROXY` | `localhost,127.0.0.1,::1,[::1]` | local addresses go direct, no proxy |
+| `NO_PROXY` | `localhost,127.0.0.1,::1` | local addresses go direct, no proxy |
 | `NODE_USE_ENV_PROXY` | `1` | makes newer Node-based tools (native fetch) honor env proxies |
 
 > Why this form: all proxy values uniformly use the `http://` scheme (never the old `ALL_PROXY=socks5://`). Local proxy ports (MonoCloud/Clash etc.) are mixed ports that answer both HTTP and SOCKS5; but some tools only understand `http://` and reject `socks5://` (e.g. dsh prints "all_proxy names a SOCKS proxy, which is not supported" and skips it). Uniform `http://` works with the most tools, with zero behavior loss.
@@ -64,7 +64,7 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 
 > About `NO_PROXY` (**entries are only ever added, never taken away**):
 > Environment variables are a shared user-level resource, and you may keep your own exceptions in there (a corporate intranet, a host you debug against). So this tool only tops `NO_PROXY` up: the defaults are written, and **anything already in the list is kept verbatim**; the other variables are written for this tool's own purpose, but **uninstall removes only the values this tool wrote** — a value it did not write is left completely alone.
-> The default exception set is `localhost,127.0.0.1,::1,[::1]`. Both IPv6 spellings are included because tools disagree: some expect the bare `::1` of shell convention, others parse the bracketed `[::1]` of URL literals. Neither is redundant — they are two spellings of the same address and both need covering.
+> The default exception set is `localhost,127.0.0.1,::1`, with the IPv6 address written **bare**. That is the accepted convention for `NO_PROXY`: httpx documents its own handling as `NO_PROXY=example.com,::1,localhost,...` and adds the brackets itself when building its internal match patterns. Write `[::1]` here instead and it is taken for an ordinary domain name, producing an invalid pattern, so that **every request** raises `InvalidURL: Invalid port: ':1]'`. Brackets belong to URL literals; inside `NO_PROXY` they are in the wrong place — which is also why this tool will not write that spelling for you.
 > If something else clobbers a variable (overwrites it, blanks it, drops one entry), you do not need to act: the monitor re-checks the whole set every 60–90 s and restores what is missing. That check is idempotent, so when everything is in place it writes nothing at all.
 
 ## 1. Install (3 steps, 5 minutes)
