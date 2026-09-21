@@ -47,13 +47,20 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 
 | Variable | Value written | Purpose |
 |---|---|---|
-| `HTTP_PROXY` / `http_proxy` | `http://127.0.0.1:port` | proxy for http:// requests |
-| `HTTPS_PROXY` / `https_proxy` | `http://127.0.0.1:port` | proxy for https:// requests |
-| `ALL_PROXY` / `all_proxy` | `http://127.0.0.1:port` | fallback for protocols the specific ones don't cover |
-| `NO_PROXY` / `no_proxy` | `localhost,127.0.0.1,::1` | local addresses go direct, no proxy |
+| `HTTP_PROXY` | `http://127.0.0.1:port` | proxy for http:// requests |
+| `HTTPS_PROXY` | `http://127.0.0.1:port` | proxy for https:// requests |
+| `ALL_PROXY` | `http://127.0.0.1:port` | fallback for protocols the specific ones don't cover |
+| `NO_PROXY` | `localhost,127.0.0.1,::1` | local addresses go direct, no proxy |
 | `NODE_USE_ENV_PROXY` | `1` | makes newer Node-based tools (native fetch) honor env proxies |
 
 > Why this form: all proxy values uniformly use the `http://` scheme (never the old `ALL_PROXY=socks5://`). Local proxy ports (MonoCloud/Clash etc.) are mixed ports that answer both HTTP and SOCKS5; but some tools only understand `http://` and reject `socks5://` (e.g. dsh prints "all_proxy names a SOCKS proxy, which is not supported" and skips it). Uniform `http://` works with the most tools, with zero behavior loss.
+
+> On letter case (**5 variables on Windows, 9 on macOS — a platform difference, not an omission**):
+> Windows environment variable names are **case-insensitive** — `HTTP_PROXY` and `http_proxy` are the same variable, and the registry can only hold one of them.
+> So the Windows build writes the 5 variables above; reading them under any casing (`$env:http_proxy` or `$env:HTTP_PROXY`) returns the same value, with no loss of compatibility.
+> On macOS, `launchctl` and the environment block are **genuinely case-sensitive**, so an upper-case and a lower-case entry really are two different things (some tools only look up the lower-case name). The macOS build therefore writes both cases — 9 variables in all, see section 12.
+>
+> Why not simply write both spellings everywhere: on Windows that does not achieve anything (the two writes just overwrite each other) and it leaves behind a duplicated environment block with the same name in two spellings. Some software (.NET-based hosts) then fails outright while reading it — "An item with the same key has already been added" — and everything launched from that terminal window is affected. The Windows build therefore deliberately avoids writing case-paired variable names.
 
 ## 1. Install (3 steps, 5 minutes)
 
@@ -134,7 +141,8 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 
 | Mechanism | Purpose |
 |---|---|
-| double-round confirm (debounce) | acts only after 2 consecutive confirming rounds — rapid connect/disconnect flapping never writes garbage |
+| double-round confirm (debounce) | a state change is acted on only after 2 consecutive confirming rounds — rapid connect/disconnect turning never writes garbage |
+| node failure hysteresis | "down" needs 3 consecutive failed node probes (~45 s at the 15 s throttle); one success clears the counter at once. Declaring "down" costs a global broadcast, so it errs on the slow side deliberately |
 | node hysteresis | declares "down" only after 2 consecutive probe failures — a shaky node won't cause deletes |
 | multi-endpoint check | 7 connectivity endpoints across vendors/networks (Google main / gstatic / YouTube / Wikipedia / Twitter); **fast-lane first**: normally probes only the "last good endpoint" (milliseconds, 1 request), on failure probes the rest **in parallel**, any success = "up" and becomes the new fast lane — one poisoned/slow network segment can't cause a false delete |
 | probe throttling | real probes at most once per 15 s per port, and they read response headers only — never the body (well under 1 KB each; a few MB ceiling even for 24 h of proxying) |
@@ -156,7 +164,8 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 |---|---|---|
 | terminal still can't proxy after install | terminal window was opened before install | close it completely and open a new one |
 | variables deleted late after disconnect | your app's "disconnect" didn't really stop (kernel still alive), or the node is still reachable | normal; to stop immediately, **quit** the VPN app |
-| variables deleted then restored back and forth | your node itself is flapping (reachable/unreachable), monitor faithfully reflects it | multi-endpoint check already cushions this; if it persists, the node quality is poor — switch nodes |
+| variables deleted then restored back and forth | your node itself is flapping (reachable/unreachable), monitor faithfully reflects it | multi-endpoint check already cushions this; the new build also raises the "declare down" counter from 2 to 3 consecutive failures (~45 s), so weak-network jitter no longer produces flapping; if it persists, the node quality is poor — switch nodes |
+| some program reports `An item with the same key has already been added`, or reads the environment incompletely | the session carries an environment block with the **same name in two spellings** (older builds followed the curl convention and wrote both `HTTP_PROXY` and `http_proxy`). Windows is case-insensitive, so those two spellings are one variable, and the duplicate makes .NET-based hosts throw while building their table | the Windows build now writes only the 5 canonical spellings and no longer produces duplicates (see the casing note under the variable table); **the duplicates only live in the current terminal/process chain — the registry itself is clean** — close and reopen the terminal and everything launched from it (including this tool's GUI window); no sign-out needed |
 | shows "variables deleted" while VPN app is connected | nodes temporarily can't reach the **check endpoints' networks** (e.g. Google main hit by DNS pollution/routing issues) while all endpoints were in that network → false "down" | new versions expanded endpoints to 7 cross-network ones (fast lane + parallel fallback), this is fixed at the root; if your folder is already new and only the running monitor still has old code, double-click "install" once in `win` to load it; if the folder itself is old, use "5-检查更新" |
 | "detection error" in log | one probe round errored (harmless overall) | ignore, self-recovers; click "install" once if it keeps happening |
 | install prints a pile of "unexpected token ) / }" (syntax errors) | script file encoding damaged: PowerShell 5.1 on non-UTF-8-codepage systems reads BOM-less scripts as ANSI → Chinese text breaks syntax | this version ships UTF-8 BOM at the root (works on any system as-is); if it still errors, the file was re-saved by some text tool — **re-copy an official folder** over it |
@@ -244,7 +253,7 @@ Needs nothing installed (no Node/Python), no admin rights — stock Windows 10/1
 
 Windows writes variables into the registry and one broadcast makes them global; macOS has no registry, so the Mac edition **writes both channels at once**: terminals read `~/.envproxy/proxy.env` (new terminals auto-load it), Dock-launched apps read `launchctl setenv`. Both channels move together, you feel no difference.
 
-The Mac edition injects the same set of 9 variables (`HTTP_PROXY/http_proxy/HTTPS_PROXY/https_proxy/ALL_PROXY/all_proxy` uniform `http://127.0.0.1:port`, `NO_PROXY/no_proxy=localhost,127.0.0.1,::1`, `NODE_USE_ENV_PROXY=1`), same parameters as Windows: 2 s/3 s polling, double-round confirm, 2 consecutive failures to declare down, 7 fast-lane + parallel-fallback endpoints, 15 s throttle, 200KB log cap, self-heal every 30 rounds (~60–90 s). **"2-停止监控" means the same as on Windows: stopping really stops it, until the next login.**
+The Mac edition injects the **full set of 9 variables** (`HTTP_PROXY/http_proxy/HTTPS_PROXY/https_proxy/ALL_PROXY/all_proxy` uniform `http://127.0.0.1:port`, `NO_PROXY/no_proxy=localhost,127.0.0.1,::1`, `NODE_USE_ENV_PROXY=1`) — on macOS casing really is significant, so both spellings have their own place. That is a **deliberate difference** from the 5 on Windows (see the casing note under the variable table). Everything else matches Windows: 2 s/3 s polling, double-round confirm, 3 consecutive failures to declare down (~45 s), 7 fast-lane + parallel-fallback endpoints, 15 s throttle, 200KB log cap, self-heal every 30 rounds (~60–90 s). **"2-停止监控" means the same as on Windows: stopping really stops it, until the next login.**
 
 ### 12.2 Install (3 steps)
 

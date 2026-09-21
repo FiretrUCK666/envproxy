@@ -371,14 +371,21 @@ function Test-RealConnectivity([int]$Port) {
 
 # 节点连通性判定（15 秒节流 + 迟滞防抖）：
 #   节流：真实探测产生一次外网请求（约 200 字节），每端口 15 秒最多探测一次。
-#   迟滞：连续 2 次失败才判"断"（防止节点抖动/慢响应导致状态来回翻转）；
-#         恢复则 1 次成功立即判"通"（重连要快）。
+#   迟滞：连续 $NodeFailThreshold 次失败才判"断"（防止节点抖动/慢响应导致状态来回翻转）；
+#         恢复则 1 次成功立即判"通"并清零失败计数（重连要快，抖动不累积）。
+# 阈值取 3 的理由（治本，不是调参）：判"断"的代价是「删变量 + 全系统广播」，
+# 影响机器上每一个应用；而误留代理变量的代价只是多等一会儿。两个代价不对称，
+# 判据就该不对称——一次探测不通 ≠ 代理没了。旧值 2（约 30 秒）实测在弱网下
+# 会产生 60–90 秒一次的状态横跳，每跳一次广播一次 WM_SETTINGCHANGE。
+# 阈值只是"调参"，改它不动机制；判定仍走三层验证，不许绕过计数改单次判定。
 # 分槽：节流缓存按端口分槽（哈希表）——同端口读缓存，换端口一律重验。
 # 多候选试活时，绝不会读到别的端口的旧结论（全局单槽在此会串味）。
 # DIVERGE(Win): Mac 侧 bash 3.2 无关联数组，只记最近一个槽位（见 test_node_alive）；
 # 行为契约一致（同端口节流、异端口重验）。$script:LastGoodEndpoint 两侧都保持全局
 # （只是快路提示，猜错最多浪费一次探测，不影响正确性）。
 $script:NodeState = @{}
+$NodeCheckThrottleSec = 15
+$NodeFailThreshold    = 3
 
 function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     $st = $script:NodeState["$Port"]
@@ -388,7 +395,7 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     }
     if (-not $Force) {
         $age = ((Get-Date) - $st.LastCheck).TotalSeconds
-        if ($age -lt 15) { return $st.Alive }
+        if ($age -lt $NodeCheckThrottleSec) { return $st.Alive }
     }
     $st.LastCheck = Get-Date
     $result = Test-RealConnectivity $Port
@@ -397,8 +404,8 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
         $st.Alive = $true
     } else {
         $st.FailCount++
-        # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则连续 2 次失败才判死
-        if ($Force -or ($st.FailCount -ge 2)) {
+        # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则连续 $NodeFailThreshold 次失败才判死
+        if ($Force -or ($st.FailCount -ge $NodeFailThreshold)) {
             $st.Alive = $false
         }
     }
@@ -492,33 +499,55 @@ function Get-CurrentState {
 # ------------------------------------------------------------------------------
 # 2. 读写用户级环境变量（注册表 HKCU\Environment，不需要管理员）
 # ------------------------------------------------------------------------------
-$ProxyVarNames = @("HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","ALL_PROXY","all_proxy","NO_PROXY","no_proxy","NODE_USE_ENV_PROXY")
+# 变量名一律用规范大写拼写；一张表同时是「注入清单」与「删除清单」，两者不可能再漂移。
+#
+# DIVERGE(Win): Windows 的环境命名空间大小写不敏感（注册表 HKCU\Environment 尤其如此），
+# 用户级同名不同大小写是同一个变量。曾按 curl 惯例大小写各写一份（9 个名字），实测后果有三：
+#   1) 注册表折叠成 1 个键，后写的那次覆盖先写的——"给两种拼写都留一份"在 Windows 上不存在；
+#   2) 运行期会留下同名两种拼写的重复环境块，而 .NET 系宿主建"大小写不敏感字典"时直接抛
+#      "An item with the same key has already been added"，连 Get-ChildItem Env: 都枚举不出来，
+#      子进程继续继承同一个畸形块，一个终端窗口里跑的东西一起中招；
+#   3) 变量清单与删除清单两处各写一遍，天然会漂移（NO_PROXY 曾因此残留）。
+# 故 Windows 侧只写 5 个变量名。
+# DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧维持 9 个。
+$ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
 
 function Get-EnvProxyValue {
-    return [Environment]::GetEnvironmentVariable("HTTP_PROXY", "User")
+    return [Environment]::GetEnvironmentVariable($ProxyVarNames[0], "User")
 }
 
-function Set-UserEnvVars([string]$Port) {
+function Get-ProxyVarTable([string]$Port) {
     # 代理值统一用 http:// 协议写法：本地代理端口（MonoCloud/Clash 等）几乎都是
     # 混合端口，HTTP 与 SOCKS5 都能应答；而部分工具（如 dsh/新版 Node 系）只认
     # http:// 写法、不支持 socks5://（会提示不支持并跳过）。统一 http:// 兼容面最大。
     $http = "http://127.0.0.1:$Port"
-    [Environment]::SetEnvironmentVariable("HTTP_PROXY",   $http,  "User")
-    [Environment]::SetEnvironmentVariable("http_proxy",   $http,  "User")
-    [Environment]::SetEnvironmentVariable("HTTPS_PROXY",  $http,  "User")
-    [Environment]::SetEnvironmentVariable("https_proxy",  $http,  "User")
-    [Environment]::SetEnvironmentVariable("ALL_PROXY",    $http,  "User")
-    [Environment]::SetEnvironmentVariable("all_proxy",    $http,  "User")
-    # 本机地址直连（与 README 变量表一致；大小写各一份：部分工具只认小写 no_proxy）
-    [Environment]::SetEnvironmentVariable("NO_PROXY",     "localhost,127.0.0.1,::1", "User")
-    [Environment]::SetEnvironmentVariable("no_proxy",     "localhost,127.0.0.1,::1", "User")
+    $table = [ordered]@{}
+    foreach ($n in $ProxyVarNames) { $table[$n] = $http }
+    # 本机地址直连（与 README 变量表一致）
+    $table["NO_PROXY"] = "localhost,127.0.0.1,::1"
     # 让新版 Node 系工具的原生 fetch 也自动读环境变量代理（老版本自动忽略）
-    [Environment]::SetEnvironmentVariable("NODE_USE_ENV_PROXY", "1", "User")
+    $table["NODE_USE_ENV_PROXY"] = "1"
+    return $table
+}
+
+function Set-UserEnvVars([string]$Port) {
+    $table = Get-ProxyVarTable $Port
+    foreach ($n in $table.Keys) {
+        [Environment]::SetEnvironmentVariable($n, $table[$n], "User")
+    }
 }
 
 function Remove-UserEnvVars {
+    # 只按当前清单删（清单即权威）。历史版本在 Windows 上还写过小写拼写，
+    # 而清理从不认它们 → 只写大写那一次会留下无主残留，产生"半代理"诡异行为。
+    # 故删除后按名做一次大小写不敏感自检，把任何同名残余一并清掉。
     foreach ($n in $ProxyVarNames) {
         [Environment]::SetEnvironmentVariable($n, $null, "User")
+    }
+    foreach ($n in $ProxyVarNames) {
+        if ([Environment]::GetEnvironmentVariable($n, "User")) {
+            [Environment]::SetEnvironmentVariable($n, $null, "User")
+        }
     }
 }
 

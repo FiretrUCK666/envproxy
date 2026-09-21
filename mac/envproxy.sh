@@ -96,6 +96,10 @@ LAST_ALIVE_PORT=""
 ROUND=0
 CURRENT_STATE="off"
 
+# 可调阈值（改行为只改这里，机制不动）
+NODE_CHECK_THROTTLE_SEC=15   # 真实探测节流：每端口 15 秒最多一次（流量预算靠它）
+NODE_FAIL_THRESHOLD=3        # 连续失败几次才判"断"（与 Win 侧 $NodeFailThreshold 对齐）
+
 # ------------------------------------------------------------------------------
 # 1. 日志（只记状态翻转；超过 200KB 截断为最近 200 行）
 # ------------------------------------------------------------------------------
@@ -372,9 +376,13 @@ test_real_connectivity() {
     return 1
 }
 
-# 15 秒节流 + 连续 2 次失败才判死（恢复 1 次即判活）
+# 15 秒节流 + 连续 NODE_FAIL_THRESHOLD 次失败才判死（恢复 1 次即判活并清零计数）
+# 阈值取 3 的理由（治本，不是调参）：判"断"的代价是「删变量 + 通知所有应用重读环境」，
+# 影响机器上每一个应用；而误留代理变量的代价只是多等一会儿。两个代价不对称，
+# 判据就该不对称——一次探测不通 ≠ 代理没了。旧值 2（约 30 秒）实测在弱网下会产生
+# 60–90 秒一次的状态横跳，每跳一次都惊动整机。
 # 节流缓存只认“同一端口”（单槽位：bash 3.2 无关联数组）。
-# 同端口 15 秒内直接给缓存结论；换端口一律重验——多候选试活时，
+# 同端口节流内直接给缓存结论；换端口一律重验——多候选试活时，
 # 绝不会读到别的端口的旧结论（全局单槽在此会串味）。
 # DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount 各一份，见 Test-NodeAlive）；
 # Mac 侧只有一个槽位（bash 3.2 无关联数组），因此失败计数也是全局的——别的端口失败会累计进
@@ -385,7 +393,7 @@ test_node_alive() {
     _now=$(date +%s)
     if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then
         _age=$((_now - LAST_NODE_CHECK))
-        if [ $_age -lt 15 ]; then
+        if [ $_age -lt "$NODE_CHECK_THROTTLE_SEC" ]; then
             [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
         fi
     fi
@@ -397,7 +405,7 @@ test_node_alive() {
         return 0
     else
         NODE_FAIL_COUNT=$((NODE_FAIL_COUNT + 1))
-        if [ "$_force" = "1" ] || [ $NODE_FAIL_COUNT -ge 2 ]; then
+        if [ "$_force" = "1" ] || [ $NODE_FAIL_COUNT -ge "$NODE_FAIL_THRESHOLD" ]; then
             NODE_ALIVE=0
         fi
         [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
