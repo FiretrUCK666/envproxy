@@ -58,7 +58,7 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 > On letter case (**5 variables on Windows, 9 on macOS — a platform difference, not an omission**):
 > Windows environment variable names are **case-insensitive** — `HTTP_PROXY` and `http_proxy` are the same variable, and the registry can only hold one of them.
 > So the Windows build writes the 5 variables above; reading them under any casing (`$env:http_proxy` or `$env:HTTP_PROXY`) returns the same value, with no loss of compatibility.
-> On macOS, `launchctl` and the environment block are **genuinely case-sensitive**, so an upper-case and a lower-case entry really are two different things (some tools only look up the lower-case name). The macOS build therefore writes both cases — 9 variables in all, see section 12.
+> On macOS, `launchctl` and the environment block are **genuinely case-sensitive**, so an upper-case and a lower-case entry really are two different things (some tools only look up the lower-case name). The macOS build therefore writes both cases — 9 variables in all, see section 13.
 >
 > Why not simply write both spellings everywhere: on Windows that does not achieve anything (the two writes just overwrite each other) and it leaves behind a duplicated environment block with the same name in two spellings. Some software (.NET-based hosts) then fails outright while reading it — "An item with the same key has already been added" — and everything launched from that terminal window is affected. The Windows build therefore deliberately avoids writing case-paired variable names.
 
@@ -200,7 +200,7 @@ EnvProxy\
       monitor.log   black-box log (state changes only, 200KB cap with auto-truncate)
       monitor.pid   run marker
       stop.flag     stop signal (temp file, deleted after use)
-  mac\            Mac edition (mirrors win\, see section 12.4)
+  mac\            Mac edition (mirrors win\, see section 13.4)
   VERSION         version number (single source of truth; status, update and releases all read it)
   README.md       Chinese docs (authoritative)
   README.en.md    this file
