@@ -209,7 +209,7 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
 }
 
 # 组合发现（薄封装）：只要首选不要全集的调用方（状态显示、更新走代理）继续调这个，
-# 语义与过去一致（第一个候选或 $null）。状态机走集合 + 试活，不调这个。
+# 语义与平台无关（第一个候选或 $null）。状态机走集合 + 试活，不调这个。
 # FullScan 控制是否启用昂贵的全端口批量探测（off 状态降频用）。
 function Get-ActiveProxyPort([bool]$FullScan = $true) {
     $cands = Find-CandidatePorts -FullScan:$FullScan
@@ -371,12 +371,12 @@ function Test-RealConnectivity([int]$Port) {
 
 # 节点连通性判定（15 秒节流 + 迟滞防抖）：
 #   节流：真实探测产生一次外网请求（约 200 字节），每端口 15 秒最多探测一次。
-#   迟滞：连续 $NodeFailThreshold 次失败才判"断"（防止节点抖动/慢响应导致状态来回翻转）；
-#         恢复则 1 次成功立即判"通"并清零失败计数（重连要快，抖动不累积）。
-# 阈值取 3 的理由（治本，不是调参）：判"断"的代价是「删变量 + 全系统广播」，
-# 影响机器上每一个应用；而误留代理变量的代价只是多等一会儿。两个代价不对称，
-# 判据就该不对称——一次探测不通 ≠ 代理没了。旧值 2（约 30 秒）实测在弱网下
-# 会产生 60–90 秒一次的状态横跳，每跳一次广播一次 WM_SETTINGCHANGE。
+#   迟滞：连续 $NodeFailThreshold 次失败才判"断"；恢复则 1 次成功立即判"通"
+#         并把失败计数清零，使偶发抖动不累积成"断"。
+# 迟滞必须不对称（这不是可调口味，是判据本身）：判"断"的代价是「删变量 + 全系统广播」，
+# 影响机器上每一个应用；误留代理变量的代价只是多等一会儿。两个代价不对称，判据就不许对称——
+# 一次探测不通不等于代理没了。另一侧的反向约束同样成立："通"要快（1 次成功即认），
+# 否则重连后要白等一个迟滞窗口。
 # 阈值只是"调参"，改它不动机制；判定仍走三层验证，不许绕过计数改单次判定。
 # 分槽：节流缓存按端口分槽（哈希表）——同端口读缓存，换端口一律重验。
 # 多候选试活时，绝不会读到别的端口的旧结论（全局单槽在此会串味）。
@@ -502,14 +502,12 @@ function Get-CurrentState {
 # 变量名一律用规范大写拼写；一张表同时是「注入清单」与「删除清单」，两者不可能再漂移。
 #
 # DIVERGE(Win): Windows 的环境命名空间大小写不敏感（注册表 HKCU\Environment 尤其如此），
-# 用户级同名不同大小写是同一个变量。曾按 curl 惯例大小写各写一份（9 个名字），实测后果有三：
-#   1) 注册表折叠成 1 个键，后写的那次覆盖先写的——"给两种拼写都留一份"在 Windows 上不存在；
-#   2) 运行期会留下同名两种拼写的重复环境块，而 .NET 系宿主建"大小写不敏感字典"时直接抛
-#      "An item with the same key has already been added"，连 Get-ChildItem Env: 都枚举不出来，
-#      子进程继续继承同一个畸形块，一个终端窗口里跑的东西一起中招；
-#   3) 变量清单与删除清单两处各写一遍，天然会漂移（NO_PROXY 曾因此残留）。
-# 故 Windows 侧只写 5 个变量名。
-# DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧维持 9 个。
+# 同名不同大小写就是同一个变量：写两遍只会互相覆盖，注册表里始终只有一个键。
+# 而"大小写各写一份"会在运行期留下**同名两种拼写的重复环境块**——.NET 系宿主按
+# "大小写不敏感字典"建表时直接抛 "An item with the same key has already been added"，
+# 连 Get-ChildItem Env: 都枚举不出来；子进程继续继承同一个块，一个终端窗口里跑的东西
+# 一起中招。故 Windows 侧对一个逻辑变量只写一个规范拼写，共 5 个变量名。
+# DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧写 9 个。
 $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
 
 function Get-EnvProxyValue {
@@ -538,9 +536,9 @@ function Set-UserEnvVars([string]$Port) {
 }
 
 function Remove-UserEnvVars {
-    # 只按当前清单删（清单即权威）。历史版本在 Windows 上还写过小写拼写，
-    # 而清理从不认它们 → 只写大写那一次会留下无主残留，产生"半代理"诡异行为。
-    # 故删除后按名做一次大小写不敏感自检，把任何同名残余一并清掉。
+    # 注入与删除共用 $ProxyVarNames 一张表，两者不可能漂移。
+    # 再按名复查一遍：清理不认的名字（例如按 curl 惯例写下的另一种大小写）会变成无主残留，
+    # 那是"半代理"诡异行为的来源——删除必须做到"按名之后确实一个都不剩"。
     foreach ($n in $ProxyVarNames) {
         [Environment]::SetEnvironmentVariable($n, $null, "User")
     }

@@ -24,3 +24,25 @@ jobs:
           $tokens = $null; $errs = $null
           [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
+
+      - name: 编码红线检查（与 AGENTS.md 硬性规范第 6、7 条同款）
+        shell: pwsh
+        run: |
+          $fail = 0
+          $b = [System.IO.File]::ReadAllBytes('win/envproxy.ps1')
+          if (-not ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
+            Write-Host 'win/envproxy.ps1 缺少 UTF-8 BOM'
+            $fail = 1
+          }
+          $s = [System.IO.File]::ReadAllBytes('mac/envproxy.sh')
+          if ($s[0] -eq 0xEF -and $s[1] -eq 0xBB -and $s[2] -eq 0xBF) {
+            Write-Host 'mac/envproxy.sh 带了 BOM'
+            $fail = 1
+          }
+          $text = [System.Text.Encoding]::UTF8.GetString($s)
+          if ($text.Contains("`r`n")) {
+            Write-Host 'mac/envproxy.sh 含 CRLF'
+            $fail = 1
+          }
+          if ($fail) { exit 1 }
+          Write-Host '编码红线通过'

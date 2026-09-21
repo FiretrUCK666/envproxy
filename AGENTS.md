@@ -195,12 +195,13 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   **新开的终端/程序立刻干净**（由 explorer 拉起，读的是注册表），而修复前就存在的终端
   及其子进程仍带着旧块，要由用户重开那个终端；**不需要注销**。对外口径见 `README` 故障排查。
 - **删除清单不得独立于注入清单**：删要按同一张表删（Windows 侧 `$ProxyVarNames`、
-  Mac 侧同一份循环清单）。历史上“注入清单”与“`NO_PROXY` 单独删”分家写，导致只写了大写那一次
-  留下无主残留——**清单分家必然漂移**。权威来源：`Remove-UserEnvVars` / `remove_user_env_vars`。
+  Mac 侧同一份循环清单）。注入清单、删除清单、复查清单只要有任意两份分家写，就必然漂移，
+  表现出“写了却没删掉”的无主残留——那是“半代理”诡异行为的来源。权威来源：
+  `Remove-UserEnvVars` / `remove_user_env_vars`。
 - **判“断”必须比判“通”保守**：判“断”的代价是「删变量 + 全系统广播」，影响机器上每一个应用；
   误留代理变量的代价只是多等一会儿。两个代价不对称，判据就不许对称——**单次探测不通 ≠ 代理没了**。
   故迟滞是：连续 3 次探测失败才判“断”（按 15 秒节流约 45 秒），**一次成功立即判“通”并清零计数**
-  （重试不累积）。旧值 2（约 30 秒）实测在弱网下产生 60–90 秒一次的状态横跳，每跳一次广播一次。
+  （抖动不累积）。反向约束同样成立：**“通”要快**（1 次成功即认），否则重连后要白等一个迟滞窗口。
   这条是行为契约，两侧同改。权威来源：Windows `Test-NodeAlive` 的 `$NodeFailThreshold`、
   Mac `test_node_alive` 的 `NODE_FAIL_THRESHOLD`。
 - **`ALL_PROXY` 统一 `http://` 写法**：不许改回 `socks5://`——部分工具（如 dsh）不支持
@@ -266,13 +267,18 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 | # | 命令（仓库根下执行） | 在验证什么 | 门禁 |
 | --- | --- | --- | --- |
 | 1 | `bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh`（macOS/Git-Bash；CI 同款） | sh 语法可解析 | 硬门禁 |
-| 2 | PowerShell 语法解析 `win\envproxy.ps1`（本机 `powershell` 跑 `Parser::ParseFile`；CI 同款） | ps1 无语法错误、中文无乱码（BOM 完好；必须用语法解析而非仅分词——BOM 损坏报的是解析错误） | 硬门禁 |
-| 3 | Windows 进 `win` 双击一次 `4-查看状态`（或 `bash mac/status.sh`） | 状态/变量/最近日志与预期一致 | 硬门禁 |
-| 4 | 改完核心逻辑后进 `win` 双击一次 `1-安装` 重载，再看一轮状态翻转 | 新代码实际被监控进程加载、注入/删除行为正确 | 建议（改核心必做） |
+| 2 | PowerShell 语法解析 `win\envproxy.ps1`（本机 `powershell` 跑 `Parser::ParseFile`；CI 同款） | ps1 无语法错误、中文无乱码（必须用语法解析而非仅分词——BOM 损坏报的是解析错误） | 硬门禁 |
+| 3 | 编码红线比对（见下）：ps1 前 3 字节须为 `EF BB BF`；`mac/envproxy.sh` 无 BOM 且不含 CRLF（CI 同样是这一步） | 两条编码红线没被编辑器的默认行为悄悄改掉 | 硬门禁 |
+| 4 | Windows 进 `win` 双击一次 `4-查看状态`（或 `bash mac/status.sh`） | 状态/变量/最近日志与预期一致 | 硬门禁 |
+| 5 | 改完核心逻辑后进 `win` 双击一次 `1-安装` 重载，再看一轮状态翻转 | 新代码实际被监控进程加载、注入/删除行为正确 | 建议（改核心必做） |
 
 `win\monitor\`（或 `mac\monitor\`）状态、已开旧终端窗口不作为验证依据（旧终端不继承新变量是预期行为，
-见 `README` 故障排查）。CI（`check.yml` 与 `release.yml` 内嵌的 check job）跑的即第 1–2 条，
+见 `README` 故障排查）。CI（`check.yml` 与 `release.yml` 内嵌的 check job）跑的即第 1–3 条，
 与本地同一批——改验证手段时三处一起改。
+
+**为什么第 3 条必须是独立门禁**：语法解析在 BOM 丢失时仍可能通过（本机 PS7 就能过），
+而多数文本编辑器保存时会默认丢掉 BOM——这条红线只靠"记得"必然失守，所以由 CI 按字节校验。
+反向同理：`mac/envproxy.sh` 被编辑器顺手补上 BOM 或 CRLF 同样当场失败。
 
 ## 版本与发版
 
@@ -291,12 +297,12 @@ Secrets，需要钥匙的步骤不会跑也不会泄。判断不了时按贡献�
 - **发版动作只有一个**：`git push origin vX.Y.Z`。`release` job 自动接管：
   先跑门禁 check → 校验标签与 `VERSION` 一致 → `gh release create --generate-notes`
  （幂等：Release 已存在则跳过）。日常推送分支**不触发**发版。
-- **Release 正文默认自动生成**（英文，来自提交记录；提交信息保持英文ASCII即无
-  非ASCII经shell风险）。要中文正文时：写 UTF-8 文件由脚本按字节发送、发送后回读
-  比对，不经 shell 拼接（见 skill 的 `scripts/release-notes.mjs` 用法）。
+- **Release 正文默认自动生成**（英文，来自提交记录）。
 - **中文正文随版一起走**：发版前把 `release-notes/<标签>.md` 写好一起提交，
   workflow 有文件就用文件发布，没有才回退英文自动生成。文件是 UTF-8 落盘、从磁盘读，
-  中文不经 shell；内容在 PR 里可评审。不新增任何钥匙。
+  中文不经 shell；内容在 PR 里可评审。**仓库内不为此新增任何工具或依赖**——
+  需要人工写入时就用编辑器落盘，不经 shell 拼接（提交信息保持英文 ASCII，
+  即无"中文经 shell"的风险面）。
 - **`RELEASE_TOKEN` 运维**：仓库 Secrets 里 exact 同名，细粒度、仅 Contents 读写、
   仅本仓库、有过期时间。过期或换人**只换 Secrets 里那一个值**，工作流文件不动；
   到期前换发是维护者的周期事项，发布前先确认它有效。
