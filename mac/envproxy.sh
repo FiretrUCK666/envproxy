@@ -116,6 +116,48 @@ log_msg() {
 # ------------------------------------------------------------------------------
 # 2. 环境变量读写（终端路 proxy.env + GUI 路 launchctl，双路同进同退）
 # ------------------------------------------------------------------------------
+# 本机地址直连的默认例外集。两种写法都收：`::1` 是给按 shell 惯例裸写 IPv6 的工具，
+# `[::1]` 是给按 URL 字面量解析方括号的那些工具——谁认哪种由工具自己决定，
+# 这里只保证"该走直连的本机地址，两种写法都覆盖到了"。
+DEFAULT_NO_PROXY="localhost,127.0.0.1,::1,[::1]"
+
+# 读已存在的 NO_PROXY（终端路取自 proxy.env，GUI 路取自 launchctl）。
+# 带参数则读指定变量名，不带则读大写那份，供合并用。
+get_existing_no_proxy() {
+    _name="${1:-NO_PROXY}"
+    _v=""
+    if [ -f "$PROXY_ENV" ]; then
+        _v=$(grep -E "^export ${_name}=" "$PROXY_ENV" 2>/dev/null | head -n 1 | sed 's/^export [A-Za-z_]*="//; s/"$//')
+    fi
+    if [ -z "$_v" ]; then _v=$(launchctl getenv "$_name" 2>/dev/null || echo ""); fi
+    printf '%s' "$_v"
+}
+
+# NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。
+# 环境变量是共享资源——用户自己加的例外（公司内网等）与别的工具写下的例外都必须留着，
+# 本工具只负责"本机地址一定直连"这一件事。
+# 取值用 sed 而非 tr -d ' '：条目里可能有空格，整体删空格会改掉别人写的值。
+merge_no_proxy() {
+    _existing="$1"; _default="$2"
+    _out=""
+    _lower=$(printf '%s' "$_default" | tr 'A-Z' 'a-z')
+    _old=$IFS; IFS=','
+    for _p in $_default; do
+        _out="${_out:+$_out,}$_p"
+    done
+    for _p in $_existing; do
+        _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+        [ -n "$_pt" ] || continue
+        _pl=$(printf '%s' "$_pt" | tr 'A-Z' 'a-z')
+        case ",$_lower," in
+            *",$_pl,"*) ;;
+            *) _out="${_out:+$_out,}$_pt"; _lower="${_lower},${_pl}" ;;
+        esac
+    done
+    IFS=$_old
+    printf '%s' "$_out"
+}
+
 get_current_proxy_port() {
     [ -f "$PROXY_ENV" ] || return 1
     _line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
@@ -126,6 +168,7 @@ get_current_proxy_port() {
 set_user_env_vars() {
     _port="$1"
     _http="http://127.0.0.1:$_port"
+    _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     _tmp="$PROXY_ENV.tmp.$$"
     {
@@ -135,8 +178,8 @@ set_user_env_vars() {
         printf 'export https_proxy="%s"\n' "$_http"
         printf 'export ALL_PROXY="%s"\n' "$_http"
         printf 'export all_proxy="%s"\n' "$_http"
-        printf 'export NO_PROXY="localhost,127.0.0.1,::1"\n'
-        printf 'export no_proxy="localhost,127.0.0.1,::1"\n'
+        printf 'export NO_PROXY="%s"\n' "$_np"
+        printf 'export no_proxy="%s"\n' "$_np"
         printf 'export NODE_USE_ENV_PROXY="1"\n'
     } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
     launchctl setenv HTTP_PROXY "$_http" 2>/dev/null || true
@@ -145,19 +188,53 @@ set_user_env_vars() {
     launchctl setenv https_proxy "$_http" 2>/dev/null || true
     launchctl setenv ALL_PROXY "$_http" 2>/dev/null || true
     launchctl setenv all_proxy "$_http" 2>/dev/null || true
-    launchctl setenv NO_PROXY "localhost,127.0.0.1,::1" 2>/dev/null || true
-    launchctl setenv no_proxy "localhost,127.0.0.1,::1" 2>/dev/null || true
+    launchctl setenv NO_PROXY "$_np" 2>/dev/null || true
+    launchctl setenv no_proxy "$_np" 2>/dev/null || true
     launchctl setenv NODE_USE_ENV_PROXY "1" 2>/dev/null || true
 }
 
+# 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
+# 半代理状态永远无人纠正。返回 0 = 已就位（无需动手）。
+env_vars_in_sync() {
+    _port="$1"
+    [ -f "$PROXY_ENV" ] || return 1
+    _http="http://127.0.0.1:$_port"
+    _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
+    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+        grep -qxF "export $_v=\"$_http\"" "$PROXY_ENV" 2>/dev/null || return 1
+    done
+    grep -qxF "export NO_PROXY=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
+    grep -qxF "export no_proxy=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
+    grep -qxF 'export NODE_USE_ENV_PROXY="1"' "$PROXY_ENV" 2>/dev/null || return 1
+    return 0
+}
+
+# 幂等同步：不齐就补齐，齐了则什么都不做、零写入。
+sync_user_env_vars() {
+    _port="$1"
+    env_vars_in_sync "$_port" && return 0
+    set_user_env_vars "$_port"
+    return 0
+}
+
 remove_user_env_vars() {
+    # 只回收**本工具自己写下的** NO_PROXY / no_proxy / NODE_USE_ENV_PROXY。
+    # 环境变量是共享资源，用户或别的工具可能把这几项用于自己的用途；
+    # 值不是我们写的那一个，就说明不是我们的东西，一律不动。
+    _ours=$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')
+    for _v in no_proxy NO_PROXY; do
+        _cur=$(get_existing_no_proxy "$_v" | tr -d ' ' | tr 'A-Z' 'a-z')
+        if [ "$_cur" = "$_ours" ]; then launchctl unsetenv "$_v" 2>/dev/null || true; fi
+    done
+    _node=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
+    if [ "$_node" = "1" ]; then launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null || true; fi
     rm -f "$PROXY_ENV" 2>/dev/null || true
-    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy NODE_USE_ENV_PROXY; do
+    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         launchctl unsetenv "$_v" 2>/dev/null || true
     done
 }
 
-# 幂等：值已正确就什么都不做
+# 幂等：整套变量都已就位就什么都不做（只看单项会让"地址对、别的漂移"的半代理状态无人纠正）
 apply_state() {
     _state="$1"
     if [ "$_state" = "off" ]; then
@@ -167,8 +244,7 @@ apply_state() {
         fi
     else
         _port=$(printf '%s' "$_state" | sed 's/^on://')
-        _cur=$(get_current_proxy_port 2>/dev/null || echo "")
-        if [ "$_cur" != "$_port" ]; then
+        if ! env_vars_in_sync "$_port"; then
             set_user_env_vars "$_port"
             log_msg "检测到本地代理端口 $_port -> 已注入代理 http://127.0.0.1:$_port"
         fi
@@ -766,9 +842,18 @@ run_monitor_loop() {
             _pending=""; _pending_n=0
         fi
         _repair=$((_repair + 1))
-        # 每 30 轮自愈一次自启动配置（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
+        # 每 30 轮自愈一次（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
         # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
-        if [ $_repair -ge 30 ]; then _repair=0; repair_autorun || true; fi
+        if [ $_repair -ge 30 ]; then
+            _repair=0
+            repair_autorun || true
+            # 变量自检：apply_state 只在状态翻转时动手，稳态下它永远不会被调用，
+            # 于是"别的东西改坏了变量"没人纠正。这里按同一周期整表核对，不齐就补回来
+            # （幂等，齐了则零写入）。只核对我们本该持有的那几个，与用户自己的变量无关。
+            case "$_last" in
+                on:*) sync_user_env_vars "${_last#on:}" || true ;;
+            esac
+        fi
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
     done
 

@@ -510,8 +510,39 @@ function Get-CurrentState {
 # DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧写 9 个。
 $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
 
+# 本机地址直连的默认例外集。两种写法都收：`::1` 是给按 shell 惯例裸写 IPv6 的工具，
+# `[::1]` 是给按 URL 字面量解析方括号的那些工具——谁认哪种由工具自己决定，
+# 这里只保证"该走直连的本机地址，两种写法都覆盖到了"。
+$DefaultNoProxy = "localhost,127.0.0.1,::1,[::1]"
+
 function Get-EnvProxyValue {
     return [Environment]::GetEnvironmentVariable($ProxyVarNames[0], "User")
+}
+
+# 小写化 + 去空白，用于合并去重（比较时大小写不敏感）
+function Get-NormalizedNoProxyEntries([string]$Value) {
+    $out = @()
+    foreach ($part in ($Value -split ',')) {
+        $t = $part.Trim()
+        if ($t) { $out += $t.ToLowerInvariant() }
+    }
+    return $out
+}
+
+# NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。
+# 这样做是因为环境变量是用户级共享资源——用户自己加的例外（公司内网等）与
+# 别的工具写下的例外都必须留着，本工具只负责"本机地址一定直连"这一件事。
+# 后果是两条：用户手动加例外不会被下一轮冲掉，也不会与轮次之间来回互相覆盖。
+function Merge-NoProxy([string]$Existing, [string]$Default) {
+    $parts = @()
+    foreach ($p in ($Default -split ',')) { $t = $p.Trim(); if ($t) { $parts += $t } }
+    $seen = Get-NormalizedNoProxyEntries $Default
+    foreach ($p in ($Existing -split ',')) {
+        $t = $p.Trim()
+        if (-not $t) { continue }
+        if ($seen -notcontains $t.ToLowerInvariant()) { $parts += $t; $seen += $t.ToLowerInvariant() }
+    }
+    return ($parts -join ',')
 }
 
 function Get-ProxyVarTable([string]$Port) {
@@ -522,49 +553,80 @@ function Get-ProxyVarTable([string]$Port) {
     $table = [ordered]@{}
     foreach ($n in $ProxyVarNames) { $table[$n] = $http }
     # 本机地址直连（与 README 变量表一致）
-    $table["NO_PROXY"] = "localhost,127.0.0.1,::1"
+    $table["NO_PROXY"] = $DefaultNoProxy
     # 让新版 Node 系工具的原生 fetch 也自动读环境变量代理（老版本自动忽略）
     $table["NODE_USE_ENV_PROXY"] = "1"
     return $table
 }
 
-function Set-UserEnvVars([string]$Port) {
-    $table = Get-ProxyVarTable $Port
-    foreach ($n in $table.Keys) {
-        [Environment]::SetEnvironmentVariable($n, $table[$n], "User")
+function Sync-UserEnvVars([string]$Port) {
+    # 幂等判据是**整套变量**是否都已就位，不是只看代理地址：
+    # 只看地址会让"代理值对、但别的变量缺失或漂移"的半代理状态一直无人纠正。
+    # 返回是否真的写了东西——调用方据此决定要不要广播（静默时零广播、零写入）。
+    $desired = Get-ProxyVarTable $Port
+    $existingNoProxy = [Environment]::GetEnvironmentVariable("NO_PROXY", "User")
+    $desired["NO_PROXY"] = Merge-NoProxy $existingNoProxy $DefaultNoProxy
+    $changed = $false
+    foreach ($n in $desired.Keys) {
+        if ([Environment]::GetEnvironmentVariable($n, "User") -ne $desired[$n]) { $changed = $true; break }
     }
+    if (-not $changed) { return $false }
+    foreach ($n in $desired.Keys) {
+        [Environment]::SetEnvironmentVariable($n, $desired[$n], "User")
+    }
+    return $true
 }
 
 function Remove-UserEnvVars {
-    # 注入与删除共用 $ProxyVarNames 一张表，两者不可能漂移。
-    # 再按名复查一遍：清理不认的名字（例如按 curl 惯例写下的另一种大小写）会变成无主残留，
-    # 那是"半代理"诡异行为的来源——删除必须做到"按名之后确实一个都不剩"。
+    # 注入与删除共用一张表，两者不可能漂移；再按名复查一遍，确保"按名之后确实一个都不剩"——
+    # 无主残留正是"半代理"诡异行为的来源。
+    #
+    # 例外：只回收**本工具自己写下的** NO_PROXY / NODE_USE_ENV_PROXY。
+    # 环境变量是用户级共享资源，用户或别的工具可能把这两项用于自己的用途；
+    # 值不是我们写的那一个，就说明不是我们的东西，一律不动。
+    $ours = $DefaultNoProxy
     foreach ($n in $ProxyVarNames) {
-        [Environment]::SetEnvironmentVariable($n, $null, "User")
-    }
-    foreach ($n in $ProxyVarNames) {
-        if ([Environment]::GetEnvironmentVariable($n, "User")) {
-            [Environment]::SetEnvironmentVariable($n, $null, "User")
+        $cur = [Environment]::GetEnvironmentVariable($n, "User")
+        if (-not $cur) { continue }
+        if ($n -eq "NO_PROXY") {
+            if (((Get-NormalizedNoProxyEntries $cur) -join ',') -eq ((Get-NormalizedNoProxyEntries $ours) -join ',')) {
+                [Environment]::SetEnvironmentVariable($n, $null, "User")
+            }
+            continue
         }
+        if ($n -eq "NODE_USE_ENV_PROXY") {
+            if ($cur -eq "1") { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            continue
+        }
+        [Environment]::SetEnvironmentVariable($n, $null, "User")
     }
 }
 
-# 把状态应用到系统（幂等：值已经正确就什么都不做）
+# 把状态应用到系统（幂等：整套变量都已就位就什么都不做）
 function Apply-State([string]$state) {
-    if ($state -eq "off") {
-        if (Get-EnvProxyValue) {
-            Remove-UserEnvVars
-            Broadcast-EnvironmentChange
-            Write-MonitorLog "代理已关闭 -> 已删除代理变量，恢复直连"
+    # 全局互斥：安装入口与监控主循环可能同一时刻各校正一次（点"安装"时两者都在跑），
+    # 没有这把锁就会出现"两边都判定要写 → 重复写 + 重复广播"。锁只覆盖"判断 + 写入"这段，
+    # 拿到锁的一方写完，另一方进来时看到已就位，自然什么都不做。
+    $gate = New-Object System.Threading.Mutex($false, "Global\EnvProxyApplyState")
+    $held = $false
+    try { $held = $gate.WaitOne(5000) } catch { $held = $false }
+    try {
+        if ($state -eq "off") {
+            if (Get-EnvProxyValue) {
+                Remove-UserEnvVars
+                Broadcast-EnvironmentChange
+                Write-MonitorLog "代理已关闭 -> 已删除代理变量，恢复直连"
+            }
+        } else {
+            $port = $state.Substring(3)
+            $want = "http://127.0.0.1:$port"
+            if (Sync-UserEnvVars $port) {
+                Broadcast-EnvironmentChange
+                Write-MonitorLog "检测到本地代理端口 $port -> 已注入代理 $want"
+            }
         }
-    } else {
-        $port = $state.Substring(3)
-        $want = "http://127.0.0.1:$port"
-        if ((Get-EnvProxyValue) -ne $want) {
-            Set-UserEnvVars $port
-            Broadcast-EnvironmentChange
-            Write-MonitorLog "检测到本地代理端口 $port -> 已注入代理 $want"
-        }
+    } finally {
+        if ($held) { try { $gate.ReleaseMutex() } catch {} }
     }
 }
 
@@ -891,12 +953,17 @@ function Run-MonitorLoop {
                 $pendingCount = 0
             }
 
-            # 每 30 轮自愈一次自启动配置（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
+            # 每 30 轮自愈一次（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
             # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
             $repairRound++
             if ($repairRound -ge 30) {
                 $repairRound = 0
                 Repair-AutoRun
+                # 变量自检：Apply-State 只在状态翻转时动手，稳态下它永远不会被调用，
+                # 于是"别的东西改坏了变量"没人纠正。这里按同一周期做一次整表核对，
+                # 不齐就补回来（幂等，齐了则零写入、零广播）。只核对我们本该持有的那几个，
+                # 所以用户自己设的、与本工具无关的变量不受影响。
+                if ($lastState -ne "off") { Sync-UserEnvVars $lastState.Substring(3) | Out-Null }
             }
 
             # 节奏差异化：on 状态 2 秒一轮（响应快）；off 状态 3 秒一轮（省资源）
