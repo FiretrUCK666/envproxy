@@ -638,8 +638,12 @@ if (-not $target) { exit }
 New-Item -Path $reg -Force -ErrorAction SilentlyContinue | Out-Null
 Set-ItemProperty -Path $reg -Name "ScriptPath" -Value $target -ErrorAction SilentlyContinue
 
+# 监控进程识别判据：与核心脚本里的 $MonitorCmdLinePattern 保持同一语义。
+# 这里必须写字面量——本模板是单引号 here-string，变量在生成时不会被展开，
+# 写变量名会让生成的定位器引用一个未定义变量（空模式恒匹配，反而误判"监控已在跑"）。
+$MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
 $running = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match '-File\s+"[^"]*envproxy\.ps1"\s*$' }
+    Where-Object { $_.CommandLine -match $MonitorCmdLinePattern }
 if (-not $running) {
     Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
         -ArgumentList "-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$target`""
@@ -714,6 +718,13 @@ function Ensure-MonitorDir {
     try { New-Item -Path $MonitorDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
 }
 
+# 监控进程的识别判据（唯一权威处，下面三处引用都指向它）：
+# 监控进程的特征 = 命令行以 -File "...envproxy.ps1" 结尾、且不带任何子命令。
+# 执行 -Status / -Install / -Stop 的进程带了子命令参数，故不会被误认；调用方自身另行排除。
+# 收紧到行尾锚定是为了排除"命令行里恰好含 envproxy 字样"的其他进程（如带 -Command 的诊断调用）。
+# DIVERGE(Mac): macOS 侧等价实现是 `pgrep -f "envproxy\.sh$"`（见 mac/locator.sh），语义相同。
+$MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
+
 function Get-MonitorProcess {
     # 先按 PID 文件（校验命令行确实是本脚本，防止 PID 被系统复用而误杀他人）
     if (Test-Path $PidFile) {
@@ -721,7 +732,7 @@ function Get-MonitorProcess {
             $pid2 = [int]((Get-Content $PidFile -Raw -ErrorAction Stop).Trim())
             if ($pid2 -ne $PID) {
                 $w = Get-CimInstance Win32_Process -Filter "ProcessId=$pid2" -ErrorAction SilentlyContinue
-                if ($w -and $w.CommandLine -match '-File\s+"[^"]*envproxy\.ps1"\s*$') { return $w }
+                if ($w -and $w.CommandLine -match $MonitorCmdLinePattern) { return $w }
             }
         } catch {}
     }
@@ -731,7 +742,7 @@ function Get-MonitorProcess {
     return Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $_.ProcessId -ne $PID -and
-            $_.CommandLine -match '-File\s+"[^"]*envproxy\.ps1"\s*$'
+            $_.CommandLine -match $MonitorCmdLinePattern
         } | Select-Object -First 1
 }
 
