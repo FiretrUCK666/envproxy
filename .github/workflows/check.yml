@@ -102,21 +102,24 @@ jobs:
             $fail = 1
           }
           # b) 目录锚点：与条目文字自洽，且每条都能命中一个二级标题；二级标题都进了目录
+          # 目录标题本身不计入（它由位置决定：目录块之前最后那个二级标题，不写死语言）
           foreach ($f in 'README.md','README.en.md') {
             $lines = Get-Content $f -Encoding UTF8
-            $inToc = $false; $toc = @()
+            $inToc = $false; $seenToc = $false; $toc = @(); $tocHeading = $null
             foreach ($l in $lines) {
-              if ($l -match '<!--\s*toc:start\s*-->') { $inToc = $true; continue }
+              if ($l -match '<!--\s*toc:start\s*-->') { $inToc = $true; $seenToc = $true; continue }
               if ($l -match '<!--\s*toc:end\s*-->') { $inToc = $false; continue }
+              if ((-not $seenToc) -and ($l -match '^##\s+')) { $tocHeading = Get-Anchor ($l -replace '^##\s+','') }
               if ($inToc -and $l -match '^\s*-\s+\[(.*)\]\(#(.*)\)\s*$') { $toc += [pscustomobject]@{ Text = $Matches[1]; Anchor = $Matches[2] } }
             }
+            if (-not $tocHeading) { Write-Host ("{0}：目录块前面没有二级标题（目录本身要有标题）" -f $f); $fail = 1 }
             $heads = @($lines | Where-Object { $_ -match '^##\s+' } | ForEach-Object { Get-Anchor ($_ -replace '^##\s+','') })
             foreach ($t in $toc) {
               if ((Get-Anchor $t.Text) -ne $t.Anchor) { Write-Host ("{0}：目录锚点与条目文字不符 [{1}]" -f $f, $t.Text); $fail = 1 }
               if ($heads -notcontains $t.Anchor) { Write-Host ("{0}：目录锚点找不到对应标题 {1}" -f $f, $t.Anchor); $fail = 1 }
             }
             foreach ($h in $heads) {
-              if (($h -ne (Get-Anchor '目录')) -and (($toc | ForEach-Object { $_.Anchor }) -notcontains $h)) { Write-Host ("{0}：二级标题没进目录 {1}" -f $f, $h); $fail = 1 }
+              if (($h -ne $tocHeading) -and (($toc | ForEach-Object { $_.Anchor }) -notcontains $h)) { Write-Host ("{0}：二级标题没进目录 {1}" -f $f, $h); $fail = 1 }
             }
           }
           # c) README 里不写死版本号（写死了每发一版就过期）
