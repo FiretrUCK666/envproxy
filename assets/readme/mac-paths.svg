@@ -35,11 +35,11 @@
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M226 176H248M242 170L248 176L242 182"/>
-    <path d="M532 176H554M548 170L554 176L548 182"/>
-    <path d="M858 176H878M872 170L878 176L872 182"/>
-    <path d="M326 284H348M342 278L348 284L342 290"/>
-    <path d="M602 284H878M872 278L878 284L872 290"/>
+    <path d="M226 176H244M238 170L244 176L238 182"/>
+    <path d="M532 176H550M544 170L550 176L544 182"/>
+    <path d="M858 176H872M866 170L872 176L866 182"/>
+    <path d="M326 284H344M338 278L344 284L338 290"/>
+    <path d="M602 284H872M866 278L872 284L866 290"/>
   </g>
 
   <g id="variables">
@@ -48,7 +48,7 @@
     <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
     <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 个规范拼写</text>
     <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
-    <path d="M904 292H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
+    <path d="M904 272H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
   </g>
 
