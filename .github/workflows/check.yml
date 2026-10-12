@@ -137,7 +137,9 @@ jobs:
           Expand-Archive -Path $zip2 -DestinationPath $xd -Force
           $inPkg = @(Get-ChildItem $xd -Recurse -File | ForEach-Object { $_.FullName.Substring($xd.Length).TrimStart('/','\').Replace('\','/') } | Sort-Object)
           $ign = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
-          $want = @(git ls-files | Where-Object {
+          # git 输出中文文件名时是否转义受本机 core.quotepath 影响（CI 默认转义成本地看不懂的八进制），
+          # 在这里写死关掉：门禁要的是确定性的 UTF-8 名单，不是本机配置的样子。
+          $want = @(git -c core.quotepath=false ls-files | Where-Object {
             $p = $_; $hit = $false
             foreach ($g in $ign) {
               if ($g.EndsWith('/')) { if ($p.StartsWith($g)) { $hit = $true; break } }
@@ -293,7 +295,8 @@ jobs:
             }
           }
           # h) 文档里引用的程序路径必须存在（改名、挪文件时不会静默断链；monitor\ 是运行时目录，跳过）
-          $repoFiles = @(git ls-files | ForEach-Object { $_ -replace '\\','/' })
+          # 名单取自 git：同样写死 core.quotepath=false，否则 CI 上中文名是转义的、前缀比对永远命中不了。
+          $repoFiles = @(git -c core.quotepath=false ls-files | ForEach-Object { $_ -replace '\\','/' })
           foreach ($f in @('README.md','README.en.md','CONTRIBUTING.md')) {
             $t = Get-Content $f -Raw -Encoding UTF8
             foreach ($m in [regex]::Matches($t, '`((?:win|mac)[\\/][^`]*?)`')) {
@@ -493,8 +496,9 @@ jobs:
         run: |
           # macOS 靠可执行位双击运行，Windows 侧相反。模式丢了只会在用户机器上炸，
           # 本地编辑器与 git 都不会提醒——所以按 git 索引逐条查。
+          # 同样写死 core.quotepath=false：转义后的中文名走不到上面的正则，会被静默跳过（虚假通过）。
           $fail = 0
-          foreach ($line in (git ls-files -s)) {
+          foreach ($line in (git -c core.quotepath=false ls-files -s)) {
             $p = $line -split '\s+'
             $mode = $p[0]; $path = $p[3]
             if (($path -match '^mac/.*\.(sh|command)$') -and ($mode -ne '100755')) { Write-Host ("应为可执行 100755：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
