@@ -12,16 +12,16 @@
 
   <g id="steps" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
     <rect x="56" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="80" y="150" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 1</text>
-    <text x="80" y="180" font-size="21" font-weight="700" fill="#E9EFF8">Download the zip</text>
+    <text x="80" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 1</text>
+    <text x="80" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">Download the zip</text>
 
     <rect x="430" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="454" y="150" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 2</text>
-    <text x="454" y="180" font-size="21" font-weight="700" fill="#E9EFF8">Double-click 1-安装</text>
+    <text x="454" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 2</text>
+    <text x="454" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">Double-click 1-安装</text>
 
     <rect x="804" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="828" y="150" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 3</text>
-    <text x="828" y="180" font-size="21" font-weight="700" fill="#E9EFF8">you see "monitor started"</text>
+    <text x="828" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 3</text>
+    <text x="828" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">you see "monitor started"</text>
   </g>
 
   <g id="step-arrows" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="26" fill="#7A8CA6" text-anchor="middle">
