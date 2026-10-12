@@ -703,7 +703,7 @@ function Apply-State([string]$state) {
     $gate = $null
     $held = $false
     try {
-        $gate = New-Object System.Threading.Mutex($false, "Global\EnvProxyApplyState")
+        $gate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
         $held = $gate.WaitOne(5000)
     } catch { $held = $false }
     try {
@@ -750,14 +750,14 @@ $ErrorActionPreference = "SilentlyContinue"
 $reg = "HKCU:\Software\EnvProxy"
 $target = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).ScriptPath
 
-if (-not $target -or -not (Test-Path $target)) {
+if (-not $target -or -not (Test-Path -LiteralPath $target)) {
     # 记录失效（文件夹被移动/删除过）。先顺手清理旧位置的运行时残留：
     # 覆盖"移动后立刻关机"的场景（监控来不及自退，旧位置可能残留 monitor 目录/空壳）。
     if ($target) {
         $oldDir = Split-Path -Parent $target
-        Remove-Item (Join-Path $oldDir "monitor") -Recurse -Force -ErrorAction SilentlyContinue
-        $left = Get-ChildItem $oldDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $left) { Remove-Item $oldDir -Force -ErrorAction SilentlyContinue }
+        Remove-Item -LiteralPath (Join-Path $oldDir "monitor") -Recurse -Force -ErrorAction SilentlyContinue
+        $left = Get-ChildItem -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $left) { Remove-Item -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue }
     }
     # 分层自动搜索新位置
     #   用户常用位置深搜 6 层；其他磁盘根浅搜 4 层。
@@ -780,7 +780,7 @@ if (-not $target -or -not (Test-Path $target)) {
     # "备份目录不会被误选"的唯一依据。
     $candidates = @()
     foreach ($r in $roots) {
-        $candidates += @(Get-ChildItem -Path $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
+        $candidates += @(Get-ChildItem -LiteralPath $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
     }
     if ($candidates.Count -gt 0) {
         # 活跃度排序：monitor\monitor.log 最近写入的优先（无日志的排最后），
@@ -788,7 +788,7 @@ if (-not $target -or -not (Test-Path $target)) {
         # 用户复制的备份（日志陈旧或没有日志）不会被误选。
         foreach ($c in $candidates) {
             $logPath = Join-Path (Split-Path -Parent $c.FullName) "monitor\monitor.log"
-            $logTime = if (Test-Path $logPath) { (Get-Item $logPath).LastWriteTime } else { [datetime]::MinValue }
+            $logTime = if (Test-Path -LiteralPath $logPath) { ([System.IO.FileInfo]$logPath).LastWriteTime } else { [datetime]::MinValue }
             $c | Add-Member -NotePropertyName EnvLogTime -NotePropertyValue $logTime -Force
         }
         $target = ($candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
@@ -836,11 +836,11 @@ function Update-ScriptPathRecord {
 # 每次自查 = 让系统状态收敛到当前代码，不依赖用户记得重装。
 function Test-LauncherCurrent {
     try {
-        if (-not (Test-Path $LauncherPath)) { return $false }
-        # 行尾与首尾空白不比：Set-Content 落盘的行尾与源码里 here-string 的行尾
+        if (-not (Test-Item $LauncherPath)) { return $false }
+        # 行尾与首尾空白不比：落盘的行尾与源码里 here-string 的行尾
         # 不必逐字节相同，比"生成出来的代码"是否一致就够了。
         $want = (Get-LauncherContent) -replace "`r`n", "`n"
-        $have = (Get-Content $LauncherPath -Raw -Encoding UTF8 -ErrorAction Stop) -replace "`r`n", "`n"
+        $have = (Read-Text $LauncherPath) -replace "`r`n", "`n"
         return ($have.Trim() -eq $want.Trim())
     } catch { return $false }
 }
@@ -852,10 +852,18 @@ function Repair-AutoRun {
         if ((-not (Test-LauncherCurrent)) -or $actual -ne $expected) {
             New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
             [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
-            Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction SilentlyContinue
-            Write-MonitorLog "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
+            Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction Stop
+            # 写完必须读回：修没修成由复读决定，不由"我调用了写入"决定。
+            $check = (Get-ItemProperty $RunKeyPath -ErrorAction Stop).$RunKeyName
+            if (($check -eq $expected) -and (Test-LauncherCurrent)) {
+                Write-MonitorLog "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
+            } else {
+                Write-MonitorLog "开机自启动修复失败：写入后读回不一致"
+            }
         }
-    } catch {}
+    } catch {
+        try { Write-MonitorLog ("开机自启动修复失败：" + $_.Exception.Message) } catch {}
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -888,9 +896,9 @@ $MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
 
 function Get-MonitorProcess {
     # 先按 PID 文件（校验命令行确实是本脚本，防止 PID 被系统复用而误杀他人）
-    if (Test-Path $PidFile) {
+    if (Test-Item $PidFile) {
         try {
-            $pid2 = [int]((Get-Content $PidFile -Raw -ErrorAction Stop).Trim())
+            $pid2 = [int]((Read-Text $PidFile).Trim())
             if ($pid2 -ne $PID) {
                 $w = Get-CimInstance Win32_Process -Filter "ProcessId=$pid2" -ErrorAction SilentlyContinue
                 if ($w -and $w.CommandLine -match $MonitorCmdLinePattern) { return $w }
@@ -925,7 +933,14 @@ function Start-Monitor([bool]$Force = $false) {
     }
     Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
         -ArgumentList "-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`""
-    Write-Host "监控进程已启动。" -ForegroundColor Green
+    # 启动完必须复查：子进程可能因抢不到单实例互斥而静默退出，
+    # 此时再打印"已启动"就是假话。
+    Start-Sleep -Seconds 2
+    if (Get-MonitorProcess) {
+        Write-Host "监控进程已启动。" -ForegroundColor Green
+    } else {
+        Write-Host "监控进程未能确认运行，请用 4-查看状态 核对（可能是另一个监控占着单实例锁）。" -ForegroundColor Yellow
+    }
 }
 
 function Stop-Monitor {
@@ -941,7 +956,7 @@ function Stop-Monitor {
     # 1) 优雅：写停止标志，监控进程 2 秒内自行退出
     try {
         New-Item -Path $targetDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-Content -Path $targetFlag -Value "stop" -Encoding ASCII -ErrorAction Stop
+        Write-Text -Path $targetFlag -Text "stop"
     } catch {}
     $deadline = (Get-Date).AddSeconds(6)
     while ((Get-Date) -lt $deadline) {
@@ -955,17 +970,21 @@ function Stop-Monitor {
         Stop-Process -Id $w2.ProcessId -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
     }
-    Remove-Item $targetFlag -Force -ErrorAction SilentlyContinue
-    Remove-Item $StopFlag -Force -ErrorAction SilentlyContinue
+    Remove-ItemSafe $targetFlag
+    Remove-ItemSafe $StopFlag
     # 跨位置停止的零残留：若停止标志写在"别的" monitor 目录、且该目录已空
     # （旧监控退出时已清理自己的 pid/flag），则把这个重建的空目录一并移除
     if ($targetDir -ne $MonitorDir) {
-        $left = Get-ChildItem $targetDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        $left = Get-ChildItem -LiteralPath $targetDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $left) {
-            Remove-Item -Path $targetDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $targetDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
-    Write-Host "监控进程已停止。" -ForegroundColor Green
+    if (Get-MonitorProcess) {
+        Write-Host "监控进程未能停止（请检查是否有别的窗口正在运行它）。" -ForegroundColor Yellow
+    } else {
+        Write-Host "监控进程已停止。" -ForegroundColor Green
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -977,7 +996,7 @@ function Write-MonitorLog([string]$msg) {
     try {
         Ensure-MonitorDir
         $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
-        # 共享写模式（FileShare.ReadWrite）：Add-Content 会延迟释放句柄导致锁冲突，
+        # 共享写模式（FileShare.ReadWrite）：多进程追加写入互不阻塞，零锁脆弱点。
         # 改用共享文件流后，任何进程（含监控自身截断）互不阻塞，零锁脆弱点。
         $fs = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Append,
             [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
@@ -988,9 +1007,9 @@ function Write-MonitorLog([string]$msg) {
         # 体积上限：超过 200KB 截断为最近 200 行（黑匣子保留近期窗口，永远不会无限增长）
         # 截断同样用共享模式；万一失败（极端外部锁），静默跳过、下次再试——绝不中断监控
         # 注意：读取必须显式 UTF8 —— 默认按 ANSI 读会乱码，且截断时把乱码写回损坏日志
-        $fi = Get-Item $LogFile -ErrorAction SilentlyContinue
-        if ($fi -and $fi.Length -gt 200KB) {
-            $keep = Get-Content $LogFile -Tail 200 -Encoding UTF8
+        $fi = New-Object System.IO.FileInfo($LogFile)
+        if ($fi.Exists -and $fi.Length -gt 200KB) {
+            $keep = [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 200
             $fs2 = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Create,
                 [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
             try {
@@ -1005,13 +1024,17 @@ function Write-MonitorLog([string]$msg) {
 # 6. 监控主循环（事件驱动 + 双轮确认去抖，无频繁写操作）
 # ------------------------------------------------------------------------------
 function Run-MonitorLoop {
-    # 单实例互斥：重复启动自动退出
-    $mutex = New-Object System.Threading.Mutex($false, "Global\EnvProxyMonitorSingleton")
-    if (-not $mutex.WaitOne(0)) { return }
+    # 单实例互斥：重复启动自动退出。名字按用户隔离（见 Get-MutexName），
+    # 同一台电脑多个账户各装一份时互不干扰。
+    $mutex = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyMonitorSingleton"))
+    if (-not $mutex.WaitOne(0)) {
+        try { Write-MonitorLog "监控未启动：已有另一个监控进程在运行（单实例互斥）。" } catch {}
+        return
+    }
 
-    Remove-Item $StopFlag -Force -ErrorAction SilentlyContinue
+    Remove-ItemSafe $StopFlag
     Ensure-MonitorDir
-    try { Set-Content -Path $PidFile -Value $PID -Encoding ASCII } catch {}
+    try { Write-Text -Path $PidFile -Text ([string]$PID) } catch {}
     Update-ScriptPathRecord
     Write-MonitorLog "==== 监控启动 ===="
 
@@ -1031,10 +1054,10 @@ function Run-MonitorLoop {
         Write-MonitorLog "启动对齐异常: $($_.Exception.Message)"
     }
 
-    while (-not (Test-Path $StopFlag)) {
+    while (-not (Test-Item $StopFlag)) {
         # 自退检测：脚本文件不存在 = 文件夹被移动/删除 → 旧位置不再需要本监控。
         # 静默退出并清理旧位置的一切运行时痕迹（下次开机定位器会从新位置启动）。
-        if (-not (Test-Path -LiteralPath $PSCommandPath)) { $selfExit = $true; break }
+        if (-not $PSCommandPath -or -not (Test-Item $PSCommandPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
 
@@ -1072,7 +1095,11 @@ function Run-MonitorLoop {
                 } else {
                     # 自愈写入后也要广播：不广播的话已经运行的资源管理器/程序仍是旧环境，
                     # 与 Apply-State 就成了两套行为。写入成功才广播。
-                    if (Sync-UserEnvVars $lastState.Substring(3)) { Broadcast-EnvironmentChange }
+                    # 先判 "on:" 前缀：启动对齐若抛过异常，$lastState 仍是 $null，
+                    # 直接 Substring 会抛异常、白记一条"检测异常"。
+                    if ($lastState -and $lastState.StartsWith("on:")) {
+                        if (Sync-UserEnvVars $lastState.Substring(3)) { Broadcast-EnvironmentChange }
+                    }
                 }
             }
 
@@ -1092,16 +1119,16 @@ function Run-MonitorLoop {
         # 因此：删 monitor 目录后，若脚本目录只剩空壳（无任何其他文件）→ 一并删除，
         # 确保旧位置完全消失（下次移回时 Move-Item 不会因空壳而嵌套）。
         try {
-            Remove-Item -Path $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
-            $left = Get-ChildItem $ScriptDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+            Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
+            $left = Get-ChildItem -LiteralPath $ScriptDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $left) {
-                Remove-Item -Path $ScriptDir -Force -ErrorAction SilentlyContinue
+                Remove-Item -LiteralPath $ScriptDir -Force -ErrorAction SilentlyContinue
             }
         } catch {}
     } else {
         Write-MonitorLog "==== 监控退出（收到停止信号）===="
-        try { Remove-Item $PidFile -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item $StopFlag -Force -ErrorAction SilentlyContinue } catch {}
+        try { Remove-ItemSafe $PidFile } catch {}
+        try { Remove-ItemSafe $StopFlag } catch {}
     }
     $mutex.ReleaseMutex()
 }
@@ -1112,13 +1139,14 @@ function Run-MonitorLoop {
 function Install-EnvProxy {
     Write-Host "======== EnvProxy 安装 ========" -ForegroundColor Cyan
     Set-AutoRun
-    Write-Host "[1/2] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
+    Write-Host "[1/3] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
     Update-ScriptPathRecord
     Start-Monitor -Force:$true
-    Write-Host "[2/2] 监控进程：已启动" -ForegroundColor Green
+    Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
     Apply-State (Get-CurrentState)
+    Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
     Start-Sleep -Seconds 1
     Write-Host ""
     Show-Status
@@ -1131,9 +1159,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     Write-Host "======== EnvProxy 卸载（一键恢复原状）========" -ForegroundColor Cyan
     Stop-Monitor
     Remove-AutoRun
-    Remove-Item -Path $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $LauncherPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path $LauncherDir -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
     # 日志去留：黑匣子保留还是彻底删除？
     #   - 交互模式（双击 3-一键恢复.cmd）：询问用户，默认保留
     #   - 自动化模式（-Uninstall -Purge）：直接彻底删除，不询问
@@ -1149,15 +1177,19 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     }
     if ($removeLog) {
         # 彻底清除：连历史日志一起删（黑匣子也不要了）
-        Remove-Item -Path $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
+        # 刚杀掉的监控进程其文件锁可能还没释放：删三次再下定论，删不掉就由末尾的复检如实报告。
+        for ($i = 0; $i -lt 3 -and (Test-Item $MonitorDir); $i++) {
+            Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
+            if (Test-Item $MonitorDir) { Start-Sleep -Milliseconds 500 }
+        }
     } else {
         # 保留历史日志（黑匣子，便于日后排查），只删运行时临时文件
-        Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
-        Remove-Item $StopFlag -Force -ErrorAction SilentlyContinue
+        Remove-ItemSafe $PidFile
+        Remove-ItemSafe $StopFlag
         # 若无日志可留（从未运行过），空目录一并移除，不留任何痕迹
-        $hasContent = Get-ChildItem $MonitorDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        $hasContent = Get-ChildItem -LiteralPath $MonitorDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $hasContent) {
-            Remove-Item -Path $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
     # 卸载验尸：确保监控彻底死透——否则它的自愈机制会在下一个自查周期（约 60–90 秒）重建自启动（复活）
@@ -1167,15 +1199,28 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         Stop-Process -Id $ghost.ProcessId -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
     }
-    Remove-UserEnvVars
-    Broadcast-EnvironmentChange
-    Write-Host "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。" -ForegroundColor Green
-    if ($removeLog) {
-        Write-Host "        历史日志已一并彻底删除。" -ForegroundColor Green
+    # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。
+    # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
+    Apply-State "off"
+    # 卸载末尾回读复检：上面每一步都可能静默失败，定论必须由复读结果决定。
+    $dirty = @()
+    try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
+    if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
+    if (Test-ProxyVarsPresent) { $dirty += "代理变量仍在" }
+    if (Get-MonitorProcess) { $dirty += "监控进程仍在" }
+    if ($removeLog -and (Test-Item (Join-Path $MonitorDir "monitor.log"))) { $dirty += "历史日志未能删除" }
+    if ($dirty.Count -eq 0) {
+        Write-Host "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。" -ForegroundColor Green
+        if ($removeLog) {
+            Write-Host "        历史日志已一并彻底删除。" -ForegroundColor Green
+        } else {
+            Write-Host "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。" -ForegroundColor Yellow
+        }
+        Write-Host "        电脑已恢复到安装前的状态，无需重启。" -ForegroundColor Green
     } else {
-        Write-Host "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。" -ForegroundColor Yellow
+        Write-Host ("[未完成] 以下残留请手动处理：{0}" -f ($dirty -join "；")) -ForegroundColor Yellow
+        Write-Host "        可再双击一次 3-一键恢复，或手动删除上述位置。" -ForegroundColor Yellow
     }
-    Write-Host "        电脑已恢复到安装前的状态，无需重启。" -ForegroundColor Green
 }
 
 function Show-Status {
@@ -1189,7 +1234,8 @@ function Show-Status {
     if ($run) { Write-Host "开机自启 : 已启用" -ForegroundColor Green }
     else      { Write-Host "开机自启 : 未启用" -ForegroundColor Yellow }
 
-    $port = Get-ActiveProxyPort
+    # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
+    $port = Get-ActiveProxyPort -FullScan:$false
     if ($port) {
         Write-Host ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $port) -ForegroundColor Green
     } else {
@@ -1210,7 +1256,7 @@ function Show-Status {
         if (Test-DevCopy) {
             Write-Host "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）" -ForegroundColor DarkGray
         } elseif (-not $localVer) {
-            Write-Host "更新状态 : 可用 5-检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 可点 5-检查更新 升级" -ForegroundColor Yellow
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
             Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
         } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
@@ -1219,13 +1265,13 @@ function Show-Status {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
     } else {
-        Write-Host "最新版本 : 检查失败（网络不可达，稍后重试）" -ForegroundColor Yellow
+        Write-Host "最新版本 : 检查失败（网络不可达或 GitHub API 限流，稍后重试）" -ForegroundColor Yellow
         Write-Host "更新状态 : 未知" -ForegroundColor DarkGray
     }
 
     Write-Host "---------------- 最近日志 ----------------" -ForegroundColor Cyan
-    if (Test-Path $LogFile) {
-        Get-Content $LogFile -Tail 3 -Encoding UTF8 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    if (Test-Item $LogFile) {
+        [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3 | ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
     } else {
         Write-Host "  （暂无日志）" -ForegroundColor DarkGray
     }
@@ -1247,7 +1293,7 @@ $UpdateRepoDefault = "FiretrUCK666/envproxy"
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
 function Test-DevCopy {
     $root = Split-Path -Parent $ScriptDir
-    return (Test-Path (Join-Path $root ".git"))
+    return (Test-Item (Join-Path $root ".git"))
 }
 
 function Get-UpdateRepo {
@@ -1268,7 +1314,8 @@ function Get-LocalVersion {
     try {
         $root = Split-Path -Parent $ScriptDir
         $vf = Join-Path $root "VERSION"
-        if (Test-Path $vf) { return ((Get-Content $vf -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) }
+        # 直接读、用异常判不存在：先 Test-Path 再读是两套语义，含 [ ] 时前者会撒谎。
+        return ((Read-Text $vf).Trim())
     } catch {}
     return ""
 }
@@ -1394,13 +1441,20 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $remote = Get-RemoteVersion
     if (-not $remote) {
         Write-Host "最新版本 : 检查失败（网络不可达或 GitHub API 限流）" -ForegroundColor Yellow
-        Write-Host "请稍后重试；翻墙开/关换个状态再试一次也常有效。" -ForegroundColor Yellow
+        Write-Host "请稍后重试。也可以先关掉、再打开翻墙软件，让它换一个状态，常常就能连上。" -ForegroundColor Yellow
         return
     }
     Write-Host ("最新版本 : {0}" -f $remote.Tag) -ForegroundColor Green
     if (Test-DevCopy) {
         Write-Host "这是开发副本（安装根有 .git）：更新入口不改动任何文件。" -ForegroundColor DarkGray
         Write-Host "拉新代码请在仓库里执行：git pull" -ForegroundColor DarkGray
+        return
+    }
+    # 本地版本读不到 = 安装区已经不完整（VERSION 是随包必带的文件）。
+    # 此时任何"比较"都是瞎猜，直接拒绝并指一条明路，而不是继续往下走。
+    if (-not $local) {
+        Write-Host "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。" -ForegroundColor Yellow
+        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或双击 1-安装 修复。" -ForegroundColor Yellow
         return
     }
     if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
@@ -1429,8 +1483,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $extractDir = "${tmpBase}-pkg"
     try {
         Write-Host "正在下载安装包..." -ForegroundColor Cyan
-        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
-        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ItemSafe $zipFile
+        Remove-ItemSafe $extractDir
         New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
         $dl = Save-UpdateFile $zipUrl $zipFile
         if ($dl -eq "missing") { throw "这个版本没有提供安装包（下载地址返回 404），未做任何改动。请到 Releases 页面手动下载。" }
@@ -1445,7 +1499,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
             if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
         }
-        # 停监控 → 覆盖安装区（跳过 monitor 保日志；跳过正在执行的核心脚本，由新脚本自己搬）
+        # 停监控 → 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位）→ 用安装根新脚本收尾
         # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
         Write-Host "正在安装新版（保留日志，原监控先停）..." -ForegroundColor Cyan
         try { Stop-Monitor } catch {}
@@ -1486,9 +1540,9 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         Write-Host "可稍后重试；也可以手动下载安装包覆盖后再点一次 1-安装。" -ForegroundColor Yellow
     } finally {
-        try { Remove-Item $zipFile -Force -ErrorAction SilentlyContinue } catch {}
-        # 解压目录交给收尾进程清理（它要用里面的新脚本）；它没跑起来时这里兜底删掉。
-        try { if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue } } catch {}
+        try { Remove-ItemSafe $zipFile } catch {}
+        # 解压目录在收尾完成后清理；收尾跑的是安装根里的新脚本，这里只是兜底删除。
+        try { if (Test-Item $extractDir) { Remove-ItemSafe $extractDir } } catch {}
     }
 }
 
@@ -1496,11 +1550,11 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
 # 任何一项不过就抛异常，调用方据此中止——安装区一个字节都不动。
 function Test-Package([string]$Root, [string]$WantVersion) {
     $srcVer = ""
-    try { $srcVer = ((Get-Content (Join-Path $Root "VERSION") -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) } catch {}
+    try { $srcVer = ((Read-Text (Join-Path $Root "VERSION")).Trim()) } catch {}
     if (-not $srcVer -or ($srcVer -ne $WantVersion)) { throw "校验失败（包内 VERSION 与目标版本不一致），未做任何改动。" }
     $psFile = Join-Path $Root "win\envproxy.ps1"
     $shFile = Join-Path $Root "mac\envproxy.sh"
-    if (-not (Test-Path $psFile) -or -not (Test-Path $shFile)) { throw "校验失败（包内缺核心文件），未做任何改动。" }
+    if (-not (Test-Item $psFile) -or -not (Test-Item $shFile)) { throw "校验失败（包内缺核心文件），未做任何改动。" }
     $b = [System.IO.File]::ReadAllBytes($psFile)
     if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) { throw "校验失败（包内 win\envproxy.ps1 缺少 UTF-8 BOM），未做任何改动。" }
     $s = [System.IO.File]::ReadAllBytes($shFile)
@@ -1511,12 +1565,12 @@ function Test-Package([string]$Root, [string]$WantVersion) {
 # 打印这一版改了什么：包内 release-notes/<标签>.md，最多 40 行；没有就跳过。
 function Show-ReleaseNotes([string]$Root, [string]$Tag) {
     $f = Join-Path $Root ("release-notes\{0}.md" -f $Tag)
-    if (-not (Test-Path $f)) { return }
+    if (-not (Test-Item $f)) { return }
     try {
-        $lines = @(Get-Content $f -Encoding UTF8)
+        $lines = @([System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8))
         Write-Host ("---------- {0} 改了什么 ----------" -f $Tag) -ForegroundColor Cyan
         $lines | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
-        if ($lines.Count -gt 40) { Write-Host ("  （以上为前 40 行，全文见 Releases 页面与本安装目录的 release-notes\{0}.md）" -f $Tag) -ForegroundColor DarkGray }
+        if ($lines.Count -gt 40) { Write-Host ("  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes\{0}.md）" -f $Tag) -ForegroundColor DarkGray }
         Write-Host "----------------------------------" -ForegroundColor Cyan
     } catch {}
 }
@@ -1524,92 +1578,109 @@ function Show-ReleaseNotes([string]$Root, [string]$Tag) {
 # 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
-function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage, [string]$SkipRel = "") {
+function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage) {
     # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。
     if (-not $Stage) { throw "内部错误：覆盖安装区必须提供备份目录（-Stage）。" }
+    # 目的地校验：目标必须已经是一个安装根（有 VERSION 与核心脚本），否则一律拒绝。
+    # 根目录是从"脚本所在目录的父目录"推出来的；脚本一旦不在 <根>\win\ 布局里，
+    # 推导出的"安装根"就是错的，后面的删除循环会删掉用户自己的文件。这道闸让那种情况到此为止。
+    if (-not (Test-Item (Join-Path $ProjectRoot "VERSION"))) { throw "这里不是 EnvProxy 安装目录（缺少 VERSION），未做任何改动。请从安装包的 win\ 目录里运行，或手动下载安装包覆盖。" }
+    if (-not (Test-Item (Join-Path $ProjectRoot "win\envproxy.ps1"))) { throw "这里不是 EnvProxy 安装目录（缺少 win\envproxy.ps1），未做任何改动。请从安装包的 win\ 目录里运行，或手动下载安装包覆盖。" }
     # 覆盖前后各做一件事，都是为了让"更新到一半失败"不留残局：
     #   覆盖前——把四个程序目录 + 根目录那几个随包文件备份到本次更新的临时目录；
-    #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方；
-    #   跳过项——正在执行的那个核心脚本由覆盖完成后的新脚本自己搬到位（避免边跑边被覆盖）。
+    #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方。
+    # 本函数内所有路径读写一律走字面量语义（-LiteralPath / 第 0.5 节 helper），
+    # 安装文件夹改名带上 [ ] 也不影响。
     $shipDirs = @("win", "mac", "release-notes", "assets")
     $pkg = @{}
-    foreach ($f in (Get-ChildItem $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
+    foreach ($f in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
         $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
         $pkg[$rel.ToLower()] = $rel
     }
     $backup = $null
     if ($Stage) {
         $backup = Join-Path $Stage "backup"
-        Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-ItemSafe (Join-Path $Stage "backup")
         New-Item -Path $backup -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
         foreach ($d in $shipDirs) {
             $src = Join-Path $ProjectRoot $d
-            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $d) -Recurse -Force -ErrorAction Stop }
+            if (Test-Item $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $backup $d) -Recurse -Force -ErrorAction Stop }
         }
         # 根目录那几个随包文件（VERSION / README / LICENSE）也要备份：只备份程序目录的话，
         # 中途失败回滚后会留下"版本号是新的、程序目录是旧的"——比不滚还难查。
         foreach ($rel in $pkg.Values) {
             if ($rel -match '\\') { continue }
             $src = Join-Path $ProjectRoot $rel
-            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $rel) -Force -ErrorAction SilentlyContinue }
+            if (Test-Item $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $backup $rel) -Force -ErrorAction Stop }
         }
     }
     try {
         $removed = 0
         foreach ($d in $shipDirs) {
             $destDir = Join-Path $ProjectRoot $d
-            if (-not (Test-Path $destDir)) { continue }
-            foreach ($f in (Get-ChildItem $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            if (-not (Test-Item $destDir)) { continue }
+            foreach ($f in (Get-ChildItem -LiteralPath $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                # 越界保护：枚举结果必须确定位于本次目标之下，否则跳过（通配符曾让这里指向过别的目录）。
+                if (-not $f.FullName.StartsWith($destDir, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                 $rel = $f.FullName.Substring($ProjectRoot.Length).TrimStart('\')
                 if ($rel -match '^(win|mac)\\monitor\\') { continue }
                 if (-not $pkg.ContainsKey($rel.ToLower())) {
-                    Remove-Item $f.FullName -Force -ErrorAction Stop
+                    Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
                     Write-Host ("  已移除旧版本残留：{0}" -f $rel) -ForegroundColor DarkGray
                     $removed++
                 }
             }
-            Get-ChildItem $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+            Get-ChildItem -LiteralPath $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
                 Sort-Object { $_.FullName.Length } -Descending |
                 ForEach-Object {
+                    if (-not $_.FullName.StartsWith($destDir, [System.StringComparison]::OrdinalIgnoreCase)) { return }
                     $drel = $_.FullName.Substring($ProjectRoot.Length).TrimStart('\')
                     if ($drel -match '^(win|mac)\\monitor') { return }
-                    if (-not (Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+                    if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
                 }
         }
         foreach ($rel in $pkg.Values) {
-            if ($SkipRel -and ($rel -ieq $SkipRel)) { continue }
             $dest = Join-Path $ProjectRoot $rel
             $parent = Split-Path -Parent $dest
-            if ($parent -and -not (Test-Path $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
-            Copy-Item (Join-Path $SrcRoot $rel) $dest -Force -ErrorAction Stop
+            if ($parent -and -not (Test-Item $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+            $srcFile = Join-Path $SrcRoot $rel
+            if ($rel -ieq 'win\envproxy.ps1') {
+                # 核心脚本必须原子替换：Copy-Item 先截断再写，中途断电会留下半截文件，
+                # 而修复入口恰恰就是这个文件。temp + Replace 不存在中间状态。
+                Write-Text -Path $dest -Text ([System.IO.File]::ReadAllText($srcFile, [System.Text.Encoding]::UTF8)) -WithBom $true
+            } else {
+                Copy-Item -LiteralPath $srcFile -Destination $dest -Force -ErrorAction Stop
+            }
         }
         if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
     } catch {
-        if ($backup -and (Test-Path $backup)) {
+        if ($backup -and (Test-Item $backup)) {
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
             # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
             foreach ($d in $shipDirs) {
                 $dst = Join-Path $ProjectRoot $d
                 $bak = Join-Path $backup $d
-                if (-not (Test-Path $bak)) { continue }
-                if (-not (Test-Path $dst)) { New-Item -Path $dst -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
-                foreach ($f in (Get-ChildItem $bak -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                if (-not (Test-Item $bak)) { continue }
+                if (-not (Test-Item $dst)) { New-Item -Path $dst -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+                foreach ($f in (Get-ChildItem -LiteralPath $bak -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                    if (-not $f.FullName.StartsWith($bak, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                     $rel = $f.FullName.Substring($bak.Length).TrimStart('\')
                     $target = Join-Path $dst $rel
                     $tp = Split-Path -Parent $target
-                    if ($tp -and -not (Test-Path $tp)) { New-Item -Path $tp -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
-                    Copy-Item $f.FullName $target -Force -ErrorAction SilentlyContinue
+                    if ($tp -and -not (Test-Item $tp)) { New-Item -Path $tp -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+                    Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction SilentlyContinue
                 }
-                foreach ($f in (Get-ChildItem $dst -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                foreach ($f in (Get-ChildItem -LiteralPath $dst -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                    if (-not $f.FullName.StartsWith($dst, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                     $rel = $f.FullName.Substring($dst.Length).TrimStart('\')
                     if ($rel -like 'monitor\*') { continue }
-                    if (-not (Test-Path (Join-Path $bak $rel))) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
+                    if (-not (Test-Item (Join-Path $bak $rel))) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
                 }
             }
             foreach ($rel in $pkg.Values) {
                 if ($rel -match '\\') { continue }
                 $bak = Join-Path $backup $rel
-                if (Test-Path $bak) { Copy-Item $bak (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
+                if (Test-Item $bak) { Copy-Item -LiteralPath $bak -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
             }
             throw ("安装区写入失败，已回滚到更新前的状态：{0}" -f $_.Exception.Message)
         }
@@ -1622,9 +1693,19 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
 # ------------------------------------------------------------------------------
 # 操作锁：安装与更新会改同一批文件，同一时刻只允许一个在跑；撞上就直接退出、不做任何改动。
 # 用命名互斥体：进程结束由系统自动释放，不需要（也不该）手工解锁。
+function Get-MutexName([string]$Base) {
+    # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
+    # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。
+    # 拿不到 SID 就回落到无后缀（行为与过去一致），绝不因此罢工。
+    try {
+        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if ($sid) { return ("Global\{0}-{1}" -f $Base, $sid) }
+    } catch {}
+    return ("Global\{0}" -f $Base)
+}
 function Get-OpLock {
     try {
-        $m = New-Object System.Threading.Mutex($false, "Global\EnvProxyInstallOp")
+        $m = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp"))
         if (-not $m.WaitOne(0)) { return $null }
         return $m
     } catch { return $null }
@@ -1648,13 +1729,15 @@ if ($Install) {
     return
 }
 if ($Uninstall) {
+    $opMutex = Exit-IfOpBusy
     Uninstall-EnvProxy -Purge:$Purge
     return
 }
 if ($Stop) {
+    $opMutex = Exit-IfOpBusy
     Stop-Monitor
-    Remove-UserEnvVars
-    Broadcast-EnvironmentChange
+    # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
+    Apply-State "off"
     Write-Host "代理变量已清除，当前恢复直连。" -ForegroundColor Cyan
     return
 }
