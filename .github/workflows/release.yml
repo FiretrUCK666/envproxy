@@ -43,9 +43,10 @@ jobs:
 
       - name: 打安装包（内容由 .gitattributes 的 export-ignore 声明）
         run: |
+          TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           mkdir -p dist
-          git archive --format=zip    -o dist/EnvProxy.zip    HEAD
-          git archive --format=tar.gz -o dist/EnvProxy.tar.gz HEAD
+          git archive --format=zip    -o dist/EnvProxy.zip    "$TAG"
+          git archive --format=tar.gz -o dist/EnvProxy.tar.gz "$TAG"
           ls -l dist
 
       - name: 校验安装包（与仓库逐字节一致、编码红线在容器里没被改）
@@ -99,16 +100,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: 自校验（两个资产都在，README 的下载直链才有效）
+      - name: 自校验（两个资产都在、是最新、与本地一致，README 的下载直链才有效）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
-          NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          JSON="$(gh release view "$TAG" --json isLatest,assets)"
+          IS="$(printf '%s' "$JSON" | jq -r '.isLatest // "unknown"')"
+          if [ "$IS" = "false" ]; then
+            echo "Release $TAG 不是 latest：README 的下载直链会指向别的版本，请确认后再发。"
+            exit 1
+          fi
           for want in EnvProxy.zip EnvProxy.tar.gz; do
-            if ! printf '%s\n' "$NAMES" | grep -qxF "$want"; then
-              echo "资产缺失：$want（README 的下载直链与更新入口都会失效）"
+            SIZE="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .size // empty')"
+            if [ -z "$SIZE" ] || [ "$SIZE" -le 0 ]; then
+              echo "资产缺失或为空：$want（README 的下载直链与更新入口都会失效）"
               exit 1
             fi
+            DIGEST="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .digest // empty')"
+            if [ -n "$DIGEST" ]; then
+              LOCAL="$(sha256sum "dist/$want" | awk '{print $1}')"
+              if [ "${DIGEST#sha256:}" != "$LOCAL" ]; then
+                echo "资产摘要与本地不一致：$want（传输或存储被改写）"
+                exit 1
+              fi
+            fi
           done
-          echo "资产已就位：$(printf '%s' "$NAMES" | tr '\n' ' ')"
+          echo "资产已就位且最新。"
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

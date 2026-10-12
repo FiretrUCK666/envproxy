@@ -27,6 +27,22 @@ jobs:
           for f in mac/*.sh; do
             bash -n "$f" || fail=1
           done
+          # 壳↔核心：小 .sh 调的子命令必须在核心分派里；.command 必须指向同目录已存在的 .sh
+          for f in mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
+            for cmd in $(grep -oE 'envproxy\.sh [a-z]+' "$f" | awk '{print $2}'); do
+              if ! grep -qE "^[[:space:]]*$cmd\)" mac/envproxy.sh; then
+                echo "$f 用的子命令 $cmd 在核心分派里没有"
+                fail=1
+              fi
+            done
+          done
+          for f in mac/*.command; do
+            ref=$(grep -oE '[a-z]+\.sh' "$f" | head -n 1)
+            if [ -n "$ref" ] && [ ! -f "mac/$ref" ]; then
+              echo "$f 指向的 $ref 不存在"
+              fail=1
+            fi
+          done
           exit $fail
 
       - name: 门禁 2：ps1 语法检查
@@ -35,6 +51,27 @@ jobs:
           $tokens = $null; $errs = $null
           [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
+          # 裸变量路径扫描（第 0.5 节的承诺）：关键 cmdlet 直接吃变量路径会踩通配符语义，
+          # 必须走 helper 或 -LiteralPath。注释行与带 -LiteralPath 的行不计。
+          $lines2 = Get-Content 'win/envproxy.ps1' -Encoding UTF8
+          for ($i = 0; $i -lt $lines2.Count; $i++) {
+            $l = $lines2[$i]
+            if ($l.Trim().StartsWith('#')) { continue }
+            if ($l -match '(Test-Path|Get-Content|Set-Content|Add-Content|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Get-Item)\s+\$[A-Za-z_]+(\s|\)|;|,|$)') {
+              if ($l -match '-LiteralPath') { continue }
+              Write-Host ("裸变量路径（第 {0} 行）：{1}" -f ($i + 1), $l.Trim())
+              exit 1
+            }
+          }
+          # 壳↔核心：.cmd 用的开关必须在核心 param() 里存在
+          $paramBlock = [regex]::Match((Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8), '(?s)param\((.*?)\n\)').Groups[1].Value
+          foreach ($f in Get-ChildItem win/*.cmd) {
+            $t = Get-Content $f.FullName -Raw
+            foreach ($m in [regex]::Matches($t, 'envproxy\.ps1"?\s+-(\w+)')) {
+              $sw = $m.Groups[1].Value
+              if ($paramBlock -notmatch ('\$' + $sw + '\b')) { Write-Host ("{0} 用的开关 -{1} 在核心 param() 里没有" -f $f.Name, $sw); exit 1 }
+            }
+          }
 
       - name: 门禁 3：编码红线检查
         shell: pwsh
@@ -54,6 +91,17 @@ jobs:
           if ($text.Contains("`r`n")) {
             Write-Host 'mac/envproxy.sh 含 CRLF'
             $fail = 1
+          }
+          # 其余脚本与壳：mac 全部 .sh/.command 同样 LF、无 BOM；
+          # win 全部 .cmd 纯 ASCII（.cmd 按 OEM 代码页读取，非 ASCII 会乱码）。
+          foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command)) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
+            if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
+          }
+          foreach ($f in Get-ChildItem win/*.cmd) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            if (@($b | Where-Object { $_ -gt 0x7E }).Count) { Write-Host ("{0} 含非 ASCII 字符" -f $f.Name); $fail = 1 }
           }
           if ($fail) { exit 1 }
           Write-Host '编码红线通过'
@@ -78,6 +126,31 @@ jobs:
           }
           $bad = @($entries | Where-Object { $_ -match '^(win|mac)/monitor/' })
           if ($bad) { Write-Host '运行时目录进了安装包：'; $bad | ForEach-Object { Write-Host "  $_" }; exit 1 }
+          # 双向：包内文件集必须等于"仓库文件集 − export-ignore"（目录内部的新文件也不能静默进包）。
+          # 用 zip + Expand-Archive 取清单：Windows 自带 tar 按控制台编码解中文名会乱码，比对无意义。
+          $zip2 = Join-Path $tmp 'envproxy-shipset.zip'
+          Remove-Item $zip2 -Force -ErrorAction SilentlyContinue
+          git archive --format=zip -o $zip2 HEAD
+          if ($LASTEXITCODE -ne 0) { Write-Host 'git archive (zip) 失败'; exit 1 }
+          $xd = Join-Path $tmp 'envproxy-shipset-x'
+          Remove-Item $xd -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $zip2 -DestinationPath $xd -Force
+          $inPkg = @(Get-ChildItem $xd -Recurse -File | ForEach-Object { $_.FullName.Substring($xd.Length).TrimStart('/','\').Replace('\','/') } | Sort-Object)
+          $ign = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+          $want = @(git ls-files | Where-Object {
+            $p = $_; $hit = $false
+            foreach ($g in $ign) {
+              if ($g.EndsWith('/')) { if ($p.StartsWith($g)) { $hit = $true; break } }
+              elseif ($p -eq $g) { $hit = $true; break }
+            }
+            -not $hit
+          } | Sort-Object)
+          $diff2 = Compare-Object $want $inPkg
+          if ($diff2) {
+            Write-Host '包内文件集与"仓库 − export-ignore"不一致：'
+            $diff2 | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
+            exit 1
+          }
           Write-Host '分发包内容通过'
 
       - name: 门禁 5：文档一致性
@@ -168,6 +241,73 @@ jobs:
               if ($blob -notmatch [regex]::Escape($t)) { Write-Host ("{0}：第 8 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
             }
           }
+          # e) 发版说明随版：VERSION 抬了，发版说明必须同交（否则推标签时才报错，而标签不许重打）
+          $ver = (Get-Content VERSION -Raw -Encoding UTF8).Trim()
+          if (-not (Test-Path "release-notes/v$ver.md")) { Write-Host ("缺 release-notes/v{0}.md：抬了 VERSION 必须同交发版说明" -f $ver); $fail = 1 }
+          # f) 块级结构：每个二级节里（表格行数，配图数，列表项数，代码围栏行数，details 数）中英必须一致
+          function Get-SecStruct([string[]]$lines) {
+            $secs = @(); $cur = @(); $inSec = $false
+            foreach ($l in $lines) {
+              if ($l -match '^##\s+') { if ($inSec) { $secs += ,@($cur) }; $cur = @(); $inSec = $true }
+              elseif ($inSec) { $cur += $l }
+            }
+            if ($inSec) { $secs += ,@($cur) }
+            $out = @()
+            foreach ($s in $secs) {
+              $tables = @($s | Where-Object { $_ -match '^\|' }).Count
+              $imgs = ([string]::Join("`n", $s) | Select-String -Pattern '<img\s' -AllMatches).Matches.Count
+              $bullets = @($s | Where-Object { $_ -match '^\s*[-*]\s+' }).Count
+              $fences = @($s | Where-Object { $_ -match '^```' }).Count
+              $details = @($s | Where-Object { $_ -match '<details|</details>' }).Count
+              $out += ,@($tables, $imgs, $bullets, $fences, $details)
+            }
+            return $out
+          }
+          $zhLines = Get-Content 'README.md' -Encoding UTF8
+          $enLines = Get-Content 'README.en.md' -Encoding UTF8
+          $sz = Get-SecStruct $zhLines; $se = Get-SecStruct $enLines
+          if ($sz.Count -ne $se.Count) { Write-Host '中英二级节数量不一致（块结构比对无意义）'; $fail = 1 }
+          else {
+            for ($i = 0; $i -lt $sz.Count; $i++) {
+              if (($sz[$i] -join ',') -ne ($se[$i] -join ',')) { Write-Host ("第 {0} 个二级节块结构不一致：中文 [{1}] / 英文 [{2}]" -f ($i + 1), ($sz[$i] -join ','), ($se[$i] -join ',')); $fail = 1 }
+            }
+          }
+          # g) 第 8 节散文必须点名四个程序目录（只靠代码块里的清单不够：散文不写，进包范围改了用户也不知道）
+          foreach ($pair in @(@('README.md','##\s*8\.'), @('README.en.md','##\s*8\.'))) {
+            $fl = Get-Content $pair[0] -Encoding UTF8
+            $start = -1
+            for ($k = 0; $k -lt $fl.Count; $k++) { if ($fl[$k] -match $pair[1]) { $start = $k; break } }
+            if ($start -ge 0) {
+              $prose = @()
+              $inF = $false
+              for ($k = $start + 1; $k -lt $fl.Count; $k++) {
+                if ($fl[$k] -match '^##\s+') { break }
+                if ($fl[$k] -match '^```') { $inF = -not $inF; continue }
+                if ($fl[$k] -match '^\s*<img') { continue }
+                if (-not $inF) { $prose += $fl[$k] }
+              }
+              $blob = $prose -join "`n"
+              foreach ($w in @('win','mac','release-notes','assets')) {
+                if ($blob -notmatch [regex]::Escape($w)) { Write-Host ("{0} 第 8 节散文里没点名 {1}" -f $pair[0], $w); $fail = 1 }
+              }
+            }
+          }
+          # h) 文档里引用的程序路径必须存在（改名、挪文件时不会静默断链；monitor\ 是运行时目录，跳过）
+          $repoFiles = @(git ls-files | ForEach-Object { $_ -replace '\\','/' })
+          foreach ($f in @('README.md','README.en.md','CONTRIBUTING.md')) {
+            $t = Get-Content $f -Raw -Encoding UTF8
+            foreach ($m in [regex]::Matches($t, '`((?:win|mac)[\\/][^`]*?)`')) {
+              $raw = $m.Groups[1].Value.Trim()
+              $p = ($raw -split '\s+')[0].TrimEnd('*').TrimEnd('.', ',', ':', ';')
+              if ($p -match '^(win|mac)[\\/]') {
+                if ($p -match 'monitor[\\/]') { continue }
+                $pn = ($p -replace '\\','/').TrimEnd('/')
+                $ok = $false
+                foreach ($rf in $repoFiles) { if ($rf -eq $pn -or $rf.StartsWith($pn + '/') -or $rf.StartsWith($pn + '.')) { $ok = $true; break } }
+                if (-not $ok) { Write-Host ("{0} 引用的路径不存在：{1}" -f $f, $raw); $fail = 1 }
+              }
+            }
+          }
           if ($fail) { exit 1 }
           Write-Host '文档一致性通过'
 
@@ -229,17 +369,39 @@ jobs:
           $epCount = @([regex]::Matches($ps, '@\{ Host =')).Count
           if ($epCount -ne $hostCount) { Write-Host ("端点个数两侧不一致：Win {0} / Mac {1}" -f $epCount, $hostCount); $fail = 1 }
           if ($pathCount -ne $hostCount) { Write-Host ("macOS 端点表 host 与 path 条数不一致：{0} / {1}" -f $hostCount, $pathCount); $fail = 1 }
-          # g) 事实清单：这些数字必须出现在双语 README 里——代码改了、文档没跟上就当场失败
+          # g) 事实清单：数字从代码取值，再查双语 README——代码改了、文档没跟上就当场失败
           $zh = Get-Content 'README.md' -Raw -Encoding UTF8
           $en = Get-Content 'README.en.md' -Raw -Encoding UTF8
+          $psKB = [int](Grab $ps 'Length -gt (\d+)KB' 'Win 日志上限')
+          $shBytes = [int](Grab $sh '\$_size"\s+-gt\s+(\d+)' 'Mac 日志上限')
+          if (-not $psKB -or -not $shBytes) { $fail = 1 }
+          elseif ($psKB * 1024 -ne $shBytes) { Write-Host ("日志上限两侧不一致：Win {0}KB / Mac {1}B" -f $psKB, $shBytes); $fail = 1 }
+          $psTail = [int](Grab $ps 'Select-Object -Last (\d+)' 'Win 截断行数')
+          $shTail = [int](Grab $sh 'tail -n (\d+)' 'Mac 截断行数')
+          if (-not $psTail -or -not $shTail) { $fail = 1 }
+          elseif ($psTail -ne $shTail) { Write-Host ("截断行数两侧不一致：Win {0} / Mac {1}" -f $psTail, $shTail); $fail = 1 }
+          $psRep = [int](Grab $ps 'repairRound -ge (\d+)' 'Win 自愈轮次')
+          $shRep = [int](Grab $sh '\$_repair -ge (\d+)' 'Mac 自愈轮次')
+          if (-not $psRep -or -not $shRep) { $fail = 1 }
+          elseif ($psRep -ne $shRep) { Write-Host ("自愈轮次两侧不一致：Win {0} / Mac {1}" -f $psRep, $shRep); $fail = 1 }
+          $thr = [int](Grab $ps '\$NodeCheckThrottleSec\s*=\s*(\d+)' 'Win 节流秒数')
+          $flr = [int](Grab $ps '\$NodeFailThreshold\s*=\s*(\d+)' 'Win 失败阈值')
+          if (-not $thr -or -not $flr) { $fail = 1 }
+          # 定位深度：用户目录 6 层、磁盘根 4 层，两侧都要有（英文用词不含数字，只查字面存在）
+          if (([regex]::Matches($ps, 'Depth = 6')).Count -eq 0) { Write-Host 'Win 侧缺少用户目录搜索深度 Depth = 6'; $fail = 1 }
+          if (([regex]::Matches($ps, 'Depth = 4')).Count -eq 0) { Write-Host 'Win 侧缺少磁盘根搜索深度 Depth = 4'; $fail = 1 }
+          $locText = Get-Content 'mac/locator.sh' -Raw -Encoding UTF8
+          if ($locText -notmatch '_search_one "\$_r" 6') { Write-Host '定位器缺少用户目录搜索深度 6'; $fail = 1 }
+          if ($locText -notmatch '_search_one "\$_vol" 4') { Write-Host '定位器缺少磁盘根搜索深度 4'; $fail = 1 }
           $facts = @(
             @('端点个数', "$epCount 个检查端点", "$epCount endpoints"),
-            @('日志上限', '200KB', '200KB'),
-            @('日志截断行数', '最近 200 行', 'most recent 200 lines'),
-            @('自愈周期', '每 30 轮', 'every 30 rounds'),
-            @('探测节流', '15 秒', '15 seconds'),
-            @('失败阈值', '连续 3 次探测失败', 'three failed probes'),
-            @('定位搜索深度', '向下 6 层', 'six levels deep')
+            @('日志上限', "${psKB}KB", "${psKB}KB"),
+            @('日志截断行数', "最近 $psTail 行", "most recent $psTail lines"),
+            @('自愈周期', "每 $psRep 轮", "every $psRep rounds"),
+            @('探测节流', "${thr} 秒", "${thr} seconds"),
+            @('失败阈值', "连续 ${flr} 次探测失败", 'three failed probes'),
+            @('用户目录深度', '向下 6 层', 'six levels'),
+            @('磁盘根深度', '4 层', 'four levels')
           )
           foreach ($fact in $facts) {
             if ($zh -notmatch [regex]::Escape($fact[1])) { Write-Host ("中文 README 缺少事实「{0}」（应出现：{1}）" -f $fact[0], $fact[1]); $fail = 1 }
@@ -310,6 +472,18 @@ jobs:
           foreach ($f in $svgs) {
             if ($f.Name -match '\.en\.svg$') { continue }
             if ($sets['README.md'] -notcontains $f.Name) { Write-Host ("中文 README 没有引用 {0}" -f $f.Name); $fail = 1 }
+          }
+          # 中英配图除文字外结构一致：元素种类序列与 <g id> 序列必须相同
+          # （同一张图只改一侧、落下另一侧时拦住；文字允许因翻译长度不同而位移，故只比结构）
+          foreach ($f in Get-ChildItem 'assets/readme/*.svg' | Where-Object { $_.Name -notmatch '\.en\.svg$' }) {
+            $a = [xml](Get-Content $f.FullName -Raw -Encoding UTF8)
+            $b = [xml](Get-Content ($f.FullName -replace '\.svg$', '.en.svg') -Raw -Encoding UTF8)
+            $ta = @(Select-Xml -Xml $a -XPath '//*' | ForEach-Object { $_.Node.LocalName } | Sort-Object) -join ','
+            $tb = @(Select-Xml -Xml $b -XPath '//*' | ForEach-Object { $_.Node.LocalName } | Sort-Object) -join ','
+            if ($ta -ne $tb) { Write-Host ("中英配图元素结构不一致：{0}" -f $f.Name); $fail = 1 }
+            $ga = @(Select-Xml -Xml $a -XPath "//*[local-name()='g' and @id]" | ForEach-Object { $_.Node.id }) -join ','
+            $gb = @(Select-Xml -Xml $b -XPath "//*[local-name()='g' and @id]" | ForEach-Object { $_.Node.id }) -join ','
+            if ($ga -ne $gb) { Write-Host ("中英配图分组结构不一致：{0}" -f $f.Name); $fail = 1 }
           }
           if ($fail) { exit 1 }
           Write-Host ("配图一致性通过（{0} 个 SVG，中英各引用 {1} 张）" -f $svgs.Count, $sets['README.md'].Count)
