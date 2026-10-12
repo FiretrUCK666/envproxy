@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="491.4" viewBox="0 0 1200 491.4" role="img" aria-labelledby="boundaryTitle boundaryDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="482" viewBox="0 0 1200 482" role="img" aria-labelledby="boundaryTitle boundaryDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
   <title id="boundaryTitle">What an update touches, and what it leaves alone</title>
   <desc id="boundaryDesc">The EnvProxy folder has three areas with different rules. The top level is yours: an update only overwrites files with the same name and never deletes anything of yours. win, mac, release-notes and assets belong to the program: an update overwrites them and removes files the new package no longer has, so do not put your own files there. Inside win\monitor\ and mac\monitor\ sit the log and the run markers, which are never overwritten and never deleted. Three more things it never touches: the system proxy, system-wide environment variables, and admin rights or system folders.</desc>
 
-  <rect width="1200" height="491.4" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="458.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="482" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="480.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
-  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="heading">
     <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">What an update touches</text>
     <text x="56" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">one folder, three areas, three sets of rules</text>
   </g>
 
-  <g id="folder" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="folder">
     <rect x="56" y="132" width="1088" height="208" rx="16" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="80" y="164" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">EnvProxy\</text>
     <text x="1120" y="164" font-size="20" fill="#34D399" text-anchor="end">yours</text>
@@ -28,7 +28,7 @@
     <text x="1072" y="296" dominant-baseline="central" font-size="20" fill="#34D399" text-anchor="end">runtime</text>
   </g>
 
-  <g id="never" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="never">
     <text x="56" y="388" font-size="22" font-weight="700" fill="#E9EFF8">never touches</text>
     <rect x="212" y="356" width="220" height="48" rx="10" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
     <text x="322" y="387" font-size="20" fill="#C7D3E3" text-anchor="middle">the system proxy</text>
@@ -38,5 +38,5 @@
     <text x="914" y="387" font-size="20" fill="#C7D3E3" text-anchor="middle">admin rights / system folders</text>
   </g>
 
-  <text x="56" y="438" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3">An update only moves inside the program's own area; the log and your files stay.</text>
+  <text x="56" y="438" font-size="20" fill="#C7D3E3">An update only moves inside the program's own area; the log and your files stay.</text>
 </svg>

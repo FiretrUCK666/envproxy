@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="589.2" viewBox="0 0 1200 589.2" role="img" aria-labelledby="mechTitle mechDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580" role="img" aria-labelledby="mechTitle mechDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
   <title id="mechTitle">EnvProxy three-layer check</title>
   <desc id="mechDesc">Flow: polled every 2-3 seconds, three gates in order — a local port is listening, the port answers a CONNECT handshake, and one real fetch through it reaches the outside world. Passing all three writes the whole proxy variable set; failing deletes it and returns the terminal to a direct connection.</desc>
 
-  <rect width="1200" height="589.2" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="558.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="580" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="578.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
-  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="heading">
     <text x="56" y="76" font-size="32" font-weight="700" fill="#E9EFF8">Three layers of evidence — all three required</text>
     <text x="56" y="110" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">polled every 2–3 s · traffic truth, not brand names</text>
   </g>
 
-  <g id="gates" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="gates">
     <g id="gate-1">
       <rect x="56" y="140" width="340" height="216" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
       <text x="80" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">LAYER 1</text>
@@ -53,21 +53,21 @@
     <path d="M316 374 L316 392"/>
     <path d="M884 374 L884 392"/>
   </g>
-  <text x="976" y="380" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="18" fill="#94A6BE">Reachable?</text>
+  <text x="976" y="380" font-size="18" fill="#94A6BE">Reachable?</text>
 
-  <g id="outcome" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="outcome">
     <g id="outcome-on">
       <rect x="56" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="80" y="428" font-size="24" font-weight="700" fill="#34D399">UP → write the whole variable set</text>
-      <text x="80" y="458" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">HTTP_PROXY  HTTPS_PROXY  ALL_PROXY</text>
-      <text x="80" y="484" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">NO_PROXY  NODE_USE_ENV_PROXY</text>
+      <text x="80" y="422.5" dominant-baseline="central" font-size="24" font-weight="700" fill="#34D399">UP → write the whole variable set</text>
+      <text x="80" y="452.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">HTTP_PROXY  HTTPS_PROXY  ALL_PROXY</text>
+      <text x="80" y="478.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">NO_PROXY  NODE_USE_ENV_PROXY</text>
     </g>
 
     <g id="outcome-off">
       <rect x="624" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="648" y="428" font-size="24" font-weight="700" fill="#94A6BE">DOWN → delete the whole set</text>
-      <text x="648" y="458" font-size="18" fill="#94A6BE">"Disconnected" with the kernel alive</text>
-      <text x="648" y="484" font-size="18" fill="#94A6BE">lands here: nothing gets through → not proxying</text>
+      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">DOWN → delete the whole set</text>
+      <text x="648" y="452" dominant-baseline="central" font-size="18" fill="#94A6BE">"Disconnected" with the kernel alive</text>
+      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">lands here: nothing gets through → not proxying</text>
     </g>
   </g>
 

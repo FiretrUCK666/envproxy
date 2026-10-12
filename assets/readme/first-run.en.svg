@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="367.4" viewBox="0 0 1200 367.4" role="img" aria-labelledby="firstTitle firstDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="358" viewBox="0 0 1200 358" role="img" aria-labelledby="firstTitle firstDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
   <title id="firstTitle">What happens when you install</title>
   <desc id="firstDesc">Three steps: download the zip package, open the win folder and double-click 1-安装, and you are done when you see the monitor started message. Below are two terminal windows side by side: a window that was already open before you installed stays as it is, and you need a new one to pick the variables up, while a window opened afterwards takes effect right away. Installing itself registers start at login, starts the monitor, and corrects the environment variables once.</desc>
 
-  <rect width="1200" height="367.4" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="338.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="358" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="356.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
-  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="heading">
     <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">What happens when you install</text>
     <text x="56" y="100" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">three steps, then it starts itself</text>
   </g>
 
-  <g id="steps" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="steps">
     <rect x="56" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="80" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 1</text>
     <text x="80" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">Download the zip</text>
@@ -24,12 +24,12 @@
     <text x="828" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">you see "monitor started"</text>
   </g>
 
-  <g id="step-arrows" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="26" fill="#7A8CA6" text-anchor="middle">
+  <g id="step-arrows" font-size="26" fill="#7A8CA6" text-anchor="middle">
     <text x="413" y="164">→</text>
     <text x="787" y="164">→</text>
   </g>
 
-  <g id="windows" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+  <g id="windows">
     <rect x="56" y="210" width="540" height="78" rx="12" fill="#0B1220" stroke="#33486B" stroke-width="1.5"/>
     <text x="80" y="240" font-size="20" fill="#C7D3E3">A window already open</text>
     <path d="M80 252H572" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
@@ -43,5 +43,5 @@
     <text x="656" y="276" font-size="20" fill="#34D399">picks it up right away</text>
   </g>
 
-  <text x="56" y="318" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3">After install it registers start at login, starts the monitor, and corrects the variables once.</text>
+  <text x="56" y="318" font-size="20" fill="#C7D3E3">After install it registers start at login, starts the monitor, and corrects the variables once.</text>
 </svg>

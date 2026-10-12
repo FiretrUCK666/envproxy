@@ -1,37 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="macTitle macDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="416" viewBox="0 0 1200 416" role="img" aria-labelledby="macTitle macDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="macTitle">macOS 为什么写两条路</title>
   <desc id="macDesc">macOS 没有注册表，所以 Mac 版同时写两条路。上面一条：终端启动时读 shell hook（写在 ~/.zshenv 与 ~/.zshrc 里），hook 加载 ~/.envproxy/proxy.env，变量因此生效。下面一条：从 Dock 启动的应用走 launchctl setenv，把变量交给整个会话。两条路写的是同一份 9 个变量，同进同退；9 个里 5 个是规范拼写，另外 4 个是小写拼写，因为 macOS 大小写敏感，两种拼写各算一个变量。</desc>
 
-  <rect width="1200" height="400" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="398.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="416" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="414.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
-  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <g id="heading">
     <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">macOS 为什么写两条路</text>
     <text x="56" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">没有注册表，终端和 Dock 启动的 App 各走一条</text>
   </g>
 
-  <g id="terminal-path" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <g id="terminal-path">
     <rect x="56" y="140" width="170" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="170.6" font-size="22" font-weight="700" fill="#E9EFF8">终端</text>
-    <text x="76" y="194.6" font-size="18" fill="#94A6BE">你打开的窗口</text>
+    <text x="76" y="165.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">终端</text>
+    <text x="76" y="189.5" dominant-baseline="central" font-size="18" fill="#94A6BE">你打开的窗口</text>
 
     <rect x="252" y="140" width="280" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="272" y="169.8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
-    <text x="272" y="193.8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
+    <text x="272" y="164.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
+    <text x="272" y="188.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
 
     <rect x="558" y="140" width="300" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="578" y="169.4" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
-    <text x="578" y="193.4" font-size="18" fill="#94A6BE">新终端加载这个文件</text>
+    <text x="578" y="163.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
+    <text x="578" y="187.5" dominant-baseline="central" font-size="18" fill="#94A6BE">新终端加载这个文件</text>
   </g>
 
-  <g id="dock-path" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <g id="dock-path">
     <rect x="56" y="248" width="270" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="278.6" font-size="22" font-weight="700" fill="#E9EFF8">Dock 启动的 App</text>
-    <text x="76" y="302.6" font-size="18" fill="#94A6BE">点图标打开的程序</text>
+    <text x="76" y="273.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Dock 启动的 App</text>
+    <text x="76" y="297.5" dominant-baseline="central" font-size="18" fill="#94A6BE">点图标打开的程序</text>
 
     <rect x="352" y="248" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="372" y="277.8" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
-    <text x="372" y="301.8" font-size="18" fill="#94A6BE">写给整个会话</text>
+    <text x="372" y="271.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
+    <text x="372" y="295.75" dominant-baseline="central" font-size="18" fill="#94A6BE">写给整个会话</text>
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -42,15 +42,15 @@
     <path d="M602 284H878M872 278L878 284L872 290"/>
   </g>
 
-  <g id="variables" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <g id="variables">
     <rect x="880" y="140" width="264" height="180" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
-    <text x="912" y="175.2" font-size="26" font-weight="700" fill="#E9EFF8">环境变量</text>
-    <text x="912" y="213.2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
-    <text x="912" y="243.2" font-size="18" fill="#94A6BE">5 个规范拼写</text>
-    <text x="912" y="265.2" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
+    <text x="912" y="169.75" dominant-baseline="central" font-size="26" font-weight="700" fill="#E9EFF8">环境变量</text>
+    <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
+    <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 个规范拼写</text>
+    <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
     <path d="M904 292H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="912" y="301.2" font-size="18" fill="#34D399">两路同进同退</text>
+    <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
   </g>
 
-  <text x="56" y="372" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3">Windows 是注册表 + 广播一次；Mac 没有注册表，所以两条路一起写。</text>
+  <text x="56" y="372" font-size="20" fill="#C7D3E3">Windows 是注册表 + 广播一次；Mac 没有注册表，所以两条路一起写。</text>
 </svg>
