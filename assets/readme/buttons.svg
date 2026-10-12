@@ -11,7 +11,7 @@
     <text x="84" y="106" font-size="20" fill="#94A6BE">保留</text>
     <text x="176" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
     <text x="214" y="106" font-size="20" fill="#94A6BE">清掉</text>
-    <circle cx="318" cy="100.7" r="4" fill="#7A8CA6"/>
+    <circle cx="318" cy="99.5" r="4" fill="#7A8CA6"/>
     <text x="334" y="106" font-size="20" fill="#94A6BE">只读不动</text>
   </g>
 
