@@ -35,11 +35,11 @@
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M226 176H244M238 170L244 176L238 182"/>
-    <path d="M532 176H550M544 170L550 176L544 182"/>
-    <path d="M858 176H872M866 170L872 176L866 182"/>
-    <path d="M326 284H344M338 278L344 284L338 290"/>
-    <path d="M602 284H872M866 278L872 284L866 290"/>
+    <path d="M232 176H246M240 170L246 176L240 182"/>
+    <path d="M538 176H552M546 170L552 176L546 182"/>
+    <path d="M864 176H874M868 170L874 176L868 182"/>
+    <path d="M332 284H346M340 278L346 284L340 290"/>
+    <path d="M608 284H874M868 278L874 284L868 290"/>
   </g>
 
   <g id="variables">
@@ -48,8 +48,7 @@
     <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
     <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 个规范拼写</text>
     <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
-    <path d="M904 272H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
+      <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
   </g>
 
   <text x="56" y="372" font-size="20" fill="#C7D3E3">Windows 是注册表 + 广播一次；Mac 没有注册表，所以两条路一起写。</text>

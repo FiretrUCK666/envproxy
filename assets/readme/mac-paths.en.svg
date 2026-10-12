@@ -35,11 +35,11 @@
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M266 176H282M276 170L282 176L276 182"/>
-    <path d="M540 176H556M550 170L556 176L550 182"/>
-    <path d="M858 176H872M866 170L872 176L866 182"/>
-    <path d="M326 284H344M338 278L344 284L338 290"/>
-    <path d="M602 284H872M866 278L872 284L866 290"/>
+    <path d="M272 176H284M278 170L284 176L278 182"/>
+    <path d="M546 176H558M552 170L558 176L552 182"/>
+    <path d="M864 176H874M868 170L874 176L868 182"/>
+    <path d="M332 284H346M340 278L346 284L340 290"/>
+    <path d="M608 284H874M868 278L874 284L868 290"/>
   </g>
 
   <g id="variables">
@@ -48,8 +48,7 @@
     <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 of them</text>
     <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 standard spellings</text>
     <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 lowercase</text>
-    <path d="M904 272H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">both move together</text>
+      <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">both move together</text>
   </g>
 
   <text x="56" y="372" font-size="20" fill="#C7D3E3">Windows writes the registry and broadcasts once; Mac has no registry, so both paths are written.</text>
