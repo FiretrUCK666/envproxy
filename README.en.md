@@ -99,7 +99,7 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 2. Unzip it anywhere — rename the folder if you like. Open `win` and double-click **`1-安装.cmd`**; on Mac, open `mac` and double-click **`1-安装.command`**
 3. When you see the monitor started message, you are done
 
-Installing does three things: registers the monitor to start at login, starts it right away, and corrects the environment variables once.
+Installing does four things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers the monitor to start at login, starts it right away, and corrects the environment variables once.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the zip, double-click 1-Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
@@ -176,8 +176,9 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Mechanism | What it prevents |
 |---|---|
 | Startup correction | variables are corrected right after login, so dead ports left over from shutdown disappear at once |
-| Monitor self exit | if the folder is moved or deleted, the monitor notices within 2–3 seconds, exits, and cleans up the old location |
-| Locator clean-up | if the machine is shut down before the monitor can exit, the locator removes the leftovers from the old location on the next boot |
+| Snapshot before install | variables with the same names are snapshotted before they are overwritten, and restored on uninstall — only our own values are ever removed |
+| Monitor self exit | if the folder is moved or deleted, the monitor notices within 2–3 seconds, exits, removes the injected variables first and then cleans up the old location |
+| Locator clean-up | if the machine is shut down before the monitor can exit, the locator removes the leftovers from the old location on the next boot; if no new location is found it also clears leftover proxy variables so new terminals stop reading stale ones |
 | Activity based location | all search roots are collected first and then sorted by log activity, so a copied backup folder is never picked up by mistake |
 | Graceful cross-location stop | stopping a monitor in another location writes the signal into that monitor's own folder, so it exits gracefully instead of being killed |
 | Self healing start at login | every 30 rounds (about 60–90 seconds) the locator and the start at login entry are rebuilt from the current code; the test is that the content matches, not merely that the file exists |
@@ -214,7 +215,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Your local proxy requires a username and password | an unauthenticated handshake gets a 407, and treating it as unavailable is the conservative answer | turn off local authentication (it is off by default) or use a port that needs none |
 | The terminal inside WSL2 is not affected | WSL2 does not inherit Windows user environment variables by default | expected; set the proxy variables inside WSL separately |
 | An administrator terminal is not affected | an elevated process belongs to another account and does not inherit your variables | expected; use a normal, non elevated terminal |
-| Proxy variables you had before are gone | installing overwrites user level variables with the same names, and uninstalling deletes them without restoring the old values (system level variables and the system proxy are never touched) | on a corporate machine, write down the old values first |
+| Proxy variables you had before are gone | installing snapshots variables with the same names before overwriting them, and restores the snapshot on uninstall (system level variables and the system proxy are never touched) | safe to install on a corporate machine; only values added after the install are outside the snapshot |
 | A service bound to `[::1]` is not bypassed in Node | the undici bundled with Node cannot parse a bare `::1` (it splits it into host `:` plus port `1`); writing `[::1]` instead would break httpx everywhere, so the bare form stays | only "service explicitly bound to `[::1]` plus native Node fetch" hits this; use `localhost` / `127.0.0.1` |
 | `NODE_USE_ENV_PROXY` is set but Node still ignores the proxy | it only works on recent Node | `node:http(s)` needs 22.21 / 24.5 or later, `fetch()` needs 22.21 / 24.0 or later; older versions are expected behaviour |
 
@@ -286,7 +287,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 1. **TUN mode gets nothing.** TUN already captures all traffic globally, so the terminal works without any help and this tool cannot find a local proxy port, so it does not write the variables. That is the correct behaviour, not a bug. The same applies to system wide VPNs such as Outline and to SOCKS only ports with no HTTP socket.
 2. **"Disconnected" is not the same as quitting.** The disconnect button in most proxy apps leaves the core running and the port alive. This tool follows the traffic: if traffic gets through, the variables are written; if it does not, they are removed.
 3. **Moving outside the search range needs one manual step.** The locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep). If you move the folder outside that range (for example `C:\Tools`, `~/Projects`, or any very deep path), double-click 1-安装 once and it takes over. Everything else is automatic.
-4. **Proxy variables you set by hand before are taken over.** Installing overwrites user level variables with the same names, and uninstalling deletes them without restoring the previous values. System level variables and the system proxy are never touched. This is rare on a personal machine; on a corporate machine, note the old values down first.
+4. **Proxy variables you set by hand before are taken over.** Installing snapshots user level variables with the same names before overwriting them, and restores the snapshot on uninstall. System level variables and the system proxy are never touched. This is rare on a personal machine, and safe on a corporate one.
 
 ---
 
@@ -308,7 +309,7 @@ The Mac build sets all 9 variables, the extra four being lowercase spellings —
 2. Open `mac` and double-click **`1-安装.command`** (the first run may need a right-click and Open, see 12.5)
 3. When you see the monitor started message, you are done. Verify in a **new terminal**: `env | grep -i proxy`
 
-Installing does four things: registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`, which new terminals use to load `proxy.env`), starts the monitor right away, and corrects the variables once. If anything seems off later, double-click `1-安装.command` again — it is the universal fix.
+Installing does five things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`, which new terminals use to load `proxy.env`), starts the monitor right away, and corrects the variables once. If anything seems off later, double-click `1-安装.command` again — it is the universal fix.
 
 > A note for fish users: fish cannot read the export syntax in `proxy.env`. Install bass and add `bass source "$HOME/.envproxy/proxy.env"` to `config.fish`.
 
@@ -338,7 +339,7 @@ EnvProxy/
     monitor/             created at runtime (monitor.log, monitor.pid, stop.flag; same log format as Windows)
 ```
 
-`~/.envproxy/` is a fixed location. After installing it holds `locator.sh` (the locator), `path.conf` (the path record), `proxy.env` (the variables for the terminal path), and two output redirection files used by launchd. The project folder can be moved anywhere and is located again on the next login; backup copies are never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` black box you chose to keep.
+`~/.envproxy/` is a fixed location. After installing it holds `locator.sh` (the locator), `path.conf` (the path record), `proxy.env` (the variables for the terminal path), `prev.env` (the snapshot of your own values taken at install time, used to restore them on uninstall), and two output redirection files used by launchd. The project folder can be moved anywhere and is located again on the next login; backup copies are never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` black box you chose to keep.
 
 ### 12.5 Three things that may block the first install on a Mac
 
