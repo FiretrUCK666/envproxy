@@ -201,6 +201,25 @@ set_user_env_vars() {
 
 # 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
 # 半代理状态永远无人纠正。返回 0 = 已就位（无需动手）。
+# 文件与路径的唯一入口：所有读写都从这里走，绕过去容易踩通配符与"写到一半"两个坑。
+#   path_exists  存在性判断（用 [ ] 判断即可，但集中一处以后好统一）
+#   read_text     读文本（macOS 天生 UTF-8，不做转换）
+#   write_text_atomic  原子写：同目录临时文件 + mv 替换——既不会留下半个文件，
+#                      也保证"覆盖正在执行的脚本"对 bash 安全（运行中的旧 inode 不受影响）
+#   remove_path   删文件或目录（静默、幂等）
+path_exists() { [ -e "$1" ]; }
+read_text() { cat "$1" 2>/dev/null; }
+write_text_atomic() {
+    _wt_path="$1"; _wt_tmp="$_wt_path.tmp$$"
+    mkdir -p "$(dirname "$_wt_path")" 2>/dev/null || true
+    if printf '%s' "$2" > "$_wt_tmp" 2>/dev/null && mv -f "$_wt_tmp" "$_wt_path" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$_wt_tmp" 2>/dev/null || true
+    return 1
+}
+remove_path() { rm -rf "$1" 2>/dev/null || true; }
+
 env_vars_in_sync() {
     _port="$1"
     [ -f "$PROXY_ENV" ] || return 1
