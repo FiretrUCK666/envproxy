@@ -20,6 +20,13 @@ jobs:
   reset:
     runs-on: ubuntu-latest
     steps:
+      # 必须先检出：gh 删 Release 时要用本地 git 上下文去处理对应的 Tag，
+      # 没有仓库就直接报 "not a git repository" 失败（这也是本工作流第一次跑失败的原因）。
+      - name: 检出（带全部标签）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: 删除 Release 与 Tag
         run: |
           set -e
@@ -35,7 +42,10 @@ jobs:
             [ -n "$t" ] || continue
             if [ -n "$KEEP" ] && [ "$t" = "$KEEP" ]; then echo "跳过 $t"; continue; fi
             echo "删除 Release 与 Tag：$t"
-            gh release delete "$t" --yes --cleanup-tag
+            gh release delete "$t" --yes --cleanup-tag || {
+              gh release delete "$t" --yes || true
+              git push origin --delete "$t" || true
+            }
           done < /tmp/tags.txt
           echo "剩余 Release（应为空）："
           gh release list --limit 100 || true
