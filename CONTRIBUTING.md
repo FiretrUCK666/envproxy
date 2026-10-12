@@ -4,7 +4,7 @@
 
 ## 提问与反馈
 
-到仓库的 Issues 区提出：`https://github.com/FiretrUCK666/envproxy/issues`
+到 [Issues](https://github.com/FiretrUCK666/envproxy/issues) 提出，请先搜索已有的 Issue，避免重复。
 
 为了让问题能被定位，请一并附上：
 
@@ -13,8 +13,6 @@
 - `4-查看状态` 的完整输出（`win`/`mac` 下同名文件，**原样粘贴，不要转述**）
 - `monitor/monitor.log` 最近的相关行（只记状态变化，不含隐私）
 - 最小复现步骤（如果问题能稳定重现）
-
-请先搜索已有的 Issue，避免重复。
 
 ## 报告缺陷
 
@@ -28,12 +26,18 @@ EnvProxy 特有的两条：如果问题只在“断开不断内核/节点抖动�
 
 1. 先开一个 Issue 说明你想改什么、为什么。涉及行为变化或新增依赖的，先在 Issue 里
    讨论清楚再动手，避免写完才发现方向不对。
-2. 把仓库弄到你自己的账号下，在分支上开发：
-   - **没有本仓库写权限**（大多数情况）：先 **fork** 一份到你自己的账号，克隆 fork
-     出来的那份，在它上面开发；
-   - **有写权限**（协作者）：直接从主干拉一个分支即可。
+2. 在分支上改，然后开拉取请求：
+   - **没有本仓库写权限**（大多数情况）：先 **fork** 到你自己的账号，克隆 fork 出来的
+     那份，在分支上开发，推回你自己的 fork，再从那个分支开拉取请求；
+   - **有写权限**（协作者）：直接从主干拉一个分支即可；
+   - **只改文字**（错别字、文档表述）：在网页上点开文件、点铅笔图标改完提交即可，
+     GitHub 会替你建好分支与拉取请求——这条路跑不了下面的提交前门禁，别用它改脚本。
 3. 跑完提交前门禁（见下），全绿再提交。
 4. 提交拉取请求，说明改了什么、为什么、怎么验证的。
+
+第一次提拉取请求、或不确定 fork 怎么用，看 GitHub 官方的[参与项目](https://docs.github.com/zh/get-started/exploring-projects-on-github/contributing-to-a-project)
+（复刻到拉取请求的完整步骤）。fork 落后于正本时，在自己 fork 的页面上点 **Sync fork**
+更新即可。
 
 **不要往本仓库推主干，也不要打版本标签或发布制品**——那些由维护者执行。没有写权限时
 你本来也推不动主干，但请注意别把改动提在自己的 fork 主干上就算了事：那样维护者看不到，
@@ -52,8 +56,9 @@ cd envproxy
 bash -n mac/*.sh
 ```
 
-`win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
-构建与验证节第 2 条）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh` 确认行为。
+`win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见
+`AGENTS.md` 的构建与验证节）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh`
+确认行为。
 
 **开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`（Windows）/ `EnvProxy.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
