@@ -164,39 +164,72 @@ function Test-HttpProxy([int]$Port) {
 
 # 并行批量 CONNECT 探测：对多个端口同时发起握手，~1 秒内出结果。
 # 用于全端口兜底扫描——避免"逐个串行等超时"导致的几十秒延迟。
+# 两阶段都用"同时开工 + 统一截止"：连接阶段总共最多等 800ms，
+# 读响应阶段总共最多等 500ms（谁先回 200 就用谁），耗时不再随端口数线性增长。
 function Test-HttpProxyBatch([int[]]$Ports) {
     $pending = @()
     foreach ($p in $Ports) {
-        $c = New-Object System.Net.Sockets.TcpClient
+        $c = $null
         try {
+            $c = New-Object System.Net.Sockets.TcpClient
             $ar = $c.BeginConnect("127.0.0.1", $p, $null, $null)
             $pending += [PSCustomObject]@{ Port = $p; Client = $c; Async = $ar }
-        } catch { $c.Close() }
+        } catch { try { if ($c) { $c.Close() } } catch {} }
     }
-    # 阶段 1：并发连接，最多等 800ms
+    if ($pending.Count -eq 0) { return $null }
+    # 阶段 1：并发连接，统一截止 800ms（逐个 IsCompleted 轮询，无 64 句柄上限问题）
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(800)
+    do {
+        $allDone = $true
+        foreach ($item in $pending) {
+            if (-not $item.Async.IsCompleted) { $allDone = $false; break }
+        }
+        if ($allDone) { break }
+        Start-Sleep -Milliseconds 20
+    } while ([DateTime]::UtcNow -lt $deadline)
     $connected = @()
     foreach ($item in $pending) {
-        if ($item.Async.AsyncWaitHandle.WaitOne(800)) {
-            try { $item.Client.EndConnect($item.Async); $connected += $item } catch {}
-        }
+        if (-not $item.Async.IsCompleted) { continue }
+        try { $item.Client.EndConnect($item.Async); $connected += $item } catch {}
     }
-    # 阶段 2：对已连接的端口发 CONNECT 读响应（非代理端口通常立即拒绝，毫秒级）
+    # 阶段 2：已连接端口同时发 CONNECT、同时读响应，统一截止 500ms
+    $reads = @()
     foreach ($item in $connected) {
         try {
             $c = $item.Client
             $s = $c.GetStream()
-            $s.ReadTimeout = 500
             $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT 127.0.0.1:9 HTTP/1.1`r`nHost: 127.0.0.1:9`r`n`r`n")
             $s.Write($req, 0, $req.Length)
             $s.Flush()
             $buf = New-Object byte[] 512
-            $n = $s.Read($buf, 0, 512)
-            if ($n -gt 0) {
-                $resp = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
-                if ($resp -match "^\s*HTTP/1\.[01]\s+200") { return $item.Port }
-            }
+            $rar = $s.BeginRead($buf, 0, 512, $null, $null)
+            $reads += [PSCustomObject]@{ Item = $item; Stream = $s; Buffer = $buf; Async = $rar }
         } catch {}
-        finally { try { $item.Client.Close() } catch {} }
+    }
+    $winner = $null
+    $remain = @($reads)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds(500)
+    while ($null -eq $winner -and $remain.Count -gt 0 -and ([DateTime]::UtcNow -lt $deadline)) {
+        $next = @()
+        foreach ($r in $remain) {
+            if ($r.Async.IsCompleted) {
+                try {
+                    $n = $r.Stream.EndRead($r.Async)
+                    if ($n -gt 0) {
+                        $resp = [System.Text.Encoding]::ASCII.GetString($r.Buffer, 0, $n)
+                        if ($resp -match "^\s*HTTP/1\.[01]\s+200") { $winner = $r.Item.Port; break }
+                    }
+                } catch {}
+            } else {
+                $next += $r
+            }
+        }
+        if (($null -eq $winner) -and ($next.Count -gt 0)) { Start-Sleep -Milliseconds 20 }
+        $remain = $next
+    }
+    if ($null -ne $winner) {
+        foreach ($item in $pending) { try { $item.Client.Close() } catch {} }
+        return $winner
     }
     foreach ($item in $pending) { try { $item.Client.Close() } catch {} }
     return $null
@@ -675,6 +708,11 @@ function Remove-UserEnvVars {
             if ($cur -eq "1") { [Environment]::SetEnvironmentVariable($n, $null, "User") }
             continue
         }
+        if ($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
+            # 归属判定：只有本机地址才是我们写下的，用户或公司工具写的其他地址一律不动。
+            if ($cur -like "http://127.0.0.1:*") { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            continue
+        }
         [Environment]::SetEnvironmentVariable($n, $null, "User")
     }
 }
@@ -693,9 +731,38 @@ function Test-ProxyVarsPresent {
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") { if ($cur -eq "1") { return $true }; continue }
-        return $true
+        # 归属判定与删除同口径：别人的代理地址不算我们的痕迹。
+        if ($cur -like "http://127.0.0.1:*") { return $true }
     }
     return $false
+}
+
+# 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
+# 属于我们自己的值视为无（升级路径下安装时代理正开着，不能把刚写的值当成用户的）。
+function Snapshot-PrevEnv {
+    try {
+        if (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue) { return }
+        New-Item -Path $PrevEnvRegKey -Force -ErrorAction Stop | Out-Null
+        foreach ($n in $ProxyVarNames) {
+            $cur = [Environment]::GetEnvironmentVariable($n, "User")
+            if (-not $cur) { continue }
+            if ($n -eq "NODE_USE_ENV_PROXY" -and $cur -eq "1") { continue }
+            if (($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) -and ($cur -like "http://127.0.0.1:*")) { continue }
+            Set-ItemProperty -Path $PrevEnvRegKey -Name $n -Value $cur -ErrorAction SilentlyContinue
+        }
+    } catch {}
+}
+
+# 卸载时按快照还原用户原值，还原完删掉快照键。无快照时什么都不做。
+function Restore-PrevEnv {
+    try {
+        if (-not (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue)) { return }
+        foreach ($n in $ProxyVarNames) {
+            $bak = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
+            if ($null -ne $bak) { [Environment]::SetEnvironmentVariable($n, $bak, "User") }
+        }
+        Remove-Item -LiteralPath $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    } catch {}
 }
 
 # 把状态应用到系统（幂等：整套变量都已就位就什么都不做）
@@ -743,6 +810,9 @@ function Apply-State([string]$state) {
 $RunKeyPath       = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $RunKeyName       = "EnvProxyMonitor"
 $ScriptPathRegKey = "HKCU:\Software\EnvProxy"
+# 用户原值快照：安装时记下被覆盖前的用户级代理变量，卸载时按快照还原。
+# 与 $ScriptPathRegKey 父子关系——卸载清注册表键时连同删掉，不留痕迹。
+$PrevEnvRegKey   = "HKCU:\Software\EnvProxy\Backup"
 $LauncherDir      = Join-Path $env:LOCALAPPDATA "EnvProxy"
 $LauncherPath     = Join-Path $LauncherDir "launcher.ps1"
 
@@ -1118,10 +1188,12 @@ function Run-MonitorLoop {
     }
 
     if ($selfExit) {
-        # 文件夹被移动/删除：静默自退，旧位置零残留。
+        # 文件夹被移动/删除：自退时没有活着的组件会再纠正变量，先把我们写的东西清掉
+        # （新位置的监控会在秒级内按需重注），再清运行时目录与空壳。
         # 注意竞态：移动瞬间若恰好写日志，Ensure-MonitorDir 会重建旧位置目录。
         # 因此：删 monitor 目录后，若脚本目录只剩空壳（无任何其他文件）→ 一并删除，
         # 确保旧位置完全消失（下次移回时 Move-Item 不会因空壳而嵌套）。
+        try { Apply-State "off" } catch {}
         try {
             Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
             $left = Get-ChildItem -LiteralPath $ScriptDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1149,6 +1221,8 @@ function Install-EnvProxy {
     Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
+    # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
+    Snapshot-PrevEnv
     Apply-State (Get-CurrentState)
     Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
     Start-Sleep -Seconds 1
@@ -1163,6 +1237,8 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     Write-Host "======== EnvProxy 卸载（一键恢复原状）========" -ForegroundColor Cyan
     Stop-Monitor
     Remove-AutoRun
+    # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
+    Restore-PrevEnv
     Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
@@ -1207,6 +1283,8 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
     Apply-State "off"
     # 卸载末尾回读复检：上面每一步都可能静默失败，定论必须由复读结果决定。
+    # DIVERGE(Win): 复检项按平台映射——Run 键对应 Mac 的 plist，
+    # 注册表变量对应 proxy.env，其余同源。
     $dirty = @()
     try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
     if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
@@ -1751,5 +1829,7 @@ if ($Status) {
     Show-Status
     return
 }
-# 无参数 = 监控模式（由开机自启调用）
+# 无参数 = 监控模式（由开机自启调用）。
+# 被点号引用（测试加载）时只定义函数、不进入监控。
+if ($MyInvocation.InvocationName -eq '.') { return }
 Run-MonitorLoop
