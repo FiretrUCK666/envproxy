@@ -55,7 +55,7 @@ bash -n mac/*.sh
 `win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
 构建与验证节第 2 条）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh` 确认行为。
 
-**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`，由 `git archive`
+**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`（Windows）/ `EnvProxy.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
 更新入口（`5-检查更新` / `bash mac/update.sh`）认得这一点，只报版本、不改动任何文件，同步上游用
 `git pull`。要验证更新逻辑，把安装包解压到别处当安装副本，在那里面点检查更新——不要指望在本仓库里
@@ -69,15 +69,14 @@ bash -n mac/*.sh
 # 门禁 1：sh 语法（CI 同款）
 bash -n mac/*.sh
 # 门禁 2：ps1 语法（本机 PowerShell 5.1；CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
-# 门禁 3-9：编码红线、安装包内容、双语文档一致性、契约常量与事实清单、AGENTS.md 体量、
-#   配图一致性、文件模式——权威定义只有 .github/workflows/check.yml，
+# 其余门禁见 .github/workflows/check.yml（权威定义只有那一处），
 #   本地要单跑某一条，就把那一步的脚本原样粘进 PowerShell。
 # 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
 # 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
 ```
 
 这里的说明与 `AGENTS.md` 构建与验证节指向同一处权威（`check.yml`）；门禁有增减时只改 CI 与 `AGENTS.md`，
-本文件不复制脚本清单。
+本文件不复制门禁清单（上面那两行只是最常用的本地命令，不是门禁目录）。
 
 ## 硬性规范
 
@@ -92,7 +91,7 @@ bash -n mac/*.sh
 
 ## 提交信息
 
-一句话说明这次改了什么。中文或英文都可以，但**不要使用 emoji**。一次实质改动一个
+提交信息用英文 ASCII，一句话说明这次改了什么（避免中文经 shell）。一次实质改动一个
 提交，不要把无关改动混在一起。
 
 ## 许可

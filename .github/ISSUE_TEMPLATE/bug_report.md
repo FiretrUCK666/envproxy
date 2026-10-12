@@ -3,6 +3,8 @@ name: 缺陷报告
 about: 报告 EnvProxy 的问题
 ---
 
+(Bug report. Chinese or English both welcome.)
+
 ## 版本
 
 （进 `win` 双击 `4-查看状态`，把"本地版本"那一行贴上来；Mac 对应 `mac` 下的同名文件。也可以直接看根目录的 `VERSION` 文件）

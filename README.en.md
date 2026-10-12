@@ -15,7 +15,7 @@
   <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">Download the latest version (zip package — the download starts right away)</a></b> · unzip anywhere, then double-click <code>1-安装.cmd</code> in <code>win</code> (on Mac, in <code>mac</code>) — see <a href="#1-install-3-steps-5-minutes">section 1</a>
 </p>
 
-> Connect your proxy app and the terminal follows. Disconnect it and the terminal goes direct again. Nothing to operate, nothing left behind, no admin rights.
+> Connect your proxy app and the terminal follows. Disconnect it and the terminal goes direct again. Nothing to operate, no admin rights, and nothing left behind in your system configuration.
 
 **Who it is for**: people who use a proxy app and also run command line tools — `git`, `npm`, `curl`, and CLI tools such as dsh or OpenCode.
 
@@ -80,6 +80,16 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 - IPv6 in `NO_PROXY` is written bare as `::1`. Written as `[::1]` httpx treats it as an ordinary domain name, builds an invalid match pattern, and then fails every request with `InvalidURL`. Square brackets belong to URL literals, not here.
 - Your own `NO_PROXY` entries are never removed — the tool only adds to them — and uninstalling removes only the values this tool wrote.
 - If something else damages a variable (overwrites, clears, or drops one), it does not matter: the monitor re-checks the whole table every 60–90 seconds and fills in what is missing.
+- The tools below do not read these 5 variables — configure them separately (not a bug in this tool):
+
+| Tool | Where to configure it |
+|---|---|
+| Maven | `<proxies>` in `settings.xml` |
+| Gradle | `systemProp.http(s).proxyHost/Port` in `gradle.properties` |
+| Native JDK HttpClient | JVM system properties (or `java.net.useSystemProxies` for the system proxy) |
+| `docker pull` in Docker Desktop | Docker Desktop's own settings (it ignores proxy settings in `daemon.json`) |
+
+- `NODE_USE_ENV_PROXY` only works on recent Node: `node:http(s)` needs 22.21 / 24.5 or later, `fetch()` needs 22.21 / 24.0 or later. On older versions it does nothing, which is expected.
 
 </details>
 
@@ -96,6 +106,8 @@ Installing does three things: registers the monitor to start at login, starts it
 To update later, double-click **`5-检查更新.cmd`**. It tells you what the new version changed and installs only after you agree.
 
 If anything seems off, double-click **`1-安装.cmd`** again. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
+
+> If the first double-click is blocked on a package downloaded from the web: right-click the file, Properties, Unblock (or run `Unblock-File` once) — do not change the execution policy.
 
 ## 2. The five buttons
 
@@ -128,7 +140,7 @@ It is the black box for troubleshooting. When you report a problem, include the 
 | What you do | What it does | How long |
 |---|---|---|
 | Connect the proxy app | sees the proxy working, writes the variables | 4–10 seconds (up to about 30 seconds for apps and ports that are not in the common tables) |
-| Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 30 seconds after disconnecting |
+| Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 30–45 seconds after disconnecting |
 | Change the port, reconnect | finds the new port and applies it | about 10 seconds |
 | Switch to another proxy app | finds the new app's port | a few seconds |
 | Run two proxy apps at once | uses the one that verifies, the other takes over when the first stops | nothing to do |
@@ -152,7 +164,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Mechanism | What it prevents |
 |---|---|
 | Two round confirmation | changes happen only after the state is confirmed twice — connecting and disconnecting within seconds will not make the variables flip |
-| Conservative disconnect | three failed probes in a row (about 45 seconds) are needed to call it disconnected, while one success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
+| Conservative disconnect | three failed probes in a row (about 30–45 seconds) are needed to call it disconnected, while one success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
 | Several check endpoints | 7 endpoints across different providers and network segments. Normally only the last successful one is probed, and only if it fails are the others tried in parallel — one blocked segment cannot cause a false removal |
 | Cheap probing | each port is really probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB |
 | One monitor process only | a single instance lock, so processes do not pile up |
@@ -189,6 +201,8 @@ It does not care about brands, process names or port numbers; it only cares who 
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md` or `.github` | you downloaded GitHub's "Source code" instead of the package | delete them, nothing breaks. The updater never removes them for you — it only aligns the program folders (`win\`, `mac\` and friends) and only overwrites same-named files at the top level |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
 | You want to undo everything | — | double-click `3-一键恢复` and answer the log question |
+| The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
+| Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | whitelist the install folder (in Huorong, turn off HTTPS scanning features first); do not turn the antivirus off |
 
 <details>
 <summary>Less common cases</summary>
@@ -201,6 +215,8 @@ It does not care about brands, process names or port numbers; it only cares who 
 | The terminal inside WSL2 is not affected | WSL2 does not inherit Windows user environment variables by default | expected; set the proxy variables inside WSL separately |
 | An administrator terminal is not affected | an elevated process belongs to another account and does not inherit your variables | expected; use a normal, non elevated terminal |
 | Proxy variables you had before are gone | installing overwrites user level variables with the same names, and uninstalling deletes them without restoring the old values (system level variables and the system proxy are never touched) | on a corporate machine, write down the old values first |
+| A service bound to `[::1]` is not bypassed in Node | the undici bundled with Node cannot parse a bare `::1` (it splits it into host `:` plus port `1`); writing `[::1]` instead would break httpx everywhere, so the bare form stays | only "service explicitly bound to `[::1]` plus native Node fetch" hits this; use `localhost` / `127.0.0.1` |
+| `NODE_USE_ENV_PROXY` is set but Node still ignores the proxy | it only works on recent Node | `node:http(s)` needs 22.21 / 24.5 or later, `fetch()` needs 22.21 / 24.0 or later; older versions are expected behaviour |
 
 </details>
 
@@ -234,9 +250,9 @@ EnvProxy\
   assets\readme\          images used by these READMEs
 ```
 
-`win\` and `mac\` belong to the program: updating aligns the contents of these two folders (plus `release-notes\` and `assets\`), so do not put your own files inside them. The top level of the folder is yours — updating only overwrites files with the same name and never deletes anything of yours, and nothing inside `monitor\` is ever overwritten.
+`win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns these four folders with the package contents, so do not keep your own files in them. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
 
-For daily use you only ever open `win\` (on Mac, `mac\`); the documents at the top level can be left alone.
+The top level and the log need no care: the top level only overwrites same-named files and never deletes anything of yours, and nothing inside `monitor\` is ever overwritten or deleted.
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three zones: the program folders (the updater overwrites them, do not keep your own files there), the runtime folder (the log and the run marker are never overwritten or deleted), and the top level of the folder (only same-named files are overwritten, nothing of yours is deleted)">
 
@@ -326,7 +342,7 @@ EnvProxy/
 
 ### 12.5 Three things that may block the first install on a Mac
 
-1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Pick one of three ways: right-click, then Open, once; or run `bash mac/install.sh` in a terminal (always works); or run `xattr -d com.apple.quarantine mac/1-安装.command` and double-click again.
+1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: right-click, then Open, once; or go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it); or run `bash mac/install.sh` in a terminal (always works); otherwise run `xattr -d com.apple.quarantine mac/1-安装.command` and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
 2. **The executable bit is lost** (common when the folder came from Windows): run `chmod +x *.command *.sh` once inside the `mac` folder.
 3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — double-clicking 1-安装 once fixes it.
 
