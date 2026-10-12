@@ -346,34 +346,37 @@ test_http_proxy() {
 
 # 批量探测 worker（参数展开在父进程完成，避免后台子 shell 闭包竞态）
 _probe_proxy_one() {
-    _pp="$1"; _found="$2"
+    _pp="$1"; _dir="$2"
     _r=$(printf 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n' | nc -G 1 -w 2 127.0.0.1 "$_pp" 2>/dev/null | head -n 1)
     if printf '%s' "$_r" | grep -qE '^HTTP/1\.[01] +200'; then
-        printf '%s' "$_pp" > "$_found" 2>/dev/null || true
+        # 每个 worker 写自己专属的结果文件：并行写同一文件会截断拼接，
+        # 曾拼出过不存在的"端口"，还会污染失败计数。
+        printf '%s' "$_pp" > "$_dir/$_pp" 2>/dev/null || true
     fi
 }
 
 # 并行批量 CONNECT 探测：多个端口同时握手，~2 秒内出结果
 test_http_proxy_batch() {
     [ $# -eq 0 ] && return 1
-    _found="/tmp/envproxy_found.$$"
-    rm -f "$_found" 2>/dev/null || true
+    _bdir=$(mktemp -d /tmp/envproxy_found.XXXXXX 2>/dev/null) || return 1
     for _p in "$@"; do
-        _probe_proxy_one "$_p" "$_found" &
+        _probe_proxy_one "$_p" "$_bdir" &
     done
     _i=0
     while [ $_i -lt 30 ]; do
-        [ -f "$_found" ] && break
+        [ -n "$(ls -A "$_bdir" 2>/dev/null)" ] && break
         sleep 0.1
         _i=$((_i + 1))
     done
+    # 有结果就收掉其余探针再返回，不空等全部跑完。
+    kill $(jobs -p) 2>/dev/null || true
     wait 2>/dev/null || true
-    if [ -f "$_found" ]; then
-        cat "$_found" 2>/dev/null
-        rm -f "$_found" 2>/dev/null || true
+    _hit=$(ls "$_bdir" 2>/dev/null | head -n 1)
+    rm -rf "$_bdir" 2>/dev/null || true
+    if [ -n "$_hit" ]; then
+        printf '%s' "$_hit"
         return 0
     fi
-    rm -f "$_found" 2>/dev/null || true
     return 1
 }
 
@@ -388,8 +391,8 @@ get_listening_ports() {
 
 # 可疑进程端口表（排序去重，无状态，可安全用于命令替换）
 get_suspect_ports() {
-    _psmap="/tmp/envproxy_ps.$$"
-    _lsofout="/tmp/envproxy_lsof.$$"
+    _psmap=$(mktemp /tmp/envproxy_ps.XXXXXX 2>/dev/null) || return 0
+    _lsofout=$(mktemp /tmp/envproxy_lsof.XXXXXX 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
     ps -ax -o pid=,comm= 2>/dev/null | tr '[:upper:]' '[:lower:]' > "$_psmap" 2>/dev/null || true
     if ! lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null > "$_lsofout"; then
         rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
@@ -478,7 +481,7 @@ test_single_endpoint() {
     _port="$1"; _host="$2"; _path="$3"
     # --disable（= -q）：不读用户 ~/.curlrc——否则用户配过的 proxy 会劫持这次探测，判据作废。
     _out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy \
-        curl --disable -s -D - -o /dev/null --connect-timeout 5 --max-time 6 -x "http://127.0.0.1:$_port" "http://$_host$_path" 2>/dev/null)
+        curl --disable -s -D - -o /dev/null --head --connect-timeout 5 --max-time 6 -x "http://127.0.0.1:$_port" "http://$_host$_path" 2>/dev/null)
     [ -n "$_out" ] || return 1
     printf '%s' "$_out" | grep -qi "Connection Established" && return 1
     _first=$(printf '%s' "$_out" | head -n 1)
@@ -769,27 +772,52 @@ repair_autorun() {
 # ------------------------------------------------------------------------------
 # 6. shell 集成（标记块幂等插入/精确移除）
 # ------------------------------------------------------------------------------
+# 落点选择：`.zshenv` 是唯一在所有 shell 类型（登录/交互/脚本/ssh 远程命令）都会加载的文件，
+# 所以它是终端路的首选落点；`.zshrc` 作为冗余。hook 行本身无输出、无耗时。
 insert_shell_hooks() {
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
         touch "$_rc" 2>/dev/null || continue
+        _normalize_hook_block "$_rc" || true
         if ! grep -qF "$HOOK_START" "$_rc" 2>/dev/null; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
     for _rc in "$HOME/.bash_profile" "$HOME/.bashrc"; do
         [ -f "$_rc" ] || continue
+        _normalize_hook_block "$_rc" || true
         if ! grep -qF "$HOOK_START" "$_rc" 2>/dev/null; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
 }
 
+# hook 块内容自愈：标记在、但内容与当前版本不符时删掉旧块（由调用方重新追加正确块）。
+# 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
+_normalize_hook_block() {
+    _hrc="$1"
+    grep -qF "$HOOK_START" "$_hrc" 2>/dev/null || return 0
+    _hwant="$(printf '%s\n%s\n%s' "$HOOK_START" "$HOOK_LINE" "$HOOK_END")"
+    _have="$(awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{f=1} f{print} $0==e{exit}' "$_hrc" 2>/dev/null)"
+    [ "$_have" = "$_hwant" ] && return 0
+    _htmp="$_hrc.tmp.$$"
+    if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_hrc" > "$_htmp" 2>/dev/null; then
+        cat "$_htmp" > "$_hrc" 2>/dev/null || true
+    fi
+    rm -f "$_htmp" 2>/dev/null || true
+    return 0
+}
+
 remove_shell_hooks() {
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc"; do
         [ -f "$_rc" ] || continue
+        # 没有标记的文件碰都不碰：全量重写会改 mtime，白白弄脏用户文件。
+        grep -qF "$HOOK_START" "$_rc" 2>/dev/null || continue
         _tmp="$_rc.tmp.$$"
-        awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null \
-            && mv "$_tmp" "$_rc" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+        # 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
+        if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null; then
+            cat "$_tmp" > "$_rc" 2>/dev/null || true
+        fi
+        rm -f "$_tmp" 2>/dev/null || true
     done
 }
 
@@ -1069,6 +1097,20 @@ update_envproxy() {
             return 0
         fi
     fi
+    # 目的地校验 + 版本闸门：脚本一旦不在 <根>/mac/ 布局里，推导出的"安装根"就是错的，
+    # 后面的删除循环会删用户自己的文件；VERSION 读不到时任何"比较"都是瞎猜。
+    # 两项任一不过就拒绝并指明路，不下载、不覆盖、不删任何东西。
+    _uroot="$(get_project_root)"
+    if [ ! -f "$_uroot/mac/envproxy.sh" ] || [ ! -f "$_uroot/VERSION" ]; then
+        echo "这里不是 EnvProxy 安装目录（缺少 mac/envproxy.sh 或 VERSION），未做任何改动。"
+        echo "请从安装包的 mac/ 目录里运行，或手动下载安装包覆盖。"
+        return 0
+    fi
+    if [ -z "$_local" ]; then
+        echo "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
+        echo "请到 Releases 页面手动下载安装包覆盖一次，或点一次 1-安装 修复。"
+        return 0
+    fi
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
     _reg=""
     [ -f "$PATH_CONF" ] && _reg=$(head -n 1 "$PATH_CONF" 2>/dev/null | tr -d '\r\n' || true)
@@ -1129,17 +1171,17 @@ update_envproxy() {
                 ;;
         esac
     fi
-    # 停监控 → 覆盖安装区（跳过 monitor 保日志；跳过正在执行的核心脚本，由新脚本自己搬）
-    # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
-    echo "正在安装新版（保留日志，原监控先停）..."
-    stop_monitor >/dev/null 2>&1 || true
-    _uroot="$(get_project_root)"
+    # 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位，含正在执行的核心脚本——
+    # 写的是同目录临时文件再改名，运行中的旧文件不受影响）。
+    # 注意顺序：先覆盖、后停监控——停得越晚，监控裸奔的窗口越短。
+    # 旧监控在覆盖期间只读写变量与自启动，不碰程序文件，不会打架。
+    echo "正在安装新版（保留日志）..."
     if ! install_package "$_exdir" "$_uroot" "$_exdir"; then
         rm -f "$_tgz" 2>/dev/null || true
-        echo "安装区已回滚，正在按原版本恢复监控..."
-        install_envproxy >/dev/null 2>&1 || true
+        echo "安装区已回滚（覆盖前监控没停，不需要恢复）。"
         return 1
     fi
+    echo "正在停止旧监控..."
     rm -f "$_tgz" 2>/dev/null || true
     # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
     # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
@@ -1192,6 +1234,12 @@ install_package() {
     _proot="$1"
     _pdest="$2"
     _pstage="${3:-}"
+    # 目的地校验（第二道）：目标必须已经是一个安装根。调用方进门时已验过一次，
+    # 这里是给"函数被别处直接调用"留的底线——后面的删除循环只认这个结论。
+    if [ ! -f "$_pdest/mac/envproxy.sh" ] || [ ! -f "$_pdest/VERSION" ]; then
+        echo "拒绝覆盖：目标不是 EnvProxy 安装目录，未做任何改动。"
+        return 1
+    fi
     _plist="/tmp/envproxy_pkglist.$$"
     # 清单必须在备份之前生成：备份目录就在 $_pstage 里（真实调用处与 $_proot 是同一个目录），
     # 先生成清单会把 backup/** 当成"包内文件"一起拷进用户安装根（里面还带着上一版核心脚本）。
@@ -1233,18 +1281,15 @@ install_package() {
         [ -n "$_prel" ] || continue
         _ptarget="$_pdest/$_prel"
         mkdir -p "$(dirname "$_ptarget")" 2>/dev/null || { _pcopy=0; continue; }
-        if [ "$_ptarget" = "$SCRIPT_PATH" ]; then
-            # 正在执行的就是这个文件：不能用 cp 直接截断重写（bash 是边读边执行的），
-            # 先写同目录临时文件再 mv 覆盖——运行中的旧 inode 不受影响，新内容原子到位。
-            _ptmp="$_ptarget.envproxy-new.$$"
-            if cp -p "$_proot/$_prel" "$_ptmp" 2>/dev/null && mv -f "$_ptmp" "$_ptarget" 2>/dev/null; then
-                :
-            else
-                rm -f "$_ptmp" 2>/dev/null || true
-                _pcopy=0
-            fi
+        # 所有文件一律"写同目录临时文件再改名"：cp 直接截断重写不安全——
+        # 其中一个文件可能正在被执行（bash 边读边执行），字符串比对认身份
+        # 在大小写不敏感卷/软链下还会失配。不再设特例，一视同仁。
+        _ptmp="$_ptarget.envproxy-new.$$"
+        if cp -p "$_proot/$_prel" "$_ptmp" 2>/dev/null && mv -f "$_ptmp" "$_ptarget" 2>/dev/null; then
+            :
         else
-            cp -p "$_proot/$_prel" "$_ptarget" 2>/dev/null || _pcopy=0
+            rm -f "$_ptmp" 2>/dev/null || true
+            _pcopy=0
         fi
     done < "$_plist"
     if [ "$_pok" != "1" ] || [ "$_pcopy" != "1" ]; then
