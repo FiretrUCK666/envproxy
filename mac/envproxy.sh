@@ -509,8 +509,7 @@ test_real_connectivity() {
         && test_single_endpoint "$_port" "$_fast_host" "$_fast_path"; then
         return 0
     fi
-    _tmpdir="/tmp/envproxy_conn.$$"
-    mkdir -p "$_tmpdir" 2>/dev/null || true
+    _tmpdir=$(mktemp -d /tmp/envproxy_conn.XXXXXX 2>/dev/null) || return 1
     # 逐个按索引展开 host/path，避免后台闭包竞态（参数在父进程展开后传值）
     _idx=0
     for _h in $CHECK_HOSTS; do
@@ -967,6 +966,14 @@ run_monitor_loop() {
             # （幂等，齐了则零写入）。只核对我们本该持有的那几个，与用户自己的变量无关。
             case "$_last" in
                 on:*) sync_user_env_vars "${_last#on:}" || true ;;
+                off)
+                    # off 态残留兜底（与 Windows 侧 30 轮自检同语义）：整表判据走同一套，
+                    # 稳态 off 下外部改动或旧残留也能被纠正，而不是等到下次翻转。
+                    if proxy_vars_present; then
+                        remove_user_env_vars
+                        log_msg "检测到代理变量残留 -> 已回收，恢复直连"
+                    fi
+                    ;;
             esac
         fi
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
@@ -1123,9 +1130,11 @@ update_envproxy() {
     _repo=$(get_update_repo)
     _url="https://github.com/$_repo/releases/download/$REMOTE_TAG/EnvProxy.tar.gz"
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
-    _safe_tag=$(printf '%s' "$REMOTE_TAG" | tr -c 'A-Za-z0-9._-' '_')
-    _tgz="/tmp/envproxy_update-$_safe_tag.tar.gz"
-    _exdir="/tmp/envproxy_update-$_safe_tag-src"
+    # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
+    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 0; }
+    rm -f "$_rnd" 2>/dev/null || true
+    _tgz="$_rnd.tar.gz"
+    _exdir="$_rnd-src"
     echo "正在下载安装包..."
     rm -f "$_tgz" 2>/dev/null || true
     rm -rf "$_exdir" 2>/dev/null || true
@@ -1213,13 +1222,15 @@ verify_package() {
 
 # 打印这一版改了什么：包内 release-notes/<标签>.md，最多 40 行；没有就跳过。
 show_release_notes() {
-    _nfile="$1/release-notes/$2.md"
+    # tag 先清洗再拼路径：$2 来自远端 API，未清洗直接拼会有路径穿越风险（与 tgz/exdir 共用同一条卫生规则）。
+    _ntag=$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_')
+    _nfile="$1/release-notes/$_ntag.md"
     [ -f "$_nfile" ] || return 0
     echo "---------- $2 改了什么 ----------"
     sed -n '1,40p' "$_nfile" 2>/dev/null
     _nlines=$(wc -l < "$_nfile" 2>/dev/null | tr -d ' ')
     if [ -n "$_nlines" ] && [ "$_nlines" -gt 40 ] 2>/dev/null; then
-        echo "  （以上为前 40 行，全文见 Releases 页面与本安装目录的 release-notes/$2.md）"
+        echo "  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes/$_ntag.md）"
     fi
     echo "----------------------------------"
     return 0
@@ -1240,7 +1251,7 @@ install_package() {
         echo "拒绝覆盖：目标不是 EnvProxy 安装目录，未做任何改动。"
         return 1
     fi
-    _plist="/tmp/envproxy_pkglist.$$"
+    _plist=$(mktemp /tmp/envproxy_pkglist.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 1; }
     # 清单必须在备份之前生成：备份目录就在 $_pstage 里（真实调用处与 $_proot 是同一个目录），
     # 先生成清单会把 backup/** 当成"包内文件"一起拷进用户安装根（里面还带着上一版核心脚本）。
     _pok=1
@@ -1462,8 +1473,8 @@ fi
 _CMD_NORM=$(printf '%s' "$_CMD" | sed 's/^--*//; s/^-//' | tr '[:upper:]' '[:lower:]')
 
 case "$_CMD_NORM" in
-    install|update)
-        # 操作锁：这两个动作会改同一批文件，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
+    install|update|stop|uninstall)
+        # 操作锁：这四个动作都会改文件或删变量，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
         # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
         mkdir -p "$MONITOR_DIR" 2>/dev/null || true
         OP_LOCK="$MONITOR_DIR/.op.lock"
