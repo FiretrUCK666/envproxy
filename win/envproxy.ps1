@@ -38,11 +38,7 @@ param(
     [switch]$Status,
     [switch]$Update,
     [switch]$Yes,
-    [switch]$Purge,
-    # 内部参数：更新入口覆盖完成后，用它调用**新版本**的自己收尾（用户不需要直接用）。
-    [switch]$FinishUpdate,
-    [string]$Root = "",
-    [string]$Stage = ""
+    [switch]$Purge
 )
 
 # ------------------------------------------------------------------------------
@@ -85,7 +81,12 @@ $ProxyProcessPatterns = @("monocloud", "clash", "mihomo", "verge", "v2ray", "xra
     "neko", "netch", "surge", "outline")
 
 function Test-PortListening([int]$Port) {
-    return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    # 命令本身可能不可用（被裁剪的系统、极老版本）：-ErrorAction 拦不住 CommandNotFoundException，
+    # 必须包 try，否则 -Install 与监控主循环都会被一条终端命令打断（与 Find-CandidatePorts 同一套处理）。
+    for ($i = 0; $i -lt 2; $i++) {
+        try { return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop) } catch {}
+    }
+    return $false
 }
 
 # CONNECT 探测：向端口发一个 HTTP CONNECT 请求，只有真正的 HTTP 代理才回 "200"。
@@ -775,7 +776,7 @@ if (-not $running) {
 # 把定位器写到固定位置，并把 Run 键指向定位器
 function Set-AutoRun {
     New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-Content -Path $LauncherPath -Value (Get-LauncherContent) -Encoding UTF8 -ErrorAction Stop
+    [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
     $launcherCmd = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath
     Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $launcherCmd -ErrorAction Stop
 }
@@ -811,7 +812,7 @@ function Repair-AutoRun {
         $actual = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
         if ((-not (Test-LauncherCurrent)) -or $actual -ne $expected) {
             New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-            Set-Content -Path $LauncherPath -Value (Get-LauncherContent) -Encoding UTF8 -ErrorAction SilentlyContinue
+            [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
             Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction SilentlyContinue
             Write-MonitorLog "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
         }
@@ -994,7 +995,7 @@ function Run-MonitorLoop {
     while (-not (Test-Path $StopFlag)) {
         # 自退检测：脚本文件不存在 = 文件夹被移动/删除 → 旧位置不再需要本监控。
         # 静默退出并清理旧位置的一切运行时痕迹（下次开机定位器会从新位置启动）。
-        if (-not (Test-Path $PSCommandPath)) { $selfExit = $true; break }
+        if (-not (Test-Path -LiteralPath $PSCommandPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
 
@@ -1030,7 +1031,9 @@ function Run-MonitorLoop {
                         Write-MonitorLog "检测到代理变量残留 -> 已回收，恢复直连"
                     }
                 } else {
-                    Sync-UserEnvVars $lastState.Substring(3) | Out-Null
+                    # 自愈写入后也要广播：不广播的话已经运行的资源管理器/程序仍是旧环境，
+                    # 与 Apply-State 就成了两套行为。写入成功才广播。
+                    if (Sync-UserEnvVars $lastState.Substring(3)) { Broadcast-EnvironmentChange }
                 }
             }
 
@@ -1172,7 +1175,7 @@ function Show-Status {
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
             Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
         } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
-            Write-Host "更新状态 : 发现新版，用 5-检查更新 可升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 发现新版，可点 5-检查更新 升级" -ForegroundColor Yellow
         } else {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
@@ -1367,6 +1370,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     }
     if ($local -and ((Compare-Versions $remote.Version $local) -le 0)) {
         Write-Host "已是最新，无需更新。" -ForegroundColor Green
+        Write-Host "（如果怀疑上次更新没装完整，到 Releases 页面重新下载安装包覆盖一次即可。）" -ForegroundColor DarkGray
         return
     }
     # 防呆：点的是备份文件夹时警告（正式路径以注册表记录为准）
@@ -1408,16 +1412,31 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         try { Stop-Monitor } catch {}
         $root = Split-Path -Parent $ScriptDir
         try {
-            Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir -SkipRel "win\envproxy.ps1"
+            # 全部文件一次覆盖到位，包含正在执行的这个核心脚本：PowerShell 启动时已把整份脚本读进
+            # 内存，之后覆盖文件不影响本次运行。任何一步失败会整体回滚。
+            Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir
         } catch {
             Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-            Write-Host "安装区已回滚，正在按原版本恢复监控..." -ForegroundColor Yellow
+            Write-Host "已恢复原状，正在重启监控..." -ForegroundColor Yellow
             try { Install-EnvProxy | Out-Null } catch {}
             return
         }
-        # 收尾交给解压目录里的新脚本（它不覆盖正在运行的自己）。
-        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extractDir "win\envproxy.ps1") -FinishUpdate -Root $root -Stage $extractDir
-        if ($LASTEXITCODE -ne 0) { Write-Host "收尾步骤没有成功，请再双击一次 1-安装 完成收尾。" -ForegroundColor Yellow }
+        # 收尾跑**安装根里**的新脚本（不是解压目录里那份）：只有从安装根执行，路径记录、自启动项与
+        # 监控进程才会落在安装根，不会指向马上要被删掉的临时目录。带超时，卡住就报错而不是无声等待。
+        $newScript = Join-Path $root "win\envproxy.ps1"
+        $rc = 1
+        try {
+            $proc = Start-Process -FilePath "powershell" -PassThru -NoNewWindow -ArgumentList @(
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$newScript`"", "-Install"
+            )
+            if ($proc.WaitForExit(120000)) { $rc = $proc.ExitCode }
+            else { try { $proc.Kill() } catch {}; Write-Host "收尾超过 2 分钟没结束，已中止。" -ForegroundColor Yellow }
+        } catch {
+            Write-Host ("收尾没能启动：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+        if ($rc -ne 0) {
+            Write-Host "文件已经覆盖完成，但收尾（自启动与监控）没成功，请再双击一次 1-安装。" -ForegroundColor Yellow
+        }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         Write-Host "可稍后重试；也可以手动下载安装包覆盖后再点一次 1-安装。" -ForegroundColor Yellow
@@ -1460,7 +1479,9 @@ function Show-ReleaseNotes([string]$Root, [string]$Tag) {
 # 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
-function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage = "", [string]$SkipRel = "") {
+function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage, [string]$SkipRel = "") {
+    # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。
+    if (-not $Stage) { throw "内部错误：覆盖安装区必须提供备份目录（-Stage）。" }
     # 覆盖前后各做一件事，都是为了让"更新到一半失败"不留残局：
     #   覆盖前——把四个程序目录 + 根目录那几个随包文件备份到本次更新的临时目录；
     #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方；
@@ -1478,7 +1499,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage 
         New-Item -Path $backup -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
         foreach ($d in $shipDirs) {
             $src = Join-Path $ProjectRoot $d
-            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $d) -Recurse -Force -ErrorAction SilentlyContinue }
+            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $d) -Recurse -Force -ErrorAction Stop }
         }
         # 根目录那几个随包文件（VERSION / README / LICENSE）也要备份：只备份程序目录的话，
         # 中途失败回滚后会留下"版本号是新的、程序目录是旧的"——比不滚还难查。

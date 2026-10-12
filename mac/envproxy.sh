@@ -212,6 +212,16 @@ env_vars_in_sync() {
     grep -qxF "export NO_PROXY=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
     grep -qxF "export no_proxy=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
     grep -qxF 'export NODE_USE_ENV_PROXY="1"' "$PROXY_ENV" 2>/dev/null || return 1
+    # launchd 的会话环境是易失的（每次登录/重启清空），而 proxy.env 一直存在——只比对它就等于
+    # 认为"第二路也齐了"，重启后那 9 个 setenv 一次都不会重放。两条腿都要核：任一条不符就判"不齐"，
+    # 交给 sync_user_env_vars 整体重写（apply_state、安装、自愈因此共用同一个判据）。
+    if command -v launchctl >/dev/null 2>&1; then
+        [ "$(launchctl getenv HTTP_PROXY 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv HTTPS_PROXY 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv ALL_PROXY 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv NO_PROXY 2>/dev/null)" = "$_np" ] || return 1
+        [ "$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null)" = "1" ] || return 1
+    fi
     return 0
 }
 
@@ -238,7 +248,7 @@ remove_user_env_vars() {
     # NO_PROXY 用"减掉我们加的默认项"的方式回收（用户原本就有 NO_PROXY 时，
     # 按"整份等于默认集"判断会让我们加的那几项永远留在他的值里）；
     # NODE_USE_ENV_PROXY 只有值是我们写的 1 才清。
-    _ours=$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')
+    _ours_default="$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')"
     for _v in no_proxy NO_PROXY; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
@@ -807,7 +817,7 @@ start_monitor() {
         if [ "$_force" = "1" ]; then echo "正在重启监控以加载当前最新代码..."; else echo "检测到旧位置的监控进程，正在迁移到当前路径..."; fi
         stop_monitor || true
     fi
-    nohup bash "$SCRIPT_PATH" >/dev/null 2>&1 < /dev/null &
+    nohup /bin/bash "$SCRIPT_PATH" >/dev/null 2>&1 < /dev/null &
     # shellcheck disable=SC2312
     disown 2>/dev/null || true
     echo "监控进程已启动。"
@@ -852,12 +862,18 @@ stop_monitor() {
 # 8. 监控主循环（双轮确认去抖；任何单轮异常都不致命）
 # ------------------------------------------------------------------------------
 run_monitor_loop() {
+    # 运行时目录必须在这里就建：安装包不带 monitor/（不入库），全新安装时这是它第一次被用到。
+    # 少了这一句，锁目录就建不出来、函数直接 return，监控永远起不来——而安装界面照样打印"已启动"。
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     _lockdir="$MONITOR_DIR/.lock"
     if ! mkdir "$_lockdir" 2>/dev/null; then
         _e=$(get_monitor_pid || true)
         [ -n "$_e" ] && return 0
         rmdir "$_lockdir" 2>/dev/null || true
-        mkdir "$_lockdir" 2>/dev/null || return 0
+        if ! mkdir "$_lockdir" 2>/dev/null; then
+            echo "监控启动失败：运行时目录不可写（$MONITOR_DIR）。" >&2
+            return 1
+        fi
     fi
     # shellcheck disable=SC2064
     trap "rmdir \"$_lockdir\" 2>/dev/null || true" EXIT
@@ -1013,7 +1029,7 @@ update_envproxy() {
     echo "正在检查最新版本（最多等几秒）..."
     if ! get_remote_version; then
         echo "最新版本 : 检查失败（网络不可达或 GitHub API 限流）"
-        echo "请稍后重试；翻墙开/关换个状态再试一次也常有效。"
+        echo "请稍后重试；把翻墙软件开关一次再试也是常见解法。"
         return 0
     fi
     echo "最新版本 : $REMOTE_TAG"
@@ -1099,16 +1115,16 @@ update_envproxy() {
     echo "正在安装新版（保留日志，原监控先停）..."
     stop_monitor >/dev/null 2>&1 || true
     _uroot="$(get_project_root)"
-    if ! install_package "$_exdir" "$_uroot" "$_exdir" "mac/envproxy.sh"; then
+    if ! install_package "$_exdir" "$_uroot" "$_exdir"; then
         rm -f "$_tgz" 2>/dev/null || true
         echo "安装区已回滚，正在按原版本恢复监控..."
         install_envproxy >/dev/null 2>&1 || true
         return 1
     fi
     rm -f "$_tgz" 2>/dev/null || true
-    # exec：把当前进程换成解压目录里的新脚本去收尾——终端里继续看到它的输出，
-    # 退出码原样带出，父进程也不会在自己的代码被覆盖之后继续执行。
-    exec /bin/bash "$_exdir/mac/envproxy.sh" finish-update "$_uroot" "$_exdir"
+    # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
+    # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
+    exec /bin/bash "$_uroot/mac/envproxy.sh" install
 }
 
 # 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
@@ -1149,8 +1165,16 @@ install_package() {
     _proot="$1"
     _pdest="$2"
     _pstage="${3:-}"
-    _pskip="${4:-}"
     _plist="/tmp/envproxy_pkglist.$$"
+    # 清单必须在备份之前生成：备份目录就在 $_pstage 里（真实调用处与 $_proot 是同一个目录），
+    # 先生成清单会把 backup/** 当成"包内文件"一起拷进用户安装根（里面还带着上一版核心脚本）。
+    _pok=1
+    (cd "$_proot" && find . -type f 2>/dev/null | sed 's|^\./||') > "$_plist" 2>/dev/null || _pok=0
+    if grep -q '^backup/' "$_plist" 2>/dev/null; then
+        echo "更新失败：安装清单里混进了备份目录，已中止。"
+        rm -f "$_plist" 2>/dev/null || true
+        return 1
+    fi
     if [ -n "$_pstage" ]; then
         _pbak="$_pstage/backup"
         rm -rf "$_pbak" 2>/dev/null || true
@@ -1164,8 +1188,6 @@ install_package() {
             [ -f "$_pdest/$_pf" ] && cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null
         done
     fi
-    _pok=1
-    (cd "$_proot" && find . -type f 2>/dev/null | sed 's|^\./||') > "$_plist" 2>/dev/null || _pok=0
     for _pd in win mac release-notes assets; do
         [ -d "$_pdest/$_pd" ] || continue
         find "$_pdest/$_pd" -type f 2>/dev/null | while IFS= read -r _pf; do
@@ -1174,7 +1196,7 @@ install_package() {
             [ -f "$_proot/$_prel" ] && continue
             if rm -f "$_pf" 2>/dev/null; then echo "  已移除旧版本残留：$_prel"; fi
         done
-        find "$_pdest/$_pd" -type d -mindepth 1 2>/dev/null | sort -r | while IFS= read -r _pdir; do
+        find "$_pdest/$_pd" -mindepth 1 -type d 2>/dev/null | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2- | while IFS= read -r _pdir; do
             case "$_pdir" in */monitor|*/monitor/*) continue;; esac
             rmdir "$_pdir" 2>/dev/null || true
         done
@@ -1182,10 +1204,21 @@ install_package() {
     _pcopy=1
     while IFS= read -r _prel; do
         [ -n "$_prel" ] || continue
-        if [ -n "$_pskip" ] && [ "$_prel" = "$_pskip" ]; then continue; fi
         _ptarget="$_pdest/$_prel"
         mkdir -p "$(dirname "$_ptarget")" 2>/dev/null || { _pcopy=0; continue; }
-        cp -p "$_proot/$_prel" "$_ptarget" 2>/dev/null || _pcopy=0
+        if [ "$_ptarget" = "$SCRIPT_PATH" ]; then
+            # 正在执行的就是这个文件：不能用 cp 直接截断重写（bash 是边读边执行的），
+            # 先写同目录临时文件再 mv 覆盖——运行中的旧 inode 不受影响，新内容原子到位。
+            _ptmp="$_ptarget.envproxy-new.$$"
+            if cp -p "$_proot/$_prel" "$_ptmp" 2>/dev/null && mv -f "$_ptmp" "$_ptarget" 2>/dev/null; then
+                :
+            else
+                rm -f "$_ptmp" 2>/dev/null || true
+                _pcopy=0
+            fi
+        else
+            cp -p "$_proot/$_prel" "$_ptarget" 2>/dev/null || _pcopy=0
+        fi
     done < "$_plist"
     if [ "$_pok" != "1" ] || [ "$_pcopy" != "1" ]; then
         if [ -n "$_pstage" ] && [ -d "$_pstage/backup" ]; then
@@ -1219,31 +1252,8 @@ install_package() {
     return 0
 }
 
-# 更新收尾（内部子命令）：把新版本的核心脚本搬到位，再走一次安装收尾。
-# 由更新入口在覆盖完成后执行，跑的是解压目录里的新脚本——所以升级完跑的是新代码，
-# 也不会出现"边读边被覆盖"。
-finish_update() {
-    _froot="$1"; _fstage="$2"
-    if [ -z "$_froot" ] || [ -z "$_fstage" ] || [ ! -f "$_fstage/mac/envproxy.sh" ]; then
-        echo "更新收尾失败：参数不对，或解压目录已被清理。"
-        return 1
-    fi
-    if ! cp -p "$_fstage/mac/envproxy.sh" "$_froot/mac/envproxy.sh" 2>/dev/null; then
-        echo "更新收尾失败：新版核心脚本没能写入。"
-        rm -rf "$_fstage" 2>/dev/null || true
-        return 1
-    fi
-    chmod +x "$_froot/mac/envproxy.sh" 2>/dev/null || true
-    if ! install_envproxy; then
-        echo "更新收尾失败：安装步骤没成功，请再点一次 1-安装。"
-        rm -rf "$_fstage" 2>/dev/null || true
-        return 1
-    fi
-    _fv=$(tr -d ' \t\r\n' < "$_froot/VERSION" 2>/dev/null || echo "")
-    echo "已更新到 v$_fv。"
-    rm -rf "$_fstage" 2>/dev/null || true
-    return 0
-}
+# 更新收尾不需要单独的子命令：覆盖完成后由更新入口 exec 安装根里的新脚本跑 install
+# （从安装根执行，路径记录/自启动/监控才会落在安装根）。
 
 # ------------------------------------------------------------------------------
 # 10. 子命令
@@ -1385,8 +1395,6 @@ case "$_CMD_NORM" in
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
     update) update_envproxy "$_YES";;
-    # 内部子命令：更新入口覆盖完成后，用它调用解压目录里的新脚本收尾（用户不需要直接用）
-    finish-update) finish_update "$2" "$3";;
     "") run_monitor_loop;;
     *) echo "用法: bash $0 {install|stop|uninstall|status|update} [--purge] [--yes]"; exit 1;;
 esac
