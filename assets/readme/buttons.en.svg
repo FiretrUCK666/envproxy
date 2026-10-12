@@ -11,7 +11,7 @@
     <text x="84" y="106" font-size="20" fill="#94A6BE">kept</text>
     <text x="176" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
     <text x="216" y="106" font-size="20" fill="#94A6BE">removed</text>
-    <circle cx="362" cy="97.7" r="4" fill="#7A8CA6"/>
+    <circle cx="362" cy="100.7" r="4" fill="#7A8CA6"/>
     <text x="378" y="106" font-size="20" fill="#94A6BE">read only</text>
   </g>
 
