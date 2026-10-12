@@ -43,8 +43,8 @@
   </g>
 
   <g id="flow-arrows" fill="none" stroke="#7A8CA6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M398 240 L414 248 L398 256"/>
-    <path d="M766 240 L782 248 L766 256"/>
+    <path d="M402 240 L418 248 L402 256"/>
+    <path d="M770 240 L786 248 L770 256"/>
   </g>
 
   <g id="branch" fill="none" stroke="#33486B" stroke-width="2" stroke-linecap="round">
