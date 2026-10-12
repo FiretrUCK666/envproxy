@@ -507,6 +507,17 @@ jobs:
           if ($fail) { exit 1 }
           Write-Host '文件模式通过'
 
+      - name: 门禁 10：功能自检
+        shell: pwsh
+        run: |
+          # 静态门禁保"不变形"，这道保"行为对"：纯函数、hook 成对护栏、
+          # 归属判定、注入核对回收往返、快照还原。失败返回非零。
+          pwsh -NoProfile -File tests/test-win-pure.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host 'Win 功能自检失败'; exit 1 }
+          bash mac/envproxy.sh self-test
+          if ($LASTEXITCODE -ne 0) { Write-Host 'Mac 功能自检失败'; exit 1 }
+          Write-Host '功能自检通过'
+
   powershell51:
     # 用户真实环境是系统自带的 PowerShell 5.1，而 ubuntu 上的 pwsh 是 7。
     # 两边都解析一遍：只靠 7 的话，7 独有的语法能过 CI、到用户机报语法错。
@@ -523,4 +534,7 @@ jobs:
           $tokens = $null; $errs = $null
           [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          powershell -NoProfile -File tests/test-win-pure.ps1
+          if ($LASTEXITCODE -ne 0) { Write-Host 'Win 功能自检（5.1）失败'; exit 1 }
+          Write-Host '5.1 语法与功能自检通过'
           Write-Host ("PowerShell {0} 解析通过" -f $PSVersionTable.PSVersion.ToString())
