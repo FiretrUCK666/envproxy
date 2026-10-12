@@ -2,12 +2,14 @@
 #  envproxy.ps1 — 命令行自动翻墙（Windows 原生，零依赖，通用版）
 # ------------------------------------------------------------------------------
 #  子命令（双击配套 .cmd，或在 PowerShell 里运行）：
-#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Install   一键安装
-#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Stop      停止监控
-#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall 一键恢复
-#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status    查看状态
-#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update     检查更新（一键升级，问过才装）
-#     无参数（由开机自启调用）                                         进入监控模式
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Install             一键安装
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Stop                停止监控并删变量
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall           一键恢复（问日志留不留）
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall -Purge    一键恢复并连日志一起删（不问）
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status              查看状态
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update              检查更新（问过才装）
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update -Yes         检查更新并跳过确认（供脚本调用）
+#     无参数（由开机自启调用）                                                   进入监控模式
 #
 #  运行环境：Windows 10/11 自带 PowerShell 5.1。不需要 Node/Python/管理员。
 #
@@ -36,7 +38,11 @@ param(
     [switch]$Status,
     [switch]$Update,
     [switch]$Yes,
-    [switch]$Purge
+    [switch]$Purge,
+    # 内部参数：更新入口覆盖完成后，用它调用**新版本**的自己收尾（用户不需要直接用）。
+    [switch]$FinishUpdate,
+    [string]$Root = "",
+    [string]$Stage = ""
 )
 
 # ------------------------------------------------------------------------------
@@ -159,9 +165,21 @@ function Test-HttpProxyBatch([int[]]$Ports) {
 # 只要首选不要全集的调用方继续用 Get-ActiveProxyPort（取第一个）。
 function Find-CandidatePorts([bool]$FullScan = $true) {
     $ordered = @()
+    # 端口枚举失败 ≠ 本机没有端口：失败的后果是候选集为空 → 调用方两轮后判 off 并删变量。
+    # 所以这里先做一次即时重试，仍失败就留一条日志（可诊断），再按原行为继续——
+    # 偶发抖动因此不会翻转状态，而"真的枚举不了"这种系统性问题会在日志里现形。
+    $listeners = @()
+    $enumerated = $false
+    for ($attempt = 0; $attempt -lt 2 -and -not $enumerated; $attempt++) {
+        try {
+            $listeners = Get-NetTCPConnection -State Listen -ErrorAction Stop
+            $enumerated = $true
+        } catch {
+            if ($attempt -eq 0) { Start-Sleep -Milliseconds 300 }
+        }
+    }
+    if (-not $enumerated) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮按无端口处理" } catch {} }
     try {
-        # 一次查询拿到全部监听端口（来源 1 与来源 2 共用，避免重复查询的开销）
-        $listeners = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
 
         # 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中
@@ -192,8 +210,10 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
 
         # 来源 2 第二轮：兜底——所有监听端口并行批量握手探测（进程名无特征也能发现）。
         # 仅在 FullScan 时执行（批量探测约 1 秒，off 状态降频调用以省资源）。
-        # 尾巴保持 early-exit 单答案（顺序读全量会拖慢）：未知工具独占时它是唯一的候选，
-        # 已知候选在前时它只是补充——两种情形试活层都能正确收敛。
+        # 批量探测一旦有结果就立刻返回（不等其余探针跑完），所以一次只带回一个端口：
+        # 候选集里有它，试活层就能收敛到它；其余同为代理的端口要等下一次集合变化或全扫再验。
+        # 覆盖面上限是"同时开两个都不在常见表里的代理软件，只认其中一个"——够用，
+        # 因为只要有一个可用端口，注入就是正确的。
         if ($FullScan) {
             $restPorts = @()
             foreach ($lp in $listening) {
@@ -592,9 +612,19 @@ function Remove-UserEnvVars {
         $cur = [Environment]::GetEnvironmentVariable($n, "User")
         if (-not $cur) { continue }
         if ($n -eq "NO_PROXY") {
-            if (((Get-NormalizedNoProxyEntries $cur) -join ',') -eq ((Get-NormalizedNoProxyEntries $ours) -join ',')) {
-                [Environment]::SetEnvironmentVariable($n, $null, "User")
+            # 只回收我们加进去的那几项：从当前值里逐项减掉默认集，剩下的原样写回（保留用户的写法与顺序），
+            # 减空了才删变量。不能按"整份等于默认集"判断——用户原本就有 NO_PROXY 时，我们加的那几项
+            # 会永远留在他的值里，回收不干净。
+            $oursSet = Get-NormalizedNoProxyEntries $ours
+            $keep = @()
+            foreach ($part in ($cur -split ',')) {
+                $t = $part.Trim()
+                if (-not $t) { continue }
+                if ($oursSet -contains $t.ToLowerInvariant()) { continue }
+                $keep += $t
             }
+            if ($keep.Count -eq 0) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            else { [Environment]::SetEnvironmentVariable($n, ($keep -join ','), "User") }
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") {
@@ -605,17 +635,40 @@ function Remove-UserEnvVars {
     }
 }
 
+# 我们该持有的那套变量现在还在不在。判据与 Remove-UserEnvVars 完全一致：
+# 三个代理变量只要有一个还有值就算在，NO_PROXY 看有没有我们写的默认项，
+# NODE_USE_ENV_PROXY 看值是不是我们写的 1。两边共用一套判据，才不会出现
+# "删得掉但门槛没让它删"的残留（半代理）。
+function Test-ProxyVarsPresent {
+    $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
+    foreach ($n in $ProxyVarNames) {
+        $cur = [Environment]::GetEnvironmentVariable($n, "User")
+        if (-not $cur) { continue }
+        if ($n -eq "NO_PROXY") {
+            foreach ($e in (Get-NormalizedNoProxyEntries $cur)) { if ($oursSet -contains $e) { return $true } }
+            continue
+        }
+        if ($n -eq "NODE_USE_ENV_PROXY") { if ($cur -eq "1") { return $true }; continue }
+        return $true
+    }
+    return $false
+}
+
 # 把状态应用到系统（幂等：整套变量都已就位就什么都不做）
 function Apply-State([string]$state) {
     # 全局互斥：安装入口与监控主循环可能同一时刻各校正一次（点"安装"时两者都在跑），
     # 没有这把锁就会出现"两边都判定要写 → 重复写 + 重复广播"。锁只覆盖"判断 + 写入"这段，
     # 拿到锁的一方写完，另一方进来时看到已就位，自然什么都不做。
-    $gate = New-Object System.Threading.Mutex($false, "Global\EnvProxyApplyState")
+    # 拿不到锁也照常往下走：锁只是省一次重复广播，跳过写入反而会让变量停在错的状态。
+    $gate = $null
     $held = $false
-    try { $held = $gate.WaitOne(5000) } catch { $held = $false }
+    try {
+        $gate = New-Object System.Threading.Mutex($false, "Global\EnvProxyApplyState")
+        $held = $gate.WaitOne(5000)
+    } catch { $held = $false }
     try {
         if ($state -eq "off") {
-            if (Get-EnvProxyValue) {
+            if (Test-ProxyVarsPresent) {
                 Remove-UserEnvVars
                 Broadcast-EnvironmentChange
                 Write-MonitorLog "代理已关闭 -> 已删除代理变量，恢复直连"
@@ -629,7 +682,10 @@ function Apply-State([string]$state) {
             }
         }
     } finally {
-        if ($held) { try { $gate.ReleaseMutex() } catch {} }
+        if ($gate) {
+            try { if ($held) { $gate.ReleaseMutex() } } catch {}
+            try { $gate.Dispose() } catch {}
+        }
     }
 }
 
@@ -963,10 +1019,19 @@ function Run-MonitorLoop {
                 $repairRound = 0
                 Repair-AutoRun
                 # 变量自检：Apply-State 只在状态翻转时动手，稳态下它永远不会被调用，
-                # 于是"别的东西改坏了变量"没人纠正。这里按同一周期做一次整表核对，
-                # 不齐就补回来（幂等，齐了则零写入、零广播）。只核对我们本该持有的那几个，
-                # 所以用户自己设的、与本工具无关的变量不受影响。
-                if ($lastState -ne "off") { Sync-UserEnvVars $lastState.Substring(3) | Out-Null }
+                # 于是"别的东西改坏了变量"没人纠正。这里按同一周期做一次整表核对：
+                # on 态补齐缺失项，off 态把残留收干净——判据与删除侧同一套，
+                # 幂等（齐了就零写入、零广播）。只核对我们本该持有的那几个，
+                # 用户自己设的、与本工具无关的变量不受影响。
+                if ($lastState -eq "off") {
+                    if (Test-ProxyVarsPresent) {
+                        Remove-UserEnvVars
+                        Broadcast-EnvironmentChange
+                        Write-MonitorLog "检测到代理变量残留 -> 已回收，恢复直连"
+                    }
+                } else {
+                    Sync-UserEnvVars $lastState.Substring(3) | Out-Null
+                }
             }
 
             # 节奏差异化：on 状态 2 秒一轮（响应快）；off 状态 3 秒一轮（省资源）
@@ -1297,7 +1362,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         return
     }
     if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
-        Write-Host "本地版本比最新发布版新，无需更新。" -ForegroundColor Green
+        Write-Host "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。" -ForegroundColor Green
         return
     }
     if ($local -and ((Compare-Versions $remote.Version $local) -le 0)) {
@@ -1337,18 +1402,29 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
             if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
         }
-        # 停监控 → 覆盖安装区（跳过 monitor，保日志）→ 走一次万能修复收尾
+        # 停监控 → 覆盖安装区（跳过 monitor 保日志；跳过正在执行的核心脚本，由新脚本自己搬）
+        # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
         Write-Host "正在安装新版（保留日志，原监控先停）..." -ForegroundColor Cyan
-        Stop-Monitor
-        Install-Package $extractDir (Split-Path -Parent $ScriptDir)
-        Install-EnvProxy
-        Write-Host ("已更新到 {0}。" -f $remote.Tag) -ForegroundColor Green
+        try { Stop-Monitor } catch {}
+        $root = Split-Path -Parent $ScriptDir
+        try {
+            Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir -SkipRel "win\envproxy.ps1"
+        } catch {
+            Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+            Write-Host "安装区已回滚，正在按原版本恢复监控..." -ForegroundColor Yellow
+            try { Install-EnvProxy | Out-Null } catch {}
+            return
+        }
+        # 收尾交给解压目录里的新脚本（它不覆盖正在运行的自己）。
+        & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $extractDir "win\envproxy.ps1") -FinishUpdate -Root $root -Stage $extractDir
+        if ($LASTEXITCODE -ne 0) { Write-Host "收尾步骤没有成功，请再双击一次 1-安装 完成收尾。" -ForegroundColor Yellow }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         Write-Host "可稍后重试；也可以手动下载安装包覆盖后再点一次 1-安装。" -ForegroundColor Yellow
     } finally {
         try { Remove-Item $zipFile -Force -ErrorAction SilentlyContinue } catch {}
-        try { Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        # 解压目录交给收尾进程清理（它要用里面的新脚本）；它没跑起来时这里兜底删掉。
+        try { if (Test-Path $extractDir) { Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue } } catch {}
     }
 }
 
@@ -1384,46 +1460,123 @@ function Show-ReleaseNotes([string]$Root, [string]$Tag) {
 # 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
-function Install-Package([string]$SrcRoot, [string]$ProjectRoot) {
+function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage = "", [string]$SkipRel = "") {
+    # 覆盖前后各做一件事，都是为了让"更新到一半失败"不留残局：
+    #   覆盖前——把四个程序目录 + 根目录那几个随包文件备份到本次更新的临时目录；
+    #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方；
+    #   跳过项——正在执行的那个核心脚本由覆盖完成后的新脚本自己搬到位（避免边跑边被覆盖）。
     $shipDirs = @("win", "mac", "release-notes", "assets")
     $pkg = @{}
     foreach ($f in (Get-ChildItem $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
         $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
         $pkg[$rel.ToLower()] = $rel
     }
-    $removed = 0
-    foreach ($d in $shipDirs) {
-        $destDir = Join-Path $ProjectRoot $d
-        if (-not (Test-Path $destDir)) { continue }
-        foreach ($f in (Get-ChildItem $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-            $rel = $f.FullName.Substring($ProjectRoot.Length).TrimStart('\')
-            if ($rel -match '^(win|mac)\\monitor\\') { continue }
-            if (-not $pkg.ContainsKey($rel.ToLower())) {
-                Remove-Item $f.FullName -Force -ErrorAction Stop
-                Write-Host ("  已移除旧版本残留：{0}" -f $rel) -ForegroundColor DarkGray
-                $removed++
-            }
+    $backup = $null
+    if ($Stage) {
+        $backup = Join-Path $Stage "backup"
+        Remove-Item $backup -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -Path $backup -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        foreach ($d in $shipDirs) {
+            $src = Join-Path $ProjectRoot $d
+            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $d) -Recurse -Force -ErrorAction SilentlyContinue }
         }
-        Get-ChildItem $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
-            Sort-Object { $_.FullName.Length } -Descending |
-            ForEach-Object {
-                $drel = $_.FullName.Substring($ProjectRoot.Length).TrimStart('\')
-                if ($drel -match '^(win|mac)\\monitor') { return }
-                if (-not (Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+        # 根目录那几个随包文件（VERSION / README / LICENSE）也要备份：只备份程序目录的话，
+        # 中途失败回滚后会留下"版本号是新的、程序目录是旧的"——比不滚还难查。
+        foreach ($rel in $pkg.Values) {
+            if ($rel -match '\\') { continue }
+            $src = Join-Path $ProjectRoot $rel
+            if (Test-Path $src) { Copy-Item $src (Join-Path $backup $rel) -Force -ErrorAction SilentlyContinue }
+        }
+    }
+    try {
+        $removed = 0
+        foreach ($d in $shipDirs) {
+            $destDir = Join-Path $ProjectRoot $d
+            if (-not (Test-Path $destDir)) { continue }
+            foreach ($f in (Get-ChildItem $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                $rel = $f.FullName.Substring($ProjectRoot.Length).TrimStart('\')
+                if ($rel -match '^(win|mac)\\monitor\\') { continue }
+                if (-not $pkg.ContainsKey($rel.ToLower())) {
+                    Remove-Item $f.FullName -Force -ErrorAction Stop
+                    Write-Host ("  已移除旧版本残留：{0}" -f $rel) -ForegroundColor DarkGray
+                    $removed++
+                }
             }
+            Get-ChildItem $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+                Sort-Object { $_.FullName.Length } -Descending |
+                ForEach-Object {
+                    $drel = $_.FullName.Substring($ProjectRoot.Length).TrimStart('\')
+                    if ($drel -match '^(win|mac)\\monitor') { return }
+                    if (-not (Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+                }
+        }
+        foreach ($rel in $pkg.Values) {
+            if ($SkipRel -and ($rel -ieq $SkipRel)) { continue }
+            $dest = Join-Path $ProjectRoot $rel
+            $parent = Split-Path -Parent $dest
+            if ($parent -and -not (Test-Path $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+            Copy-Item (Join-Path $SrcRoot $rel) $dest -Force -ErrorAction Stop
+        }
+        if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
+    } catch {
+        if ($backup -and (Test-Path $backup)) {
+            # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
+            # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
+            foreach ($d in $shipDirs) {
+                $dst = Join-Path $ProjectRoot $d
+                $bak = Join-Path $backup $d
+                if (-not (Test-Path $bak)) { continue }
+                if (-not (Test-Path $dst)) { New-Item -Path $dst -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+                foreach ($f in (Get-ChildItem $bak -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                    $rel = $f.FullName.Substring($bak.Length).TrimStart('\')
+                    $target = Join-Path $dst $rel
+                    $tp = Split-Path -Parent $target
+                    if ($tp -and -not (Test-Path $tp)) { New-Item -Path $tp -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+                    Copy-Item $f.FullName $target -Force -ErrorAction SilentlyContinue
+                }
+                foreach ($f in (Get-ChildItem $dst -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                    $rel = $f.FullName.Substring($dst.Length).TrimStart('\')
+                    if ($rel -like 'monitor\*') { continue }
+                    if (-not (Test-Path (Join-Path $bak $rel))) { Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue }
+                }
+            }
+            foreach ($rel in $pkg.Values) {
+                if ($rel -match '\\') { continue }
+                $bak = Join-Path $backup $rel
+                if (Test-Path $bak) { Copy-Item $bak (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
+            }
+            throw ("安装区写入失败，已回滚到更新前的状态：{0}" -f $_.Exception.Message)
+        }
+        throw
     }
-    foreach ($rel in $pkg.Values) {
-        $dest = Join-Path $ProjectRoot $rel
-        $parent = Split-Path -Parent $dest
-        if ($parent -and -not (Test-Path $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
-        Copy-Item (Join-Path $SrcRoot $rel) $dest -Force -ErrorAction Stop
-    }
-    if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
 }
 
 # ------------------------------------------------------------------------------
 # 9. 入口分派
 # ------------------------------------------------------------------------------
+if ($FinishUpdate) {
+    # 更新收尾（内部用）：把新版本的核心脚本搬到位，再走一次安装收尾。
+    # 由更新入口在覆盖完成后调用，跑的是解压目录里的新脚本——因此"升级完跑的是新代码"，
+    # 而且不会出现"边跑边覆盖自己"。
+    $rc = 1
+    try {
+        if (-not $Root -or -not $Stage) { throw "缺少参数（更新入口内部调用）" }
+        $srcSelf = Join-Path $Stage "win\envproxy.ps1"
+        if (-not (Test-Path $srcSelf)) { throw "解压目录里找不到新版核心脚本" }
+        Copy-Item $srcSelf (Join-Path $Root "win\envproxy.ps1") -Force -ErrorAction Stop
+        Install-EnvProxy
+        $v = ""
+        try { $v = (Get-Content (Join-Path $Root "VERSION") -Raw -Encoding UTF8).Trim() } catch {}
+        Write-Host ("已更新到 v{0}。" -f $v) -ForegroundColor Green
+        $rc = 0
+    } catch {
+        Write-Host ("更新收尾失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Host "文件已经覆盖完成，请再双击一次 1-安装 完成收尾。" -ForegroundColor Yellow
+    } finally {
+        try { Remove-Item $Stage -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    exit $rc
+}
 if ($Update) {
     Update-EnvProxy -AutoYes:$Yes
     return

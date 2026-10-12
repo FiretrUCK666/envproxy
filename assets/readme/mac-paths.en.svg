@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="macTitle macDesc">
+  <title id="macTitle">Why macOS writes through two paths</title>
+  <desc id="macDesc">macOS has no registry, so the Mac build writes through two paths at the same time. The upper one: a terminal reads the shell hook on startup (written into ~/.zshenv and ~/.zshrc), the hook loads ~/.envproxy/proxy.env, and the variables take effect. The lower one: an app launched from the Dock is covered by launchctl setenv, which hands the variables to the whole session. Both paths write the same 9 variables and move together; 5 of them are the standard spellings and 4 are lowercase, because macOS is case sensitive and the two spellings are separate variables.</desc>
+
+  <rect width="1200" height="400" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="398.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+
+  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">Why macOS writes through two paths</text>
+    <text x="56" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">no registry, so terminals and Dock apps each get a path</text>
+  </g>
+
+  <g id="terminal-path" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+    <rect x="56" y="140" width="210" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="178" font-size="22" font-weight="700" fill="#E9EFF8">Terminal</text>
+    <text x="76" y="202" font-size="18" fill="#94A6BE">the window you open</text>
+
+    <rect x="290" y="140" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="310" y="178" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
+    <text x="310" y="202" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
+
+    <rect x="564" y="140" width="294" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="584" y="178" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
+    <text x="584" y="202" font-size="18" fill="#94A6BE">new terminals load this file</text>
+  </g>
+
+  <g id="dock-path" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+    <rect x="56" y="248" width="270" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="286" font-size="22" font-weight="700" fill="#E9EFF8">App from the Dock</text>
+    <text x="76" y="310" font-size="18" fill="#94A6BE">started from the icon</text>
+
+    <rect x="352" y="248" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="372" y="286" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
+    <text x="372" y="310" font-size="18" fill="#94A6BE">for the whole session</text>
+  </g>
+
+  <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M266 176H288M282 170L288 176L282 182"/>
+    <path d="M540 176H562M556 170L562 176L556 182"/>
+    <path d="M858 176H878M872 170L878 176L872 182"/>
+    <path d="M326 284H348M342 278L348 284L342 290"/>
+    <path d="M602 284H878M872 278L878 284L872 290"/>
+  </g>
+
+  <g id="variables" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+    <rect x="880" y="140" width="264" height="180" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
+    <text x="912" y="186" font-size="26" font-weight="700" fill="#E9EFF8">Variables</text>
+    <text x="912" y="224" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 of them</text>
+    <text x="912" y="254" font-size="18" fill="#94A6BE">5 standard spellings</text>
+    <text x="912" y="276" font-size="18" fill="#94A6BE">+ 4 lowercase</text>
+    <path d="M904 292H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="912" y="312" font-size="18" fill="#34D399">both move together</text>
+  </g>
+
+  <text x="56" y="372" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3">Windows writes the registry and broadcasts once; Mac has no registry, so both paths are written.</text>
+</svg>

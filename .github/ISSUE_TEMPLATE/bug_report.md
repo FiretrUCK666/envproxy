@@ -5,7 +5,7 @@ about: 报告 EnvProxy 的问题
 
 ## 版本
 
-（提交号 `git log -1 --format=%H`，或文件夹版本说明）
+（进 `win` 双击 `4-查看状态`，把"本地版本"那一行贴上来；Mac 对应 `mac` 下的同名文件。也可以直接看根目录的 `VERSION` 文件）
 
 ## 环境
 
@@ -22,7 +22,7 @@ about: 报告 EnvProxy 的问题
 
 ## 报错文本
 
-（原样粘贴 `4-查看状态` 的完整输出，不要转述；另附 `monitor/monitor.log` 最近的相关行）
+（原样粘贴 `4-查看状态` 的完整输出，不要转述；另附 `win\monitor\monitor.log` 最近的相关行——Mac 是 `mac/monitor/monitor.log`）
 
 ## 已尝试
 

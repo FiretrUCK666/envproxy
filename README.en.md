@@ -91,6 +91,8 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 
 Installing does three things: registers the monitor to start at login, starts it right away, and corrects the environment variables once.
 
+<img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the zip, double-click 1-Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
+
 To update later, double-click **`5-检查更新.cmd`**. It tells you what the new version changed and installs only after you agree.
 
 If anything seems off, double-click **`1-安装.cmd`** again. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
@@ -113,9 +115,11 @@ Double-clicking `3-一键恢复` stops and asks one question: keep the log? Pres
 
 No button deletes the `EnvProxy` folder itself. After uninstalling, nothing is left in the system, and the folder stays where it is — keep it for later or delete the whole folder yourself.
 
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="Which parts each button touches: 1-Install touches all of them; 2-Stop keeps start at login and clears the variables; 3-Restore keeps only the log; 4-Status and 5-Check for updates are read only">
+
 ## 2.5 The log (monitor.log)
 
-`win\monitor\monitor.log` (on Mac, `mac\monitor\`) records three kinds of events: when the proxy variables were written, when they were removed, and when something failed. While everything is stable it writes nothing at all. The file is capped at 200KB and is truncated to the most recent 200 lines when it grows past that, so it never gets bigger over the years.
+`win\monitor\monitor.log` (on Mac, `mac\monitor\`) records state changes: when the variables were written, when they were removed, the monitor starting and stopping, self-healing of start at login, and any errors. While everything is stable it writes nothing at all. The file is capped at 200KB and is truncated to the most recent 200 lines when it grows past that, so it never gets bigger over the years.
 
 It is the black box for troubleshooting. When you report a problem, include the relevant recent lines — in most cases that is enough to see what happened.
 
@@ -164,9 +168,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Locator clean-up | if the machine is shut down before the monitor can exit, the locator removes the leftovers from the old location on the next boot |
 | Activity based location | all search roots are collected first and then sorted by log activity, so a copied backup folder is never picked up by mistake |
 | Graceful cross-location stop | stopping a monitor in another location writes the signal into that monitor's own folder, so it exits gracefully instead of being killed |
-| Shared file stream | log writing never collides, and the monitor can truncate its own log without hitting a lock |
 | Self healing start at login | every 30 rounds (about 60–90 seconds) the locator and the start at login entry are rebuilt from the current code; the test is that the content matches, not merely that the file exists |
-| In place re-check | a locked port gets a local handshake check about every 10 rounds (no traffic); if another program takes the port after the proxy exits, the cached port is dropped immediately |
 | Candidate testing | candidate ports are tested in order, the one that worked last time is preferred, and two apps running side by side hand over automatically |
 
 </details>
@@ -184,7 +186,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Update check reports a check failure | GitHub is temporarily unreachable from this machine | try again later; toggling the proxy on or off and retrying often works |
 | An error during an update | the download, extraction, verification or write step failed | run `5-检查更新` again (it fills in what is missing), or download the package by hand, unzip it over the folder and click 1-安装 once |
 | "This version does not provide a package" | that release did not get its package uploaded | download `EnvProxy.zip` from the Releases page by hand, unzip it over the folder and click 1-安装 once. Nothing is wrong with your machine |
-| The folder contains `AGENTS.md`, `CONTRIBUTING.md` or `.github` | you downloaded GitHub's "Source code" instead of the package | delete them, nothing breaks; the next update replaces them with the real package contents |
+| The folder contains `AGENTS.md`, `CONTRIBUTING.md` or `.github` | you downloaded GitHub's "Source code" instead of the package | delete them, nothing breaks. The updater never removes them for you — it only aligns the program folders (`win\`, `mac\` and friends) and only overwrites same-named files at the top level |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
 | You want to undo everything | — | double-click `3-一键恢复` and answer the log question |
 
@@ -236,6 +238,8 @@ EnvProxy\
 
 For daily use you only ever open `win\` (on Mac, `mac\`); the documents at the top level can be left alone.
 
+<img src="./assets/readme/boundary.en.svg" width="100%" alt="Three zones: the program folders (the updater overwrites them, do not keep your own files there), the runtime folder (the log and the run marker are never overwritten or deleted), and the top level of the folder (only same-named files are overwritten, nothing of yours is deleted)">
+
 ## 9. Copying the folder as a backup
 
 You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no harm:
@@ -279,6 +283,8 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 Windows writes the variables into the registry and broadcasts once, which makes them global. macOS has no registry, so the Mac build writes through two paths at the same time: terminals read `~/.envproxy/proxy.env` (loaded automatically by new terminals), and apps launched from the Dock are covered by `launchctl setenv`. The two paths move together.
 
 The Mac build sets all 9 variables, the extra four being lowercase spellings — macOS is genuinely case sensitive, so the two spellings are separate variables and some tools read only the lowercase ones (the reason is under the variable table above). Everything else matches Windows: 2 and 3 second polling, two round confirmation, three failures before calling it disconnected, 7 endpoints with a fast path and a parallel fallback, 15 second throttling, the 200KB log cap, and self healing every 30 rounds. `2-停止监控` means the same thing as on Windows: stopped stays stopped until the next login.
+
+<img src="./assets/readme/mac-paths.en.svg" width="100%" alt="macOS writes the variables through two paths: the terminal reads proxy.env through a shell hook, and apps started from the Dock read the same set through launchctl setenv; both paths always change together">
 
 ### 12.2 Install (3 steps)
 

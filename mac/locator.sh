@@ -73,8 +73,6 @@ mkdir -p "$(dirname "$REG")" 2>/dev/null
 printf '%s\n' "$_target" > "$REG" 2>/dev/null
 
 # 单实例：已在跑就静默退出（监控自身还有互斥锁，这里只是少 fork 一次）
-if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "envproxy\.sh$" >/dev/null 2>&1 && exit 0
-fi
+pgrep -f "envproxy\.sh$" >/dev/null 2>&1 && exit 0
 
 exec /bin/bash "$_target"

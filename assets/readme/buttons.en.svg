@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="buttonsTitle buttonsDesc">
+  <title id="buttonsTitle">What each of the five buttons touches</title>
+  <desc id="buttonsDesc">A five by four grid. Rows are the five buttons, columns are start at login, variables, log, and locator / path record. A check means kept, a dash means removed, a dot means read only. The log cell of row 3 says ask: double-clicking that button stops to ask whether to keep the log, and Enter keeps it. Row 5 only reads while it checks; it acts only after you agree to update, and then it is a full install.</desc>
+
+  <rect width="1200" height="420" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="418.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+
+  <g id="heading" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">What each button touches</text>
+    <text x="56" y="106" font-size="26" font-weight="700" fill="#34D399">✓</text>
+    <text x="84" y="106" font-size="20" fill="#94A6BE">kept</text>
+    <text x="176" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="216" y="106" font-size="20" fill="#94A6BE">removed</text>
+    <text x="350" y="108" font-size="40" font-weight="700" fill="#7A8CA6">·</text>
+    <text x="378" y="106" font-size="20" fill="#94A6BE">read only</text>
+  </g>
+
+  <g id="grid" fill="none" stroke-width="1.5">
+    <path d="M320 136V374M526 136V374M732 136V374M938 136V374M56 214H1144M56 254H1144M56 294H1144M56 334H1144" stroke="#2A3B58"/>
+    <path d="M56 174H1144" stroke="#33486B"/>
+  </g>
+
+  <g id="column-labels" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3" text-anchor="middle">
+    <text x="423" y="162">Start at login</text>
+    <text x="629" y="162">Variables</text>
+    <text x="835" y="162">Log</text>
+    <text x="1041" y="162">Locator / path</text>
+  </g>
+
+  <g id="row-labels" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="21" fill="#E9EFF8">
+    <text x="76" y="202">1-安装 / install</text>
+    <text x="76" y="242">2-停止监控 / stop</text>
+    <text x="76" y="282">3-一键恢复 / uninstall</text>
+    <text x="76" y="322">4-查看状态 / status</text>
+    <text x="76" y="362">5-检查更新 / update</text>
+  </g>
+
+  <g id="kept" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
+    <text x="423" y="202">✓</text>
+    <text x="629" y="202">✓</text>
+    <text x="835" y="202">✓</text>
+    <text x="1041" y="202">✓</text>
+    <text x="423" y="242">✓</text>
+    <text x="835" y="242">✓</text>
+    <text x="1041" y="242">✓</text>
+    <text x="803" y="282">✓</text>
+  </g>
+
+  <g id="cleared" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
+    <text x="629" y="242">—</text>
+    <text x="423" y="282">—</text>
+    <text x="629" y="282">—</text>
+    <text x="1041" y="282">—</text>
+  </g>
+
+  <g id="read-only" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="40" font-weight="700" fill="#7A8CA6" text-anchor="middle">
+    <text x="423" y="330">·</text>
+    <text x="629" y="330">·</text>
+    <text x="835" y="330">·</text>
+    <text x="1041" y="330">·</text>
+    <text x="423" y="370">·</text>
+    <text x="629" y="370">·</text>
+    <text x="835" y="370">·</text>
+    <text x="1041" y="370">·</text>
+  </g>
+
+  <text x="861" y="280" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="18" fill="#94A6BE" text-anchor="middle">ask</text>
+
+  <text x="56" y="404" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif" font-size="20" fill="#C7D3E3">2 pauses (it comes back on the next login), 3 uninstalls; 5 only acts once you agree to update</text>
+</svg>

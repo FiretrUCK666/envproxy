@@ -23,9 +23,11 @@ jobs:
 
       - name: 门禁 1：sh 语法检查
         run: |
-          for f in mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
-            bash -n "$f" || exit 1
+          fail=0
+          for f in mac/*.sh; do
+            bash -n "$f" || fail=1
           done
+          exit $fail
 
       - name: 门禁 2：ps1 语法检查
         shell: pwsh
@@ -121,6 +123,12 @@ jobs:
             foreach ($h in $heads) {
               if (($h -ne $tocHeading) -and (($toc | ForEach-Object { $_.Anchor }) -notcontains $h)) { Write-Host ("{0}：二级标题没进目录 {1}" -f $f, $h); $fail = 1 }
             }
+            # 正文里的锚点链接也要命中一个标题（改标题或改节号时不会静默断链）
+            $allHeads = @($lines | Where-Object { $_ -match '^#{2,3}\s+' } | ForEach-Object { Get-Anchor ($_ -replace '^#{2,3}\s+','') })
+            foreach ($m in [regex]::Matches(($lines -join "`n"), '\]\(#([^)]+)\)')) {
+              $a = $m.Groups[1].Value
+              if ($allHeads -notcontains $a) { Write-Host ("{0}：正文锚点找不到对应标题 {1}" -f $f, $a); $fail = 1 }
+            }
           }
           # c) README 里不写死版本号（写死了每发一版就过期）
           foreach ($f in 'README.md','README.en.md') {
@@ -205,5 +213,130 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
+          # e) 两侧变量名必须是同一批（只数个数挡不住改名或写错名）
+          $winNames = @((Grab $ps '\$ProxyVarNames\s*=\s*@\(([^)]*)\)' 'Windows 变量集合') -split ',' |
+            ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ })
+          $macUp = @($macNames | Where-Object { $_ -ceq $_.ToUpper() })
+          if ((($winNames | Sort-Object) -join ',') -ne (($macUp | Sort-Object) -join ',')) {
+            Write-Host ("两侧变量名不是同一批：Win=[{0}] Mac 大写=[{1}]" -f ($winNames -join ' '), ($macUp -join ' '))
+            $fail = 1
+          }
+          # f) 端点表：两侧条数一致、macOS 的 host 与 path 条数一致（平行字符串不许错位）
+          $hosts = Grab $sh 'CHECK_HOSTS="([^"]*)"' 'macOS 端点表'
+          $paths = Grab $sh 'CHECK_PATHS="([^"]*)"' 'macOS 端点路径表'
+          $hostCount = @($hosts -split '\s+' | Where-Object { $_ }).Count
+          $pathCount = @($paths -split '\s+' | Where-Object { $_ }).Count
+          $epCount = @([regex]::Matches($ps, '@\{ Host =')).Count
+          if ($epCount -ne $hostCount) { Write-Host ("端点个数两侧不一致：Win {0} / Mac {1}" -f $epCount, $hostCount); $fail = 1 }
+          if ($pathCount -ne $hostCount) { Write-Host ("macOS 端点表 host 与 path 条数不一致：{0} / {1}" -f $hostCount, $pathCount); $fail = 1 }
+          # g) 事实清单：这些数字必须出现在双语 README 里——代码改了、文档没跟上就当场失败
+          $zh = Get-Content 'README.md' -Raw -Encoding UTF8
+          $en = Get-Content 'README.en.md' -Raw -Encoding UTF8
+          $facts = @(
+            @('端点个数', "$epCount 个检查端点", "$epCount endpoints"),
+            @('日志上限', '200KB', '200KB'),
+            @('日志截断行数', '最近 200 行', 'most recent 200 lines'),
+            @('自愈周期', '每 30 轮', 'every 30 rounds'),
+            @('探测节流', '15 秒', '15 seconds'),
+            @('失败阈值', '连续 3 次探测失败', 'three failed probes'),
+            @('定位搜索深度', '向下 6 层', 'six levels deep')
+          )
+          foreach ($fact in $facts) {
+            if ($zh -notmatch [regex]::Escape($fact[1])) { Write-Host ("中文 README 缺少事实「{0}」（应出现：{1}）" -f $fact[0], $fact[1]); $fail = 1 }
+            if ($en -notmatch [regex]::Escape($fact[2])) { Write-Host ("英文 README 缺少事实「{0}」（应出现：{1}）" -f $fact[0], $fact[2]); $fail = 1 }
+          }
+          foreach ($n in $winNames) {
+            if ($zh -notmatch [regex]::Escape($n)) { Write-Host ("中文 README 里没有变量 {0}" -f $n); $fail = 1 }
+            if ($en -notmatch [regex]::Escape($n)) { Write-Host ("英文 README 里没有变量 {0}" -f $n); $fail = 1 }
+          }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
+
+      - name: 门禁 7：AGENTS.md 体量上限
+        shell: pwsh
+        run: |
+          # 这份文件每次会话都注入上下文，必须有天花板。量的是 git 里的 blob，
+          # 不受检出时 LF/CRLF 影响，本地与 CI 结果一致。
+          $limit = 46 * 1024
+          $size = [int](git cat-file -s HEAD:AGENTS.md)
+          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（46 KB）" -f $size, $limit)
+          if ($size -gt $limit) {
+            Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
+            exit 1
+          }
+
+      - name: 门禁 8：配图一致性与合规
+        shell: pwsh
+        run: |
+          $fail = 0
+          $svgs = @(Get-ChildItem 'assets/readme' -Filter *.svg -File | Sort-Object Name)
+          if ($svgs.Count -eq 0) { Write-Host 'assets/readme 里没有 SVG'; exit 1 }
+          foreach ($f in $svgs) {
+            $base = $f.Name -replace '\.en\.svg$', '' -replace '\.svg$', ''
+            foreach ($p in @("assets/readme/$base.svg", "assets/readme/$base.en.svg")) {
+              if (-not (Test-Path $p)) { Write-Host ("配图不成对，缺少：{0}" -f $p); $fail = 1 }
+            }
+            $t = Get-Content $f.FullName -Raw -Encoding UTF8
+            foreach ($bad in @('<script', '<foreignObject', 'xlink:href', 'href="http', 'url(http')) {
+              if ($t -match [regex]::Escape($bad)) { Write-Host ("{0} 含不允许的内容：{1}" -f $f.Name, $bad); $fail = 1 }
+            }
+            foreach ($need in @('viewBox=', '<title', '<desc')) {
+              if ($t -notmatch [regex]::Escape($need)) { Write-Host ("{0} 缺少 {1}" -f $f.Name, $need); $fail = 1 }
+            }
+          }
+          $sets = @{}
+          foreach ($f in 'README.md', 'README.en.md') {
+            $t = Get-Content $f -Raw -Encoding UTF8
+            $imgs = @([regex]::Matches($t, '<img\s+src="\./assets/readme/([^"]+)"[^>]*>'))
+            if ($imgs.Count -eq 0) { Write-Host ("{0} 没有引用任何配图" -f $f); $fail = 1 }
+            $refs = @()
+            foreach ($m in $imgs) {
+              $refs += $m.Groups[1].Value
+              if ($m.Value -notmatch 'alt="[^"]+"') { Write-Host ("{0} 的配图缺 alt 文本：{1}" -f $f, $m.Groups[1].Value); $fail = 1 }
+            }
+            $sets[$f] = $refs
+          }
+          if ($sets['README.md'].Count -ne $sets['README.en.md'].Count) { Write-Host '两份 README 引用的配图数量不一致'; $fail = 1 }
+          foreach ($r in $sets['README.md']) {
+            if ($sets['README.en.md'] -notcontains ($r -replace '\.svg$', '.en.svg')) { Write-Host ("英文版没有引用对应的 {0}" -f ($r -replace '\.svg$', '.en.svg')); $fail = 1 }
+          }
+          # 不许有孤儿：assets/readme 里每张中文图都必须被中文 README 引用（否则就是没人看又没人删的堆积）
+          foreach ($f in $svgs) {
+            if ($f.Name -match '\.en\.svg$') { continue }
+            if ($sets['README.md'] -notcontains $f.Name) { Write-Host ("中文 README 没有引用 {0}" -f $f.Name); $fail = 1 }
+          }
+          if ($fail) { exit 1 }
+          Write-Host ("配图一致性通过（{0} 个 SVG，中英各引用 {1} 张）" -f $svgs.Count, $sets['README.md'].Count)
+
+      - name: 门禁 9：文件模式
+        shell: pwsh
+        run: |
+          # macOS 靠可执行位双击运行，Windows 侧相反。模式丢了只会在用户机器上炸，
+          # 本地编辑器与 git 都不会提醒——所以按 git 索引逐条查。
+          $fail = 0
+          foreach ($line in (git ls-files -s)) {
+            $p = $line -split '\s+'
+            $mode = $p[0]; $path = $p[3]
+            if (($path -match '^mac/.*\.(sh|command)$') -and ($mode -ne '100755')) { Write-Host ("应为可执行 100755：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
+            if (($path -match '^win/.*\.(cmd|ps1)$') -and ($mode -ne '100644')) { Write-Host ("不应可执行 100644：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
+          }
+          if ($fail) { exit 1 }
+          Write-Host '文件模式通过'
+
+  powershell51:
+    # 用户真实环境是系统自带的 PowerShell 5.1，而 ubuntu 上的 pwsh 是 7。
+    # 两边都解析一遍：只靠 7 的话，7 独有的语法能过 CI、到用户机报语法错。
+    runs-on: windows-latest
+    steps:
+      - name: 检出
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: 门禁 2b：ps1 语法检查（PowerShell 5.1）
+        shell: powershell
+        run: |
+          $tokens = $null; $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          Write-Host ("PowerShell {0} 解析通过" -f $PSVersionTable.PSVersion.ToString())

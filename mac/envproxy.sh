@@ -10,7 +10,9 @@
 #     bash envproxy.sh update      检查更新（一键升级，问过才装；加 --yes 跳过确认）
 #     无参数（由 LaunchAgent 调用 locator.sh 间接触发）进入监控模式
 #
-#  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、ps、awk、tar、cmp、launchctl。
+#  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、ps、awk、sed、
+#  od、stat、find、tr、cut、tar、cmp、launchctl。（检查更新会用到 git——只在当前
+#  文件夹是 git 工作树时才走那条路，普通安装副本不需要它。）
 #  不需要 Homebrew/Python/Node/管理员，不写任何系统目录。
 #
 #  行为保证（与 Windows 同语义）：
@@ -142,12 +144,9 @@ get_existing_no_proxy() {
 # 取值用 sed 而非 tr -d ' '：条目里可能有空格，整体删空格会改掉别人写的值。
 merge_no_proxy() {
     _existing="$1"; _default="$2"
-    _out=""
+    _out="$_default"
     _lower=$(printf '%s' "$_default" | tr 'A-Z' 'a-z')
     _old=$IFS; IFS=','
-    for _p in $_default; do
-        _out="${_out:+$_out,}$_p"
-    done
     for _p in $_existing; do
         _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         [ -n "$_pt" ] || continue
@@ -169,6 +168,10 @@ get_current_proxy_port() {
 }
 
 set_user_env_vars() {
+    # DIVERGE(Mac): 写 9 个变量——5 个规范拼写再加 4 个小写拼写。macOS 的变量名真大小写敏感，
+    #   有的工具只认小写；Windows 的命名空间大小写不敏感，写小写只会互相覆盖，所以那边只写 5 个。
+    # DIVERGE(Mac): 双路写入——终端读 ~/.envproxy/proxy.env（由 shell hook 加载），
+    #   Dock 启动的 App 读 launchctl setenv；Windows 侧是注册表 + 全系统广播。
     _port="$1"
     _http="http://127.0.0.1:$_port"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
@@ -220,14 +223,36 @@ sync_user_env_vars() {
     return 0
 }
 
+# 这一项是不是我们默认例外集里的（大小写不敏感）。用于精确回收 NO_PROXY：
+# 只减掉我们加进去的那几项，用户自己写的条目原样留着。
+is_default_no_proxy_entry() {
+    _must=$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')
+    _me=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    case ",$_must," in *",$_me,"*) return 0 ;; esac
+    return 1
+}
+
 remove_user_env_vars() {
-    # 只回收**本工具自己写下的** NO_PROXY / no_proxy / NODE_USE_ENV_PROXY。
-    # 环境变量是共享资源，用户或别的工具可能把这几项用于自己的用途；
-    # 值不是我们写的那一个，就说明不是我们的东西，一律不动。
+    # 只回收**本工具自己写下的**东西。
+    # proxy.env 整个文件是我们的，直接删；launchctl 那一路要按项回收——
+    # NO_PROXY 用"减掉我们加的默认项"的方式回收（用户原本就有 NO_PROXY 时，
+    # 按"整份等于默认集"判断会让我们加的那几项永远留在他的值里）；
+    # NODE_USE_ENV_PROXY 只有值是我们写的 1 才清。
     _ours=$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')
     for _v in no_proxy NO_PROXY; do
-        _cur=$(get_existing_no_proxy "$_v" | tr -d ' ' | tr 'A-Z' 'a-z')
-        if [ "$_cur" = "$_ours" ]; then launchctl unsetenv "$_v" 2>/dev/null || true; fi
+        _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+        [ -n "$_cur" ] || continue
+        _keep=""
+        _old=$IFS; IFS=','
+        for _p in $_cur; do
+            _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -n "$_pt" ] || continue
+            if is_default_no_proxy_entry "$_pt"; then continue; fi
+            _keep="${_keep:+$_keep,}$_pt"
+        done
+        IFS=$_old
+        if [ -n "$_keep" ]; then launchctl setenv "$_v" "$_keep" 2>/dev/null || true
+        else launchctl unsetenv "$_v" 2>/dev/null || true; fi
     done
     _node=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
     if [ "$_node" = "1" ]; then launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null || true; fi
@@ -237,11 +262,33 @@ remove_user_env_vars() {
     done
 }
 
+# 我们该持有的那套变量现在还有没有痕迹：proxy.env 与 launchctl 任一路在就算在。
+# 与 remove_user_env_vars 的回收范围对齐——两边共用一套判据，才不会出现
+# "删得掉但门槛没让它删"的残留（半代理：状态显示直连，实际还挂着代理）。
+proxy_vars_present() {
+    if [ -f "$PROXY_ENV" ] && grep -qE '^export (HTTP_PROXY|http_proxy)=' "$PROXY_ENV" 2>/dev/null; then return 0; fi
+    if [ -n "$(launchctl getenv HTTP_PROXY 2>/dev/null || echo "")" ]; then return 0; fi
+    if [ -n "$(launchctl getenv http_proxy 2>/dev/null || echo "")" ]; then return 0; fi
+    for _v in NO_PROXY no_proxy; do
+        _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+        [ -n "$_cur" ] || continue
+        _old=$IFS; IFS=','
+        for _p in $_cur; do
+            _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+            [ -n "$_pt" ] || continue
+            if is_default_no_proxy_entry "$_pt"; then IFS=$_old; return 0; fi
+        done
+        IFS=$_old
+    done
+    if [ "$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")" = "1" ]; then return 0; fi
+    return 1
+}
+
 # 幂等：整套变量都已就位就什么都不做（只看单项会让"地址对、别的漂移"的半代理状态无人纠正）
 apply_state() {
     _state="$1"
     if [ "$_state" = "off" ]; then
-        if get_current_proxy_port >/dev/null 2>&1; then
+        if proxy_vars_present; then
             remove_user_env_vars
             log_msg "代理已关闭 -> 已删除代理变量，恢复直连"
         fi
@@ -368,8 +415,9 @@ find_candidate_ports() {
     done
     # 来源 2 第二轮：兜底——全端口并行批量握手（进程名无特征也能发现）。
     # 仅在 _full=1 时执行（约 1 秒，off 状态降频调用以省资源）。
-    # 尾巴保持 early-exit 单答案：未知工具独占时它是唯一的候选，
-    # 已知候选在前时它只是补充——两种情形试活层都能正确收敛。
+    # 批量探测一旦有结果就立刻返回（不等其余探针跑完），所以一次只带回一个端口：
+    # 候选集里有它，试活层就能收敛到它。覆盖面上限是"同时开两个都不在常见表里的
+    # 代理软件，只认其中一个"——够用，因为只要有一个可用端口，注入就是正确的。
     if [ "$_full" = "1" ]; then
         _rest=""
         for _p in $_ports; do
@@ -407,7 +455,8 @@ test_single_endpoint() {
     _first=$(printf '%s' "$_out" | head -n 1)
     _code=$(printf '%s' "$_first" | grep -oE ' [0-9]{3} ' | tr -cd '0-9')
     case "$_code" in
-        204|200|301|302|303|304|307|308) return 0;;
+        # 与 Windows 侧同一口径：2xx 与 3xx 都算"通过代理能到外网"。
+        2??|3??) return 0;;
         *) return 1;;
     esac
 }
@@ -460,13 +509,10 @@ test_real_connectivity() {
 # 重读环境」，影响机器上每一个应用；误留代理变量的代价只是多等一会儿。两个代价不对称，
 # 判据就不许对称——一次探测不通不等于代理没了。反向约束同样成立："通"要快（1 次成功即认），
 # 否则重连后要白等一个迟滞窗口。
-# 节流缓存只认“同一端口”（单槽位：bash 3.2 无关联数组）。
-# 同端口节流内直接给缓存结论；换端口一律重验——多候选试活时，
-# 绝不会读到别的端口的旧结论（全局单槽在此会串味）。
-# DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount 各一份，见 Test-NodeAlive）；
-# Mac 侧只有一个槽位（bash 3.2 无关联数组），因此失败计数也是全局的——别的端口失败会累计进
-# 同一个计数。用户可见行为不变：判死只在"首选端口 + 非 Force"这条稳态路径上受计数影响，
-# 候选试活一律 Force 单次判定，双轮去抖会把这点差异吸收掉。
+# 节流缓存只认"同一端口"（单槽位：bash 3.2 无关联数组）。
+# 同端口节流内直接给缓存结论；换端口一律重验——多候选试活时不会读到别的端口的旧结论。
+# DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount 各一份，见 Test-NodeAlive），
+# Mac 侧单槽；失败计数随之也是全局的，差异与代价写在计数更新那一处（test_node_alive 内）。
 test_node_alive() {
     _port="$1"; _force="${2:-0}"
     _now=$(date +%s)
@@ -478,6 +524,10 @@ test_node_alive() {
     fi
     LAST_NODE_CHECK="$_now"
     NODE_CACHE_PORT="$_port"
+    # DIVERGE(Mac): 计数只有一个槽（Windows 侧按端口分槽）。macOS 自带的 bash 是 3.2，
+    # 没有关联数组，分槽要么退化成一串手工变量、要么引入外部命令；而代价只在
+    # "同时有多个候选端口交替出现"时体现（计数会被不同端口的结果共同推进，
+    # 可能提前一次失败判"断"，最多早约 15 秒）。单代理与换端口这两条主路径不受影响。
     if test_real_connectivity "$_port"; then
         NODE_FAIL_COUNT=0
         NODE_ALIVE=1
@@ -734,16 +784,12 @@ get_monitor_pid() {
             fi
         fi
     fi
-    if command -v pgrep >/dev/null 2>&1; then
-        for _pid in $(pgrep -f "envproxy\.sh$" 2>/dev/null); do
-            [ "$_pid" != "$$" ] || continue
-            printf '%s' "$_pid"
-            return 0
-        done
-    else
-        _found=$(ps ax -o pid=,args= 2>/dev/null | grep -E "envproxy\.sh$" | grep -v grep | head -n 1 | awk '{print $1}')
-        if [ -n "$_found" ] && [ "$_found" != "$$" ]; then printf '%s' "$_found"; return 0; fi
-    fi
+    # pgrep 是 macOS 自带（10.6 起），直调即可，不留走不到的兜底分支。
+    for _pid in $(pgrep -f "envproxy\.sh$" 2>/dev/null); do
+        [ "$_pid" != "$$" ] || continue
+        printf '%s' "$_pid"
+        return 0
+    done
     return 1
 }
 
@@ -772,10 +818,13 @@ stop_monitor() {
     if [ -z "$_existing" ]; then echo "监控进程未在运行。"; return 0; fi
     _args=$(ps -p "$_existing" -o args= 2>/dev/null || echo "")
     _target_dir="$MONITOR_DIR"
-    _from_args=$(printf '%s' "$_args" | grep -oE '/[^ ]*envproxy\.sh' | head -n 1)
-    if [ -n "$_from_args" ]; then
-        _target_dir="$(dirname "$_from_args")/monitor"
-    fi
+    # ps 的 args 是"解释器 + 脚本路径"两个词，路径里可能有空格，所以按"去掉第一个词"取整串，
+    # 不能用只匹配非空格字符的正则（路径带空格时会截到尾巴，把停止标志写进错误目录，
+    # 优雅停止退化成强杀、旧监控残留）。
+    _from_args=$(printf '%s' "$_args" | sed 's/^[^ ]*[ ]*//')
+    case "$_from_args" in
+        *envproxy.sh*) _target_dir="$(dirname "$_from_args")/monitor" ;;
+    esac
     mkdir -p "$_target_dir" 2>/dev/null || true
     printf 'stop\n' > "$_target_dir/stop.flag" 2>/dev/null || true
     _i=0
@@ -803,7 +852,7 @@ stop_monitor() {
 # 8. 监控主循环（双轮确认去抖；任何单轮异常都不致命）
 # ------------------------------------------------------------------------------
 run_monitor_loop() {
-    _lockdir="/tmp/envproxy_monitor.lock"
+    _lockdir="$MONITOR_DIR/.lock"
     if ! mkdir "$_lockdir" 2>/dev/null; then
         _e=$(get_monitor_pid || true)
         [ -n "$_e" ] && return 0
@@ -976,7 +1025,7 @@ update_envproxy() {
     if [ -n "$_local" ]; then
         _newer=$(compare_versions "$_local" "$REMOTE_VERSION" || true)
         if [ "$_newer" -gt 0 ] 2>/dev/null; then
-            echo "本地版本比最新发布版新，无需更新。"
+            echo "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。"
             return 0
         fi
         _older=$(compare_versions "$REMOTE_VERSION" "$_local" || true)
@@ -1045,14 +1094,21 @@ update_envproxy() {
                 ;;
         esac
     fi
-    # 停监控 → 覆盖安装区（跳过 monitor，保日志）→ 走一次万能修复收尾
+    # 停监控 → 覆盖安装区（跳过 monitor 保日志；跳过正在执行的核心脚本，由新脚本自己搬）
+    # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
     echo "正在安装新版（保留日志，原监控先停）..."
     stop_monitor >/dev/null 2>&1 || true
-    install_package "$_exdir" "$(get_project_root)"
+    _uroot="$(get_project_root)"
+    if ! install_package "$_exdir" "$_uroot" "$_exdir" "mac/envproxy.sh"; then
+        rm -f "$_tgz" 2>/dev/null || true
+        echo "安装区已回滚，正在按原版本恢复监控..."
+        install_envproxy >/dev/null 2>&1 || true
+        return 1
+    fi
     rm -f "$_tgz" 2>/dev/null || true
-    rm -rf "$_exdir" 2>/dev/null || true
-    install_envproxy
-    echo "已更新到 $REMOTE_TAG。"
+    # exec：把当前进程换成解压目录里的新脚本去收尾——终端里继续看到它的输出，
+    # 退出码原样带出，父进程也不会在自己的代码被覆盖之后继续执行。
+    exec /bin/bash "$_exdir/mac/envproxy.sh" finish-update "$_uroot" "$_exdir"
 }
 
 # 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
@@ -1087,11 +1143,29 @@ show_release_notes() {
 # 覆盖安装区。边界三条：包内文件全部写入；win/monitor 与 mac/monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
+# 参数 3 是本次更新的临时目录（放备份），参数 4 是要跳过的相对路径（正在执行的核心脚本，
+# 由覆盖完成后的新脚本自己搬到位）。任何一步失败就整体回滚，并返回非零。
 install_package() {
     _proot="$1"
     _pdest="$2"
+    _pstage="${3:-}"
+    _pskip="${4:-}"
     _plist="/tmp/envproxy_pkglist.$$"
-    (cd "$_proot" && find . -type f 2>/dev/null | sed 's|^\./||') > "$_plist" 2>/dev/null
+    if [ -n "$_pstage" ]; then
+        _pbak="$_pstage/backup"
+        rm -rf "$_pbak" 2>/dev/null || true
+        mkdir -p "$_pbak" 2>/dev/null || true
+        for _pd in win mac release-notes assets; do
+            [ -d "$_pdest/$_pd" ] && cp -pR "$_pdest/$_pd" "$_pbak/$_pd" 2>/dev/null
+        done
+        # 根目录那几个随包文件也要备份：只备份程序目录的话，中途失败回滚后会留下
+        # "版本号是新的、程序目录是旧的"——比不滚还难查。
+        for _pf in VERSION README.md README.en.md LICENSE; do
+            [ -f "$_pdest/$_pf" ] && cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null
+        done
+    fi
+    _pok=1
+    (cd "$_proot" && find . -type f 2>/dev/null | sed 's|^\./||') > "$_plist" 2>/dev/null || _pok=0
     for _pd in win mac release-notes assets; do
         [ -d "$_pdest/$_pd" ] || continue
         find "$_pdest/$_pd" -type f 2>/dev/null | while IFS= read -r _pf; do
@@ -1108,14 +1182,66 @@ install_package() {
     _pcopy=1
     while IFS= read -r _prel; do
         [ -n "$_prel" ] || continue
+        if [ -n "$_pskip" ] && [ "$_prel" = "$_pskip" ]; then continue; fi
         _ptarget="$_pdest/$_prel"
         mkdir -p "$(dirname "$_ptarget")" 2>/dev/null || { _pcopy=0; continue; }
         cp -p "$_proot/$_prel" "$_ptarget" 2>/dev/null || _pcopy=0
     done < "$_plist"
-    rm -f "$_plist" 2>/dev/null || true
-    if [ "$_pcopy" != "1" ]; then
-        echo "更新失败：文件写入失败。请点一次 1-安装 修复后重试。"
+    if [ "$_pok" != "1" ] || [ "$_pcopy" != "1" ]; then
+        if [ -n "$_pstage" ] && [ -d "$_pstage/backup" ]; then
+            # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
+            # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
+            for _pd in win mac release-notes assets; do
+                _pb="$_pstage/backup/$_pd"
+                [ -d "$_pb" ] || continue
+                mkdir -p "$_pdest/$_pd" 2>/dev/null || true
+                (cd "$_pb" && find . -type f 2>/dev/null | sed 's|^\./||') | while IFS= read -r _r; do
+                    _pt="$_pdest/$_pd/$_r"
+                    mkdir -p "$(dirname "$_pt")" 2>/dev/null || true
+                    cp -p "$_pb/$_r" "$_pt" 2>/dev/null || true
+                done
+                (cd "$_pdest/$_pd" && find . -type f 2>/dev/null | sed 's|^\./||') | while IFS= read -r _r; do
+                    case "$_r" in monitor/*) continue;; esac
+                    [ -f "$_pb/$_r" ] || rm -f "$_pdest/$_pd/$_r" 2>/dev/null || true
+                done
+            done
+            for _pf in VERSION README.md README.en.md LICENSE; do
+                [ -f "$_pstage/backup/$_pf" ] && cp -p "$_pstage/backup/$_pf" "$_pdest/$_pf" 2>/dev/null
+            done
+            echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
+        else
+            echo "更新失败：文件写入失败。请点一次 1-安装 修复后重试。"
+        fi
+        rm -f "$_plist" 2>/dev/null || true
+        return 1
     fi
+    rm -f "$_plist" 2>/dev/null || true
+    return 0
+}
+
+# 更新收尾（内部子命令）：把新版本的核心脚本搬到位，再走一次安装收尾。
+# 由更新入口在覆盖完成后执行，跑的是解压目录里的新脚本——所以升级完跑的是新代码，
+# 也不会出现"边读边被覆盖"。
+finish_update() {
+    _froot="$1"; _fstage="$2"
+    if [ -z "$_froot" ] || [ -z "$_fstage" ] || [ ! -f "$_fstage/mac/envproxy.sh" ]; then
+        echo "更新收尾失败：参数不对，或解压目录已被清理。"
+        return 1
+    fi
+    if ! cp -p "$_fstage/mac/envproxy.sh" "$_froot/mac/envproxy.sh" 2>/dev/null; then
+        echo "更新收尾失败：新版核心脚本没能写入。"
+        rm -rf "$_fstage" 2>/dev/null || true
+        return 1
+    fi
+    chmod +x "$_froot/mac/envproxy.sh" 2>/dev/null || true
+    if ! install_envproxy; then
+        echo "更新收尾失败：安装步骤没成功，请再点一次 1-安装。"
+        rm -rf "$_fstage" 2>/dev/null || true
+        return 1
+    fi
+    _fv=$(tr -d ' \t\r\n' < "$_froot/VERSION" 2>/dev/null || echo "")
+    echo "已更新到 v$_fv。"
+    rm -rf "$_fstage" 2>/dev/null || true
     return 0
 }
 
@@ -1239,7 +1365,7 @@ show_status() {
 }
 
 # ------------------------------------------------------------------------------
-# 11. 入口分派（兼容大小写与 --/— 前缀，方便 Windows 用户迁移）
+# 11. 入口分派（兼容大小写与 '-' 前缀，方便 Windows 用户迁移）
 # ------------------------------------------------------------------------------
 _CMD="${1:-}"
 _PURGE="0"
@@ -1259,6 +1385,8 @@ case "$_CMD_NORM" in
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
     update) update_envproxy "$_YES";;
+    # 内部子命令：更新入口覆盖完成后，用它调用解压目录里的新脚本收尾（用户不需要直接用）
+    finish-update) finish_update "$2" "$3";;
     "") run_monitor_loop;;
     *) echo "用法: bash $0 {install|stop|uninstall|status|update} [--purge] [--yes]"; exit 1;;
 esac

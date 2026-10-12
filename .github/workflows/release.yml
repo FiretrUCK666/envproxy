@@ -89,8 +89,9 @@ jobs:
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在：上传（覆盖）两个资产，补齐上次可能漏掉的。"
+            echo "Release $TAG 已存在：上传（覆盖）两个资产，并刷新发版说明。"
             gh release upload "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz --clobber
+            gh release edit "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG"
           else
             gh release create "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz \
               --notes-file "release-notes/$TAG.md" --title "$TAG"

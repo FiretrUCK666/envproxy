@@ -8,7 +8,7 @@
 
 为了让问题能被定位，请一并附上：
 
-- 你用的版本（`git log -1 --format=%H` 的提交号，或“官网文件夹某月版本”）
+- 你用的版本（进 `win` 双击 `4-查看状态`，把里面"本地版本"那一行贴上来；Mac 对应 `mac` 下的同名文件。也可以直接看根目录的 `VERSION` 文件）
 - 运行环境（Windows 10/11 或 macOS 版本；翻墙软件名字）
 - `4-查看状态` 的完整输出（`win`/`mac` 下同名文件，**原样粘贴，不要转述**）
 - `monitor/monitor.log` 最近的相关行（只记状态变化，不含隐私）
@@ -48,8 +48,8 @@ EnvProxy 特有的两条：如果问题只在“断开不断内核/节点抖动�
 git clone https://github.com/FiretrUCK666/envproxy.git
 cd envproxy
 
-# 改完自检（与 CI 跑的是同一批）
-bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
+# 改完自检（与 CI 同款；门禁的权威定义只有一处：.github/workflows/check.yml）
+bash -n mac/*.sh
 ```
 
 `win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
@@ -66,14 +66,18 @@ bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.
 改完必须全绿才算完成。按顺序：
 
 ```sh
-# sh 语法（macOS/Git-Bash；CI 同款）
-bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh
-# ps1 语法（Windows 本机 PowerShell；CI 同款）
+# 门禁 1：sh 语法（CI 同款）
+bash -n mac/*.sh
+# 门禁 2：ps1 语法（本机 PowerShell 5.1；CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
+# 门禁 3-9：编码红线、安装包内容、双语文档一致性、契约常量与事实清单、AGENTS.md 体量、
+#   配图一致性、文件模式——权威定义只有 .github/workflows/check.yml，
+#   本地要单跑某一条，就把那一步的脚本原样粘进 PowerShell。
 # 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/status.sh），输出与预期一致
 # 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
 ```
 
-这里的命令与 `AGENTS.md` 构建与验证节保持一致，改一处时同步另一处。
+这里的说明与 `AGENTS.md` 构建与验证节指向同一处权威（`check.yml`）；门禁有增减时只改 CI 与 `AGENTS.md`，
+本文件不复制脚本清单。
 
 ## 硬性规范
 
