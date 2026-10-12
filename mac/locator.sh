@@ -25,9 +25,6 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
     # 分层搜索：用户常用位置深搜 6 层；其他卷根浅搜 4 层。
     # 注意：不从 $HOME 根整体递归——大目录 + TCC 弹窗会拖慢登录；错误全部静默忽略。
     # 注意：跳过 Time Machine 备份卷，否则又慢又可能误选。
-    _best=""
-    _best_log_mtime=0
-    _best_file_mtime=0
     _search_one() {
         _root="$1"; _depth="$2"
         [ -d "$_root" ] || return 0
@@ -68,7 +65,19 @@ $_out"
     fi
 fi
 
-[ -n "$_target" ] && [ -f "$_target" ] || exit 0
+[ -n "$_target" ] && [ -f "$_target" ] || {
+    # 兜底：安装根找不到了，没有活着的组件会再纠正变量——把我们写的东西清掉，
+    # 新终端不再读到过期代理。只删本机地址（归属判定），用户自己的配置不动。
+    # 保持静默（登录路径不打扰用户），无日志可写：monitor 目录可能已不存在。
+    rm -f "$HOME/.envproxy/proxy.env" 2>/dev/null
+    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+        _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+        case "$_cur" in http://127.0.0.1:*) launchctl unsetenv "$_v" 2>/dev/null;; esac
+    done
+    _node=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
+    [ "$_node" = "1" ] && launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null
+    exit 0
+}
 
 mkdir -p "$(dirname "$REG")" 2>/dev/null
 printf '%s\n' "$_target" > "$REG" 2>/dev/null

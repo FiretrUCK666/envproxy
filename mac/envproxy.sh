@@ -52,12 +52,13 @@ PID_FILE="$MONITOR_DIR/monitor.pid"
 STOP_FLAG="$MONITOR_DIR/stop.flag"
 LOG_FILE="$MONITOR_DIR/monitor.log"
 
-ENVPROXY_HOME="$HOME/.envproxy"
+ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"
 PROXY_ENV="$ENVPROXY_HOME/proxy.env"
 PATH_CONF="$ENVPROXY_HOME/path.conf"
 LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
 PLIST_LABEL="com.envproxy.monitor"
-PLIST_PATH="$HOME/Library/LaunchAgents/$PLIST_LABEL.plist"
+# 测试可覆盖安装位置与自启动位置（自检时指向沙箱，不碰真实 HOME）。
+PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/$PLIST_LABEL.plist}"
 
 # 更新源：GitHub Release 里的安装包资产（见第 9 节）。
 # 开发副本（安装根有 .git）的只读版本检查跟自己的 git remote 走，
@@ -133,7 +134,7 @@ get_existing_no_proxy() {
     _name="${1:-NO_PROXY}"
     _v=""
     if [ -f "$PROXY_ENV" ]; then
-        _v=$(grep -E "^export ${_name}=" "$PROXY_ENV" 2>/dev/null | head -n 1 | sed 's/^export [A-Za-z_]*="//; s/"$//')
+        _v=$(grep -E "^export ${_name}=" "$PROXY_ENV" 2>/dev/null | head -n 1 | sed 's/^export [A-Za-z_]*=//; s/^"//; s/"$//' | sed "s/^'//; s/'\$//")
     fi
     if [ -z "$_v" ]; then _v=$(launchctl getenv "$_name" 2>/dev/null || echo ""); fi
     printf '%s' "$_v"
@@ -151,6 +152,8 @@ merge_no_proxy() {
     for _p in $_existing; do
         _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         [ -n "$_pt" ] || continue
+        # 单引号不是合法的主机名/IP 字符，且会破坏 proxy.env 的 source 转义幂等——直接丢弃该条目。
+        case "$_pt" in *"'"*) continue;; esac
         _pl=$(printf '%s' "$_pt" | tr 'A-Z' 'a-z')
         case ",$_lower," in
             *",$_pl,"*) ;;
@@ -159,6 +162,14 @@ merge_no_proxy() {
     done
     IFS=$_old
     printf '%s' "$_out"
+}
+
+# shell 安全转义：单引号包裹、内部单引号转义。proxy.env 会被 hook 在每个新
+# shell 里 source，未转义的 $、反引号会被执行（值变代码）。
+shell_escape_sq() {
+    _sq="$1"
+    _sq=$(printf '%s' "$_sq" | sed "s/'/'\\\\''/g")
+    printf "'%s'" "$_sq"
 }
 
 get_current_proxy_port() {
@@ -176,6 +187,7 @@ set_user_env_vars() {
     _port="$1"
     _http="http://127.0.0.1:$_port"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
+    _npq=$(shell_escape_sq "$_np")
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     _tmp="$PROXY_ENV.tmp.$$"
     {
@@ -185,8 +197,8 @@ set_user_env_vars() {
         printf 'export https_proxy="%s"\n' "$_http"
         printf 'export ALL_PROXY="%s"\n' "$_http"
         printf 'export all_proxy="%s"\n' "$_http"
-        printf 'export NO_PROXY="%s"\n' "$_np"
-        printf 'export no_proxy="%s"\n' "$_np"
+        printf 'export NO_PROXY=%s\n' "$_npq"
+        printf 'export no_proxy=%s\n' "$_npq"
         printf 'export NODE_USE_ENV_PROXY="1"\n'
     } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
     launchctl setenv HTTP_PROXY "$_http" 2>/dev/null || true
@@ -202,35 +214,17 @@ set_user_env_vars() {
 
 # 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
 # 半代理状态永远无人纠正。返回 0 = 已就位（无需动手）。
-# 文件与路径的唯一入口：所有读写都从这里走，绕过去容易踩通配符与"写到一半"两个坑。
-#   path_exists  存在性判断（用 [ ] 判断即可，但集中一处以后好统一）
-#   read_text     读文本（macOS 天生 UTF-8，不做转换）
-#   write_text_atomic  原子写：同目录临时文件 + mv 替换——既不会留下半个文件，
-#                      也保证"覆盖正在执行的脚本"对 bash 安全（运行中的旧 inode 不受影响）
-#   remove_path   删文件或目录（静默、幂等）
-path_exists() { [ -e "$1" ]; }
-read_text() { cat "$1" 2>/dev/null; }
-write_text_atomic() {
-    _wt_path="$1"; _wt_tmp="$_wt_path.tmp$$"
-    mkdir -p "$(dirname "$_wt_path")" 2>/dev/null || true
-    if printf '%s' "$2" > "$_wt_tmp" 2>/dev/null && mv -f "$_wt_tmp" "$_wt_path" 2>/dev/null; then
-        return 0
-    fi
-    rm -f "$_wt_tmp" 2>/dev/null || true
-    return 1
-}
-remove_path() { rm -rf "$1" 2>/dev/null || true; }
-
 env_vars_in_sync() {
     _port="$1"
     [ -f "$PROXY_ENV" ] || return 1
     _http="http://127.0.0.1:$_port"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
+    _npq=$(shell_escape_sq "$_np")
     for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         grep -qxF "export $_v=\"$_http\"" "$PROXY_ENV" 2>/dev/null || return 1
     done
-    grep -qxF "export NO_PROXY=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
-    grep -qxF "export no_proxy=\"$_np\"" "$PROXY_ENV" 2>/dev/null || return 1
+    grep -qxF "export NO_PROXY=$_npq" "$PROXY_ENV" 2>/dev/null || return 1
+    grep -qxF "export no_proxy=$_npq" "$PROXY_ENV" 2>/dev/null || return 1
     grep -qxF 'export NODE_USE_ENV_PROXY="1"' "$PROXY_ENV" 2>/dev/null || return 1
     # launchd 的会话环境是易失的（每次登录/重启清空），而 proxy.env 一直存在——只比对它就等于
     # 认为"第二路也齐了"，重启后那 9 个 setenv 一次都不会重放。两条腿都要核：任一条不符就判"不齐"，
@@ -262,12 +256,64 @@ is_default_no_proxy_entry() {
     return 1
 }
 
+# 变量事实源（写/核/收/判四处共用，口径不再分家）：代理变量 6 个（大小写双写）
+# + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
+OWNED_HTTP_PREFIX="http://127.0.0.1:"
+PREV_ENV="$ENVPROXY_HOME/prev.env"
+
+# 这个值是不是本工具写下的：只有 127.0.0.1 本机地址才算我们的，
+# 用户或公司工具写的其他地址一律不动。
+is_owned_proxy_value() {
+    case "$1" in "$OWNED_HTTP_PREFIX"*) return 0;; *) return 1;; esac
+}
+
+# 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
+# 快照时属于我们自己的值视为空（升级路径下安装时代理正开着，不能把刚写的值当成用户的）。
+snapshot_prev_env() {
+    [ -f "$PREV_ENV" ] && return 0
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    _sntmp="$PREV_ENV.tmp.$$"
+    {
+        for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+            _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+            is_owned_proxy_value "$_cur" 2>/dev/null && _cur=""
+            case "$_cur" in *"
+"*) _cur="";; esac
+            printf '%s\t%s\n' "$_v" "$_cur"
+        done
+        for _v in NO_PROXY no_proxy; do
+            _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+            case "$_cur" in *"
+"*) _cur="";; esac
+            printf '%s\t%s\n' "$_v" "$_cur"
+        done
+        _cur=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
+        [ "$_cur" = "1" ] && _cur=""
+        printf '%s\t%s\n' "NODE_USE_ENV_PROXY" "$_cur"
+    } > "$_sntmp" 2>/dev/null && mv "$_sntmp" "$PREV_ENV" 2>/dev/null || rm -f "$_sntmp" 2>/dev/null || true
+    return 0
+}
+
+# 卸载时按快照还原用户原值，还原完删掉快照。无快照时什么都不做。
+restore_prev_env() {
+    [ -f "$PREV_ENV" ] || return 0
+    while IFS='	' read -r _k _v; do
+        [ -n "$_k" ] || continue
+        if [ -n "$_v" ]; then launchctl setenv "$_k" "$_v" 2>/dev/null || true
+        else launchctl unsetenv "$_k" 2>/dev/null || true; fi
+    done < "$PREV_ENV" 2>/dev/null || true
+    rm -f "$PREV_ENV" 2>/dev/null || true
+    return 0
+}
+
 remove_user_env_vars() {
     # 只回收**本工具自己写下的**东西。
     # proxy.env 整个文件是我们的，直接删；launchctl 那一路要按项回收——
+    # 代理变量只删本机地址（归属判定），用户或公司工具写的其他地址不动；
     # NO_PROXY 用"减掉我们加的默认项"的方式回收（用户原本就有 NO_PROXY 时，
     # 按"整份等于默认集"判断会让我们加的那几项永远留在他的值里）；
     # NODE_USE_ENV_PROXY 只有值是我们写的 1 才清。
+    # 安装时的原值快照另存（见 snapshot_prev_env），卸载时由 restore_prev_env 还原。
     _ours_default="$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')"
     for _v in no_proxy NO_PROXY; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
@@ -288,6 +334,9 @@ remove_user_env_vars() {
     if [ "$_node" = "1" ]; then launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null || true; fi
     rm -f "$PROXY_ENV" 2>/dev/null || true
     for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+        _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+        [ -n "$_cur" ] || continue
+        is_owned_proxy_value "$_cur" || continue
         launchctl unsetenv "$_v" 2>/dev/null || true
     done
 }
@@ -295,10 +344,13 @@ remove_user_env_vars() {
 # 我们该持有的那套变量现在还有没有痕迹：proxy.env 与 launchctl 任一路在就算在。
 # 与 remove_user_env_vars 的回收范围对齐——两边共用一套判据，才不会出现
 # "删得掉但门槛没让它删"的残留（半代理：状态显示直连，实际还挂着代理）。
+# 归属与删除同口径：别人的代理地址不算我们的痕迹。
 proxy_vars_present() {
     if [ -f "$PROXY_ENV" ] && grep -qE '^export (HTTP_PROXY|http_proxy)=' "$PROXY_ENV" 2>/dev/null; then return 0; fi
-    if [ -n "$(launchctl getenv HTTP_PROXY 2>/dev/null || echo "")" ]; then return 0; fi
-    if [ -n "$(launchctl getenv http_proxy 2>/dev/null || echo "")" ]; then return 0; fi
+    for _v in HTTP_PROXY http_proxy; do
+        _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
+        if is_owned_proxy_value "$_cur"; then return 0; fi
+    done
     for _v in NO_PROXY no_proxy; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
@@ -345,11 +397,11 @@ test_http_proxy() {
     printf '%s' "$_resp" | grep -qE '^HTTP/1\.[01] +200'
 }
 
-# 批量探测 worker（参数展开在父进程完成，避免后台子 shell 闭包竞态）
+# 批量探测 worker（参数展开在父进程完成，避免后台子 shell 闭包竞态）。
+# 握手判据只有 test_http_proxy 一处，这里直接复用，不重复写正则。
 _probe_proxy_one() {
     _pp="$1"; _dir="$2"
-    _r=$(printf 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n' | nc -G 1 -w 2 127.0.0.1 "$_pp" 2>/dev/null | head -n 1)
-    if printf '%s' "$_r" | grep -qE '^HTTP/1\.[01] +200'; then
+    if test_http_proxy "$_pp"; then
         # 每个 worker 写自己专属的结果文件：并行写同一文件会截断拼接，
         # 曾拼出过不存在的"端口"，还会污染失败计数。
         printf '%s' "$_pp" > "$_dir/$_pp" 2>/dev/null || true
@@ -390,7 +442,9 @@ get_listening_ports() {
     printf '%s' "$_ports"
 }
 
-# 可疑进程端口表（排序去重，无状态，可安全用于命令替换）
+# 可疑进程端口表（排序去重，无状态，可安全用于命令替换）。
+# 解析只用一次 awk：pid→comm 映射与监听行匹配在同一次扫描里完成，
+# 不再对每一行各起 awk/grep/head（原来每行 6–7 个进程，空转时最费电的就是它）。
 get_suspect_ports() {
     _psmap=$(mktemp /tmp/envproxy_ps.XXXXXX 2>/dev/null) || return 0
     _lsofout=$(mktemp /tmp/envproxy_lsof.XXXXXX 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
@@ -400,21 +454,25 @@ get_suspect_ports() {
         printf ''
         return 0
     fi
-    _suspect=""
-    while IFS= read -r _line; do
-        case "$_line" in COMMAND*) continue;; esac
-        _pid=$(printf '%s' "$_line" | awk '{print $2}')
-        _port=$(printf '%s' "$_line" | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | head -n 1)
-        [ -n "$_pid" ] && [ -n "$_port" ] || continue
-        _comm=$(grep -E "^ *$_pid " "$_psmap" 2>/dev/null | head -n 1 | awk '{print $2}')
-        if [ -n "$_comm" ]; then
-            for _pat in $PATTERNS; do
-                case "$_comm" in *"$_pat"*) _suspect="$_suspect $_port"; break;; esac
-            done
-        fi
-    done < "$_lsofout"
+    _suspect=$(awk -v pats="$PATTERNS" '
+        NR==FNR { comm[$1]=$2; next }
+        $1=="COMMAND" { next }
+        {
+            pid=$2
+            c=comm[pid]
+            if (c=="") next
+            if (match($0, /:[0-9]+ \(LISTEN\)/)) {
+                seg=substr($0, RSTART+1, RLENGTH)
+                gsub(/[^0-9]/, "", seg)
+                if (seg=="") next
+                n=split(pats, pa, " ")
+                for (i=1; i<=n; i++) {
+                    if (index(c, pa[i])>0) { print seg; break }
+                }
+            }
+        }' "$_psmap" "$_lsofout" 2>/dev/null | sort -nu | tr '\n' ' ' | sed 's/ $//')
     rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
-    printf '%s' "$_suspect" | tr ' ' '\n' | grep -E '^[0-9]+$' | sort -nu | tr '\n' ' ' | sed 's/ $//'
+    printf '%s' "$_suspect"
 }
 
 # 成员判断：$1 在空格分隔表 $2 里则返回 0
@@ -735,6 +793,8 @@ set_autorun() {
     if ! launchctl bootstrap "gui/$_uid" "$PLIST_PATH" 2>/dev/null; then
         launchctl load "$PLIST_PATH" 2>/dev/null || true
     fi
+    # 落点判据：两个固定产物都在才算成功，调用方据此打印实话。
+    [ -f "$PLIST_PATH" ] && [ -f "$LOCATOR_PATH" ]
 }
 
 remove_autorun() {
@@ -767,6 +827,27 @@ repair_autorun() {
         set_autorun || true
         log_msg "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
     fi
+    _repair_hooks || true
+}
+
+# hook 存在性自愈（与变量 30 轮自检、自启动内容比对同周期）：zsh 落点缺失或内容不符就补写。
+# bash 落点只在安装时处理（存在才写），稳态下不碰。
+_repair_hooks() {
+    _need=0
+    _any=0
+    for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
+        [ -f "$_rc" ] || continue
+        _any=1
+        if ! _hook_block_paired "$_rc" 2>/dev/null || ! grep -qxF "$HOOK_LINE" "$_rc" 2>/dev/null; then
+            _need=1
+            break
+        fi
+    done
+    [ "$_any" = "0" ] && _need=1
+    if [ "$_need" = "1" ]; then
+        insert_shell_hooks || true
+        log_msg "已自动修复终端 shell hook（缺失或内容与当前版本不一致）"
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -778,28 +859,57 @@ insert_shell_hooks() {
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
         touch "$_rc" 2>/dev/null || continue
         _normalize_hook_block "$_rc" || true
-        if ! grep -qF "$HOOK_START" "$_rc" 2>/dev/null; then
+        if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
     for _rc in "$HOME/.bash_profile" "$HOME/.bashrc"; do
         [ -f "$_rc" ] || continue
         _normalize_hook_block "$_rc" || true
-        if ! grep -qF "$HOOK_START" "$_rc" 2>/dev/null; then
+        if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
+    # 落点判据：两个 zsh 落点至少一个有完整 hook 块，否则终端路不通。
+    for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
+        if _hook_block_paired "$_rc" 2>/dev/null && grep -qxF "$HOOK_LINE" "$_rc" 2>/dev/null; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # hook 块内容自愈：标记在、但内容与当前版本不符时删掉旧块（由调用方重新追加正确块）。
 # 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
+# 安全三条：判定与删除统一用整行匹配；开始行与结束行必须成对且有序才动手，
+# 缺一侧或顺序错乱就一个字节都不改；动手前先备份。
+_hook_block_paired() {
+    _hrc="$1"
+    grep -qxF "$HOOK_START" "$_hrc" 2>/dev/null || return 1
+    grep -qxF "$HOOK_END" "$_hrc" 2>/dev/null || return 1
+    _s=$(grep -nxF "$HOOK_START" "$_hrc" 2>/dev/null | head -n 1 | cut -d: -f1)
+    _e=$(grep -nxF "$HOOK_END" "$_hrc" 2>/dev/null | head -n 1 | cut -d: -f1)
+    _s=$(printf '%s' "$_s" | tr -cd '0-9'); _e=$(printf '%s' "$_e" | tr -cd '0-9')
+    [ -n "$_s" ] && [ -n "$_e" ] && [ "$_s" -lt "$_e" ] || return 1
+    return 0
+}
+
+_backup_rc() {
+    cp -p "$1" "$1.envproxy.bak" 2>/dev/null || true
+}
+
 _normalize_hook_block() {
     _hrc="$1"
-    grep -qF "$HOOK_START" "$_hrc" 2>/dev/null || return 0
+    grep -qxF "$HOOK_START" "$_hrc" 2>/dev/null || return 0
+    if ! _hook_block_paired "$_hrc"; then
+        log_msg "shell hook 标记不完整（缺结束行或顺序错乱），未改动：$_hrc"
+        return 0
+    fi
     _hwant="$(printf '%s\n%s\n%s' "$HOOK_START" "$HOOK_LINE" "$HOOK_END")"
     _have="$(awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{f=1} f{print} $0==e{exit}' "$_hrc" 2>/dev/null)"
     [ "$_have" = "$_hwant" ] && return 0
     _htmp="$_hrc.tmp.$$"
+    _backup_rc "$_hrc"
     if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_hrc" > "$_htmp" 2>/dev/null; then
         cat "$_htmp" > "$_hrc" 2>/dev/null || true
     fi
@@ -811,9 +921,14 @@ remove_shell_hooks() {
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc"; do
         [ -f "$_rc" ] || continue
         # 没有标记的文件碰都不碰：全量重写会改 mtime，白白弄脏用户文件。
-        grep -qF "$HOOK_START" "$_rc" 2>/dev/null || continue
+        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null || continue
+        if ! _hook_block_paired "$_rc"; then
+            log_msg "shell hook 标记不完整（缺结束行或顺序错乱），未改动：$_rc"
+            continue
+        fi
         _tmp="$_rc.tmp.$$"
         # 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
+        _backup_rc "$_rc"
         if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null; then
             cat "$_tmp" > "$_rc" 2>/dev/null || true
         fi
@@ -867,7 +982,13 @@ start_monitor() {
     nohup /bin/bash "$SCRIPT_PATH" >/dev/null 2>&1 < /dev/null &
     # shellcheck disable=SC2312
     disown 2>/dev/null || true
-    echo "监控进程已启动。"
+    sleep 0.5
+    if get_monitor_pid >/dev/null 2>&1; then
+        echo "监控进程已启动。"
+        return 0
+    fi
+    echo "监控进程启动失败，请重试 1-安装。" >&2
+    return 1
 }
 
 stop_monitor() {
@@ -944,7 +1065,10 @@ run_monitor_loop() {
 
     while [ ! -f "$STOP_FLAG" ]; do
         if [ ! -f "$SCRIPT_PATH" ]; then _self=1; break; fi
-        get_current_state || CURRENT_STATE="$_last"
+        if ! get_current_state; then
+            log_msg "检测异常：状态探测失败，沿用上一状态"
+            CURRENT_STATE="$_last"
+        fi
         _st="$CURRENT_STATE"
         if [ "$_st" != "$_last" ]; then
             if [ "$_st" = "$_pending" ]; then _pending_n=$((_pending_n + 1)); else _pending="$_st"; _pending_n=1; fi
@@ -981,6 +1105,9 @@ run_monitor_loop() {
     done
 
     if [ "$_self" = "1" ]; then
+        # 自退时没有活着的组件会再纠正变量：先把我们写的东西清掉（新位置的监控会在秒级内按需重注），
+        # 再清运行时目录。否则删文件夹后新终端继续读到过期代理。
+        remove_user_env_vars || true
         rm -rf "$MONITOR_DIR" 2>/dev/null || true
         if [ -d "$SCRIPT_DIR" ] && [ -z "$(ls -A "$SCRIPT_DIR" 2>/dev/null)" ]; then
             rmdir "$SCRIPT_DIR" 2>/dev/null || true
@@ -1190,6 +1317,7 @@ update_envproxy() {
     echo "正在安装新版（保留日志）..."
     if ! install_package "$_exdir" "$_uroot" "$_exdir"; then
         rm -f "$_tgz" 2>/dev/null || true
+        rm -rf "$_exdir" 2>/dev/null || true
         echo "安装区已回滚（覆盖前监控没停，不需要恢复）。"
         return 1
     fi
@@ -1206,6 +1334,7 @@ update_envproxy() {
         install_envproxy >/dev/null 2>&1 || true
         echo "如果状态仍不对，请再点一次 1-安装。"
     fi
+    rm -rf "$_exdir" 2>/dev/null || true
 }
 
 # 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
@@ -1346,13 +1475,24 @@ install_package() {
 # ------------------------------------------------------------------------------
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
-    set_autorun
-    echo "[1/3] 开机自启动：已写入（LaunchAgent + 固定定位器）"
-    insert_shell_hooks
-    echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效）"
+    # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
+    snapshot_prev_env || true
+    if set_autorun; then
+        echo "[1/3] 开机自启动：已写入（LaunchAgent + 固定定位器）"
+    else
+        echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
+    fi
+    if insert_shell_hooks; then
+        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效）"
+    else
+        echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
+    fi
     update_path_record
-    start_monitor 1
-    echo "[3/3] 监控进程：已启动"
+    if start_monitor 1; then
+        echo "[3/3] 监控进程：已启动"
+    else
+        echo "[3/3] 监控进程：启动失败，请重试 1-安装"
+    fi
     CURRENT_STATE="off"
     get_current_state || true
     apply_state "$CURRENT_STATE" || true
@@ -1391,6 +1531,8 @@ uninstall_envproxy() {
     _ghost=$(get_monitor_pid || true)
     if [ -n "$_ghost" ]; then kill -9 "$_ghost" 2>/dev/null || true; sleep 0.5; fi
     remove_user_env_vars
+    # 按安装时的快照还用户原值（若有），还完删掉快照。
+    restore_prev_env || true
     # launchd 的两个重定向文件（StandardOutPath/StandardErrorPath）是运行时管道，不是黑匣子：
     # 一律清掉，"恢复到安装前的状态"才成立。唯一的黑匣子是 monitor/monitor.log，
     # 它的去留由上面那次询问决定。
@@ -1399,13 +1541,30 @@ uninstall_envproxy() {
     if [ -d "$ENVPROXY_HOME" ] && [ -z "$(ls -A "$ENVPROXY_HOME" 2>/dev/null)" ]; then
         rmdir "$ENVPROXY_HOME" 2>/dev/null || true
     fi
-    echo "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。"
-    if [ $_remove_log -eq 1 ]; then
-        echo "        历史日志已一并彻底删除。"
+    # 卸载末尾回读复检：上面每一步都可能静默失败，定论必须由复读结果决定。
+    # DIVERGE(Mac): 复检项按平台映射——plist 对应 Windows 的 Run 键，
+    # proxy.env 对应注册表变量，其余同源。
+    _dirty=""
+    if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then _dirty="$_dirty 开机自启动项仍在；"; fi
+    if [ -f "$PLIST_PATH" ]; then _dirty="$_dirty 自启动文件仍在；"; fi
+    if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位器文件仍在；"; fi
+    if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在；"; fi
+    if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在；"; fi
+    if proxy_vars_present 2>/dev/null; then _dirty="$_dirty 代理变量仍在；"; fi
+    if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
+    if [ $_remove_log -eq 1 ] && [ -f "$LOG_FILE" ]; then _dirty="$_dirty 历史日志未能删除；"; fi
+    if [ -z "$_dirty" ]; then
+        echo "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。"
+        if [ $_remove_log -eq 1 ]; then
+            echo "        历史日志已一并彻底删除。"
+        else
+            echo "        历史日志保留在 monitor/monitor.log（黑匣子，供日后排查）。"
+        fi
+        echo "        电脑已恢复到安装前的状态，无需重启。"
     else
-        echo "        历史日志保留在 monitor/monitor.log（黑匣子，供日后排查）。"
+        echo "[未完成] 以下残留请手动处理：$_dirty"
+        echo "        可再跑一次 uninstall，或手动删除上述位置。"
     fi
-    echo "        电脑已恢复到安装前的状态，无需重启。"
 }
 
 show_status() {
@@ -1461,8 +1620,114 @@ show_status() {
 }
 
 # ------------------------------------------------------------------------------
+# 自检回归：沙箱里跑，断言 hook 成对护栏、合并语义、归属判定与注入回收往返。
+# 只碰沙箱 HOME 与沙箱 ENVPROXY_HOME，不碰真实用户文件。CI 门禁调用，失败返回非零。
+# ------------------------------------------------------------------------------
+_selftest_fails=0
+
+_selftest_assert_eq() {
+    _name="$1"; _want="$2"; _have="$3"
+    if [ "$_want" = "$_have" ]; then
+        echo "  PASS $_name"
+    else
+        echo "  FAIL $_name（期望 [$_want]，实际 [$_have]）"
+        _selftest_fails=$((_selftest_fails + 1))
+    fi
+}
+
+_selftest_assert_file_eq() {
+    _name="$1"; _want="$2"; _file="$3"
+    _have=$(cat "$_file" 2>/dev/null || echo "__MISSING__")
+    if [ "$_want" = "$_have" ]; then
+        echo "  PASS $_name"
+    else
+        echo "  FAIL $_name（文件内容不符，实际：）"
+        printf '%s\n' "$_have" | sed 's/^/    |/'
+        _selftest_fails=$((_selftest_fails + 1))
+    fi
+}
+
+self_test() {
+    _selftest_fails=0
+    _sandbox=$(mktemp -d /tmp/envproxy_selftest.XXXXXX 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
+    # 运行期改道：HOME 管 hook 落点，ENVPROXY_HOME 管 proxy.env/快照，MONITOR_DIR 管日志。
+    HOME="$_sandbox"
+    ENVPROXY_HOME="$_sandbox/.envproxy"
+    PROXY_ENV="$ENVPROXY_HOME/proxy.env"
+    PREV_ENV="$ENVPROXY_HOME/prev.env"
+    MONITOR_DIR="$ENVPROXY_HOME/monitor"
+    LOG_FILE="$MONITOR_DIR/monitor.log"
+    export HOME ENVPROXY_HOME
+    mkdir -p "$ENVPROXY_HOME" "$MONITOR_DIR" 2>/dev/null || true
+
+    echo "[1] hook 成对护栏"
+    printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' 'OLD-HOOK' '# <<< EnvProxy <<<' 'alias ll="ls"' > "$HOME/.zshenv"
+    _normalize_hook_block "$HOME/.zshenv" || true
+    _selftest_assert_file_eq "旧块被清理、用户行保留" "$(printf '%s\n' 'export PATH=/x' 'alias ll="ls"')" "$HOME/.zshenv"
+
+    printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' 'HOOK' 'alias ll="ls"' > "$HOME/.zshenv"
+    _before=$(cat "$HOME/.zshenv" 2>/dev/null)
+    _normalize_hook_block "$HOME/.zshenv" || true
+    _selftest_assert_eq "缺结束行时一个字节都不改" "$_before" "$(cat "$HOME/.zshenv" 2>/dev/null)"
+
+    printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' 'HOOK' '# <<< EnvProxy <<< ' 'alias ll="ls"' > "$HOME/.zshenv"
+    _before=$(cat "$HOME/.zshenv" 2>/dev/null)
+    remove_shell_hooks 2>/dev/null || true
+    _selftest_assert_eq "结束行尾随空格时不截断" "$_before" "$(cat "$HOME/.zshenv" 2>/dev/null)"
+
+    printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' "$HOOK_LINE" '# <<< EnvProxy <<<' 'alias ll="ls"' > "$HOME/.zshenv"
+    remove_shell_hooks 2>/dev/null || true
+    _selftest_assert_file_eq "成对时正常移除" "$(printf '%s\n' 'export PATH=/x' 'alias ll="ls"')" "$HOME/.zshenv"
+
+    echo "[2] 合并与归属"
+    _selftest_assert_eq "补默认项、留用户条目" "localhost,127.0.0.1,::1,example.com" "$(merge_no_proxy 'localhost,example.com,::1' "$DEFAULT_NO_PROXY")"
+    _selftest_assert_eq "含单引号条目丢弃" "localhost,127.0.0.1,::1,ok.example" "$(merge_no_proxy "ok.example,a'b" "$DEFAULT_NO_PROXY")"
+    if is_owned_proxy_value "http://127.0.0.1:7890"; then _o1=1; else _o1=0; fi
+    if is_owned_proxy_value "http://corp:8080"; then _o2=1; else _o2=0; fi
+    _selftest_assert_eq "本机地址算我们的" "1" "$_o1"
+    _selftest_assert_eq "公司地址不算我们的" "0" "$_o2"
+    _selftest_assert_eq "转义幂等" "'a'" "$(shell_escape_sq 'a')"
+    if compare_versions "1.0.10" "1.0.9" >/dev/null 2>&1; then _c1=$(compare_versions "1.0.10" "1.0.9"); else _c1="?"; fi
+    _selftest_assert_eq "版本逐段数值比" "1" "$_c1"
+
+    echo "[3] 注入核对回收往返"
+    set_user_env_vars "17890" || true
+    if env_vars_in_sync "17890"; then _s1=1; else _s1=0; fi
+    _selftest_assert_eq "注入后判就位" "1" "$_s1"
+    if proxy_vars_present; then _s2=1; else _s2=0; fi
+    _selftest_assert_eq "注入后判有痕迹" "1" "$_s2"
+    # shellcheck disable=SC1090
+    . "$PROXY_ENV" 2>/dev/null || true
+    _selftest_assert_eq "proxy.env 可被 source" "http://127.0.0.1:17890" "$HTTP_PROXY"
+    remove_user_env_vars || true
+    if [ -f "$PROXY_ENV" ]; then _s3=1; else _s3=0; fi
+    _selftest_assert_eq "回收后文件消失" "0" "$_s3"
+    if proxy_vars_present; then _s4=1; else _s4=0; fi
+    _selftest_assert_eq "回收后无痕迹" "0" "$_s4"
+    unset HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy NODE_USE_ENV_PROXY 2>/dev/null || true
+
+    echo "[4] 快照还原"
+    snapshot_prev_env || true
+    if [ -f "$PREV_ENV" ]; then _s5=1; else _s5=0; fi
+    _selftest_assert_eq "快照文件生成" "1" "$_s5"
+    restore_prev_env || true
+    if [ -f "$PREV_ENV" ]; then _s6=1; else _s6=0; fi
+    _selftest_assert_eq "还原后快照删除" "0" "$_s6"
+
+    rm -rf "$_sandbox" 2>/dev/null || true
+    if [ "$_selftest_fails" -eq 0 ]; then
+        echo "自检全部通过"
+        return 0
+    fi
+    echo "自检失败：$_selftest_fails 项"
+    return 1
+}
+
+# ------------------------------------------------------------------------------
 # 11. 入口分派（兼容大小写与 '-' 前缀，方便 Windows 用户迁移）
 # ------------------------------------------------------------------------------
+# 直接执行才分派：被 source（测试加载）时只定义函数、不跑监控。
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
 _CMD="${1:-}"
 _PURGE="0"
 _YES="0"
@@ -1505,6 +1770,8 @@ case "$_CMD_NORM" in
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
     update) update_envproxy "$_YES";;
+    self-test) self_test;;
     "") run_monitor_loop;;
-    *) echo "用法: bash $0 {install|stop|uninstall|status|update} [--purge] [--yes]"; exit 1;;
+    *) echo "用法: bash $0 {install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 1;;
 esac
+fi
