@@ -66,17 +66,18 @@ UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
-# 因此本表按"常见入站口"收，不按协议收：列入纯 SOCKS 口不会误判，只会多一次本机握手。
+# 收录标准：能过 CONNECT 门、且可能拿去注入（http:// 方案）的口才值得收；
+# 纯 SOCKS 口刻意不收（过不了握手门，只是白扫）。已在表内的不动（判决走握手门，无害）。
 KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888 12334"  # 12334 = Hiddify-Next 默认
 
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。
+# 不认品牌、不认版本：mihomo-party/flclash 已被 mihomo/clash 命中；Stash/Quantumult X 默认 Network Extension 模式、不产生本地口，故不单列。
 PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shadowsocks ss-local trojan hysteria neko netch surge outline"
 
 # 验证端点（与 Windows 版一致：跨厂商/跨域段，快路优先 + 失败并行兜底）。
 # 端点池的两条硬要求，缺一不可：
 #   1) 跨厂商/跨域段——单个域段被干扰时其余端点仍能证明节点活着；
-#   2) 响应体"零字节或极小"——Mac 侧探针是 curl：它没有"读到响应头就停"的开关，
-#      只能把正文收下再丢弃（-o /dev/null），所以正文字节数直接等于流量预算。
+#   2) 响应体"零字节或极小"——探针发 HEAD 请求（--head），只收响应头、不收正文。
 #      现有 7 个端点：5 个 /generate_204（0 字节 204）+ 2 个被墙站点（重定向或 KB 级响应）。
 # 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
 CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org twitter.com"
@@ -1131,6 +1132,8 @@ update_envproxy() {
     _url="https://github.com/$_repo/releases/download/$REMOTE_TAG/EnvProxy.tar.gz"
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
+    # 下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
+    # 不硬编码任何第三方域名，不为它放宽校验。
     _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 0; }
     rm -f "$_rnd" 2>/dev/null || true
     _tgz="$_rnd.tar.gz"
@@ -1239,8 +1242,8 @@ show_release_notes() {
 # 覆盖安装区。边界三条：包内文件全部写入；win/monitor 与 mac/monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
-# 参数 3 是本次更新的临时目录（放备份），参数 4 是要跳过的相对路径（正在执行的核心脚本，
-# 由覆盖完成后的新脚本自己搬到位）。任何一步失败就整体回滚，并返回非零。
+# 参数 3 是本次更新的临时目录（放备份）。覆盖全走临时文件改名，运行中的旧脚本不受影响。
+# 任何一步失败就逐文件回滚，并返回非零。
 install_package() {
     _proot="$1"
     _pdest="$2"

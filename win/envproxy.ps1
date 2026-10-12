@@ -70,12 +70,16 @@ function Broadcast-EnvironmentChange {
 # ------------------------------------------------------------------------------
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 本表只是"常见入站口"的提速提示：命中它省一轮全端口兜底，不命中也不影响覆盖面。
-# 判决永远走 CONNECT 握手门，所以列入纯 SOCKS 口不会造成误判，只会多一次本机握手。
+# 收录标准：能过 CONNECT 门、且可能拿去注入（http:// 方案）的口才值得收；
+# 纯 SOCKS 口（如 Surge 6153、mihomo socks-port 7891、Netch 2801）刻意不收——
+# 过不了握手门，列进去只是每轮多一次注定失败的本机握手。已在表内的不动（判决走握手门，无害）。
 $KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888, 12334)  # 12334 = Hiddify-Next 默认
 
 # 翻墙软件进程名特征（用于快速预筛，缩小 CONNECT 探测范围）。可自行扩展。
 # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
 #       第二轮的"全端口 CONNECT 探测"也能发现它（见 Find-CandidatePorts）。
+# 不认品牌、不认版本：mihomo-party/flclash 已被 mihomo/clash 命中；
+# Stash/Quantumult X 默认 Network Extension 模式、不产生本地口，故不单列。
 $ProxyProcessPatterns = @("monocloud", "clash", "mihomo", "verge", "v2ray", "xray",
     "sing-box", "singbox", "hiddify", "shadowsocks", "ss-local", "trojan", "hysteria",
     "neko", "netch", "surge", "outline")
@@ -1283,6 +1287,8 @@ function Show-Status {
 # ------------------------------------------------------------------------------
 # 更新源：GitHub Release 里的安装包资产（EnvProxy.zip；Mac 侧取 EnvProxy.tar.gz）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
+#   下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
+#   不硬编码任何第三方域名，不为它放宽校验。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
 #     没有 .git     = 安装副本 → 下载安装包、校验、覆盖安装区。
