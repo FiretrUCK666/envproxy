@@ -104,7 +104,8 @@ jobs:
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           JSON="$(gh release view "$TAG" --json isLatest,assets)"
-          IS="$(printf '%s' "$JSON" | jq -r '.isLatest // "unknown"')"
+          # 注意：jq 的 `//` 会把 false 也当空值吞掉，这里必须用 has() 区分"明确非最新"与"字段缺失"。
+          IS="$(printf '%s' "$JSON" | jq -r 'if has("isLatest") then (.isLatest | tostring) else "unknown" end')"
           if [ "$IS" = "false" ]; then
             echo "Release $TAG 不是 latest：README 的下载直链会指向别的版本，请确认后再发。"
             exit 1
