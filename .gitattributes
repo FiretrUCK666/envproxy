@@ -4,3 +4,12 @@
 # of envproxy.ps1; editors must save it as UTF-8 WITH BOM, and envproxy.sh as
 # LF without BOM (a BOM breaks its shebang). See README sections 10 and 12.6.
 * text=auto eol=lf
+
+# 分发包内容：打标签时用 git archive 产出安装包，只收用户可见的文件。
+# 下面这些是仓库自己的东西（给开发者与 AI 用），不进安装包。
+# 新增仓库内部文件时，在这里补一行；check.yml 的「分发包内容」门禁会校验实际产出。
+/AGENTS.md        export-ignore
+/CONTRIBUTING.md  export-ignore
+/.gitattributes   export-ignore
+/.gitignore       export-ignore
+/.github/         export-ignore

@@ -55,6 +55,12 @@ bash -n mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.
 `win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见 `AGENTS.md`
 构建与验证节第 2 条）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh` 确认行为。
 
+**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`，由 `git archive`
+从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
+更新入口（`5-检查更新` / `bash mac/update.sh`）认得这一点，只报版本、不改动任何文件，同步上游用
+`git pull`。要验证更新逻辑，把安装包解压到别处当安装副本，在那里面点检查更新——不要指望在本仓库里
+跑出覆盖效果，那是设计如此。
+
 ## 提交前门禁
 
 改完必须全绿才算完成。按顺序：

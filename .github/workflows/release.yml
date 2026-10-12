@@ -11,48 +11,11 @@ on:
         default: ''
 
 jobs:
+  # 门禁只有一处定义：check.yml。发版前先跑同一批（含安装包内容与文档一致性）。
   check:
-    runs-on: ubuntu-latest
-    steps:
-      - name: 检出
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
-
-      - name: sh 语法检查（与 AGENTS.md 第 1 条同款）
-        run: |
-          for f in mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
-            bash -n "$f" || exit 1
-          done
-
-      - name: ps1 语法检查（与 AGENTS.md 第 2 条同款）
-        shell: pwsh
-        run: |
-          $tokens = $null; $errs = $null
-          [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
-          if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
-
-      - name: 编码红线检查（与 AGENTS.md 硬性规范第 6、7 条同款）
-        shell: pwsh
-        run: |
-          $fail = 0
-          $b = [System.IO.File]::ReadAllBytes('win/envproxy.ps1')
-          if (-not ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
-            Write-Host 'win/envproxy.ps1 缺少 UTF-8 BOM'
-            $fail = 1
-          }
-          $s = [System.IO.File]::ReadAllBytes('mac/envproxy.sh')
-          if ($s[0] -eq 0xEF -and $s[1] -eq 0xBB -and $s[2] -eq 0xBF) {
-            Write-Host 'mac/envproxy.sh 带了 BOM'
-            $fail = 1
-          }
-          $text = [System.Text.Encoding]::UTF8.GetString($s)
-          if ($text.Contains("`r`n")) {
-            Write-Host 'mac/envproxy.sh 含 CRLF'
-            $fail = 1
-          }
-          if ($fail) { exit 1 }
-          Write-Host '编码红线通过'
+    uses: ./.github/workflows/check.yml
+    with:
+      ref: ${{ inputs.tag != '' && inputs.tag || github.ref }}
 
   release:
     needs: check
@@ -64,24 +27,87 @@ jobs:
         with:
           ref: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
 
-      - name: 标签与 VERSION 一致
+      - name: 标签与 VERSION 一致，且中文发版说明已随版提交
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           VER="$(tr -d ' \t\r\n' < VERSION)"
           if [ "$TAG" != "v$VER" ]; then
-            echo "tag $TAG 与 VERSION $VER 不一致，拒绝发布。"
+            echo "标签 $TAG 与 VERSION $VER 不一致，拒绝发布。"
             exit 1
           fi
+          if [ ! -f "release-notes/$TAG.md" ]; then
+            echo "缺 release-notes/$TAG.md：发版说明与版本一起提交，拒绝发布。"
+            exit 1
+          fi
+          echo "标签、版本、发版说明齐备。"
 
-      - name: 建 Release（幂等，已存在则跳过）
+      - name: 打安装包（内容由 .gitattributes 的 export-ignore 声明）
+        run: |
+          mkdir -p dist
+          git archive --format=zip    -o dist/EnvProxy.zip    HEAD
+          git archive --format=tar.gz -o dist/EnvProxy.tar.gz HEAD
+          ls -l dist
+
+      - name: 校验安装包（与仓库逐字节一致、编码红线在容器里没被改）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fail = 0
+          $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $zipDir = Join-Path $tmp 'envproxy-pkg-zip'
+          $tgzDir = Join-Path $tmp 'envproxy-pkg-tgz'
+          Remove-Item $zipDir, $tgzDir -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path 'dist/EnvProxy.zip' -DestinationPath $zipDir -Force
+          New-Item -ItemType Directory -Force -Path $tgzDir | Out-Null
+          & tar -xzf dist/EnvProxy.tar.gz -C $tgzDir
+          if ($LASTEXITCODE -ne 0) { Write-Host 'tar.gz 解压失败'; exit 1 }
+
+          $relTgz = @(Get-ChildItem $tgzDir -Recurse -File | ForEach-Object { $_.FullName.Substring($tgzDir.Length).TrimStart('/','\') } | Sort-Object)
+          $relZip = @(Get-ChildItem $zipDir -Recurse -File | ForEach-Object { $_.FullName.Substring($zipDir.Length).TrimStart('/','\') } | Sort-Object)
+          $diff = Compare-Object $relTgz $relZip
+          if ($diff) { Write-Host '两个容器内容不一致：'; $diff | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }; $fail = 1 }
+
+          foreach ($r in $relTgz) {
+            if (-not (Test-Path $r)) { Write-Host ("安装包里有仓库没有的文件：{0}" -f $r); $fail = 1; continue }
+            $inPkg = (Get-FileHash (Join-Path $tgzDir $r) -Algorithm SHA256).Hash
+            $inRepo = (Get-FileHash $r -Algorithm SHA256).Hash
+            if ($inPkg -ne $inRepo) { Write-Host ("安装包与仓库字节不一致：{0}" -f $r); $fail = 1 }
+          }
+
+          $ps1 = Join-Path $tgzDir 'win/envproxy.ps1'
+          $sh = Join-Path $tgzDir 'mac/envproxy.sh'
+          $pb = [System.IO.File]::ReadAllBytes($ps1)
+          if (-not ($pb[0] -eq 0xEF -and $pb[1] -eq 0xBB -and $pb[2] -eq 0xBF)) { Write-Host '交付的 envproxy.ps1 丢了 UTF-8 BOM'; $fail = 1 }
+          $sb = [System.IO.File]::ReadAllBytes($sh)
+          if ($sb[0] -eq 0xEF -and $sb[1] -eq 0xBB -and $sb[2] -eq 0xBF) { Write-Host '交付的 envproxy.sh 带了 BOM'; $fail = 1 }
+          if ([System.Text.Encoding]::UTF8.GetString($sb).Contains("`r`n")) { Write-Host '交付的 envproxy.sh 被改成 CRLF'; $fail = 1 }
+
+          if ($fail) { exit 1 }
+          Write-Host ("安装包校验通过：{0} 个文件，与仓库逐字节一致。" -f $relTgz.Count)
+
+      - name: 建 Release 并挂安装包（幂等：已存在则补齐资产）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在，跳过。"
-          elif [ -f "release-notes/$TAG.md" ]; then
-            gh release create "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG"
+            echo "Release $TAG 已存在：上传（覆盖）两个资产，补齐上次可能漏掉的。"
+            gh release upload "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz --clobber
           else
-            gh release create "$TAG" --generate-notes --title "$TAG"
+            gh release create "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz \
+              --notes-file "release-notes/$TAG.md" --title "$TAG"
           fi
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: 自校验（两个资产都在，README 的下载直链才有效）
+        run: |
+          TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+          NAMES="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          for want in EnvProxy.zip EnvProxy.tar.gz; do
+            if ! printf '%s\n' "$NAMES" | grep -qxF "$want"; then
+              echo "资产缺失：$want（README 的下载直链与更新入口都会失效）"
+              exit 1
+            fi
+          done
+          echo "资产已就位：$(printf '%s' "$NAMES" | tr '\n' ' ')"
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

@@ -7,6 +7,14 @@
 
 [中文](README.md)
 
+<p align="center">
+  <img src="./assets/readme/hero.en.svg" width="100%" alt="EnvProxy: VPN app on, the terminal proxies; VPN app off, the terminal is back to direct. On the right, an excerpt of the real status output.">
+</p>
+
+<p align="center">
+  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">Download the latest version (zip — clicking starts the download)</a></b> · unzip it anywhere, then double-click <code>1-安装.cmd</code> in <code>win</code> (on a Mac, in <code>mac</code>) — full steps in <a href="#1-install-3-steps-5-minutes">section 1</a>
+</p>
+
 > VPN app on = terminal auto-proxies; VPN app off = terminal back to direct. Zero clicks, zero residue, zero admin rights.
 
 ## 目录
@@ -37,6 +45,14 @@ Your VPN app (MonoCloud, Clash, v2rayN, Hiddify… anything with a local proxy p
 
 **EnvProxy is the translator**: it watches "is the VPN app actually proxying right now", writes the proxy into environment variables when it is, and deletes them when it isn't. You do nothing.
 
+Here is what that looks like in practice:
+
+| Your situation | Without EnvProxy | With EnvProxy |
+|---|---|---|
+| you connect the VPN app | the browser crosses the wall, the terminal does not: commands get slow or time out, and tools that read only env variables fail outright | the terminal follows along, zero clicks |
+| you quit the VPN app | the proxy variables stay behind, and your terminal throws "connection refused" errors you can't make sense of | the variables are deleted, the terminal goes direct again |
+| you change ports or switch apps | copy the port out of the app, set the variables by hand, remember to undo it later | the new port is discovered and applied automatically |
+
 > Note: it only manages **environment variables** (the command-line world) and never touches the **system proxy** (the browser world). The two worlds don't interfere.
 >
 > TUN users, start here: if you run TUN mode, all traffic — terminals included — is already captured, so you don't need this tool (expected behavior, see section 11 item 1).
@@ -55,11 +71,13 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 
 > Why this form: all proxy values uniformly use the `http://` scheme (never the old `ALL_PROXY=socks5://`). Local proxy ports (MonoCloud/Clash etc.) are mixed ports that answer both HTTP and SOCKS5; but some tools only understand `http://` and reject `socks5://` (e.g. dsh prints "all_proxy names a SOCKS proxy, which is not supported" and skips it). Uniform `http://` works with the most tools, with zero behavior loss.
 
-> On letter case (**5 variables on Windows, 9 on macOS — a platform difference, not an omission**):
-> Windows environment variable names are **case-insensitive** — `HTTP_PROXY` and `http_proxy` are the same variable, and the registry can only hold one of them.
-> So the Windows build writes the 5 variables above; reading them under any casing (`$env:http_proxy` or `$env:HTTP_PROXY`) returns the same value, with no loss of compatibility.
-> On macOS, `launchctl` and the environment block are **genuinely case-sensitive**, so an upper-case and a lower-case entry really are two different things (some tools only look up the lower-case name). The macOS build therefore writes both cases — 9 variables in all, see section 13.
->
+**Letter case: 5 variables on Windows, 9 on macOS.** That is a platform difference, not an omission:
+
+| Platform | Writes | Why |
+|---|---|---|
+| Windows | the 5 above | Variable names are **case-insensitive**: `HTTP_PROXY` and `http_proxy` are the same variable, and the registry can hold only one of them. Reading it under any casing (`$env:http_proxy` or `$env:HTTP_PROXY`) returns the same value, with no loss of compatibility. |
+| macOS | the 5 above plus one lower-case spelling each = 9 | `launchctl` and the environment block are **genuinely case-sensitive**, so an upper-case and a lower-case entry really are two different things (some tools only look up the lower-case name). See section 12. |
+
 > Why not simply write both spellings everywhere: on Windows that does not achieve anything (the two writes just overwrite each other) and it leaves behind a duplicated environment block with the same name in two spellings. Some software (.NET-based hosts) then fails outright while reading it — "An item with the same key has already been added" — and everything launched from that terminal window is affected. The Windows build therefore deliberately avoids writing case-paired variable names.
 
 > About `NO_PROXY` (**entries are only ever added, never taken away**):
@@ -69,8 +87,8 @@ Written as a set when proxying, deleted as a set when not — all or nothing:
 
 ## 1. Install (3 steps, 5 minutes)
 
-1. Put the whole `EnvProxy` folder wherever you like (**any location, any name**)
-2. In the `win` folder, double-click **`1-安装.cmd`**
+1. **[Download the latest package here](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (one zip, works on Windows and Mac; unzip it **anywhere, rename the folder if you like**)
+2. In the `win` folder, double-click **`1-安装.cmd`** (on a Mac, double-click **`1-安装.command`** in `mac`)
 3. Done when you see "monitor process started"
 
 Install does three things:
@@ -79,7 +97,7 @@ Install does three things:
 - Starts the monitor right away
 - Corrects environment variables on the spot (inject what should be injected, clean what should be cleaned)
 
-> Later, to upgrade: in the `win` folder, double-click **`5-检查更新.cmd`** (it shows the latest release and installs only after you say yes; log kept).
+> Later, to upgrade: in the `win` folder, double-click **`5-检查更新.cmd`** — it shows the latest version and **what that release changed**, and installs only after you say yes; log kept.
 >
 > To fix anything: in the `win` folder, just **double-click `1-安装.cmd` again**. It's the "universal fix button" — no double install, no network break, nothing lost.
 
@@ -93,7 +111,7 @@ Install does three things:
 | **2-停止监控** | stops monitor + **deletes env variables** (back to direct immediately) | **keeps** auto-start + locator + path record (monitor returns on next boot) | pause temporarily, want it back next boot |
 | **3-一键恢复** | stops monitor + deletes variables + **removes auto-start + locator + path record** | log kept or deleted — **you choose on the spot** (default: keep) | you want this feature gone completely |
 | **4-查看状态** | shows monitor/auto-start/VPN/variables/versions/recent log (the version lines query GitHub once; when offline they say "check failed" after up to 8 s) | — | check how it's doing |
-| **5-检查更新** | checks GitHub for the latest release → **installs only after you say yes** (full-package overwrite, log kept) | version bumped, everything else in place | upgrade when a new release is out |
+| **5-检查更新** | checks GitHub for the latest release → shows **what that release changed** → **installs only after you say yes** (aligned to the package: nothing missed, stale files cleaned, log kept) | version bumped, everything else in place | upgrade when a new release is out |
 
 One-line memory:
 
@@ -128,15 +146,14 @@ One-line memory:
 
 ## 4. How it tells "VPN on or off" (plain words)
 
-```
-Every 2-3 seconds, take a look: is any local proxy port "open for business"?
-    ↓ a port is listening
-Then ask: does this port answer a proxy handshake? (CONNECT probe)
-    ↓ yes
-Then really try it: fetch the outside world once through it — reachable? (real-node check)
-    ↓ reachable = truly proxying → write variables
-    ↓ unreachable (e.g. disconnected but app kernel still alive) → delete variables
-```
+<p align="center">
+  <img src="./assets/readme/mechanism.en.svg" width="100%" alt="The three-layer check: every 2-3 seconds it verifies that a local port is listening, that the port answers a CONNECT handshake, and that one real fetch through it reaches the outside world. All three passing writes the whole proxy variable set; any layer failing deletes it and returns the terminal to a direct connection.">
+</p>
+
+Every 2-3 seconds it looks at whether a local port is listening, and walks two more layers from there: does that port
+answer a CONNECT handshake, and does one fetch through it actually reach the outside world. All three passing means
+"really proxying" → write the variables; any layer failing means "not proxying" → delete them and go direct
+("disconnected but the app kernel is still alive" lands in this branch).
 
 Three layers, all required. So it can't be fooled by "fake proxies", won't mistake a "disconnected app" for proxying, and won't miss a "new app on a new port".
 
@@ -175,7 +192,10 @@ Three layers, all required. So it can't be fooled by "fake proxies", won't mista
 | install prints a pile of "unexpected token ) / }" (syntax errors) | script file encoding damaged: PowerShell 5.1 on non-UTF-8-codepage systems reads BOM-less scripts as ANSI → Chinese text breaks syntax | the ps1 is always shipped as UTF-8 with BOM, usable on any system as-is; if it still errors, the file was re-saved by some text tool — **re-copy an official folder** over it |
 | folder placed outside the auto-search range (e.g. `C:\Tools`, `~/Projects`, or a path deeper than 4 levels such as D:\a\b\c\d\e\f) | the locator only looks under "user directories (6 levels) + other drive roots (4 levels)" | double-click "install" once in `win` |
 | update check says "failed" | this machine can't reach GitHub right now (or API rate-limited) | retry later; toggling the VPN on/off and retrying often helps |
-| update aborts halfway | download/extract/verify failed | the installed version is untouched — just re-run `5-检查更新` |
+| update aborts halfway | download / extract / verify / write failed | just re-run `5-检查更新` (copying is idempotent, it fills in what is missing); or download the package manually, unzip it over the folder, then click `1-安装` once |
+| "this release has no package" | that release was published without the package attached | download `EnvProxy.zip` manually from the Releases page, unzip it over the folder, then click `1-安装`. It is not a problem on your machine |
+| the folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` and other unfamiliar files | you downloaded GitHub's "Source code" archive, not the package | delete them — nothing breaks; the next update replaces the folder with the real package contents |
+| the update check says "this is a development copy" | the folder has a `.git` (the author's or a contributor's clone) | expected: the updater never touches a git working tree — use `git pull` to sync |
 | local proxy has authentication on (username/password) | credential-less handshakes get 407, judged "unusable" — conservative and correct | turn off local auth (off by default), or use a port without auth |
 | terminals inside WSL2 don't pick it up | WSL2 doesn't inherit Windows user env variables by default | expected — set proxy variables inside WSL separately |
 | elevated (Run as administrator) terminals don't pick it up | elevated processes belong to a different admin identity and don't inherit your user's variables | expected — use a normal (non-elevated) terminal |
@@ -205,15 +225,18 @@ EnvProxy\
       monitor.log   black-box log (state changes only, 200KB cap with auto-truncate)
       monitor.pid   run marker
       stop.flag     stop signal (temp file, deleted after use)
-  mac\            Mac edition (mirrors win\, see section 13.4)
+  mac\            Mac edition (mirrors win\, see section 12.4)
   VERSION         version number (single source of truth; status, update and releases all read it)
   README.md       Chinese docs (authoritative)
   README.en.md    this file
   LICENSE         license (MIT)
-  CONTRIBUTING.md contribution guide (how to ask, report bugs, propose changes)
-  AGENTS.md       project contract for AI assistants (mechanisms and rules; not needed for normal use)
-  release-notes\  per-release notes
+  release-notes\  what each release changed (the update check shows the current one)
+  assets\readme\  README artwork (hand-written SVG, no external resources; hero and mechanism in both languages)
 ```
+
+> `win\` and `mac\` belong to the program: an update aligns everything inside those two folders (plus `release-notes\` and `assets\`) with the package, so **do not put your own files inside them**. The top level of the folder is yours — an update overwrites same-named files and never deletes anything else, while `monitor\` (the log and run markers) is never overwritten at all.
+
+> The repository also contains `AGENTS.md`, `CONTRIBUTING.md` and `.github\`, which are for developers and AI assistants and are **not part of the package**. If you find them in your folder, you downloaded the "Source code" archive instead (see section 6).
 
 > Daily use only enters `win` (or `mac` on a Mac); the docs in the root stay untouched.
 
@@ -228,11 +251,11 @@ Copying the whole `EnvProxy` folder elsewhere as a **backup** is completely harm
 
 ## 10. Deploy to a friend's / new machine
 
-1. Get the code onto the new machine (either way): `git clone https://github.com/FiretrUCK666/envproxy.git` (recommended); or copy the **whole folder** (USB/drive/zip all fine, just **don't re-save the .ps1 files in a text editor** — that breaks the UTF-8 BOM encoding)
-2. Double-click `win\1-安装.cmd`
+1. Get the package onto the new machine (either way): **[download the latest version](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**; or copy the **whole unzipped folder** (USB/drive/zip all fine — just **don't re-save the `.ps1` files in a text editor**, that breaks the UTF-8-with-BOM encoding)
+2. Double-click `win\1-安装.cmd` (on a Mac, `mac\1-安装.command`)
 3. Done
 
-To update later: double-click `5-检查更新.cmd` in `win` — it asks first, then upgrades to the latest release in one click (full-package overwrite, nothing missed; log kept). If you installed via `git clone`, you can also `git pull` and double-click `1-安装.cmd` once in `win` (equivalent fallback: loads new code and corrects variables).
+To update later: double-click `5-检查更新.cmd` in `win` — it shows what the release changed first, then installs after you say yes (aligned to the package: nothing missed, stale files cleaned, log kept).
 
 > Encoding note: `win\envproxy.ps1` is saved as **UTF-8 with BOM** so PowerShell 5.1 reads it correctly on **any Chinese/English Windows** (without BOM, Chinese systems read GBK and English systems Latin1 — both can cause syntax errors or mojibake). **If you ever edit `win\envproxy.ps1`, save it as UTF-8 with BOM** (VS Code / Notepad++ / Notepad all offer "UTF-8 with BOM"), then double-click "install" once in `win` so the monitor loads the new code.
 >
@@ -325,4 +348,6 @@ This project is MIT-licensed (see `LICENSE`): use, modify, redistribute freely, 
 
 To contribute (report bugs, propose changes), read `CONTRIBUTING.md` first (issue format, fork flow, pre-submit gates) — PRs that skip it will be sent back.
 
-Issue? Read section 6 troubleshooting first; still stuck → open an issue: `https://github.com/FiretrUCK666/envproxy/issues`. Include: your OS version, the full output of `4-查看状态` (`win`, or the `mac` counterpart), recent relevant lines of `monitor/monitor.log` under the same folder. To hack on the code, read `CONTRIBUTING.md` first.
+Issue? Read section 6 troubleshooting first; still stuck → open an issue: `https://github.com/FiretrUCK666/envproxy/issues`. Include: your OS version, the full output of `4-查看状态` (`win`, or the `mac` counterpart), recent relevant lines of `monitor/monitor.log` under the same folder.
+
+Repository: `https://github.com/FiretrUCK666/envproxy`. To hack on the code, read `CONTRIBUTING.md` first; a `git clone` copy carries its own `.git` and you sync it with `git pull` — the updater recognises such a copy and never overwrites your working tree.

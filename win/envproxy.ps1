@@ -1100,12 +1100,16 @@ function Show-Status {
     $remoteVer = Get-RemoteVersion
     if ($remoteVer) {
         Write-Host ("最新版本 : {0}" -f $remoteVer.Tag) -ForegroundColor Green
-        if ($localVer -and ((Compare-Versions $remoteVer.Version $localVer) -le 0)) {
-            Write-Host "更新状态 : 已是最新" -ForegroundColor Green
-        } elseif ($localVer) {
+        if (Test-DevCopy) {
+            Write-Host "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）" -ForegroundColor DarkGray
+        } elseif (-not $localVer) {
+            Write-Host "更新状态 : 可用 5-检查更新 升级" -ForegroundColor Yellow
+        } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
+            Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
+        } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
             Write-Host "更新状态 : 发现新版，用 5-检查更新 可升级" -ForegroundColor Yellow
         } else {
-            Write-Host "更新状态 : 可用 5-检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
     } else {
         Write-Host "最新版本 : 检查失败（网络不可达，稍后重试）" -ForegroundColor Yellow
@@ -1124,20 +1128,32 @@ function Show-Status {
 # ------------------------------------------------------------------------------
 # 8. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：GitHub Release（releases/latest → 标签源码包整包覆盖）。
-#   不用 git pull（用户机器未必有 git）、不用单文件拉取（新版增删文件会漏）。
-#   上游默认与 README 克隆地址同源；有 .git 时优先从 git remote 解析
-#   （fork 后 git-clone 的机器自动跟自己的 Release 走）。
+# 更新源：GitHub Release 里的安装包资产（EnvProxy.zip；Mac 侧取 EnvProxy.tar.gz）。
+#   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
+#   判据是环境事实，不看是谁在用：
+#     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
+#     没有 .git     = 安装副本 → 下载安装包、校验、覆盖安装区。
+#   读版本时开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；
+#   覆盖文件这条路上，git 副本一律不参与。
 $UpdateRepoDefault = "FiretrUCK666/envproxy"
 
+# 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
+function Test-DevCopy {
+    $root = Split-Path -Parent $ScriptDir
+    return (Test-Path (Join-Path $root ".git"))
+}
+
 function Get-UpdateRepo {
-    try {
-        $url = (git config --get remote.origin.url 2>$null)
-        if ($url -and ($url -match 'github\.com[:/]([^/]+)/([^/\s]+)')) {
-            $repo = $Matches[2] -replace '\.git$',''
-            if ($Matches[1] -and $repo) { return ("{0}/{1}" -f $Matches[1], $repo) }
-        }
-    } catch {}
+    if (Test-DevCopy) {
+        $root = Split-Path -Parent $ScriptDir
+        try {
+            $url = (git -C $root config --get remote.origin.url 2>$null)
+            if ($url -and ($url -match 'github\.com[:/]([^/]+)/([^/\s]+)')) {
+                $repo = $Matches[2] -replace '\.git$',''
+                if ($Matches[1] -and $repo) { return ("{0}/{1}" -f $Matches[1], $repo) }
+            }
+        } catch {}
+    }
     return $UpdateRepoDefault
 }
 
@@ -1220,14 +1236,16 @@ function Get-RemoteVersion {
     } catch { return $null }
 }
 
-# 带代理兜底的 HTTPS 下载文件：成功返回 $true。
+# 带代理兜底的 HTTPS 下载：返回 "ok" / "missing"（这个版本没提供该文件）/ "fail"。
+# 单独分出 "missing"，是为了把「这次发布漏了安装包」和「本机网络不通」两句提示分开。
 function Save-UpdateFile([string]$Url, [string]$DestFile) {
-    if (Save-UpdateFileVia $Url $DestFile "") { return $true }
+    $r = Save-UpdateFileVia $Url $DestFile ""
+    if ($r -ne "fail") { return $r }
     $port = $null
     try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
     if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
     if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port") }
-    return $false
+    return "fail"
 }
 
 function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort) {
@@ -1244,11 +1262,16 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort)
         $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(60)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
-        $task = $client.GetByteArrayAsync($Url)
-        if (-not $task.Wait(60000)) { return $false }
-        [System.IO.File]::WriteAllBytes($DestFile, $task.Result)
-        return $true
-    } catch { return $false }
+        $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
+        if (-not $respTask.Wait(60000)) { return "fail" }
+        $resp = $respTask.Result
+        if (($resp.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) -or ($resp.StatusCode -eq [System.Net.HttpStatusCode]::Gone)) { return "missing" }
+        if (-not $resp.IsSuccessStatusCode) { return "fail" }
+        $bodyTask = $resp.Content.ReadAsByteArrayAsync()
+        if (-not $bodyTask.Wait(60000)) { return "fail" }
+        [System.IO.File]::WriteAllBytes($DestFile, $bodyTask.Result)
+        return "ok"
+    } catch { return "fail" }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
@@ -1268,6 +1291,15 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         return
     }
     Write-Host ("最新版本 : {0}" -f $remote.Tag) -ForegroundColor Green
+    if (Test-DevCopy) {
+        Write-Host "这是开发副本（安装根有 .git）：更新入口不改动任何文件。" -ForegroundColor DarkGray
+        Write-Host "拉新代码请在仓库里执行：git pull" -ForegroundColor DarkGray
+        return
+    }
+    if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
+        Write-Host "本地版本比最新发布版新，无需更新。" -ForegroundColor Green
+        return
+    }
     if ($local -and ((Compare-Versions $remote.Version $local) -le 0)) {
         Write-Host "已是最新，无需更新。" -ForegroundColor Green
         return
@@ -1280,60 +1312,113 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
     }
-    if (-not $AutoYes) {
-        $answer = ""
-        try { $answer = Read-Host ("发现新版 {0}，是否更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
-        if ($answer -notmatch '^[Yy]') { Write-Host "已取消，未做任何改动。" -ForegroundColor Yellow; return }
-    }
-    # 下载标签源码包（整包，防漏文件）
+    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
     $repo = Get-UpdateRepo
-    $zipUrl = "https://codeload.github.com/{0}/zip/refs/tags/{1}" -f $repo, $remote.Tag
+    $zipUrl = "https://github.com/{0}/releases/download/{1}/EnvProxy.zip" -f $repo, $remote.Tag
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_'))
     $zipFile = "$tmpBase.zip"
-    $extractDir = "${tmpBase}-src"
+    $extractDir = "${tmpBase}-pkg"
     try {
-        Write-Host "正在下载新版..." -ForegroundColor Cyan
+        Write-Host "正在下载安装包..." -ForegroundColor Cyan
         Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
         Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        if (-not (Save-UpdateFile $zipUrl $zipFile)) { throw "下载失败（网络不可达），未做任何改动。" }
+        $dl = Save-UpdateFile $zipUrl $zipFile
+        if ($dl -eq "missing") { throw "这个版本没有提供安装包（下载地址返回 404），未做任何改动。请到 Releases 页面手动下载。" }
+        if ($dl -ne "ok") { throw "下载失败（网络不可达），未做任何改动。" }
         Write-Host "正在解压并校验..." -ForegroundColor Cyan
         Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
-        $top = Get-ChildItem $extractDir -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-        $srcRoot = if ($top) { $top.FullName } else { $extractDir }
-        $srcVer = ""
-        try { $srcVer = ((Get-Content (Join-Path $srcRoot "VERSION") -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) } catch {}
-        if (-not $srcVer -or ($srcVer -ne $remote.Version)) { throw "校验失败（包内 VERSION 与目标版本不一致），未做任何改动。" }
-        if (-not (Test-Path (Join-Path $srcRoot "win\envproxy.ps1"))) { throw "校验失败（包内缺核心文件），未做任何改动。" }
-        # 停监控 → 字节覆盖（跳过 monitor，保日志）→ 走一次万能修复收尾
+        Test-Package $extractDir $remote.Version
+        # 先把这一版改了什么给用户看，再问要不要装
+        Show-ReleaseNotes $extractDir $remote.Tag
+        if (-not $AutoYes) {
+            $answer = ""
+            try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
+            if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
+        }
+        # 停监控 → 覆盖安装区（跳过 monitor，保日志）→ 走一次万能修复收尾
         Write-Host "正在安装新版（保留日志，原监控先停）..." -ForegroundColor Cyan
         Stop-Monitor
-        $projectRoot = Split-Path -Parent $ScriptDir
-        foreach ($item in (Get-ChildItem $srcRoot -Force -ErrorAction Stop)) {
-            if ($item.Name -eq ".git") { continue }
-            if ($item.PSIsContainer) {
-                $dest = Join-Path $projectRoot $item.Name
-                New-Item -Path $dest -ItemType Directory -Force -ErrorAction Stop | Out-Null
-                foreach ($child in (Get-ChildItem $item.FullName -Force -ErrorAction Stop)) {
-                    # win\monitor / mac\monitor：本机运行时黑匣子，永不覆盖
-                    if ($child.Name -eq "monitor") { continue }
-                    Copy-Item $child.FullName $dest -Recurse -Force -ErrorAction Stop
-                }
-            } else {
-                Copy-Item $item.FullName $projectRoot -Force -ErrorAction Stop
-            }
-        }
-        Remove-Item $zipFile -Force -ErrorAction SilentlyContinue
-        Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue
+        Install-Package $extractDir (Split-Path -Parent $ScriptDir)
         Install-EnvProxy
         Write-Host ("已更新到 {0}。" -f $remote.Tag) -ForegroundColor Green
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host "当前旧版未被破坏，可稍后重试；着急就手动下载覆盖后点一次 1-安装。" -ForegroundColor Yellow
+        Write-Host "可稍后重试；也可以手动下载安装包覆盖后再点一次 1-安装。" -ForegroundColor Yellow
+    } finally {
         try { Remove-Item $zipFile -Force -ErrorAction SilentlyContinue } catch {}
         try { Remove-Item $extractDir -Recurse -Force -ErrorAction SilentlyContinue } catch {}
     }
+}
+
+# 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
+# 任何一项不过就抛异常，调用方据此中止——安装区一个字节都不动。
+function Test-Package([string]$Root, [string]$WantVersion) {
+    $srcVer = ""
+    try { $srcVer = ((Get-Content (Join-Path $Root "VERSION") -Raw -Encoding UTF8 -ErrorAction Stop).Trim()) } catch {}
+    if (-not $srcVer -or ($srcVer -ne $WantVersion)) { throw "校验失败（包内 VERSION 与目标版本不一致），未做任何改动。" }
+    $psFile = Join-Path $Root "win\envproxy.ps1"
+    $shFile = Join-Path $Root "mac\envproxy.sh"
+    if (-not (Test-Path $psFile) -or -not (Test-Path $shFile)) { throw "校验失败（包内缺核心文件），未做任何改动。" }
+    $b = [System.IO.File]::ReadAllBytes($psFile)
+    if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) { throw "校验失败（包内 win\envproxy.ps1 缺少 UTF-8 BOM），未做任何改动。" }
+    $s = [System.IO.File]::ReadAllBytes($shFile)
+    if ($s.Length -ge 3 -and $s[0] -eq 0xEF -and $s[1] -eq 0xBB -and $s[2] -eq 0xBF) { throw "校验失败（包内 mac\envproxy.sh 带了 BOM），未做任何改动。" }
+    if ([System.Text.Encoding]::UTF8.GetString($s).Contains("`r`n")) { throw "校验失败（包内 mac\envproxy.sh 含 CRLF），未做任何改动。" }
+}
+
+# 打印这一版改了什么：包内 release-notes/<标签>.md，最多 40 行；没有就跳过。
+function Show-ReleaseNotes([string]$Root, [string]$Tag) {
+    $f = Join-Path $Root ("release-notes\{0}.md" -f $Tag)
+    if (-not (Test-Path $f)) { return }
+    try {
+        $lines = @(Get-Content $f -Encoding UTF8)
+        Write-Host ("---------- {0} 改了什么 ----------" -f $Tag) -ForegroundColor Cyan
+        $lines | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
+        if ($lines.Count -gt 40) { Write-Host ("  （以上为前 40 行，全文见 Releases 页面与本安装目录的 release-notes\{0}.md）" -f $Tag) -ForegroundColor DarkGray }
+        Write-Host "----------------------------------" -ForegroundColor Cyan
+    } catch {}
+}
+
+# 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
+# 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
+# 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
+function Install-Package([string]$SrcRoot, [string]$ProjectRoot) {
+    $shipDirs = @("win", "mac", "release-notes", "assets")
+    $pkg = @{}
+    foreach ($f in (Get-ChildItem $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
+        $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
+        $pkg[$rel.ToLower()] = $rel
+    }
+    $removed = 0
+    foreach ($d in $shipDirs) {
+        $destDir = Join-Path $ProjectRoot $d
+        if (-not (Test-Path $destDir)) { continue }
+        foreach ($f in (Get-ChildItem $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            $rel = $f.FullName.Substring($ProjectRoot.Length).TrimStart('\')
+            if ($rel -match '^(win|mac)\\monitor\\') { continue }
+            if (-not $pkg.ContainsKey($rel.ToLower())) {
+                Remove-Item $f.FullName -Force -ErrorAction Stop
+                Write-Host ("  已移除旧版本残留：{0}" -f $rel) -ForegroundColor DarkGray
+                $removed++
+            }
+        }
+        Get-ChildItem $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
+            Sort-Object { $_.FullName.Length } -Descending |
+            ForEach-Object {
+                $drel = $_.FullName.Substring($ProjectRoot.Length).TrimStart('\')
+                if ($drel -match '^(win|mac)\\monitor') { return }
+                if (-not (Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+            }
+    }
+    foreach ($rel in $pkg.Values) {
+        $dest = Join-Path $ProjectRoot $rel
+        $parent = Split-Path -Parent $dest
+        if ($parent -and -not (Test-Path $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
+        Copy-Item (Join-Path $SrcRoot $rel) $dest -Force -ErrorAction Stop
+    }
+    if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
 }
 
 # ------------------------------------------------------------------------------

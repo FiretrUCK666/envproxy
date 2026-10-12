@@ -4,6 +4,13 @@ on:
   push:
     branches: ['**']
   pull_request:
+  workflow_call:
+    inputs:
+      ref:
+        description: '要检查的引用（留空则用触发本次运行的引用）'
+        type: string
+        required: false
+        default: ''
 
 jobs:
   check:
@@ -11,21 +18,23 @@ jobs:
     steps:
       - name: 检出
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
 
-      - name: sh 语法检查（与 AGENTS.md 第 1 条同款）
+      - name: 门禁 1：sh 语法检查
         run: |
           for f in mac/envproxy.sh mac/locator.sh mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
             bash -n "$f" || exit 1
           done
 
-      - name: ps1 语法检查（与 AGENTS.md 第 2 条同款）
+      - name: 门禁 2：ps1 语法检查
         shell: pwsh
         run: |
           $tokens = $null; $errs = $null
           [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
           if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
 
-      - name: 编码红线检查（与 AGENTS.md 硬性规范第 6、7 条同款）
+      - name: 门禁 3：编码红线检查
         shell: pwsh
         run: |
           $fail = 0
@@ -46,3 +55,152 @@ jobs:
           }
           if ($fail) { exit 1 }
           Write-Host '编码红线通过'
+
+      - name: 门禁 4：分发包内容
+        shell: pwsh
+        run: |
+          # git archive 产出的安装包：顶层的集合必须与预期一致，且不含运行时目录。
+          $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $tar = Join-Path $tmp 'envproxy-shipset.tar'
+          git archive --format=tar -o $tar HEAD
+          if ($LASTEXITCODE -ne 0) { Write-Host 'git archive 失败'; exit 1 }
+          $entries = @(& tar -tf $tar)
+          $tops = @($entries | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
+          $expect = @('LICENSE','README.en.md','README.md','VERSION','assets','mac','release-notes','win')
+          $diff = Compare-Object $expect $tops
+          if ($diff) {
+            Write-Host '安装包顶层内容与预期不一致（左侧=预期，右侧=实际）：'
+            $diff | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
+            Write-Host '新增仓库内部文件时，在 .gitattributes 里补 export-ignore；改动安装包内容时同步 README 第 8 节与本表。'
+            exit 1
+          }
+          $bad = @($entries | Where-Object { $_ -match '^(win|mac)/monitor/' })
+          if ($bad) { Write-Host '运行时目录进了安装包：'; $bad | ForEach-Object { Write-Host "  $_" }; exit 1 }
+          Write-Host '分发包内容通过'
+
+      - name: 门禁 5：文档一致性
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          function Get-Anchor([string]$t) {
+            $s = $t.ToLower() -replace '`',''
+            $s = $s -replace '[^\p{L}\p{Nd}\s\-_]',''
+            return ($s -replace ' ','-')
+          }
+          function Get-Levels([string]$p) {
+            return @(Get-Content $p -Encoding UTF8 | Where-Object { $_ -match '^#{1,6} ' } | ForEach-Object { ($_ -replace '^(#+).*','$1').Length })
+          }
+          $fail = 0
+          # a) 中英 README 的标题层级序列逐位置一致（节数与顺序）
+          $zh = Get-Levels 'README.md'
+          $en = Get-Levels 'README.en.md'
+          if ($zh.Count -ne $en.Count) {
+            Write-Host ("中英 README 节数不一致：中文 {0} / 英文 {1}" -f $zh.Count, $en.Count)
+            $fail = 1
+          } elseif (Compare-Object $zh $en -SyncWindow 0) {
+            Write-Host '中英 README 标题层级序列不一致'
+            $fail = 1
+          }
+          # b) 目录锚点：与条目文字自洽，且每条都能命中一个二级标题；二级标题都进了目录
+          foreach ($f in 'README.md','README.en.md') {
+            $lines = Get-Content $f -Encoding UTF8
+            $inToc = $false; $toc = @()
+            foreach ($l in $lines) {
+              if ($l -match '<!--\s*toc:start\s*-->') { $inToc = $true; continue }
+              if ($l -match '<!--\s*toc:end\s*-->') { $inToc = $false; continue }
+              if ($inToc -and $l -match '^\s*-\s+\[(.*)\]\(#(.*)\)\s*$') { $toc += [pscustomobject]@{ Text = $Matches[1]; Anchor = $Matches[2] } }
+            }
+            $heads = @($lines | Where-Object { $_ -match '^##\s+' } | ForEach-Object { Get-Anchor ($_ -replace '^##\s+','') })
+            foreach ($t in $toc) {
+              if ((Get-Anchor $t.Text) -ne $t.Anchor) { Write-Host ("{0}：目录锚点与条目文字不符 [{1}]" -f $f, $t.Text); $fail = 1 }
+              if ($heads -notcontains $t.Anchor) { Write-Host ("{0}：目录锚点找不到对应标题 {1}" -f $f, $t.Anchor); $fail = 1 }
+            }
+            foreach ($h in $heads) {
+              if (($h -ne (Get-Anchor '目录')) -and (($toc | ForEach-Object { $_.Anchor }) -notcontains $h)) { Write-Host ("{0}：二级标题没进目录 {1}" -f $f, $h); $fail = 1 }
+            }
+          }
+          # c) README 里不写死版本号（写死了每发一版就过期）
+          foreach ($f in 'README.md','README.en.md') {
+            $hit = Select-String -Path $f -Pattern '(?<![\d.])v?\d+\.\d+\.\d+(?![\d.])' -Encoding UTF8
+            if ($hit) {
+              Write-Host ("{0}：出现写死的版本号" -f $f)
+              $hit | ForEach-Object { Write-Host ("  行 {0}" -f $_.LineNumber) }
+              $fail = 1
+            }
+          }
+          # d) 安装包里的每个顶层条目都要写进两语 README 第 8 节的文件夹清单代码块里
+          $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
+          $tar = Join-Path $tmp 'envproxy-docset.tar'
+          Remove-Item $tar -Force -ErrorAction SilentlyContinue
+          git archive --format=tar -o $tar HEAD
+          if ($LASTEXITCODE -ne 0) { Write-Host 'git archive 失败，无法比对安装包内容'; exit 1 }
+          $tops = @(& tar -tf $tar | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
+          if ($tops.Count -eq 0) { Write-Host '安装包内容为空，比对无意义（门禁不通过）'; exit 1 }
+          foreach ($f in 'README.md','README.en.md') {
+            $lines = Get-Content $f -Encoding UTF8
+            $start = -1
+            for ($k = 0; $k -lt $lines.Count; $k++) {
+              if ($lines[$k] -match '^##\s*8\.') { $start = $k; break }
+            }
+            if ($start -lt 0) { Write-Host ("{0}：找不到第 8 节（文件夹清单所在节）" -f $f); $fail = 1; continue }
+            $inFence = $false
+            $block = @()
+            for ($k = $start; $k -lt $lines.Count; $k++) {
+              if ($lines[$k] -match '^```') {
+                if (-not $inFence) { $inFence = $true; continue } else { break }
+              }
+              if ($inFence) { $block += $lines[$k] }
+            }
+            if ($block.Count -eq 0) { Write-Host ("{0}：第 8 节里找不到文件夹清单代码块" -f $f); $fail = 1; continue }
+            $blob = $block -join "`n"
+            foreach ($t in $tops) {
+              if ($blob -notmatch [regex]::Escape($t)) { Write-Host ("{0}：第 8 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
+            }
+          }
+          if ($fail) { exit 1 }
+          Write-Host '文档一致性通过'
+
+      - name: 门禁 6：契约常量与变量集
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ps = Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8
+          $sh = Get-Content 'mac/envproxy.sh' -Raw -Encoding UTF8
+          $fail = 0
+          function Grab([string]$text, [string]$pattern, [string]$label) {
+            $m = [regex]::Match($text, $pattern)
+            if (-not $m.Success) { Write-Host ("找不到 " + $label); return $null }
+            return $m.Groups[1].Value
+          }
+          # 变量集合：Windows 5 个全大写；macOS 9 个（含 4 个小写拼写）
+          $winSet = Grab $ps '\$ProxyVarNames\s*=\s*@\(([^)]*)\)' 'Windows 变量集合'
+          if ($winSet) {
+            $names = @($winSet -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ })
+            if ($names.Count -ne 5) { Write-Host ("Windows 变量数不是 5：{0}" -f $names.Count); $fail = 1 }
+            foreach ($n in $names) {
+              if ($n -cne $n.ToUpper()) { Write-Host ("Windows 侧出现非大写拼写：{0}（.NET 宿主会因重复键报错）" -f $n); $fail = 1 }
+            }
+          } else { $fail = 1 }
+          $macNames = @([regex]::Matches($sh, "(?m)^\s*printf 'export ([A-Za-z_]+)=") | ForEach-Object { $_.Groups[1].Value })
+          if ($macNames.Count -ne 9) { Write-Host ("macOS 变量数不是 9：{0}" -f $macNames.Count); $fail = 1 }
+          $lowerCount = @($macNames | Where-Object { $_ -ceq $_.ToLower() }).Count
+          if ($lowerCount -ne 4) { Write-Host ("macOS 侧小写拼写应恰为 4 个，实际 {0}" -f $lowerCount); $fail = 1 }
+          # NO_PROXY 默认值：两侧一致、含裸写 ::1、不含方括号
+          $winNp = Grab $ps '\$DefaultNoProxy\s*=\s*"([^"]*)"' 'Windows NO_PROXY 默认值'
+          $macNp = Grab $sh 'DEFAULT_NO_PROXY="([^"]*)"' 'macOS NO_PROXY 默认值'
+          if ($winNp -and $macNp -and ($winNp -ne $macNp)) { Write-Host ("两侧 NO_PROXY 默认值不一致：{0} / {1}" -f $winNp, $macNp); $fail = 1 }
+          if ($winNp -and ($winNp -notmatch '(^|,)::1(,|$)')) { Write-Host ("NO_PROXY 缺少裸写 ::1：{0}" -f $winNp); $fail = 1 }
+          if ($winNp -and ($winNp -match '\[')) { Write-Host ("NO_PROXY 出现方括号（httpx 会每次请求报错）：{0}" -f $winNp); $fail = 1 }
+          # 行为阈值：两侧取值必须一致
+          $pairs = @(
+            @('\$NodeFailThreshold\s*=\s*(\d+)', 'NODE_FAIL_THRESHOLD=(\d+)', '连续失败判"断"阈值'),
+            @('\$NodeCheckThrottleSec\s*=\s*(\d+)', 'NODE_CHECK_THROTTLE_SEC=(\d+)', '真实探测节流秒数')
+          )
+          foreach ($p in $pairs) {
+            $a = Grab $ps $p[0] ($p[2] + '（Win 侧）')
+            $b = Grab $sh $p[1] ($p[2] + '（Mac 侧）')
+            if ((-not $a) -or (-not $b)) { $fail = 1; continue }
+            if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
+          }
+          if ($fail) { exit 1 }
+          Write-Host '契约常量与变量集通过'
