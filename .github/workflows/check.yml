@@ -283,6 +283,12 @@ jobs:
             foreach ($need in @('viewBox=', '<title', '<desc')) {
               if ($t -notmatch [regex]::Escape($need)) { Write-Host ("{0} 缺少 {1}" -f $f.Name, $need); $fail = 1 }
             }
+            # 合法性：SVG 必须是能解析的 XML。手改坐标时最容易漏一个引号或尖括号，
+            # 而浏览器只会画出半张图、不报错——只有解析一下才拦得住。
+            try { [xml]$null = $t } catch {
+              Write-Host ("{0} 不是合法 XML：{1}" -f $f.Name, $_.Exception.Message)
+              $fail = 1
+            }
           }
           $sets = @{}
           foreach ($f in 'README.md', 'README.en.md') {

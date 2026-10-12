@@ -9,7 +9,7 @@
     <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">五个按钮各自动了什么</text>
     <text x="56" y="98" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
     <text x="84" y="106" font-size="20" fill="#94A6BE">保留</text>
-    <text x="176" y="106 font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="176" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
     <text x="214" y="106" font-size="20" fill="#94A6BE">清掉</text>
     <circle cx="318" cy="97.7" r="4" fill="#7A8CA6"/>
     <text x="334" y="106" font-size="20" fill="#94A6BE">只读不动</text>
@@ -47,10 +47,10 @@
   </g>
 
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
-    <text x="629" y="240.5>—</text>
-    <text x="423" y="280.5>—</text>
-    <text x="629" y="280.5>—</text>
-    <text x="1041" y="280.5>—</text>
+    <text x="629" y="240.5">—</text>
+    <text x="423" y="280.5">—</text>
+    <text x="629" y="280.5">—</text>
+    <text x="1041" y="280.5">—</text>
   </g>
 
   <g id="read-only" font-size="40" font-weight="700" fill="#7A8CA6" text-anchor="middle">
