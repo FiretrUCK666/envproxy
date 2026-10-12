@@ -103,17 +103,17 @@ jobs:
       - name: 自校验（两个资产都在、是最新、与本地一致，README 的下载直链才有效）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
-          JSON="$(gh release view "$TAG" --json isLatest,assets)"
-          # 注意：jq 的 `//` 会把 false 也当空值吞掉，这里必须用 has() 区分"明确非最新"与"字段缺失"。
-          IS="$(printf '%s' "$JSON" | jq -r 'if has("isLatest") then (.isLatest | tostring) else "unknown" end')"
-          if [ "$IS" = "false" ]; then
-            echo "Release $TAG 不是 latest：README 的下载直链会指向别的版本，请确认后再发。"
-            exit 1
-          fi
+          # gh release view 的 --json 字段集随版本变化（如 isLatest 老版本没有），只用最稳的 assets；
+          # "是否最新"改从 releases/latest 反查：重建旧标签时直链仍指新版，此时必须拒绝。
+          JSON="$(gh release view "$TAG" --json assets)" || { echo "读取 Release 失败：$TAG"; exit 1; }
           for want in EnvProxy.zip EnvProxy.tar.gz; do
             SIZE="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .size // empty')"
-            if [ -z "$SIZE" ] || [ "$SIZE" -le 0 ]; then
-              echo "资产缺失或为空：$want（README 的下载直链与更新入口都会失效）"
+            if [ -z "$SIZE" ]; then
+              echo "资产缺失：$want（README 的下载直链与更新入口都会失效）"
+              exit 1
+            fi
+            if [ "$SIZE" -le 0 ]; then
+              echo "资产为空：$want（上传没写完）"
               exit 1
             fi
             DIGEST="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .digest // empty')"
@@ -125,6 +125,11 @@ jobs:
               fi
             fi
           done
+          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" || { echo "读取最新版失败"; exit 1; }
+          if [ "$LATEST_TAG" != "$TAG" ]; then
+            echo "直链最新版是 $LATEST_TAG，不是 $TAG：README 的下载直链会指向别的版本，请确认后再发。"
+            exit 1
+          fi
           echo "资产已就位且最新。"
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
