@@ -813,7 +813,10 @@ $ScriptPathRegKey = "HKCU:\Software\EnvProxy"
 # 用户原值快照：安装时记下被覆盖前的用户级代理变量，卸载时按快照还原。
 # 与 $ScriptPathRegKey 父子关系——卸载清注册表键时连同删掉，不留痕迹。
 $PrevEnvRegKey   = "HKCU:\Software\EnvProxy\Backup"
-$LauncherDir      = Join-Path $env:LOCALAPPDATA "EnvProxy"
+# 顶层取值必须加载期安全：CI 自检会在 Linux 上点源本文件测纯函数，
+# 那里没有 LOCALAPPDATA。运行时只在 Windows 走，兜底值走不到业务逻辑。
+$_localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
+$LauncherDir      = Join-Path $_localAppData "EnvProxy"
 $LauncherPath     = Join-Path $LauncherDir "launcher.ps1"
 
 # 定位器脚本内容（安装时写入固定位置，由本脚本生成，保证一致）
