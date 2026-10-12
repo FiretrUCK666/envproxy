@@ -15,7 +15,8 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
     if [ -n "$_target" ]; then
         _old_dir=$(dirname "$_target" 2>/dev/null)
         if [ -n "$_old_dir" ]; then
-            rm -rf "$_old_dir/monitor" 2>/dev/null
+            rm -f "$_old_dir/monitor/monitor.pid" "$_old_dir/monitor/stop.flag" 2>/dev/null
+    rm -rf "$_old_dir/monitor/.lock" 2>/dev/null
             if [ -d "$_old_dir" ] && [ -z "$(ls -A "$_old_dir" 2>/dev/null)" ]; then
                 rmdir "$_old_dir" 2>/dev/null
             fi

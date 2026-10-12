@@ -425,7 +425,7 @@ find_candidate_ports() {
     done
     # 来源 2 第二轮：兜底——全端口并行批量握手（进程名无特征也能发现）。
     # 仅在 _full=1 时执行（约 1 秒，off 状态降频调用以省资源）。
-    # 批量探测一旦有结果就立刻返回（不等其余探针跑完），所以一次只带回一个端口：
+    # 批量探测有结果就结束轮询（本轮已启动的探针仍会收掉），所以一次只带回一个端口：
     # 候选集里有它，试活层就能收敛到它。覆盖面上限是"同时开两个都不在常见表里的
     # 代理软件，只认其中一个"——够用，因为只要有一个可用端口，注入就是正确的。
     if [ "$_full" = "1" ]; then
@@ -989,10 +989,10 @@ compare_versions() {
 # DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
 # Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
 fetch_update_text() {
-    _out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
+    _out=$(curl -fsSL --max-time 3 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
         && { printf '%s' "$_out"; return 0; }
     env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
+        curl -fsSL --max-time 3 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
 }
 
 # 下载文件：返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404，不必再试代理），其余 = 失败。
@@ -1299,7 +1299,7 @@ uninstall_envproxy() {
     else
         rm -f "$PID_FILE" "$STOP_FLAG" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
-            rm -rf "$MONITOR_DIR" 2>/dev/null || true
+            rm -f "$PID_FILE" "$STOP_FLAG" 2>/dev/null || true
         fi
     fi
     _ghost=$(get_monitor_pid || true)
