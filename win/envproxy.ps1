@@ -1435,7 +1435,11 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             Write-Host ("收尾没能启动：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         }
         if ($rc -ne 0) {
-            Write-Host "文件已经覆盖完成，但收尾（自启动与监控）没成功，请再双击一次 1-安装。" -ForegroundColor Yellow
+            # 收尾子进程失败/超时也不能把监控留在停用状态：文件已经覆盖完成，这里用当前进程
+            # （旧代码）调一次安装，它会去安装根把**新脚本**拉起来，自启动项也会一起修好。
+            Write-Host "收尾没走完，正在按新版本重启监控..." -ForegroundColor Yellow
+            try { Install-EnvProxy | Out-Null } catch {}
+            Write-Host "如果状态仍不对，请再双击一次 1-安装。" -ForegroundColor Yellow
         }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow

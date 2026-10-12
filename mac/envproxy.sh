@@ -1124,7 +1124,12 @@ update_envproxy() {
     rm -f "$_tgz" 2>/dev/null || true
     # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
     # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
-    exec /bin/bash "$_uroot/mac/envproxy.sh" install
+    # 用子进程而不是 exec：失败时还能用当前（旧）代码兜底把监控拉起来，不让它停在停用状态。
+    if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
+        echo "收尾没走完，正在按当前文件重启监控..."
+        install_envproxy >/dev/null 2>&1 || true
+        echo "如果状态仍不对，请再点一次 1-安装。"
+    fi
 }
 
 # 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
