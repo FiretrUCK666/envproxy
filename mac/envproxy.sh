@@ -1125,6 +1125,9 @@ update_envproxy() {
     # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
     # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
     # 用子进程而不是 exec：失败时还能用当前（旧）代码兜底把监控拉起来，不让它停在停用状态。
+    # 交出手里的操作锁：收尾子进程跑的是同一个安装动作，它会自己去拿锁。
+    rm -rf "$MONITOR_DIR/.op.lock" 2>/dev/null || true
+    trap - EXIT
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
         echo "收尾没走完，正在按当前文件重启监控..."
         install_envproxy >/dev/null 2>&1 || true
@@ -1393,6 +1396,30 @@ done
 fi
 # shellcheck disable=SC2001
 _CMD_NORM=$(printf '%s' "$_CMD" | sed 's/^--*//; s/^-//' | tr '[:upper:]' '[:lower:]')
+
+case "$_CMD_NORM" in
+    install|update)
+        # 操作锁：这两个动作会改同一批文件，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
+        # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
+        mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+        OP_LOCK="$MONITOR_DIR/.op.lock"
+        if ! mkdir "$OP_LOCK" 2>/dev/null; then
+            _opid=$(cat "$OP_LOCK/pid" 2>/dev/null || echo 0)
+            if [ -n "$_opid" ] && [ "$_opid" != "0" ] && kill -0 "$_opid" 2>/dev/null; then
+                echo "另一个安装/更新正在进行（PID $_opid），请等它结束再试（没有做任何改动）。"
+                exit 1
+            fi
+            rm -rf "$OP_LOCK" 2>/dev/null || true
+            if ! mkdir "$OP_LOCK" 2>/dev/null; then
+                echo "另一个安装/更新正在进行，请稍候（没有做任何改动）。"
+                exit 1
+            fi
+        fi
+        printf '%s\n' "$$" > "$OP_LOCK/pid" 2>/dev/null || true
+        # shellcheck disable=SC2064
+        trap 'rm -rf "$OP_LOCK" 2>/dev/null || true' EXIT
+        ;;
+esac
 
 case "$_CMD_NORM" in
     install) install_envproxy;;

@@ -1424,6 +1424,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         # 收尾跑**安装根里**的新脚本（不是解压目录里那份）：只有从安装根执行，路径记录、自启动项与
         # 监控进程才会落在安装根，不会指向马上要被删掉的临时目录。带超时，卡住就报错而不是无声等待。
         $newScript = Join-Path $root "win\envproxy.ps1"
+        # 先把操作锁交出去：收尾子进程跑的是同一个安装动作，它会自己去拿这把锁。
+        if ($opMutex) { try { $opMutex.ReleaseMutex() } catch {}; $opMutex = $null }
         $rc = 1
         try {
             $proc = Start-Process -FilePath "powershell" -PassThru -NoNewWindow -ArgumentList @(
@@ -1579,34 +1581,30 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
 # ------------------------------------------------------------------------------
 # 9. 入口分派
 # ------------------------------------------------------------------------------
-if ($FinishUpdate) {
-    # 更新收尾（内部用）：把新版本的核心脚本搬到位，再走一次安装收尾。
-    # 由更新入口在覆盖完成后调用，跑的是解压目录里的新脚本——因此"升级完跑的是新代码"，
-    # 而且不会出现"边跑边覆盖自己"。
-    $rc = 1
+# 操作锁：安装与更新会改同一批文件，同一时刻只允许一个在跑；撞上就直接退出、不做任何改动。
+# 用命名互斥体：进程结束由系统自动释放，不需要（也不该）手工解锁。
+function Get-OpLock {
     try {
-        if (-not $Root -or -not $Stage) { throw "缺少参数（更新入口内部调用）" }
-        $srcSelf = Join-Path $Stage "win\envproxy.ps1"
-        if (-not (Test-Path $srcSelf)) { throw "解压目录里找不到新版核心脚本" }
-        Copy-Item $srcSelf (Join-Path $Root "win\envproxy.ps1") -Force -ErrorAction Stop
-        Install-EnvProxy
-        $v = ""
-        try { $v = (Get-Content (Join-Path $Root "VERSION") -Raw -Encoding UTF8).Trim() } catch {}
-        Write-Host ("已更新到 v{0}。" -f $v) -ForegroundColor Green
-        $rc = 0
-    } catch {
-        Write-Host ("更新收尾失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host "文件已经覆盖完成，请再双击一次 1-安装 完成收尾。" -ForegroundColor Yellow
-    } finally {
-        try { Remove-Item $Stage -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        $m = New-Object System.Threading.Mutex($false, "Global\EnvProxyInstallOp")
+        if (-not $m.WaitOne(0)) { return $null }
+        return $m
+    } catch { return $null }
+}
+function Exit-IfOpBusy {
+    $m = Get-OpLock
+    if (-not $m) {
+        Write-Host "另一个安装/更新正在进行，请等它结束再试（没有做任何改动）。" -ForegroundColor Yellow
+        exit 1
     }
-    exit $rc
+    return $m
 }
 if ($Update) {
+    $opMutex = Exit-IfOpBusy
     Update-EnvProxy -AutoYes:$Yes
     return
 }
 if ($Install) {
+    $opMutex = Exit-IfOpBusy
     Install-EnvProxy
     return
 }
