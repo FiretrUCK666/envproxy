@@ -1340,6 +1340,8 @@ function Show-Status {
         Write-Host ("最新版本 : {0}" -f $remoteVer.Tag) -ForegroundColor Green
         if (Test-DevCopy) {
             Write-Host "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）" -ForegroundColor DarkGray
+        } elseif (Test-SourceCopy) {
+            Write-Host "更新状态 : 源码包（更新入口会先确认用途再动手）" -ForegroundColor Yellow
         } elseif (-not $localVer) {
             Write-Host "更新状态 : 可点 5-检查更新 升级" -ForegroundColor Yellow
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
@@ -1372,7 +1374,9 @@ function Show-Status {
 #   不硬编码任何第三方域名，不为它放宽校验。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
-#     没有 .git     = 安装副本 → 下载安装包、校验、覆盖安装区。
+#     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
+#       自己改代码就一个字节都不动），拿不到输入时按后者；
+#     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 #   读版本时开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；
 #   覆盖文件这条路上，git 副本一律不参与。
 $UpdateRepoDefault = "FiretrUCK666/envproxy"
@@ -1381,6 +1385,35 @@ $UpdateRepoDefault = "FiretrUCK666/envproxy"
 function Test-DevCopy {
     $root = Split-Path -Parent $ScriptDir
     return (Test-Item (Join-Path $root ".git"))
+}
+
+# 源码包：有 .github、无 .git（网页上下载的 Source code 包，或删掉了 .git 的克隆）。
+# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
+# 传参则判指定目录（自检用），不传判安装根。
+function Test-SourceCopy {
+    param([string]$Root = "")
+    if (-not $Root) { $Root = Split-Path -Parent $ScriptDir }
+    return ((-not (Test-Item (Join-Path $Root ".git"))) -and (Test-Item (Join-Path $Root ".github")))
+}
+
+# 源码包转安装包：删掉源码专用文件（清单从 .gitattributes 的排除表实时读，不是写死的）。
+# 调用方保证安装根有效且用户已确认；删完下次更新不再问。
+function Remove-SourceOnlyFiles([string]$Root) {
+    try {
+        $ga = Join-Path $Root ".gitattributes"
+        if (-not (Test-Item $ga)) { return }
+        $list = @()
+        foreach ($l in ((Read-Text $ga) -split "`n")) {
+            $t = $l.Trim()
+            if ($t -match '^/(\S+?)\s+export-ignore') { $list += $Matches[1] }
+        }
+        foreach ($e in $list) {
+            $p = Join-Path $Root $e
+            if (-not (Test-Item $p)) { continue }
+            if ($e.EndsWith('/')) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+            else { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+        }
+    } catch {}
 }
 
 function Get-UpdateRepo {
@@ -1532,10 +1565,22 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         return
     }
     Write-Host ("最新版本 : {0}" -f $remote.Tag) -ForegroundColor Green
+    $cleanSource = $false
     if (Test-DevCopy) {
         Write-Host "这是开发副本（安装根有 .git）：更新入口不改动任何文件。" -ForegroundColor DarkGray
         Write-Host "拉新代码请在仓库里执行：git pull" -ForegroundColor DarkGray
         return
+    }
+    if (Test-SourceCopy) {
+        Write-Host "这里是源码包（有 .github、无 .git），不是安装包。" -ForegroundColor Yellow
+        $choice = ""
+        try { $choice = Read-Host "更新会覆盖程序文件：[U] 当安装包用并清理源码文件 / [D] 自己改代码什么都不动（默认）" } catch { $choice = "" }
+        if ($choice -notmatch '^[Uu]') {
+            Write-Host "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。" -ForegroundColor Yellow
+            return
+        }
+        Write-Host "继续更新，完成后源码专用文件会被清理（下次不再问）。" -ForegroundColor Cyan
+        $cleanSource = $true
     }
     # 本地版本读不到 = 安装区已经不完整（VERSION 是随包必带的文件）。
     # 此时任何"比较"都是瞎猜，直接拒绝并指一条明路，而不是继续往下走。
@@ -1601,6 +1646,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             try { Install-EnvProxy | Out-Null } catch {}
             return
         }
+        if ($cleanSource) { Remove-SourceOnlyFiles $root }
         # 收尾跑**安装根里**的新脚本（不是解压目录里那份）：只有从安装根执行，路径记录、自启动项与
         # 监控进程才会落在安装根，不会指向马上要被删掉的临时目录。带超时，卡住就报错而不是无声等待。
         $newScript = Join-Path $root "win\envproxy.ps1"
