@@ -125,7 +125,13 @@ jobs:
               fi
             fi
           done
-          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" || { echo "读取最新版失败"; exit 1; }
+          # 取不到"最新版"最常见的成因是这个 Release 还停在草稿：草稿对外不可见，
+          # releases/latest 会直接 404，于是直链和更新入口一起失效。报错必须点出这一条，
+          # 否则只看到"读取失败"，还得翻日志才知道是草稿。
+          LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" || {
+            echo "读取最新版失败：请到 Releases 页面确认 $TAG 是不是停在草稿（草稿对外不可见，下载直链与更新入口都会失效）。"
+            exit 1
+          }
           if [ "$LATEST_TAG" != "$TAG" ]; then
             echo "直链最新版是 $LATEST_TAG，不是 $TAG：README 的下载直链会指向别的版本，请确认后再发。"
             exit 1
