@@ -127,7 +127,7 @@ Double-clicking `3-一键恢复` stops and asks one question: keep the log? Pres
 
 No button deletes the `EnvProxy` folder itself. After uninstalling, nothing is left in the system, and the folder stays where it is — keep it for later or delete the whole folder yourself.
 
-<img src="./assets/readme/buttons.en.svg" width="100%" alt="Which parts each button touches: 1-Install touches all of them; 2-Stop keeps start at login and clears the variables; 3-Restore keeps only the log; 4-Status and 5-Check for updates are read only">
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="Which parts each button touches: 1-Install writes start at login, starts the monitor and writes the variables; 2-Stop stops the monitor and clears the variables while keeping start at login; 3-Restore clears everything and keeps only the log; 4-Status and 5-Check for updates are read only">
 
 ## 2.5 The log (monitor.log)
 

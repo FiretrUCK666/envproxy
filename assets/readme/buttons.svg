@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="448" viewBox="0 0 1200 448" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">五个按钮各自动了什么</title>
-  <desc id="buttonsDesc">五行四列的对照表。行是五个按钮，列是开机自启、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动。3-一键恢复 的日志一格里写着问一句，意思是双击时会停下来问日志留不留，默认保留。5-检查更新 的检查本身只读，只有你同意升级之后才会动手，那时等于跑一次安装。</desc>
+  <desc id="buttonsDesc">五行五列的对照表。行是五个按钮，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动。看整列：只有环境变量这一列是安装写、停止清；只有开机自启这一列是停止留下、恢复清掉。5-检查更新 整行都是圆点，只有你同意升级之后才会动手，那时等于跑一次安装，所以那一行按安装算。</desc>
 
-  <rect width="1200" height="448" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="446.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="500" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="498.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">五个按钮各自动了什么</text>
@@ -16,55 +16,60 @@
   </g>
 
   <g id="grid" fill="none" stroke-width="1.5">
-    <path d="M320 136V374M526 136V374M732 136V374M938 136V374M56 214H1144M56 254H1144M56 294H1144M56 334H1144" stroke="#2A3B58"/>
+    <path d="M200 136V374M380 136V374M560 136V374M740 136V374M920 136V374M1100 136V374M56 214H1144M56 254H1144M56 294H1144M56 334H1144" stroke="#2A3B58"/>
     <path d="M56 174H1144" stroke="#33486B"/>
   </g>
 
   <g id="column-labels" font-size="20" fill="#C7D3E3" text-anchor="middle">
-    <text x="423" y="162">开机自启</text>
-    <text x="629" y="162">环境变量</text>
-    <text x="835" y="162">日志</text>
-    <text x="1041" y="162">定位器/路径记录</text>
+    <text x="290" y="162">开机自启</text>
+    <text x="470" y="162">监控进程</text>
+    <text x="650" y="162">环境变量</text>
+    <text x="830" y="162">日志</text>
+    <text x="1010" y="162">定位器与路径记录</text>
   </g>
 
   <g id="row-labels" font-size="21" fill="#E9EFF8">
-    <text x="76" y="202">1-安装</text>
-    <text x="76" y="242">2-停止监控</text>
-    <text x="76" y="282">3-一键恢复</text>
-    <text x="76" y="322">4-查看状态</text>
-    <text x="76" y="362">5-检查更新</text>
+    <text x="56" y="202">1-安装</text>
+    <text x="56" y="242">2-停止监控</text>
+    <text x="56" y="282">3-一键恢复</text>
+    <text x="56" y="322">4-查看状态</text>
+    <text x="56" y="362">5-检查更新</text>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="423" y="194" dominant-baseline="central">✓</text>
-    <text x="629" y="194" dominant-baseline="central">✓</text>
-    <text x="835" y="194" dominant-baseline="central">✓</text>
-    <text x="1041" y="194" dominant-baseline="central">✓</text>
-    <text x="423" y="234" dominant-baseline="central">✓</text>
-    <text x="835" y="234" dominant-baseline="central">✓</text>
-    <text x="1041" y="234" dominant-baseline="central">✓</text>
-    <text x="803" y="274" dominant-baseline="central">✓</text>
+    <text x="290" y="194" dominant-baseline="central">✓</text>
+    <text x="470" y="194" dominant-baseline="central">✓</text>
+    <text x="650" y="194" dominant-baseline="central">✓</text>
+    <text x="830" y="194" dominant-baseline="central">✓</text>
+    <text x="1010" y="194" dominant-baseline="central">✓</text>
+    <text x="290" y="234" dominant-baseline="central">✓</text>
+    <text x="830" y="234" dominant-baseline="central">✓</text>
+    <text x="1010" y="234" dominant-baseline="central">✓</text>
+    <text x="830" y="274" dominant-baseline="central">✓</text>
   </g>
 
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
-    <text x="629" y="240.5">—</text>
-    <text x="423" y="280.5">—</text>
-    <text x="629" y="280.5">—</text>
-    <text x="1041" y="280.5">—</text>
+    <text x="470" y="240.5">—</text>
+    <text x="650" y="240.5">—</text>
+    <text x="290" y="280.5">—</text>
+    <text x="470" y="280.5">—</text>
+    <text x="650" y="280.5">—</text>
+    <text x="1010" y="280.5">—</text>
   </g>
 
   <g id="read-only" font-size="40" font-weight="700" fill="#7A8CA6" text-anchor="middle">
-    <circle cx="423" cy="314" r="4"/>
-    <circle cx="629" cy="314" r="4"/>
-    <circle cx="835" cy="314" r="4"/>
-    <circle cx="1041" cy="314" r="4"/>
-    <circle cx="423" cy="354" r="4"/>
-    <circle cx="629" cy="354" r="4"/>
-    <circle cx="835" cy="354" r="4"/>
-    <circle cx="1041" cy="354" r="4"/>
+    <circle cx="290" cy="314" r="4"/>
+    <circle cx="470" cy="314" r="4"/>
+    <circle cx="650" cy="314" r="4"/>
+    <circle cx="830" cy="314" r="4"/>
+    <circle cx="1010" cy="314" r="4"/>
+    <circle cx="290" cy="354" r="4"/>
+    <circle cx="470" cy="354" r="4"/>
+    <circle cx="650" cy="354" r="4"/>
+    <circle cx="830" cy="354" r="4"/>
+    <circle cx="1010" cy="354" r="4"/>
   </g>
 
-  <text x="861" y="280" font-size="18" fill="#94A6BE" text-anchor="middle">问一句</text>
-
-  <text x="56" y="404" font-size="20" fill="#C7D3E3">2 是暂停（下次开机回来），3 是卸载；5 只在你同意升级后才动手，等于跑一次安装</text>
+  <text x="56" y="406" font-size="20" fill="#C7D3E3">看列比看行快：环境变量是安装写、停止清；开机自启是停止留、恢复清。</text>
+  <text x="56" y="440" font-size="20" fill="#C7D3E3">5 那一行只读，只在你同意升级时才动手，那时等于跑一次安装。</text>
 </svg>
