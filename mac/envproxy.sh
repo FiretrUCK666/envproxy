@@ -1127,7 +1127,9 @@ run_monitor_loop() {
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
-#     没有 .git     = 安装副本 → 下载安装包、校验、覆盖安装区。
+#     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
+#       自己改代码就一个字节都不动），拿不到输入时按后者；
+#     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 
 get_project_root() {
     dirname "$SCRIPT_DIR"
@@ -1135,6 +1137,30 @@ get_project_root() {
 
 is_dev_copy() {
     [ -e "$(get_project_root)/.git" ]
+}
+
+# 源码包：有 .github、无 .git（网页上下载的 Source code 包，或删掉了 .git 的克隆）。
+# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
+# 传参则判指定目录（自检用），不传判安装根。
+is_source_copy() {
+    _sr="${1:-$(get_project_root)}"
+    [ ! -e "$_sr/.git" ] && [ -d "$_sr/.github" ]
+}
+
+# 源码包转安装包：删掉源码专用文件（清单从 .gitattributes 的排除表实时读，不是写死的）。
+# 调用方保证安装根有效且用户已确认；删完下次更新不再问。
+clean_source_files() {
+    _croot="$1"
+    [ -f "$_croot/.gitattributes" ] || return 0
+    _clist=$(grep -E '^/[^ ]+[ ]+export-ignore' "$_croot/.gitattributes" 2>/dev/null | sed -E 's#^/([^ ]+)[ ]+export-ignore.*#\1#' || true)
+    [ -n "$_clist" ] || return 0
+    for _cent in $_clist; do
+        case "$_cent" in
+            */) [ -e "$_croot/$_cent" ] && rm -rf "$_croot/$_cent" 2>/dev/null || true ;;
+            *) [ -e "$_croot/$_cent" ] && rm -f "$_croot/$_cent" 2>/dev/null || true ;;
+        esac
+    done
+    return 0
 }
 
 get_local_version() {
@@ -1215,10 +1241,27 @@ update_envproxy() {
         return 0
     fi
     echo "最新版本 : $REMOTE_TAG"
+    _clean_source=0
     if is_dev_copy; then
         echo "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
         echo "拉新代码请在仓库里执行：git pull"
         return 0
+    fi
+    if is_source_copy; then
+        echo "这里是源码包（有 .github、无 .git），不是安装包。"
+        printf "更新会覆盖程序文件：[U] 当安装包用并清理源码文件 / [D] 自己改代码什么都不动（默认）: "
+        _ans=""
+        if read -r _ans < /dev/tty 2>/dev/null; then :; else _ans=""; fi
+        case "$_ans" in
+            [Uu]*)
+                echo "继续更新，完成后源码专用文件会被清理（下次不再问）。"
+                _clean_source=1
+                ;;
+            *)
+                echo "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。"
+                return 0
+                ;;
+        esac
     fi
     if [ -n "$_local" ]; then
         _newer=$(compare_versions "$_local" "$REMOTE_VERSION" || true)
@@ -1323,6 +1366,7 @@ update_envproxy() {
     fi
     echo "正在停止旧监控..."
     rm -f "$_tgz" 2>/dev/null || true
+    if [ "${_clean_source:-0}" = "1" ]; then clean_source_files "$_uroot" || true; fi
     # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
     # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
     # 用子进程而不是 exec：失败时还能用当前（旧）代码兜底把监控拉起来，不让它停在停用状态。
@@ -1591,6 +1635,8 @@ show_status() {
         echo "最新版本 : $REMOTE_TAG"
         if is_dev_copy; then
             echo "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）"
+        elif is_source_copy; then
+            echo "更新状态 : 源码包（更新入口会先确认用途再动手）"
         elif [ -z "$_local_ver" ]; then
             echo "更新状态 : 可用 5-检查更新 升级"
         else
@@ -1713,6 +1759,28 @@ self_test() {
     restore_prev_env || true
     if [ -f "$PREV_ENV" ]; then _s6=1; else _s6=0; fi
     _selftest_assert_eq "还原后快照删除" "0" "$_s6"
+
+    echo "[5] 源码包判据与清理"
+    _fakeroot="$_sandbox/fakeroot"
+    mkdir -p "$_fakeroot/.github" "$_fakeroot/tests" 2>/dev/null || true
+    printf 'dev\n' > "$_fakeroot/AGENTS.md" 2>/dev/null || true
+    printf 'mine\n' > "$_fakeroot/my-notes.txt" 2>/dev/null || true
+    printf 't\n' > "$_fakeroot/tests/t.txt" 2>/dev/null || true
+    printf '/AGENTS.md  export-ignore\n/.github/  export-ignore\n/tests/  export-ignore\n/.gitattributes  export-ignore\n' > "$_fakeroot/.gitattributes" 2>/dev/null || true
+    if is_source_copy "$_fakeroot"; then _t1=1; else _t1=0; fi
+    _selftest_assert_eq "有.github无.git判源码包" "1" "$_t1"
+    mkdir -p "$_sandbox/fakegit/.git" 2>/dev/null || true
+    if is_source_copy "$_sandbox/fakegit"; then _t2=1; else _t2=0; fi
+    _selftest_assert_eq "有.git不判源码包" "0" "$_t2"
+    if is_source_copy "$_sandbox"; then _t3=1; else _t3=0; fi
+    _selftest_assert_eq "两者都没有不判源码包" "0" "$_t3"
+    clean_source_files "$_fakeroot" || true
+    if [ -e "$_fakeroot/.github" ] || [ -e "$_fakeroot/tests" ] || [ -e "$_fakeroot/AGENTS.md" ] || [ -e "$_fakeroot/.gitattributes" ]; then _t4=1; else _t4=0; fi
+    _selftest_assert_eq "清理删掉源码文件" "0" "$_t4"
+    if [ -f "$_fakeroot/my-notes.txt" ]; then _t5=1; else _t5=0; fi
+    _selftest_assert_eq "用户自己的文件保留" "1" "$_t5"
+    if is_source_copy "$_fakeroot"; then _t6=1; else _t6=0; fi
+    _selftest_assert_eq "清理后不再判源码包" "0" "$_t6"
 
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
