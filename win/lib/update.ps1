@@ -172,6 +172,39 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort)
     }
 }
 
+# 跑一次"安装收尾"：启动安装根里的入口脚本（-Install）并等它结束。返回"它有没有正常跑完"，
+# 但**不把退出码当成结论**——见 Test-InstallRootMonitor 的注释。
+function Invoke-InstallFinish([string]$Entry, [int]$TimeoutMs = 120000) {
+    try {
+        $proc = Start-Process -FilePath "powershell" -PassThru -NoNewWindow -ArgumentList @(
+            "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$Entry`"", "-Install"
+        )
+        if ($proc.WaitForExit($TimeoutMs)) { return $true }
+        try { $proc.Kill() } catch {}
+        Write-Host "安装收尾超过 2 分钟没结束，已中止。" -ForegroundColor Yellow
+        return $false
+    } catch {
+        Write-Host ("安装收尾没能启动：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        return $false
+    }
+}
+
+# 收尾是否真的完成：读安装根的 monitor\monitor.pid，确认那个进程还活着、命令行指向**安装根**的入口。
+# 判据必须是复读出来的事实，不能用子进程的退出码：PowerShell 5.1 里 Start-Process -PassThru 之后
+# ExitCode 读不到（返回空），把"读不到"当失败会让每次更新都白跑一遍收尾、把刚装好的监控掀掉，
+# 还会让旧代码把刚写对的路径记录改回去。
+function Test-InstallRootMonitor([string]$Root) {
+    $pidFile = Join-Path $Root "win\monitor\monitor.pid"
+    if (-not (Test-Item $pidFile)) { return $false }
+    try {
+        $p = [int]((Read-Text $pidFile).Trim())
+        $w = Get-CimInstance Win32_Process -Filter "ProcessId=$p" -ErrorAction SilentlyContinue
+        if ($w -and ($w.CommandLine -match $MonitorCmdLinePattern) -and
+            ($w.CommandLine.IndexOf($Root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)) { return $true }
+    } catch {}
+    return $false
+}
+
 function Update-EnvProxy([bool]$AutoYes = $false) {
     Write-Host "======== EnvProxy 检查更新 ========" -ForegroundColor Cyan
     $local = Get-LocalVersion
@@ -272,22 +305,23 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         $newScript = Join-Path $root "win\envproxy.ps1"
         # 先把操作锁交出去：收尾子进程跑的是同一个安装动作，它会自己去拿这把锁。
         if ($opMutex) { try { $opMutex.ReleaseMutex() } catch {}; $opMutex = $null }
-        $rc = 1
-        try {
-            $proc = Start-Process -FilePath "powershell" -PassThru -NoNewWindow -ArgumentList @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$newScript`"", "-Install"
-            )
-            if ($proc.WaitForExit(120000)) { $rc = $proc.ExitCode }
-            else { try { $proc.Kill() } catch {}; Write-Host "收尾超过 2 分钟没结束，已中止。" -ForegroundColor Yellow }
-        } catch {
-            Write-Host ("收尾没能启动：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        $null = Invoke-InstallFinish $newScript
+        # 收尾成没成由**复读**决定：安装根里的监控在跑，就是成了。
+        $ok = $false
+        $deadline = (Get-Date).AddSeconds(15)
+        while ((Get-Date) -lt $deadline) {
+            if (Test-InstallRootMonitor $root) { $ok = $true; break }
+            Start-Sleep -Milliseconds 500
         }
-        if ($rc -ne 0) {
-            # 收尾子进程失败/超时也不能把监控留在停用状态：文件已经覆盖完成，这里用当前进程
-            # （旧代码）调一次安装，它会去安装根把**新脚本**拉起来，自启动项也会一起修好。
-            Write-Host "收尾没走完，正在按新版本重启监控..." -ForegroundColor Yellow
-            try { Install-EnvProxy | Out-Null } catch {}
-            Write-Host "如果状态仍不对，请再双击一次 1-安装。" -ForegroundColor Yellow
+        if (-not $ok) {
+            # 文件已经覆盖到位：再跑一次收尾，跑的仍是安装根里的**新代码**（不是本进程这份旧代码——
+            # 旧代码对新布局的假设可能已经过时，让它去动安装区是自找麻烦）。
+            Write-Host "收尾没走完，正在用新版本再试一次..." -ForegroundColor Yellow
+            $null = Invoke-InstallFinish $newScript
+            $ok = Test-InstallRootMonitor $root
+        }
+        if (-not $ok) {
+            Write-Host "监控未能确认运行，请再双击一次 1-安装。" -ForegroundColor Yellow
         }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow

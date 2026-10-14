@@ -159,5 +159,19 @@ Assert-Eq 'a dead pid is not a confirmed monitor' '' (Get-MonitorProcessFromPidF
 $PidFile = $savedPidFile
 Remove-Item -LiteralPath $dir9 -Recurse -Force
 
+Write-Host '[10] judging a finished install'
+# The updater decides the finish step worked by reading the install root's pid file, never by the
+# child's exit code: PowerShell 5.1 cannot read ExitCode after Start-Process -PassThru (it returns
+# empty), so treating "unreadable" as failure makes every update run the fallback and tear down the
+# monitor it had just started.
+$root10 = New-TempDir 'envproxy_finish_'
+New-Item -Path (Join-Path $root10 'win\monitor') -ItemType Directory -Force | Out-Null
+Assert-Eq 'no pid file is not a finished install' $false (Test-InstallRootMonitor $root10)
+Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') '999999'
+Assert-Eq 'a dead pid is not a finished install' $false (Test-InstallRootMonitor $root10)
+Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') ([string]$PID)
+Assert-Eq 'a live non-monitor pid is not a finished install' $false (Test-InstallRootMonitor $root10)
+Remove-Item -LiteralPath $root10 -Recurse -Force
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
