@@ -315,8 +315,8 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   （Windows 命名互斥体 `Global\EnvProxyInstallOp-<用户SID>`，macOS `<monitor>/.op.lock` + 陈旧 PID 接管）；
   撞上就提示退出、不做任何改动。更新在把收尾交给子进程之前**先交出锁**，否则子进程会把自己拦下。
 - **用户可见文件集（安装包）由 `.gitattributes` 的 `export-ignore` 声明**：发布流水线用
-  `git archive` 从标签产出两个容器，内容 = 中英 README + `LICENSE` + `VERSION` + `win\` + `mac\`
-  （各不含 `monitor\`）+ `release-notes\` + `assets\`；`AGENTS.md`、`CONTRIBUTING.md`、`.github\`
+  `git archive` 从标签产出完整包（内容 = 中英 README + `LICENSE` + `VERSION` + `win\` + `mac\`
+  （各不含 `monitor\`）+ `release-notes\` + `assets\`）与分平台包（完整减对方目录）；`AGENTS.md`、`CONTRIBUTING.md`、`.github\`
   不进包。**新增仓库内部文件必须补一行 `export-ignore`**，门禁 4 按实际产出双向校验（顶层集合 + 包内外文件集对齐）。
   首装与升级用同一个产物（README 直链与更新入口取的是同一份东西）。权威来源：`.gitattributes`、
   `.github/workflows/release.yml`。
@@ -401,15 +401,13 @@ Secrets，需要钥匙的步骤不会跑也不会泄。判断不了时按贡献�
 - **标签形状**：`v<VERSION>`（如 `v1.0.0`）。CI 自动校验，不一致拒绝发布。
 - **发版动作只有一个**：`git push origin vX.Y.Z`。`release` job 自动接管：先调 `check.yml`
   跑全部门禁 → 校验标签与 `VERSION` 一致、`release-notes/v<VERSION>.md` 已提交 →
-  用 `git archive` 从该标签打 `EnvProxy.zip` 与 `EnvProxy.tar.gz` → 校验两个容器与仓库
-  逐字节一致、编码红线没被容器改掉 → 挂到 Release。日常推送分支**不触发**发版。
-- **安装包名字不带版本号**（`EnvProxy.zip` / `EnvProxy.tar.gz`）：README 的下载直链用
+  用 `git archive` 从该标签打 4 个资产（完整包 + 两分平台包：完整减对方目录）→ 校验逐字节一致与编码红线 → 挂到 Release。日常推送分支**不触发**发版。
+- **安装包名字不带版本号**（完整包与分平台包同规则）：README 的下载直链用
   `releases/latest/download/EnvProxy.zip`，**永远指向最新版、永不过期**；更新入口按标签取
-  同一个名字（`releases/download/v<VERSION>/EnvProxy.zip`），版本由标签与包内 `VERSION`
-  双重保证。
+  完整包，版本由标签与包内 `VERSION` 双重保证。
 - **幂等且自愈**：Release 已存在时不跳过，而是补挂缺失的资产**并刷新发版说明**
   （`gh release edit --notes-file`）——只补资产不更新说明的话，事后修正过的 `release-notes/*.md`
-  永远不会送到用户眼前。最后自校验两个资产都在：资产缺失会让下载直链与更新入口一起失效。
+  永远不会送到用户眼前。最后自校验四个资产都在：资产缺失会让下载直链与更新入口一起失效。
 - **中文发版说明随版必带**：`release-notes/v<VERSION>.md` 缺失则**拒绝发布**。文件是 UTF-8
   落盘、从磁盘读，中文不经 shell；内容在 PR 里可评审。**仓库内不为此新增任何工具或依赖**——
   需要人工写入时就用编辑器落盘，不经 shell 拼接（提交信息保持英文 ASCII，

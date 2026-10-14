@@ -95,7 +95,7 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 
 ## 1. 安装（3 步，5 分钟）
 
-1. 点 **[这里下载最新版安装包](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**（一个 zip，Windows 和 Mac 通用）
+1. 点 **[这里下载最新版安装包](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**（一个 zip，Windows 和 Mac 通用；只要 Windows 版点 [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)，只要 Mac 版点 [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz)）
 2. 解压到任意位置，文件夹随便改名。进 `win` 双击 **`打开菜单.cmd`**（Mac 进 `mac` 双击 **`打开菜单.command`**），再选 **`1 安装 / 修复`**
 3. 看到"监控进程：已启动"就装好了
 
@@ -265,6 +265,10 @@ EnvProxy\
   assets\readme\          README 的配图
 ```
 
+四个资产的关系：`EnvProxy.zip` / `EnvProxy.tar.gz` 是完整包（两边平台都在，更新走它）；
+`EnvProxy-win.zip` / `EnvProxy-mac.tar.gz` 是分平台包（只有自己平台的目录，其余文件都有，
+只给新装用——更新时完整包会把另一边按清单补回来）。
+
 `win\`、`mac\`、`release-notes\`、`assets\` 这四个目录是程序的地盘：更新会按包内清单对齐它们的内容，别放自己的文件。日常只用打开 `win\`（Mac 上是 `mac\`），顶层的文件不用管。
 
 最外层和日志都不用担心：顶层只覆盖同名文件，绝不删你的东西；`monitor\` 里的日志与运行标记永不覆盖、永不删。
@@ -281,7 +285,7 @@ EnvProxy\
 
 ## 10. 给朋友/新电脑部署
 
-1. 把安装包弄到新电脑（二选一）：点 **[最新版下载](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**；或者把已经解压好的整个文件夹拷过去（U 盘、网盘、压缩包都行）
+1. 把安装包弄到新电脑（二选一）：点 **[最新版下载](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**（只要 Windows 版下 [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)）；或者把已经解压好的整个文件夹拷过去（U 盘、网盘、压缩包都行）
 2. 双击 `win\打开菜单.cmd`（Mac 双击 `mac\打开菜单.command`），选 `1 安装 / 修复`
 3. 完事
 
@@ -372,7 +376,7 @@ EnvProxy/
 
 ### 12.7 给朋友/新 Mac 部署
 
-整个文件夹拷过去 → 进 `mac` 双击 `打开菜单.command`，选 `1 安装 / 修复` → 完事。不需要 Homebrew、Python、Node，不需要 `sudo`，macOS 12+ 默认的 `zsh` 就够。
+整个文件夹拷过去 → 进 `mac` 双击 `打开菜单.command`，选 `1 安装 / 修复` → 完事。不需要 Homebrew、Python、Node，不需要 `sudo`，macOS 12+ 默认的 `zsh` 就够。（只要 Mac 版：下 [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz)。）
 
 想升级：打开菜单选 `5 检查更新`，先问后装，日志保留。
 

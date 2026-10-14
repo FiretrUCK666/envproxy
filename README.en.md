@@ -95,7 +95,7 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 
 ## 1. Install (3 steps, 5 minutes)
 
-1. Click **[download the latest package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (one zip, works on Windows and Mac)
+1. Click **[download the latest package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (one zip, works on Windows and Mac; Windows only: [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip); Mac only: [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz))
 2. Unzip it anywhere — rename the folder if you like. Open `win` and double-click **`打开菜单.cmd`** (on Mac, open `mac` and double-click **`打开菜单.command`**), then choose **`1 Install / Fix`**
 3. When you see the monitor started message, you are done
 
@@ -262,6 +262,9 @@ EnvProxy\
   assets\readme\          images used by these READMEs
 ```
 
+The four assets: `EnvProxy.zip` / `EnvProxy.tar.gz` are the full packages (both platforms inside; updates use them).
+`EnvProxy-win.zip` / `EnvProxy-mac.tar.gz` are per-platform packages (only your own platform folder, everything else included, for fresh installs — a later update with the full package brings the other side back in line).
+
 `win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns these four folders with the package contents, so do not keep your own files in them. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
 
 The top level and the log need no care: the top level only overwrites same-named files and never deletes anything of yours, and nothing inside `monitor\` is ever overwritten or deleted.
@@ -278,7 +281,7 @@ You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no har
 
 ## 10. Deploying to a friend or a new machine
 
-1. Get the package onto the new machine, either way works: click **[the latest download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**, or copy the already unzipped folder over (USB drive, cloud storage, an archive — all fine)
+1. Get the package onto the new machine, either way works: click **[the latest download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (Windows only: [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)), or copy the already unzipped folder over (USB drive, cloud storage, an archive — all fine)
 2. Double-click `win\打开菜单.cmd` (on Mac, `mac\打开菜单.command`), then choose `1 Install / Fix`
 3. Done
 
@@ -369,7 +372,7 @@ Two more:
 
 ### 12.7 Deploying to a friend or a new Mac
 
-Copy the whole folder over, open `mac` and double-click `打开菜单.command`, then choose `1 Install / Fix`, done. No Homebrew, Python or Node, no `sudo`, and the `zsh` that ships with macOS 12 or later is enough.
+Copy the whole folder over, open `mac` and double-click `打开菜单.command`, then choose `1 Install / Fix`, done. No Homebrew, Python or Node, no `sudo`, and the `zsh` that ships with macOS 12 or later is enough. (Mac only: grab [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz).)
 
 To update: open the menu and choose `5 Check for updates`. It asks first, then installs, and keeps the log.
 

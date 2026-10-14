@@ -258,6 +258,25 @@ jobs:
             $diff2 | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
             exit 1
           }
+          # 分平台包只给新装用：内容 = 完整包减去另一平台目录（与发版流水线同一产包命令）。
+          # 更新入口只认完整包，分包从不进更新校验，所以这里只核形状。
+          foreach ($sp in @(@{ Keep = 'win'; Drop = 'mac' }, @{ Keep = 'mac'; Drop = 'win' })) {
+            $sa = Join-Path $tmp ("envproxy-split-{0}.zip" -f $sp.Keep)
+            Remove-Item $sa -Force -ErrorAction SilentlyContinue
+            git archive --format=zip -o $sa HEAD $sp.Keep README.md README.en.md LICENSE VERSION release-notes assets
+            if ($LASTEXITCODE -ne 0) { Write-Host ("分包产出失败：" + $sp.Keep); exit 1 }
+            $sd = Join-Path $tmp ("envproxy-split-{0}" -f $sp.Keep)
+            Remove-Item $sd -Recurse -Force -ErrorAction SilentlyContinue
+            Expand-Archive -Path $sa -DestinationPath $sd -Force
+            $sIn = @(Get-ChildItem $sd -Recurse -File | ForEach-Object { $_.FullName.Substring($sd.Length).TrimStart('/','\').Replace('\','/') } | Sort-Object)
+            $sWant = @($want | Where-Object { $_ -notlike ($sp.Drop + '/*') } | Sort-Object)
+            $sDiff = Compare-Object $sWant $sIn
+            if ($sDiff) {
+              Write-Host ("分包内容不对（" + $sp.Keep + "）：")
+              $sDiff | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
+              exit 1
+            }
+          }
           Write-Host '分发包内容通过'
 
       - name: 门禁 5：文档一致性
