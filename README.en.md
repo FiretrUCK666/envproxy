@@ -54,8 +54,6 @@ EnvProxy fills that gap: it watches whether your proxy app is actually carrying 
 | Disconnect the proxy app | The proxy variables stay behind and the terminal reports connection refused | The variables are removed and the terminal is direct again |
 | Change the port, or switch to another proxy app | Copy the port by hand, set the variables by hand, remember to undo it later | The new port is found and applied automatically |
 
-> It only manages **environment variables** (the world of command line tools). It never touches the **system proxy** (the world of browsers). The two stay out of each other's way.
-
 ### Which variables it sets
 
 Written as one set while the proxy is up, removed as one set when it goes down:
@@ -142,11 +140,21 @@ It is the black box for troubleshooting. When you report a problem, include the 
 | Connect the proxy app | sees the proxy working, writes the variables | 4–10 seconds (up to about 30 seconds for apps and ports that are not in the common tables) |
 | Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 30–45 seconds after disconnecting |
 | Change the port, reconnect | finds the new port and applies it | about 10 seconds |
-| Switch to another proxy app | finds the new app's port | a few seconds |
-| Run two proxy apps at once | uses the one that verifies, the other takes over when the first stops | nothing to do |
-| Connect and disconnect quickly | the jitter is absorbed, the variables do not move | nothing to do |
-| Reboot | corrects leftover variables right after login | nothing to do |
-| Move the folder somewhere else | the old monitor exits by itself, the next start comes from the new location (search range in section 11, point 3) | nothing to do |
+
+<details>
+<summary>Other cases (also nothing to do)</summary>
+
+| What you do | What it does |
+|---|---|
+| Switch to another proxy app | finds the new app's port in a few seconds |
+| Run two proxy apps at once | uses the one that verifies, the other takes over when the first stops |
+| Connect and disconnect quickly | the jitter is absorbed, the variables do not move |
+| Reboot | corrects leftover variables right after login |
+| Move the folder somewhere else | the old monitor exits by itself, the next start comes from the new location (search range in section 11, point 3) |
+
+</details>
+
+<img src="./assets/readme/states.en.svg" width="100%" alt="Day to day in three states: connecting writes the variables, disconnecting removes them, new ports and flapping are followed automatically — nothing to do">
 
 ## 4. How it decides whether the proxy is working
 
@@ -253,7 +261,9 @@ EnvProxy\
   mac\                    Mac build: the same single menu, entry script and libraries
     打开菜单.command     the only thing to double-click: the menu (same as Windows)
     envproxy.sh           entry (counterpart of win\envproxy.ps1)
+    locator.sh           locator template (copied to ~/.envproxy/locator.sh on install)
     lib\                  seven libraries (same names, same jobs as on Windows)
+    monitor\             created at runtime (same as Windows, same log format)
   README.md               Chinese documentation
   README.en.md            English documentation
   LICENSE                 MIT license
@@ -304,6 +314,8 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 3. **Moving outside the search range needs one manual step.** The locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep). If you move the folder outside that range (for example `C:\Tools`, `~/Projects`, or any very deep path), open the menu and run "Install / Fix" once and it takes over. Everything else is automatic.
 4. **Proxy variables you set by hand before are taken over.** Installing snapshots user level variables with the same names before overwriting them, and restores the snapshot on uninstall. System level variables and the system proxy are never touched. This is rare on a personal machine, and safe on a corporate one.
 
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Four technical limits: pure TUN gets nothing, disconnected is not quitting, manual takeover outside the range, hand-set variables snapshotted">
+
 ---
 
 ## 12. macOS
@@ -330,7 +342,10 @@ Installing does five things: it snapshots existing variables with the same names
 
 ### 12.3 The menu (same meaning as Windows)
 
-Only one thing lives in the `mac` folder to double-click. Everything else happens inside the menu:
+Only one thing lives in the `mac` folder to double-click. The menu is identical to the Windows one ([see section 2](#2-the-menu)) — open to compare:
+
+<details>
+<summary>Menu comparison (open to view)</summary>
 
 | Menu item | What it does |
 |---|---|
@@ -339,6 +354,8 @@ Only one thing lives in the `mac` folder to double-click. Everything else happen
 | **3 Stop monitor** | stop the monitor and delete the variables (start at login stays, it returns on the next login) |
 | **4 Full restore** | stop the monitor, delete the variables, remove start at login, the locator and the hook; asks about the log |
 | **5 Check for updates** | checks the latest release and installs after you agree |
+
+</details>
 
 Terminal users can also run the commands directly from the project root: `bash mac/envproxy.sh install`, `bash mac/envproxy.sh stop`, `bash mac/envproxy.sh uninstall` (add `--purge` to delete the log without asking), `bash mac/envproxy.sh status`, `bash mac/envproxy.sh update` (add `--yes` to skip the confirmation). The `.command` file is only a double-click shell; the logic lives in the entry script and the libraries under `lib/`.
 
@@ -358,9 +375,11 @@ EnvProxy/
 
 ### 12.5 Three things that may block the first install on a Mac
 
-1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it; on newer systems right-clicking and opening may no longer offer it); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/打开菜单.command` first (also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
+1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: double-click once so it warns you, then go to System Settings, Privacy and Security and click "Open Anyway" (that button only appears after you tried to open it; on Sequoia and later, right-clicking no longer offers a bypass); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/打开菜单.command` first (also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
 2. **The executable bit is lost** (common when the folder came from Windows): run `chmod +x *.command *.sh` once inside the `mac` folder.
 3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — open the menu and run "Install / Fix" once and it is corrected.
+
+<img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three Mac first-install hurdles: unblock in Settings, chmod back the bit, click OK on the prompt">
 
 ### 12.6 macOS technical limits (the Windows 3 still apply, plus 2 more)
 
