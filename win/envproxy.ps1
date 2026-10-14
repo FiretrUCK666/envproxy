@@ -1,7 +1,8 @@
 ﻿# ==============================================================================
 #  envproxy.ps1 — 命令行自动翻墙（Windows 原生，零依赖，通用版）
 # ------------------------------------------------------------------------------
-#  子命令（双击配套 .cmd，或在 PowerShell 里运行）：
+#  子命令（双击"打开菜单"，或在 PowerShell 里运行）：
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Menu                打开菜单（安装/状态/停止/恢复/更新）
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Install             一键安装
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Stop                停止监控并删变量
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall           一键恢复（问日志留不留）
@@ -27,7 +28,7 @@
 #     - 退出翻墙软件后约 5 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，约 30 秒
 #       （本地代理响应挂起、探测跑满超时时最坏约 45 秒）
 #     - 整个文件夹移动 → 无需任何操作（监控自退 + 定位器开机自动重新定位；
-#       自动搜索只覆盖"用户目录 + 其他磁盘根"，搬到范围外时双击一次"安装"接管）
+#       自动搜索只覆盖"用户目录 + 其他磁盘根"，搬到范围外时打开菜单选"安装 / 修复"接管）
 #     - 无常驻依赖、不改系统代理、不需要管理员
 # ==============================================================================
 
@@ -37,6 +38,7 @@ param(
     [switch]$Stop,
     [switch]$Status,
     [switch]$Update,
+    [switch]$Menu,
     [switch]$Yes,
     [switch]$Purge
 )
@@ -76,7 +78,7 @@ if ($missingLib.Count) {
     Write-Host "安装不完整，缺少程序文件：" -ForegroundColor Yellow
     foreach ($m in $missingLib) { Write-Host ("  " + $m) -ForegroundColor Yellow }
     Write-Host "这个文件夹没有完整拷过来，或者文件被删掉了。" -ForegroundColor Yellow
-    Write-Host "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时 1-安装 也修不了——它自己就要用到这些文件）。" -ForegroundColor Yellow
+    Write-Host "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。" -ForegroundColor Yellow
     exit 1
 }
 foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) }
@@ -86,6 +88,8 @@ foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) 
 # ------------------------------------------------------------------------------
 # 操作锁：安装与更新会改同一批文件，同一时刻只允许一个在跑；撞上就直接退出、不做任何改动。
 # 用命名互斥体：进程结束由系统自动释放，不需要（也不该）手工解锁。
+# 实测过：上家崩溃后，下一次 WaitOne(0) 直接拿到锁、不抛遗弃异常——不存在"被一次崩溃卡到重启"，
+# 所以这里不需要 AbandonedMutexException 分支，保持 catch 全收。
 # 互斥体的名字由 base 层的 Get-MutexName 生成（库里的写变量锁也用它，所以它不在入口）。
 function Get-OpLock {
     try {
@@ -127,6 +131,10 @@ if ($Stop) {
 }
 if ($Status) {
     Show-Status
+    return
+}
+if ($Menu) {
+    Show-Menu
     return
 }
 # 无参数 = 监控模式（由开机自启调用）。

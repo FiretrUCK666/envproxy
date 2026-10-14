@@ -2,7 +2,8 @@
 # ==============================================================================
 #  envproxy.sh — 命令行自动翻墙（macOS 原生，零依赖，通用版）
 # ------------------------------------------------------------------------------
-#  用法（双击配套 .command，或在终端里运行）：
+#  用法（双击"打开菜单"，或在终端里运行）：
+#     bash envproxy.sh menu        打开菜单（安装/状态/停止/恢复/更新）
 #     bash envproxy.sh install     一键安装
 #     bash envproxy.sh stop        停止监控
 #     bash envproxy.sh uninstall   一键恢复（加 --purge 彻底删除日志，不询问）
@@ -73,7 +74,7 @@ done
 if [ -n "$_missing_lib" ]; then
     echo "安装不完整，缺少程序文件：$_missing_lib"
     echo "这个文件夹没有完整拷过来，或者文件被删掉了。"
-    echo "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时 1-安装 也修不了——它自己就要用到这些文件）。"
+    echo "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。"
     exit 1
 fi
 for _lib_name in $CORE_LIBS; do . "$LIB_DIR/$_lib_name.sh"; done
@@ -125,8 +126,9 @@ case "$_CMD_NORM" in
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
     update) update_envproxy "$_YES";;
+    menu) show_menu;;
     self-test) self_test;;
     "") run_monitor_loop;;
-    *) echo "用法: bash $0 {install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 1;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 1;;
 esac
 fi

@@ -97,9 +97,10 @@ jobs:
             fi
           done
           # macOS 自带 bash 3.2，而 CI 是 bash 5：只有 4.0+ 才有的写法在这就被拦住。
-          for f in mac/envproxy.sh mac/lib/*.sh; do
+          # 目录级通配（根下新增 .sh 自动纳入；根下本就不该多文件，门禁 1 另有拦截）。
+          for f in mac/*.sh mac/lib/*.sh; do
             [ -f "$f" ] || continue
-            hits=$(grep -nE 'declare[[:space:]]+-A|(^|[^[:alnum:]_])mapfile([[:space:]]|$)|(^|[^[:alnum:]_])readarray([[:space:]]|$)|local[[:space:]]+-n[[:space:]]|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(\^\^|,,)|&>>|\|&' "$f" 2>/dev/null || true)
+            hits=$(grep -nE '(declare|local)[[:space:]]+-A|(^|[^[:alnum:]_])(mapfile|readarray)([[:space:]]|$)|(^|[[:space:];|&()])wait[[:space:]]+-n([[:space:];]|$)|local[[:space:]]+-n[[:space:]]|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(\^\^|,,)|\$\{[^}]*@(Q|U|u|E|a|A)\}|\bcoproc\b|globstar|EPOCHSECONDS|EPOCHREALTIME|SRANDOM|BASHPID|\[\[[[:space:]]*-v([[:space:]]|;)|&>>|\|&' "$f" 2>/dev/null || true)
             if [ -n "$hits" ]; then
               echo "$f 出现 bash 4+ 专有写法（macOS 自带 3.2 会失败）："
               echo "$hits"
@@ -196,7 +197,7 @@ jobs:
               $fail = 1
             }
           }
-          # mac：入口、定位器、五个双击壳与 lib\ 下的每个 .sh 都必须 LF、无 BOM
+          # mac：入口、定位器、菜单壳与 lib\ 下的每个 .sh 都必须 LF、无 BOM
           foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command) + @(Get-ChildItem mac/lib/*.sh)) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
             if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }

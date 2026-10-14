@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="387" viewBox="0 0 1200 387" role="img" aria-labelledby="heroTitle heroDesc">
   <title id="heroTitle">EnvProxy — 终端自动翻墙（环境变量代理）</title>
-  <desc id="heroDesc">左侧是项目名与一句话价值：翻墙软件开着，终端就自动翻墙；关掉，终端立刻恢复直连。右侧是 4-查看状态 的真实输出节选：监控进程运行中、开机自启已启用、翻墙代理已开启、代理变量已注入。</desc>
+  <desc id="heroDesc">左侧是项目名与一句话价值：翻墙软件开着，终端就自动翻墙；关掉，终端立刻恢复直连。右侧是菜单"查看状态"的真实输出节选：监控进程运行中、开机自启已启用、翻墙代理已开启、代理变量已注入。</desc>
 
   <rect width="1200" height="387" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="385.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -30,7 +30,7 @@
       <circle cx="628" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="646" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="664" cy="114.5" r="5" fill="#33486B"/>
-      <text x="686" y="120.5" font-size="19" fill="#C7D3E3">4-查看状态</text>
+      <text x="686" y="120.5" font-size="19" fill="#C7D3E3">查看状态</text>
       <text x="1120" y="120.5" font-size="18" fill="#94A6BE" text-anchor="end">真实输出节选</text>
     </g>
 

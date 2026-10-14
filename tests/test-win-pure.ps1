@@ -159,8 +159,7 @@ Assert-Eq 'a dead pid is not a confirmed monitor' '' (Get-MonitorProcessFromPidF
 $PidFile = $savedPidFile
 Remove-Item -LiteralPath $dir9 -Recurse -Force
 
-Write-Host '[10] judging a finished install'
-# The updater decides the finish step worked by reading the install root's pid file, never by the
+Write-Host '[10] judging a finished install'# The updater decides the finish step worked by reading the install root's pid file, never by the
 # child's exit code: PowerShell 5.1 cannot read ExitCode after Start-Process -PassThru (it returns
 # empty), so treating "unreadable" as failure makes every update run the fallback and tear down the
 # monitor it had just started.
@@ -172,6 +171,16 @@ Assert-Eq 'a dead pid is not a finished install' $false (Test-InstallRootMonitor
 Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') ([string]$PID)
 Assert-Eq 'a live non-monitor pid is not a finished install' $false (Test-InstallRootMonitor $root10)
 Remove-Item -LiteralPath $root10 -Recurse -Force
+
+Write-Host '[11] the menu dispatch table'
+# The menu maps numbers to existing entry switches; the shells call back through these
+# switches, so every number must resolve and every switch must exist. Names are checked
+# as data (keys and switch words only): this file stays ASCII-only on purpose.
+$menuKeys = @($MenuItems | ForEach-Object { $_.Key })
+Assert-Eq 'menu has six entries' 6 $menuKeys.Count
+foreach ($k in @('1', '2', '3', '4', '5', '0')) { Assert-Eq ('menu has key ' + $k) $true ($menuKeys -contains $k) }
+$menuSwitches = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Switch })
+foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update')) { Assert-Eq ('menu covers -' + $sw) $true ($menuSwitches -contains $sw) }
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

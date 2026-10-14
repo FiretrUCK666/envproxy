@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">Download the latest version (zip package — the download starts right away)</a></b> · unzip anywhere, then double-click <code>1-安装.cmd</code> in <code>win</code> (on Mac, in <code>mac</code>) — see <a href="#1-install-3-steps-5-minutes">section 1</a>
+  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">Download the latest version (zip package — the download starts right away)</a></b> · unzip anywhere, then double-click <code>打开菜单.cmd</code> in <code>win</code> (on Mac, in <code>mac</code>) — see <a href="#1-install-3-steps-5-minutes">section 1</a>
 </p>
 
 > Connect your proxy app and the terminal follows. Disconnect it and the terminal goes direct again. Nothing to operate, no admin rights, and nothing left behind in your system configuration.
@@ -27,7 +27,7 @@
 
 - [What it does](#what-it-does)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
-- [2. The five buttons](#2-the-five-buttons)
+- [2. The menu](#2-the-menu)
 - [2.5 The log (monitor.log)](#25-the-log-monitorlog)
 - [3. Day to day (nothing to do after install)](#3-day-to-day-nothing-to-do-after-install)
 - [4. How it decides whether the proxy is working](#4-how-it-decides-whether-the-proxy-is-working)
@@ -96,38 +96,38 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 ## 1. Install (3 steps, 5 minutes)
 
 1. Click **[download the latest package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (one zip, works on Windows and Mac)
-2. Unzip it anywhere — rename the folder if you like. Open `win` and double-click **`1-安装.cmd`**; on Mac, open `mac` and double-click **`1-安装.command`**
+2. Unzip it anywhere — rename the folder if you like. Open `win` and double-click **`打开菜单.cmd`** (on Mac, open `mac` and double-click **`打开菜单.command`**), then choose **`1 Install / Fix`**
 3. When you see the monitor started message, you are done
 
 Installing does four things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers the monitor to start at login, starts it right away, and corrects the environment variables once.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the zip, double-click 1-Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, double-click **`5-检查更新.cmd`**. It tells you what the new version changed and installs only after you agree.
+To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree.
 
-If anything seems off, double-click **`1-安装.cmd`** again. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
+If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
 > If the first double-click is blocked on a package downloaded from the web: right-click the file, Properties, Unblock (or run `Unblock-File` once) — do not change the execution policy.
 
-## 2. The five buttons
+## 2. The menu
 
-All five live in `win\` (on Mac, in `mac/`). Whenever this page says double-click, it means double-click there.
+Only one thing lives in `win\` to double-click (in `mac/` on Mac). The rest stays out of your way:
 
-| Button | What it does | When to use it |
+| Menu item | What it does | When to use it |
 |---|---|---|
-| **1-安装** | registers start at login + starts the monitor + corrects the variables | first install; any time something feels wrong |
-| **2-停止监控** | stops the monitor and deletes the variables (direct connection immediately), keeps start at login so it returns on the next boot | you want to pause it |
-| **3-一键恢复** | stops the monitor, deletes the variables, removes start at login, the locator and the path record | you are done with it |
-| **4-查看状态** | shows monitor, start at login, proxy state, variables, version, recent log | you want to confirm it is working |
-| **5-检查更新** | checks the latest release, shows what changed, installs after you agree | you want to upgrade |
+| **1 Install / Fix** | registers start at login + starts the monitor + corrects the variables | first install; any time something feels wrong |
+| **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log | you want to confirm it is working |
+| **3 Stop monitor** | stops the monitor and deletes the variables (direct connection immediately), keeps start at login so it returns on the next boot | you want to pause it |
+| **4 Full restore** | stops the monitor, deletes the variables, removes start at login, the locator and the path record | you are done with it |
+| **5 Check for updates** | checks the latest release, shows what changed, installs after you agree | you want to upgrade |
 
-If you remember nothing else: **1 fixes everything, 2 pauses, 3 uninstalls, 5 upgrades.**
+If you remember nothing else: **open the menu — 1 fixes everything, 2 checks, 3 pauses, 4 uninstalls, 5 upgrades.**
 
-Double-clicking `3-一键恢复` stops and asks one question: keep the log? Press Enter to keep it, type `N` and press Enter to delete it along with everything else.
+Choosing "Full restore" stops and asks one question: keep the log? Press Enter to keep it, type `N` and press Enter to delete it along with everything else.
 
-No button deletes the `EnvProxy` folder itself. After uninstalling, nothing is left in the system, and the folder stays where it is — keep it for later or delete the whole folder yourself.
+No menu item deletes the `EnvProxy` folder itself. After uninstalling, nothing is left in the system, and the folder stays where it is — keep it for later or delete the whole folder yourself.
 
-<img src="./assets/readme/buttons.en.svg" width="100%" alt="Which parts each button touches: 1-Install writes start at login, starts the monitor and writes the variables; 2-Stop stops the monitor and clears the variables while keeping start at login; 3-Restore clears everything and keeps only the log; 4-Status and 5-Check for updates are read only">
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="Which parts each menu item touches: Install writes start at login, starts the monitor and writes the variables; Stop stops the monitor and clears the variables while keeping start at login; Restore clears everything and keeps only the log; Status and Check for updates are read only">
 
 ## 2.5 The log (monitor.log)
 
@@ -194,18 +194,19 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Variables are not removed after disconnecting | the app's disconnect does not stop its core, and the node is still reachable | expected. Quit the proxy app if you want it to stop right away |
 | Variables are removed and then come back | your node itself is flapping, and the monitor reports what it sees | expected behaviour. If it keeps happening the node is poor quality; switch to another one |
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
-| The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, double-click 1-安装 once |
-| The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, double-click 1-安装 once |
+| The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
+| The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
 | Update check reports a check failure | GitHub is temporarily unreachable from this machine | try again later; toggling the proxy on or off and retrying often works |
-| An error during an update | the download, extraction, verification or write step failed | run `5-检查更新` again (it fills in what is missing), or download the package by hand, unzip it over the folder and click 1-安装 once |
-| "This version does not provide a package" | that release did not get its package uploaded | download `EnvProxy.zip` from the Releases page by hand, unzip it over the folder and click 1-安装 once. Nothing is wrong with your machine |
+| An error during an update | the download, extraction, verification or write step failed | run "Check for updates" from the menu again (it fills in what is missing), or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
+| "This version does not provide a package" | that release did not get its package uploaded | download `EnvProxy.zip` from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you downloaded GitHub's "Source code" instead of the package | just run the updater: it asks what the folder is for first, and cleans those files up if you use it as a package. You can also delete them by hand, nothing breaks |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
-| You want to undo everything | — | double-click `3-一键恢复` and answer the log question |
+| You want to undo everything | — | open the menu and choose "Full restore", then answer the log question |
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
-| Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | `1-安装` now reads the setting back and tells you when it did not stick; whitelist the install folder (in Huorong, turn off HTTPS scanning features first) and do not turn the antivirus off |
-| After `1-安装` it reports the monitor could not be confirmed | a second copy on the same machine already holds the single-instance lock (only one monitor runs at a time), or the launch was blocked | double-click `4-查看状态` to see the real state; if you no longer need that other copy, run `3-一键恢复` inside its folder, then click `1-安装` once |
-| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. If files from an older release are left behind after covering (such as `install.sh` under `mac/`), just delete them by hand — the new release no longer uses them. `1-安装` cannot fix this — it needs those same files to run |
+| Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | "Install / Fix" in the menu reads the setting back and tells you when it did not stick; whitelist the install folder (in Huorong, turn off HTTPS scanning features first) and do not turn the antivirus off |
+| After "Install / Fix" it reports the monitor could not be confirmed | a second copy on the same machine already holds the single-instance lock (only one monitor runs at a time), or the launch was blocked | open the menu and choose "Show status" to see the real state; if you no longer need that other copy, run "Full restore" inside its folder, then choose "Install / Fix" once |
+| Browsers cannot open pages, but the terminal is fine | the proxy app was shut down or rebooted without disconnecting, leaving a dead address in the **system proxy** (the browsers' world, not the variables this tool writes) | open the menu and choose "Show status" — it tells you directly whether the system proxy is a leftover. Turn it off under system settings, network, proxy — or open the proxy app and disconnect cleanly once |
+| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. If files from an older release are left behind after covering (such as deleted old shells), just delete them by hand — the new release no longer uses them. Opening the menu to run "Install / Fix" cannot fix this — it needs those same files to run |
 
 <details>
 <summary>Less common cases</summary>
@@ -213,8 +214,10 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Symptom | Cause | What to do |
 |---|---|---|
 | Installing reports syntax errors about unexpected tokens | the script encoding was damaged by a text editor. PowerShell 5.1 reads a script without a BOM as ANSI on non UTF-8 systems, and the mangled Chinese breaks the syntax | the script in the official package is always UTF-8 with a BOM; copy a fresh official folder over the old one |
-| Nothing happens after putting the folder in an unusual place | the locator only searches six levels below your home folders and four levels below other drive roots (`C:\Tools`, `~/Projects` and very deep paths are outside that range) | open `win` and double-click 1-安装 once |
+| Nothing happens after putting the folder in an unusual place | the locator only searches six levels below your home folders and four levels below other drive roots (`C:\Tools`, `~/Projects` and very deep paths are outside that range) | open `win` and open the menu to run "Install / Fix" once |
 | Your local proxy requires a username and password | an unauthenticated handshake gets a 407, and treating it as unavailable is the conservative answer | turn off local authentication (it is off by default) or use a port that needs none |
+| It does nothing inside fish | fish does not understand the `export` syntax, so automatic injection only covers bash/zsh | fish has no native support yet, bash/zsh work fine; a later version may add it |
+| A corporate EDR flags or blocks it | a Run key plus user-folder scripts plus environment writes looks exactly like persistence attacks, so it gets extra attention | ask IT to allowlist the folder by path; uninstalling wipes everything clean and it can be verified. The scripts are plain text and auditable — no obfuscation, downloads or elevation |
 | The terminal inside WSL2 is not affected | WSL2 does not inherit Windows user environment variables by default | expected; set the proxy variables inside WSL separately |
 | An administrator terminal is not affected | an elevated process belongs to another account and does not inherit your variables | expected; use a normal, non elevated terminal |
 | Proxy variables you had before are gone | installing snapshots variables with the same names before overwriting them, and restores the snapshot on uninstall (system level variables and the system proxy are never touched) | safe to install on a corporate machine; only values added after the install are outside the snapshot |
@@ -242,11 +245,13 @@ After unzipping you have this (the folder name is yours to change):
 
 ```
 EnvProxy\
-  win\                    Windows build: five buttons, the entry script and the libraries
+  win\                    Windows build: one menu, the entry script and the libraries
+    打开菜单.cmd         the only thing to double-click: the menu (install/status/stop/restore/update)
     envproxy.ps1          entry: parses arguments, takes the op lock, verifies and loads the libraries, dispatches
     lib\                  seven libraries: base / probe / env / runtime / package / update / ops
     monitor\              created at runtime: monitor.log, monitor.pid, stop.flag
-  mac\                    Mac build: the same five buttons, entry script and libraries
+  mac\                    Mac build: the same single menu, entry script and libraries
+    打开菜单.command     the only thing to double-click: the menu (same as Windows)
     envproxy.sh           entry (counterpart of win\envproxy.ps1)
     lib\                  seven libraries (same names, same jobs as on Windows)
   README.md               Chinese documentation
@@ -268,13 +273,13 @@ The top level and the log need no care: the top level only overwrites same-named
 You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no harm:
 
 - Start at login, the registry entries and the locator all point at the copy you installed, never at a backup. The locator sorts by log activity, so a backup is never picked up by mistake.
-- One thing to avoid: **do not double-click `win\1-安装.cmd` inside a backup folder** — that turns the backup into the live installation.
-- Keep one installation per machine. Before moving, click `3-一键恢复` in the old location, then `1-安装` in the new one. The program has a single instance lock and migration protection, so two monitors never fight over the same variables; the rule exists because the old start at login entry and path record would otherwise be left behind and missed during a later uninstall.
+- One thing to avoid: **do not open the menu and run the install inside a backup folder** — that turns the backup into the live installation.
+- Keep one installation per machine. Before moving, open the menu and run "Full restore" in the old location, then "Install / Fix" in the new one. The program has a single instance lock and migration protection, so two monitors never fight over the same variables; the rule exists because the old start at login entry and path record would otherwise be left behind and missed during a later uninstall.
 
 ## 10. Deploying to a friend or a new machine
 
 1. Get the package onto the new machine, either way works: click **[the latest download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**, or copy the already unzipped folder over (USB drive, cloud storage, an archive — all fine)
-2. Double-click `win\1-安装.cmd` (on Mac, `mac\1-安装.command`)
+2. Double-click `win\打开菜单.cmd` (on Mac, `mac\打开菜单.command`), then choose `1 Install / Fix`
 3. Done
 
 Nothing needs to be installed (no Node, no Python), no administrator rights are needed, and the PowerShell that ships with Windows 10 and 11 is enough.
@@ -282,7 +287,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 <details>
 <summary>If you edit the files by hand, mind the encoding</summary>
 
-- Every `.ps1` under `win\` (the entry and the libraries in `lib\`) is **UTF-8 with a BOM**. That is what lets PowerShell 5.1 read it correctly on both Chinese and English systems: without a BOM, a Chinese system reads it as GBK and an English one as Latin-1, and either can produce syntax errors. If you edit it, save as "UTF-8 with BOM" and double-click 1-安装 once so the monitor loads the new code.
+- Every `.ps1` under `win\` (the entry and the libraries in `lib\`) is **UTF-8 with a BOM**. That is what lets PowerShell 5.1 read it correctly on both Chinese and English systems: without a BOM, a Chinese system reads it as GBK and an English one as Latin-1, and either can produce syntax errors. If you edit it, save as "UTF-8 with BOM" and open the menu to run "Install / Fix" once so the monitor loads the new code.
 - The log `monitor\monitor.log` is the opposite: **UTF-8 without a BOM**, with UTF-8 specified explicitly on both the writing and reading side, so it never looks wrong on any code page (CRLF line endings on Windows, LF on Mac). Do not "unify" the log to a BOM either — the three extra bytes at the start would be read as log content.
 - When copying the folder around, do not re-save the `.ps1` files with a text editor, which would break the BOM.
 
@@ -292,7 +297,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 1. **TUN mode gets nothing.** TUN already captures all traffic globally, so the terminal works without any help and this tool cannot find a local proxy port, so it does not write the variables. That is the correct behaviour, not a bug. The same applies to system wide VPNs such as Outline and to SOCKS only ports with no HTTP socket.
 2. **"Disconnected" is not the same as quitting.** The disconnect button in most proxy apps leaves the core running and the port alive. This tool follows the traffic: if traffic gets through, the variables are written; if it does not, they are removed.
-3. **Moving outside the search range needs one manual step.** The locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep). If you move the folder outside that range (for example `C:\Tools`, `~/Projects`, or any very deep path), double-click 1-安装 once and it takes over. Everything else is automatic.
+3. **Moving outside the search range needs one manual step.** The locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep). If you move the folder outside that range (for example `C:\Tools`, `~/Projects`, or any very deep path), open the menu and run "Install / Fix" once and it takes over. Everything else is automatic.
 4. **Proxy variables you set by hand before are taken over.** Installing snapshots user level variables with the same names before overwriting them, and restores the snapshot on uninstall. System level variables and the system proxy are never touched. This is rare on a personal machine, and safe on a corporate one.
 
 ---
@@ -305,33 +310,33 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 Windows writes the variables into the registry and broadcasts once, which makes them global. macOS has no registry, so the Mac build writes through two paths at the same time: terminals read `~/.envproxy/proxy.env` (loaded automatically by new terminals), and apps launched from the Dock are covered by `launchctl setenv`. The two paths move together.
 
-The Mac build sets all 9 variables, the extra four being lowercase spellings — macOS is genuinely case sensitive, so the two spellings are separate variables and some tools read only the lowercase ones (the reason is under the variable table above). Everything else matches Windows: 2 and 3 second polling, two round confirmation, three failures before calling it disconnected, 7 endpoints with a fast path and a parallel fallback, 15 second throttling, the 200KB log cap, and self healing every 30 rounds. `2-停止监控` means the same thing as on Windows: stopped stays stopped until the next login.
+The Mac build sets all 9 variables, the extra four being lowercase spellings — macOS is genuinely case sensitive, so the two spellings are separate variables and some tools read only the lowercase ones (the reason is under the variable table above). Everything else matches Windows: 2 and 3 second polling, two round confirmation, three failures before calling it disconnected, 7 endpoints with a fast path and a parallel fallback, 15 second throttling, the 200KB log cap, and self healing every 30 rounds. Stopping the monitor means the same thing as on Windows: stopped stays stopped until the next login.
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="macOS writes the variables through two paths: the terminal reads proxy.env through a shell hook, and apps started from the Dock read the same set through launchctl setenv; both paths always change together">
 
 ### 12.2 Install (3 steps)
 
 1. Copy the whole `EnvProxy` folder to any location on the Mac (USB drive, AirDrop, an archive — all fine)
-2. Open `mac` and double-click **`1-安装.command`** (the first run may need a right-click and Open, see 12.5)
+2. Open `mac` and double-click **`打开菜单.command`**, then choose **`1 Install / Fix`** (the first run may need a right-click and Open, see 12.5)
 3. When you see the monitor started message, you are done. Verify in a **new terminal**: `env | grep -i proxy`
 
-Installing does five things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`, which new terminals use to load `proxy.env`), starts the monitor right away, and corrects the variables once. If anything seems off later, double-click `1-安装.command` again — it is the universal fix.
+Installing does five things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`, which new terminals use to load `proxy.env`), starts the monitor right away, and corrects the variables once. If anything seems off later, open the menu and choose "Install / Fix" — it is the universal fix.
 
-> A note for fish users: fish cannot read the export syntax in `proxy.env`. Install bass and add `bass source "$HOME/.envproxy/proxy.env"` to `config.fish`.
+> A note for fish users: fish does not understand the `export` syntax, so there is no native support yet. The workaround is to install bass and add `bass source "$HOME/.envproxy/proxy.env"` to `config.fish` (it re-reads the file in every new window, so port changes are picked up).
 
-### 12.3 The five buttons (same meaning as Windows)
+### 12.3 The menu (same meaning as Windows)
 
-All five live in the `mac` folder.
+Only one thing lives in the `mac` folder to double-click. Everything else happens inside the menu:
 
-| Button | What it does |
+| Menu item | What it does |
 |---|---|
-| **1-安装.command** | start at login + start the monitor + correct the variables (universal fix) |
-| **2-停止监控.command** | stop the monitor and delete the variables (start at login stays, it returns on the next login) |
-| **3-一键恢复.command** | stop the monitor, delete the variables, remove start at login, the locator and the hook; asks about the log |
-| **4-查看状态.command** | shows monitor, start at login, proxy state, variables, version, recent log |
-| **5-检查更新.command** | checks the latest release and installs after you agree |
+| **1 Install / Fix** | start at login + start the monitor + correct the variables (universal fix) |
+| **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log |
+| **3 Stop monitor** | stop the monitor and delete the variables (start at login stays, it returns on the next login) |
+| **4 Full restore** | stop the monitor, delete the variables, remove start at login, the locator and the hook; asks about the log |
+| **5 Check for updates** | checks the latest release and installs after you agree |
 
-Terminal users can also run the commands directly from the project root: `bash mac/envproxy.sh install`, `bash mac/envproxy.sh stop`, `bash mac/envproxy.sh uninstall` (add `--purge` to delete the log without asking), `bash mac/envproxy.sh status`, `bash mac/envproxy.sh update` (add `--yes` to skip the confirmation). The `.command` files are only double-click shells; the logic lives in the entry script and the libraries under `lib/`.
+Terminal users can also run the commands directly from the project root: `bash mac/envproxy.sh install`, `bash mac/envproxy.sh stop`, `bash mac/envproxy.sh uninstall` (add `--purge` to delete the log without asking), `bash mac/envproxy.sh status`, `bash mac/envproxy.sh update` (add `--yes` to skip the confirmation). The `.command` file is only a double-click shell; the logic lives in the entry script and the libraries under `lib/`.
 
 ### 12.4 What is inside the `mac` folder
 
@@ -341,7 +346,7 @@ EnvProxy/
     envproxy.sh          entry (counterpart of win\envproxy.ps1, system tools only)
     lib/                 seven libraries: base / probe / env / runtime / package / update / ops
     locator.sh           locator template (copied to ~/.envproxy/locator.sh at install time)
-    1-安装.command ... 5-检查更新.command   (double-click entry points, each calls the matching envproxy.sh subcommand)
+    打开菜单.command     the only thing to double-click: the menu (same as Windows)
     monitor/             created at runtime (monitor.log, monitor.pid, stop.flag; same log format as Windows)
 ```
 
@@ -349,9 +354,9 @@ EnvProxy/
 
 ### 12.5 Three things that may block the first install on a Mac
 
-1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: right-click, then Open, once; or go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/*.command` first (clears all five buttons at once, also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
+1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it; on newer systems right-clicking and opening may no longer offer it); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/打开菜单.command` first (also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
 2. **The executable bit is lost** (common when the folder came from Windows): run `chmod +x *.command *.sh` once inside the `mac` folder.
-3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — double-clicking 1-安装 once fixes it.
+3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — open the menu and run "Install / Fix" once and it is corrected.
 
 ### 12.6 macOS technical limits (the Windows 3 still apply, plus 2 more)
 
@@ -364,9 +369,9 @@ Two more:
 
 ### 12.7 Deploying to a friend or a new Mac
 
-Copy the whole folder over, open `mac` and double-click `1-安装.command`, done. No Homebrew, Python or Node, no `sudo`, and the `zsh` that ships with macOS 12 or later is enough.
+Copy the whole folder over, open `mac` and double-click `打开菜单.command`, then choose `1 Install / Fix`, done. No Homebrew, Python or Node, no `sudo`, and the `zsh` that ships with macOS 12 or later is enough.
 
-To update: open `mac` and double-click `5-检查更新.command`. It asks first, then installs, and keeps the log.
+To update: open the menu and choose `5 Check for updates`. It asks first, then installs, and keeps the log.
 
 ---
 
@@ -376,6 +381,6 @@ This project is open source under the MIT license (see `LICENSE`): use it, chang
 
 To contribute (report a bug, propose a change), read `CONTRIBUTING.md` first — it covers the question format, the fork flow and the gates to run before submitting. Pull requests that skip it will be sent back.
 
-If something goes wrong, check the troubleshooting table in section 6 first. If that does not help, open an issue at `https://github.com/FiretrUCK666/envproxy/issues` and include your system version, the full output of `win\4-查看状态`, and the relevant recent lines of `win\monitor\monitor.log` (on Mac, the files with the same names under `mac`).
+If something goes wrong, check the troubleshooting table in section 6 first. If that does not help, open an issue at `https://github.com/FiretrUCK666/envproxy/issues` and include your system version, the full output of "Show status" from the menu, and the relevant recent lines of `win\monitor\monitor.log` (on Mac, the files with the same names under `mac`).
 
 Repository: `https://github.com/FiretrUCK666/envproxy`. To change the code, read `CONTRIBUTING.md` first; a `git clone` copy carries `.git`, so sync upstream with `git pull` — the updater recognises such copies and leaves your working tree alone.

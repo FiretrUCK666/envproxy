@@ -29,6 +29,19 @@ function Get-LauncherContent {
 $ErrorActionPreference = "SilentlyContinue"
 $reg = "HKCU:\Software\EnvProxy"
 $target = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).ScriptPath
+# 广播用的 P/Invoke 不能写成 @'...'@ here-string：外层模板本身就是单引号 here-string，
+# 内层再出现行首 '@ 会提前终结外层。这里用反引号转义拼单行 C# 源码。
+try {
+    $csSrc = "using System;`nusing System.Runtime.InteropServices;`npublic static class EnvProxyNative {`n [DllImport(`"user32.dll`", CharSet = CharSet.Auto)]`n public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);`n}"
+    Add-Type -TypeDefinition $csSrc -ErrorAction SilentlyContinue
+} catch {}
+function Send-LocatorBroadcast {
+    try {
+        $r = [UIntPtr]::Zero
+        [EnvProxyNative]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero,
+            "Environment", 0x0002, 3000, [ref]$r) | Out-Null
+    } catch {}
+}
 
 # 记录必须指向入口脚本本身：指向别处（例如某个库文件）同样算失效。
 # 只判"文件在不在"不够——记录写坏了、而那个文件恰好存在时，会一直去启动一个跑不起来的
@@ -77,7 +90,27 @@ if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Lea
         $target = ($candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
     }
 }
-if (-not $target) { exit }
+if (-not $target -or -not (Test-Path -LiteralPath $target)) {
+    # 兜底：安装根找不到了（记录为空，或搜索后仍无可用候选、$target 留着旧的死路径），
+    # 没有活着的组件会再纠正变量——把我们写的东西清掉，新终端不再读到过期代理。
+    # 只删本机地址（归属判定），用户自己的配置不动。判据与 Mac 侧同源（值非空且文件存在才算找到）。
+    # 清完必须广播：Explorer 在登录时已按旧注册表建好环境块，不广播则它之后起的
+    # 每个终端都继续继承死变量。保持静默（登录路径不打扰用户）。
+    $cleared = $false
+    foreach ($n in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
+        $v = [Environment]::GetEnvironmentVariable($n, "User")
+        if ($v -like "http://127.0.0.1:*") {
+            [Environment]::SetEnvironmentVariable($n, $null, "User")
+            $cleared = $true
+        }
+    }
+    if ([Environment]::GetEnvironmentVariable("NODE_USE_ENV_PROXY", "User") -eq "1") {
+        [Environment]::SetEnvironmentVariable("NODE_USE_ENV_PROXY", $null, "User")
+        $cleared = $true
+    }
+    if ($cleared) { Send-LocatorBroadcast }
+    exit
+}
 
 New-Item -Path $reg -Force -ErrorAction SilentlyContinue | Out-Null
 Set-ItemProperty -Path $reg -Name "ScriptPath" -Value $target -ErrorAction SilentlyContinue

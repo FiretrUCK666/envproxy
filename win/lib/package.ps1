@@ -58,7 +58,7 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
 }
 
 # 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
-# 四个程序目录内、新包没有的文件按清单删除（旧按钮不会残留成"点了没反应"）。
+# 四个程序目录内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
 function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage) {
     # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。

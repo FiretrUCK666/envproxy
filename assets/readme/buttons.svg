@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-  <title id="buttonsTitle">五个按钮各自动了什么</title>
-  <desc id="buttonsDesc">五行五列的对照表。行是五个按钮，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动。看整列：只有环境变量这一列是安装写、停止清；只有开机自启这一列是停止留下、恢复清掉。5-检查更新 整行都是圆点，只有你同意升级之后才会动手，那时等于跑一次安装，所以那一行按安装算。</desc>
+  <title id="buttonsTitle">菜单每个选项动什么</title>
+  <desc id="buttonsDesc">五行五列的对照表。行是菜单里的五个选项，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动。看整列：只有环境变量这一列是安装写、停止清；只有开机自启这一列是停止留下、恢复清掉。5 检查更新那一行都是圆点，只有你同意升级之后才会动手，那时等于跑一次安装，所以那一行按安装算。</desc>
 
   <rect width="1200" height="500" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="498.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">五个按钮各自动了什么</text>
+    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项动什么</text>
     <text x="56" y="98" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
     <text x="84" y="106" font-size="20" fill="#94A6BE">保留</text>
     <text x="176" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
@@ -29,11 +29,11 @@
   </g>
 
   <g id="row-labels" font-size="21" fill="#E9EFF8">
-    <text x="56" y="202">1-安装</text>
-    <text x="56" y="242">2-停止监控</text>
-    <text x="56" y="282">3-一键恢复</text>
-    <text x="56" y="322">4-查看状态</text>
-    <text x="56" y="362">5-检查更新</text>
+    <text x="56" y="202">1 安装 / 修复</text>
+    <text x="56" y="242">2 查看状态</text>
+    <text x="56" y="282">3 停止监控</text>
+    <text x="56" y="322">4 一键恢复</text>
+    <text x="56" y="362">5 检查更新</text>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
@@ -71,5 +71,5 @@
   </g>
 
   <text x="56" y="406" font-size="20" fill="#C7D3E3">看列比看行快：环境变量是安装写、停止清；开机自启是停止留、恢复清。</text>
-  <text x="56" y="440" font-size="20" fill="#C7D3E3">5 那一行只读，只在你同意升级时才动手，那时等于跑一次安装。</text>
+  <text x="56" y="440" font-size="20" fill="#C7D3E3">5 检查更新那一行只读，只在你同意升级时才动手，那时等于跑一次安装。</text>
 </svg>

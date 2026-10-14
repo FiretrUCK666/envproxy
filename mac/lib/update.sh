@@ -164,7 +164,7 @@ update_envproxy() {
     fi
     if [ -z "$_local" ]; then
         echo "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
-        echo "请到 Releases 页面手动下载安装包覆盖一次，或点一次 1-安装 修复。"
+        echo "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。"
         return 0
     fi
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
@@ -260,7 +260,7 @@ update_envproxy() {
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
         echo "收尾没走完，正在按当前文件重启监控..."
         install_envproxy >/dev/null 2>&1 || true
-        echo "如果状态仍不对，请再点一次 1-安装。"
+        echo "如果状态仍不对，请打开菜单选一次"安装 / 修复"。"
     fi
     rm -rf "$_exdir" 2>/dev/null || true
 }

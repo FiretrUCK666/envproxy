@@ -1,5 +1,5 @@
 ﻿# ==============================================================================
-#  ops.ps1 — 动作层：四个按钮背后的安装、停止、卸载、状态编排
+#  ops.ps1 — 动作层：菜单背后的安装、停止、卸载、状态编排
 #  把下面各层拼成使用者点得到的行为。
 # ==============================================================================
 
@@ -17,14 +17,14 @@ function Install-EnvProxy {
         Write-Host "[1/3] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
     } else {
         Write-Host "[1/3] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
-        Write-Host "      请检查杀软拦截，或再双击一次本按钮；仍然不行就把它加进白名单。" -ForegroundColor Yellow
+        Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
     Update-ScriptPathRecord
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     if (Start-Monitor -Force:$true) {
         Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
     } else {
-        Write-Host "[2/3] 监控进程：未能确认运行，请用 4-查看状态 核对。" -ForegroundColor Yellow
+        Write-Host "[2/3] 监控进程：未能确认运行，请打开菜单选 查看状态 核对。" -ForegroundColor Yellow
         Write-Host "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。" -ForegroundColor Yellow
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
@@ -45,13 +45,28 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     Write-Host "======== EnvProxy 卸载（一键恢复原状）========" -ForegroundColor Cyan
     Stop-Monitor
     Remove-AutoRun
+    # 顺序是定的：先清我们写的值，再按快照还用户原值。
+    # 反过来会把用户原值里与默认集重合的项（如 localhost）当成"我们加的"剥掉，快照保护落空。
+    # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。
+    # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
+    Apply-State "off"
     # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
     Restore-PrevEnv
+    # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
+    Broadcast-EnvironmentChange
+    # 复检用的期望值现在就抄一份：键删掉之后就没处可查了。
+    # 有快照的名字以"与快照一致"为准（用户原值里若含 localhost 这类与默认集重合的项，
+    # 它既不是残留也不能删）；没快照的名字才按"有无我们的痕迹"判。
+    $restoredWant = @{}
+    foreach ($n in $ProxyVarNames) {
+        $bv = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
+        if ($null -ne $bv) { $restoredWant[$n] = [string]$bv }
+    }
     Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
     # 日志去留：黑匣子保留还是彻底删除？
-    #   - 交互模式（双击 3-一键恢复.cmd）：询问用户，默认保留
+    #   - 交互模式（菜单里选 一键恢复）：询问用户，默认保留
     #   - 自动化模式（-Uninstall -Purge）：直接彻底删除，不询问
     $removeLog = $Purge
     if (-not $Purge) {
@@ -87,16 +102,28 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         Stop-Process -Id $ghost.ProcessId -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 500
     }
-    # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。
-    # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
-    Apply-State "off"
     # 卸载末尾回读复检：上面每一步都可能静默失败，定论必须由复读结果决定。
     # DIVERGE(Win): 复检项按平台映射——Run 键对应 Mac 的 plist，
     # 注册表变量对应 proxy.env，其余同源。
     $dirty = @()
     try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
     if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
-    if (Test-ProxyVarsPresent) { $dirty += "代理变量仍在" }
+    # 变量复检不用整表判据：有快照的名字必须与快照一致（用户原值含重合项也算干净），
+    # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。
+    $varsClean = $true
+    $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
+    foreach ($n in $ProxyVarNames) {
+        $cur = [Environment]::GetEnvironmentVariable($n, "User")
+        if ($restoredWant.ContainsKey($n)) { if ($cur -ne $restoredWant[$n]) { $varsClean = $false } }
+        elseif ($cur) {
+            if ($n -eq "NO_PROXY") {
+                foreach ($e in (Get-NormalizedNoProxyEntries $cur)) { if ($oursSet -contains $e) { $varsClean = $false; break } }
+            }
+            elseif ($n -eq "NODE_USE_ENV_PROXY") { if ($cur -eq "1") { $varsClean = $false } }
+            elseif ($cur -like "http://127.0.0.1:*") { $varsClean = $false }
+        }
+    }
+    if (-not $varsClean) { $dirty += "代理变量仍在" }
     if (Get-MonitorProcess) { $dirty += "监控进程仍在" }
     if ($removeLog -and (Test-Item (Join-Path $MonitorDir "monitor.log"))) { $dirty += "历史日志未能删除" }
     if ($dirty.Count -eq 0) {
@@ -109,7 +136,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         Write-Host "        电脑已恢复到安装前的状态，无需重启。" -ForegroundColor Green
     } else {
         Write-Host ("[未完成] 以下残留请手动处理：{0}" -f ($dirty -join "；")) -ForegroundColor Yellow
-        Write-Host "        可再双击一次 3-一键恢复，或手动删除上述位置。" -ForegroundColor Yellow
+        Write-Host "        可再打开菜单选 一键恢复，或手动删除上述位置。" -ForegroundColor Yellow
     }
 }
 
@@ -136,6 +163,29 @@ function Show-Status {
     if ($cur) { Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green }
     else      { Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray }
 
+    # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
+    # DIVERGE(Win): Mac 侧用 scutil --proxy 同语义，待真机回齐。
+    try {
+        $sp = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
+        if (($sp.ProxyEnable -eq 1) -and ($sp.ProxyServer -match "127\.0\.0\.1:(\d+)")) {
+            $spPort = [int]$Matches[1]
+            $spAlive = $false
+            $tc = $null
+            try {
+                $tc = New-Object Net.Sockets.TcpClient
+                $iar = $tc.BeginConnect("127.0.0.1", $spPort, $null, $null)
+                if ($iar.AsyncWaitHandle.WaitOne(800)) { $tc.EndConnect($iar); $spAlive = $true }
+            } catch {} finally {
+                try { if ($tc) { $tc.Close() } } catch {}
+            }
+            if (-not $spAlive) {
+                Write-Host ("系统代理 : 疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $sp.ProxyServer) -ForegroundColor Yellow
+                Write-Host "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。" -ForegroundColor Yellow
+            }
+        }
+    } catch {}
+
     # 版本信息（只读：查不到只提示，不断言、不写文件、不提问）
     $localVer = Get-LocalVersion
     if ($localVer) { Write-Host ("本地版本 : v{0}" -f $localVer) -ForegroundColor Green }
@@ -148,11 +198,11 @@ function Show-Status {
         } elseif (Test-SourceCopy) {
             Write-Host "更新状态 : 源码包（更新入口会先确认用途再动手）" -ForegroundColor Yellow
         } elseif (-not $localVer) {
-            Write-Host "更新状态 : 可点 5-检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 可打开菜单选 检查更新 升级" -ForegroundColor Yellow
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
             Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
         } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
-            Write-Host "更新状态 : 发现新版，可点 5-检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 发现新版，可打开菜单选 检查更新 升级" -ForegroundColor Yellow
         } else {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
@@ -168,4 +218,66 @@ function Show-Status {
         Write-Host "  （暂无日志）" -ForegroundColor DarkGray
     }
     Write-Host "==================================" -ForegroundColor Cyan
+}
+
+# ------------------------------------------------------------------------------
+# 8. 菜单（唯一双击入口"打开菜单"背后：编号→现有开关，不新增行为）
+# ------------------------------------------------------------------------------
+# 菜单只做三件事：打印、读编号、起子进程跑对应开关后回到菜单。
+# 每个动作都走一遍入口开关的完整路径（含操作锁）：菜单自己不拿锁、不碰变量不碰文件，
+# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。五个动作与入口开关一一对应。
+# 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
+$MenuItems = @(
+    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install" },
+    @{ Key = "2"; Name = "查看状态";   Switch = "Status" },
+    @{ Key = "3"; Name = "停止监控";   Switch = "Stop" },
+    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall" },
+    @{ Key = "5"; Name = "检查更新";   Switch = "Update" },
+    @{ Key = "0"; Name = "退出";       Switch = "" }
+)
+function Show-Menu {
+    # 非交互 stdin（管道/重定向）直接退出不进循环：菜单是给人点的，自动化请用开关。
+    # 否则管道到 EOF 时 Read-Host 读空会被当成回车，一遍遍重复默认动作停不下来。
+    try {
+        if ([Console]::IsInputRedirected) {
+            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update 开关。" -ForegroundColor Yellow
+            return
+        }
+    } catch {}
+    while ($true) {
+        Write-Host ""
+        Write-Host "======== EnvProxy 菜单 ========" -ForegroundColor Cyan
+        # 抬头只读瞬时项（监控在不在、本地版本），不做网络探测，不卡菜单。
+        $hm = Get-MonitorProcess
+        $monText = if ($hm) { ("运行中 (PID {0})" -f $hm.ProcessId) } else { "未运行" }
+        $verText = Get-LocalVersion
+        if (-not $verText) { $verText = "未知" }
+        Write-Host ("当前：监控{0}，本地版本 v{1}（详情选 2 查看状态）" -f $monText, $verText) -ForegroundColor DarkGray
+        Write-Host "  [1] 安装 / 修复（首次安装；觉得不对劲就点它）" -ForegroundColor Green
+        Write-Host "  [2] 查看状态（监控、翻墙、变量、版本）" -ForegroundColor Green
+        Write-Host "  [3] 停止监控（停掉并恢复直连，下次开机回来）" -ForegroundColor Green
+        Write-Host "  [4] 一键恢复（彻底卸载，回到没装之前）" -ForegroundColor Green
+        Write-Host "  [5] 检查更新（有新版先说明，同意才装）" -ForegroundColor Green
+        Write-Host "  [0] 退出" -ForegroundColor DarkGray
+        try {
+            $choice = Read-Host "选一个（回车=查看状态）"
+        } catch {
+            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update 开关。" -ForegroundColor Yellow
+            return
+        }
+        if (-not $choice) { $choice = "2" }
+        $item = @($MenuItems | Where-Object { $_.Key -eq $choice.Trim() })
+        if (-not $item -or ($item.Count -eq 0)) {
+            Write-Host "没有这个编号，重输一个。" -ForegroundColor Yellow
+            continue
+        }
+        if (-not $item[0].Switch) { return }
+        # 子进程跑完整开关：与入口开关走的是同一条路（含锁、确认、复检）。
+        # 本进程只等它结束，不解释它的退出码（退出码在 5.1 里读不到，判据只看复读）。
+        try {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath ("-" + $item[0].Switch)
+        } catch {
+            Write-Host ("启动失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
 }

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="387" viewBox="0 0 1200 387" role="img" aria-labelledby="heroTitle heroDesc">
   <title id="heroTitle">EnvProxy — automatic proxy for terminals (environment variables)</title>
-  <desc id="heroDesc">On the left: the project name and its one-line value — VPN app on, the terminal proxies; VPN app off, the terminal is back to direct. On the right: an excerpt of the real status output (4-查看状态), showing the monitor running, auto-start enabled, the VPN app detected, and proxy variables injected.</desc>
+  <desc id="heroDesc">On the left: the project name and its one-line value — VPN app on, the terminal proxies; VPN app off, the terminal is back to direct. On the right: an excerpt of the real status output (Show status in the menu), showing the monitor running, auto-start enabled, the VPN app detected, and proxy variables injected.</desc>
 
   <rect width="1200" height="387" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="385.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -30,7 +30,7 @@
       <circle cx="628" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="646" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="664" cy="114.5" r="5" fill="#33486B"/>
-      <text x="686" y="120.5" font-size="19" fill="#C7D3E3">4-查看状态</text>
+      <text x="686" y="120.5" font-size="19" fill="#C7D3E3">查看状态</text>
       <text x="1120" y="120.5" font-size="18" fill="#94A6BE" text-anchor="end">output excerpt, labels translated</text>
     </g>
 

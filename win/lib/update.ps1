@@ -239,7 +239,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     # 此时任何"比较"都是瞎猜，直接拒绝并指一条明路，而不是继续往下走。
     if (-not $local) {
         Write-Host "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。" -ForegroundColor Yellow
-        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或双击 1-安装 修复。" -ForegroundColor Yellow
+        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。" -ForegroundColor Yellow
         return
     }
     if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
@@ -321,11 +321,11 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             $ok = Test-InstallRootMonitor $root
         }
         if (-not $ok) {
-            Write-Host "监控未能确认运行，请再双击一次 1-安装。" -ForegroundColor Yellow
+            Write-Host "监控未能确认运行，请打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
         }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host "可稍后重试；也可以手动下载安装包覆盖后再点一次 1-安装。" -ForegroundColor Yellow
+        Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
     } finally {
         try { Remove-ItemSafe $zipFile } catch {}
         # 解压目录在收尾完成后清理；收尾跑的是安装根里的新脚本，这里只是兜底删除。

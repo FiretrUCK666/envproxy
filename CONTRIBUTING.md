@@ -8,9 +8,9 @@
 
 为了让问题能被定位，请一并附上：
 
-- 你用的版本（进 `win` 双击 `4-查看状态`，把里面"本地版本"那一行贴上来；Mac 对应 `mac` 下的同名文件。也可以直接看根目录的 `VERSION` 文件）
+- 你用的版本（打开菜单选"查看状态"，把里面"本地版本"那一行贴上来；也可以直接看根目录的 `VERSION` 文件）
 - 运行环境（Windows 10/11 或 macOS 版本；翻墙软件名字）
-- `4-查看状态` 的完整输出（`win`/`mac` 下同名文件，**原样粘贴，不要转述**）
+- 菜单"查看状态"的完整输出（**原样粘贴，不要转述**）
 - `monitor/monitor.log` 最近的相关行（只记状态变化，不含隐私）
 - 最小复现步骤（如果问题能稳定重现）
 
@@ -57,12 +57,12 @@ bash -n mac/*.sh mac/lib/*.sh
 ```
 
 `win\` 下每个 `.ps1`（入口与 `lib\` 里的库）的语法检查在 Windows 本机用 PowerShell 语法解析跑
-（`Parser::ParseFile`，见 `AGENTS.md` 的构建与验证节）；改完 Windows 进 `win` 双击 `4-查看状态`、
-Mac 跑 `bash mac/envproxy.sh status` 确认行为。
+（`Parser::ParseFile`，见 `AGENTS.md` 的构建与验证节）；改完行为后 Windows 打开菜单选"查看状态"、
+Mac 跑 `bash mac/envproxy.sh status` 确认。
 
 **开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`（Windows）/ `EnvProxy.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
-更新入口（`5-检查更新` / `bash mac/envproxy.sh update`）认得这一点，只报版本、不改动任何文件，同步上游用
+更新入口（菜单"检查更新" / `bash mac/envproxy.sh update`）认得这一点，只报版本、不改动任何文件，同步上游用
 `git pull`。要验证更新逻辑，把安装包解压到别处当安装副本，在那里面点检查更新——不要指望在本仓库里
 跑出覆盖效果，那是设计如此。
 
@@ -79,8 +79,8 @@ pwsh -NoProfile -File tests/test-win-pure.ps1
 bash mac/envproxy.sh self-test
 # 其余门禁见 .github/workflows/check.yml（权威定义只有那一处），
 #   本地要单跑某一条，就把那一步的脚本原样粘进 PowerShell。
-# 状态冒烟：Windows 进 win 双击 4-查看状态（Mac 跑 bash mac/envproxy.sh status），输出与预期一致
-# 核心改动追加：进 win 双击 1-安装 重载，看一轮状态翻转
+# 状态冒烟：Windows 打开菜单选"查看状态"（Mac 跑 bash mac/envproxy.sh status），输出与预期一致
+# 核心改动追加：打开菜单选"安装 / 修复"重载，看一轮状态翻转
 ```
 
 这里的说明与 `AGENTS.md` 构建与验证节指向同一处权威（`check.yml`）；门禁有增减时只改 CI 与 `AGENTS.md`，

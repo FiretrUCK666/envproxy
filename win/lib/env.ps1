@@ -111,27 +111,47 @@ function Test-ProxyVarsPresent {
 
 # 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
 # 属于我们自己的值视为无（升级路径下安装时代理正开着，不能把刚写的值当成用户的）。
+# 注意：不用 Volatile Environment 做"会话级"优化——它是未文档化机制，语义不保证；持久化即 HKCU 本体。
+# 类型也要留底：原值若是 REG_EXPAND_SZ（含 %引用%），按 REG_SZ 写回会提前展开、腐化用户配置。
+# 所以读未展开值、存类型，还原时按原类型写回。
 function Snapshot-PrevEnv {
     try {
         if (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue) { return }
         New-Item -Path $PrevEnvRegKey -Force -ErrorAction Stop | Out-Null
+        $envKey = Get-Item -LiteralPath "HKCU:\Environment" -ErrorAction SilentlyContinue
         foreach ($n in $ProxyVarNames) {
-            $cur = [Environment]::GetEnvironmentVariable($n, "User")
-            if (-not $cur) { continue }
-            if ($n -eq "NODE_USE_ENV_PROXY" -and $cur -eq "1") { continue }
-            if (($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) -and ($cur -like "http://127.0.0.1:*")) { continue }
-            Set-ItemProperty -Path $PrevEnvRegKey -Name $n -Value $cur -ErrorAction SilentlyContinue
+            $raw = $null
+            $kind = "String"
+            if ($envKey) {
+                try {
+                    $raw = $envKey.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    $kind = $envKey.GetValueKind($n).ToString()
+                } catch {}
+            }
+            if ($null -eq $raw) { continue }
+            if ($n -eq "NODE_USE_ENV_PROXY" -and $raw -eq "1") { continue }
+            if (($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) -and ($raw -like "http://127.0.0.1:*")) { continue }
+            Set-ItemProperty -Path $PrevEnvRegKey -Name $n -Value $raw -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path $PrevEnvRegKey -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction SilentlyContinue
         }
     } catch {}
 }
 
 # 卸载时按快照还原用户原值，还原完删掉快照键。无快照时什么都不做。
+# 按快照时的原类型写回：REG_EXPAND_SZ 的原值若按 REG_SZ 写回，里面的 %引用% 会被提前展开。
 function Restore-PrevEnv {
     try {
         if (-not (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue)) { return }
         foreach ($n in $ProxyVarNames) {
             $bak = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
-            if ($null -ne $bak) { [Environment]::SetEnvironmentVariable($n, $bak, "User") }
+            if ($null -ne $bak) {
+                $kindName = (Get-ItemProperty -Path $PrevEnvRegKey -Name ("{0}__Kind" -f $n) -ErrorAction SilentlyContinue).("{0}__Kind" -f $n)
+                if ($kindName -eq "ExpandString") {
+                    Set-ItemProperty -Path "HKCU:\Environment" -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
+                } else {
+                    [Environment]::SetEnvironmentVariable($n, $bak, "User")
+                }
+            }
         }
         Remove-Item -LiteralPath $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue
     } catch {}

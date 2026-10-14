@@ -1,5 +1,5 @@
 # ------------------------------------------------------------------------------
-#  ops.sh — 动作层：四个按钮背后的安装、停止、卸载、状态编排，以及自检沙箱
+#  ops.sh — 动作层：菜单背后的安装、停止、卸载、状态编排，以及自检沙箱
 #  把下面各层拼成使用者点得到的行为。
 # ------------------------------------------------------------------------------
 
@@ -170,6 +170,18 @@ self_test() {
     if [ -n "$SCRIPT_PATH" ] && [ "$SCRIPT_PATH" = "$SCRIPT_DIR/envproxy.sh" ] && [ -f "$SCRIPT_PATH" ]; then _l3=1; else _l3=0; fi
     _selftest_assert_eq "入口公布的 SCRIPT_PATH 指向入口脚本本身" "1" "$_l3"
 
+    echo "[9] 菜单分派"
+    # menu 子命令必须在入口分派里存在，show_menu 必须已定义；
+    # 菜单列出的每个子命令都必须能在入口分派里找到（壳调回来的路不断）。
+    if [ "$(type -t show_menu 2>/dev/null || true)" = "function" ]; then _l4=1; else _l4=0; fi
+    _selftest_assert_eq "show_menu 已定义" "1" "$_l4"
+    if grep -qE '^[[:space:]]*menu\)' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _l5=1; else _l5=0; fi
+    _selftest_assert_eq "menu 在入口分派里存在" "1" "$_l5"
+    for _ms in install status stop uninstall update; do
+        if grep -qE "^[[:space:]]*$_ms\\)" "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _l6=1; else _l6=0; fi
+        _selftest_assert_eq "菜单子命令 $_ms 在入口分派里存在" "1" "$_l6"
+    done
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"
@@ -195,7 +207,7 @@ install_envproxy() {
         echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
     if insert_shell_hooks; then
-        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效）"
+        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 暂不支持，见故障排查）"
     else
         echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
     fi
@@ -203,7 +215,7 @@ install_envproxy() {
     if start_monitor 1; then
         echo "[3/3] 监控进程：已启动"
     else
-        echo "[3/3] 监控进程：未能确认运行，请用 4-查看状态 核对"
+        echo "[3/3] 监控进程：未能确认运行，请用菜单"查看状态"核对"
         echo "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。"
     fi
     CURRENT_STATE="off"
@@ -307,7 +319,7 @@ show_status() {
         elif is_source_copy; then
             echo "更新状态 : 源码包（更新入口会先确认用途再动手）"
         elif [ -z "$_local_ver" ]; then
-            echo "更新状态 : 可用 5-检查更新 升级"
+            echo "更新状态 : 可用菜单 检查更新 升级"
         else
             _newer=$(compare_versions "$_local_ver" "$REMOTE_VERSION" || true)
             if [ "$_newer" -gt 0 ] 2>/dev/null; then
@@ -315,7 +327,7 @@ show_status() {
             else
                 _older=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
                 if [ "$_older" -gt 0 ] 2>/dev/null; then
-                    echo "更新状态 : 发现新版，用 5-检查更新 可升级"
+                    echo "更新状态 : 发现新版，用菜单 检查更新 可升级"
                 else
                     echo "更新状态 : 已是最新"
                 fi
@@ -332,4 +344,53 @@ show_status() {
         echo "  （暂无日志）"
     fi
     echo "=================================="
+}
+
+# ------------------------------------------------------------------------------
+# 菜单（唯一双击入口"打开菜单"背后：编号→现有子命令，不新增行为）
+# 菜单只做三件事：打印、读编号、起子进程跑对应子命令后回到菜单。
+# 每个动作都走一遍入口子命令的完整路径（含操作锁）：菜单自己不拿锁，
+# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。五个动作与入口子命令一一对应。
+# 非交互环境（stdin 不是终端）直接退出并提示，不死循环。
+show_menu() {
+    if [ ! -t 0 ]; then
+        echo "菜单需要双击 打开菜单.command 使用，管道调用请直接用 install/status/stop/uninstall/update 子命令。"
+        return 1
+    fi
+    while true; do
+        echo ""
+        echo "======== EnvProxy 菜单 (macOS) ========"
+        # 抬头只读瞬时项（监控在不在、本地版本），不做网络探测，不卡菜单。
+        _hm=$(get_monitor_pid || true)
+        _hver=$(get_local_version || true)
+        [ -z "$_hver" ] && _hver="未知"
+        if [ -n "$_hm" ]; then _hmon="运行中 (PID $_hm)"; else _hmon="未运行"; fi
+        echo "当前：监控$_hmon，本地版本 v$_hver（详情选 2 查看状态）"
+        echo "  [1] 安装 / 修复（首次安装；觉得不对劲就点它）"
+        echo "  [2] 查看状态（监控、翻墙、变量、版本）"
+        echo "  [3] 停止监控（停掉并恢复直连，下次登录回来）"
+        echo "  [4] 一键恢复（彻底卸载，回到没装之前）"
+        echo "  [5] 检查更新（有新版先说明，同意才装）"
+        echo "  [0] 退出"
+        printf "选一个（回车=查看状态）："
+        if ! IFS= read -r _choice; then
+            echo ""
+            echo "菜单需要双击 打开菜单.command 使用。"
+            return 0
+        fi
+        # 首尾空格不算输错（与 Windows 侧 .Trim() 同语义）。
+        _choice=$(printf '%s' "$_choice" | tr -d '[:space:]')
+        [ -z "$_choice" ] && _choice="2"
+        case "$_choice" in
+            1) _msub="install";;
+            2) _msub="status";;
+            3) _msub="stop";;
+            4) _msub="uninstall";;
+            5) _msub="update";;
+            0) return 0;;
+            *) echo "没有这个编号，重输一个。"; continue;;
+        esac
+        # 子进程跑完整子命令：与入口子命令走的是同一条路（含锁、确认、复检）。
+        /bin/bash "$SCRIPT_PATH" "$_msub" || echo "启动失败（退出码 $?）。"
+    done
 }
