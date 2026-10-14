@@ -123,6 +123,7 @@ if ($Uninstall) {
 }
 if ($Stop) {
     $opMutex = Exit-IfOpBusy
+    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
     Stop-Monitor
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
     Apply-State "off"

@@ -29,7 +29,7 @@ is_dev_copy() {
 }
 
 # 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
-# 现在网页上下载的 zip 已不再含这些文件，见 README 故障排查）。
+# 现在网页上下载的包已不再含这些文件，见 README 故障排查）。
 # 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
 # 传参则判指定目录（自检用），不传判安装根。
 is_source_copy() {
@@ -244,7 +244,7 @@ update_envproxy() {
     # DIVERGE(Mac): Windows 侧是先停监控再覆盖。两侧收尾都会由新脚本的安装再对齐一次，
     # 最终状态相同；这里选"后停"只为缩短变量无人纠正的窗口。
     echo "正在安装新版（保留日志）..."
-    if ! install_package "$_exdir" "$_uroot" "$_exdir"; then
+    if ! install_package "$_exdir" "$_uroot" "$_exdir" "mac release-notes assets"; then
         rm -f "$_tgz" 2>/dev/null || true
         rm -rf "$_exdir" 2>/dev/null || true
         echo "安装区已回滚（覆盖前监控没停，不需要恢复）。"

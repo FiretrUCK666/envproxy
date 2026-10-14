@@ -27,7 +27,7 @@ function Test-DevCopy {
 }
 
 # 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
-# 现在网页上下载的 zip 已不再含这些文件，见 README 故障排查）。
+# 现在网页上下载的包已不再含这些文件，见 README 故障排查）。
 # 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
 # 传参则判指定目录（自检用），不传判安装根。
 function Test-SourceCopy {
@@ -265,7 +265,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $repo = Get-UpdateRepo
     $zipUrl = "https://github.com/{0}/releases/download/{1}/EnvProxy-win.zip" -f $repo, $remote.Tag
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
-    $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_'))
+    $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
     $zipFile = "$tmpBase.zip"
     $extractDir = "${tmpBase}-pkg"
     try {
@@ -338,7 +338,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
 
 # 打印这一版改了什么：包内 release-notes/<标签>.md，最多 40 行；没有就跳过。
 function Show-ReleaseNotes([string]$Root, [string]$Tag) {
-    $f = Join-Path $Root ("release-notes\{0}.md" -f $Tag)
+    $safeTag = $Tag -replace '[^A-Za-z0-9._-]','_'
+    $f = Join-Path $Root ("release-notes\{0}.md" -f $safeTag)
     if (-not (Test-Item $f)) { return }
     try {
         $lines = @([System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8))

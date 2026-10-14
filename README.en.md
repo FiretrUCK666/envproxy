@@ -101,7 +101,7 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 
 Installing does four things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers the monitor to start at login, starts it right away, and corrects the environment variables once.
 
-<img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the zip, double-click 1-Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
+<img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
 To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree.
 
@@ -199,14 +199,14 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Update check reports a check failure | GitHub is temporarily unreachable from this machine | try again later; toggling the proxy on or off and retrying often works |
 | An error during an update | the download, extraction, verification or write step failed | run "Check for updates" from the menu again (it fills in what is missing), or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
 | "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
-| The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no zip downloaded from the site (package, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
+| The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no package downloaded from the site (installer, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
 | You want to undo everything | — | open the menu and choose "Full restore", then answer the log question |
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
 | Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | "Install / Fix" in the menu reads the setting back and tells you when it did not stick; whitelist the install folder (in Huorong, turn off HTTPS scanning features first) and do not turn the antivirus off |
 | After "Install / Fix" it reports the monitor could not be confirmed | a second copy on the same machine already holds the single-instance lock (only one monitor runs at a time), or the launch was blocked | open the menu and choose "Show status" to see the real state; if you no longer need that other copy, run "Full restore" inside its folder, then choose "Install / Fix" once |
 | Browsers cannot open pages, but the terminal is fine | the proxy app was shut down or rebooted without disconnecting, leaving a dead address in the **system proxy** (the browsers' world, not the variables this tool writes) | open the menu and choose "Show status" — it tells you directly whether the system proxy is a leftover. Turn it off under system settings, network, proxy — or open the proxy app and disconnect cleanly once |
-| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. If files from an older release are left behind after covering (such as deleted old shells), just delete them by hand — the new release no longer uses them. Opening the menu to run "Install / Fix" cannot fix this — it needs those same files to run |
+| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download your platform's package again from the Releases page and copy it over the folder. **Updating through the menu cleans your platform's old files automatically** (the other platform's folder is left alone); only hand-covering needs leftover files deleted by hand. Opening the menu to run "Install / Fix" cannot fix this — it needs those same files to run |
 
 <details>
 <summary>Less common cases</summary>
@@ -241,7 +241,7 @@ To see the actual numbers, look in Task Manager for the powershell process whose
 
 ## 8. What is inside the folder
 
-After unzipping you have this (the folder name is yours to change):
+After unzipping you have roughly this (the folder name is yours to change; a split package simply lacks the other platform folder):
 
 ```
 EnvProxy\
@@ -265,7 +265,7 @@ EnvProxy\
 The two assets: `EnvProxy-win.zip` is the Windows package (`win\` plus the docs, version, notes and images),
 `EnvProxy-mac.tar.gz` is the Mac package (`mac\` plus the same shared files). Download your own side; updates use the same per-platform package, and each side leaves the other platform folder alone.
 
-`win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns these four folders with the package contents, so do not keep your own files in them. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
+`win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns the in-scope contents with the package, and never touches the other platform folder. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
 
 The top level and the log need no care: the top level only overwrites same-named files and never deletes anything of yours, and nothing inside `monitor\` is ever overwritten or deleted.
 
@@ -277,6 +277,7 @@ You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no har
 
 - Start at login, the registry entries and the locator all point at the copy you installed, never at a backup. The locator sorts by log activity, so a backup is never picked up by mistake.
 - One thing to avoid: **do not open the menu and run the install inside a backup folder** — that turns the backup into the live installation.
+- To delete the whole folder, run "Full restore" from the menu first. Otherwise the login item and the locator stay behind (they cost nothing and leave no dead proxy — the fixed locator keeps cleaning variables on every login; reinstalling puts everything back).
 - Keep one installation per machine. Before moving, open the menu and run "Full restore" in the old location, then "Install / Fix" in the new one. The program has a single instance lock and migration protection, so two monitors never fight over the same variables; the rule exists because the old start at login entry and path record would otherwise be left behind and missed during a later uninstall.
 
 ## 10. Deploying to a friend or a new machine
@@ -307,7 +308,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 ## 12. macOS
 
-> Windows users can stop here. The Windows files are in `win\`, the Mac files in `mac\`; both sit side by side and copying the whole folder to a Mac is all it takes.
+> Windows users can stop here. Each side ships its own package: Mac users download the Mac package directly; an old folder that already contains `mac\` works as-is.
 
 ### 12.1 How it differs from Windows, in one sentence
 
@@ -319,7 +320,7 @@ The Mac build sets all 9 variables, the extra four being lowercase spellings —
 
 ### 12.2 Install (3 steps)
 
-1. Copy the whole `EnvProxy` folder to any location on the Mac (USB drive, AirDrop, an archive — all fine)
+1. Get the Mac package (`EnvProxy-mac.tar.gz`) onto any location on the Mac (or copy over a whole folder that contains `mac\`: USB drive, AirDrop, an archive — all fine)
 2. Open `mac` and double-click **`打开菜单.command`**, then choose **`1 Install / Fix`** (the first run may need a right-click and Open, see 12.5)
 3. When you see the monitor started message, you are done. Verify in a **new terminal**: `env | grep -i proxy`
 

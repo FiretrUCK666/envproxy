@@ -89,22 +89,27 @@ function Remove-UserEnvVars {
     }
 }
 
+# 单个值是不是我们写下的（纯函数，不碰注册表，可单测）。
+# 与 Remove-UserEnvVars 的逐项规则同源：改这里必须同时看那边——判据与删除必须同一套，
+# 否则会出现"删得掉但门槛没让它删"的残留。
+function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
+    if (-not $Value) { return $false }
+    if ($Name -eq "NO_PROXY") {
+        $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
+        foreach ($e in (Get-NormalizedNoProxyEntries $Value)) { if ($oursSet -contains $e) { return $true } }
+        return $false
+    }
+    if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
+    return ($Value -like "http://127.0.0.1:*")
+}
+
 # 我们该持有的那套变量现在还在不在。判据与 Remove-UserEnvVars 完全一致：
 # 三个代理变量只要有一个还有值就算在，NO_PROXY 看有没有我们写的默认项，
 # NODE_USE_ENV_PROXY 看值是不是我们写的 1。两边共用一套判据，才不会出现
 # "删得掉但门槛没让它删"的残留（半代理）。
 function Test-ProxyVarsPresent {
-    $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
     foreach ($n in $ProxyVarNames) {
-        $cur = [Environment]::GetEnvironmentVariable($n, "User")
-        if (-not $cur) { continue }
-        if ($n -eq "NO_PROXY") {
-            foreach ($e in (Get-NormalizedNoProxyEntries $cur)) { if ($oursSet -contains $e) { return $true } }
-            continue
-        }
-        if ($n -eq "NODE_USE_ENV_PROXY") { if ($cur -eq "1") { return $true }; continue }
-        # 归属判定与删除同口径：别人的代理地址不算我们的痕迹。
-        if ($cur -like "http://127.0.0.1:*") { return $true }
+        if (Test-IsOwnedProxyValue $n ([Environment]::GetEnvironmentVariable($n, "User"))) { return $true }
     }
     return $false
 }

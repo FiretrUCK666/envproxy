@@ -21,11 +21,24 @@ jobs:
     needs: check
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    # 同一标签的两次发版互斥：串行排队，不取消（发版中途取消会留半截资产）。
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - name: 检出标签
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag != '' && inputs.tag || github.ref_name }}
+
+      # 先验钥匙：token 无效/过期时在这里就报清楚，而不是打包半天后在上传那步哑火。
+      - name: 预检发布钥匙
+        run: |
+          command -v gh >/dev/null 2>&1 || { echo "缺少 gh，无法发布。"; exit 1; }
+          gh api user --jq .login >/dev/null 2>&1 || { echo "RELEASE_TOKEN 无效或过期：请维护者换发 Secrets 里那一个值（工作流文件不用动）。"; exit 1; }
+          echo "发布钥匙有效。"
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
       - name: 标签与 VERSION 一致，且中文发版说明已随版提交
         run: |
@@ -46,8 +59,8 @@ jobs:
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           mkdir -p dist
           # 只有分平台包：完整内容减去另一平台目录；更新入口按平台各取各的包。
-          git archive --format=zip    -o dist/EnvProxy-win.zip "$TAG" win README.md README.en.md LICENSE VERSION release-notes assets
-          git archive --format=tar.gz -o dist/EnvProxy-mac.tar.gz "$TAG" mac README.md README.en.md LICENSE VERSION release-notes assets
+          git archive --format=zip    -o dist/EnvProxy-win.zip "$TAG" win README.md README.en.md LICENSE VERSION release-notes assets || { echo "打 Win 包失败"; exit 1; }
+          git archive --format=tar.gz -o dist/EnvProxy-mac.tar.gz "$TAG" mac README.md README.en.md LICENSE VERSION release-notes assets || { echo "打 Mac 包失败"; exit 1; }
           ls -l dist
 
       - name: 校验安装包（与仓库逐字节一致、编码红线在容器里没被改）
@@ -87,7 +100,7 @@ jobs:
             foreach ($r in $have) {
               if ($r -match '^(win|mac)/monitor/') { Write-Host ("运行时目录进了分包：" + $r); $ok = $false; continue }
               $rel = $r.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-              if (-not (Test-Path $rel)) { Write-Host ("分包里有仓库没有的文件：" + $r); $ok = $false; continue }
+              if (-not (Test-Path -LiteralPath $rel)) { Write-Host ("分包里有仓库没有的文件：" + $r); $ok = $false; continue }
               $a = (Get-FileHash (Join-Path $d $rel) -Algorithm SHA256).Hash
               $b = (Get-FileHash $rel -Algorithm SHA256).Hash
               if ($a -ne $b) { Write-Host ("分包与仓库字节不一致：" + $r); $ok = $false }
@@ -126,6 +139,7 @@ jobs:
       - name: 自校验（两个资产都在、是最新、与本地一致，README 的下载直链才有效）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+          command -v jq sha256sum awk curl >/dev/null 2>&1 || { echo "自校验缺工具（jq/sha256sum/awk/curl），装不上就判不了，请先修 runner。"; exit 1; }
           # gh release view 的 --json 字段集随版本变化（如 isLatest 老版本没有），只用最稳的 assets；
           # "是否最新"改从 releases/latest 反查：重建旧标签时直链仍指新版，此时必须拒绝。
           JSON="$(gh release view "$TAG" --json assets)" || { echo "读取 Release 失败：$TAG"; exit 1; }
@@ -146,19 +160,34 @@ jobs:
                 echo "资产摘要与本地不一致：$want（传输或存储被改写）"
                 exit 1
               fi
+            else
+              echo "注意：$want 取不到摘要字段（gh 太老），跳过摘要比对，后面的直链下载校验仍会兜底。"
             fi
           done
           # 取不到"最新版"最常见的成因是这个 Release 还停在草稿：草稿对外不可见，
           # releases/latest 会直接 404，于是直链和更新入口一起失效。报错必须点出这一条，
           # 否则只看到"读取失败"，还得翻日志才知道是草稿。
           LATEST_TAG="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)" || {
-            echo "读取最新版失败：请到 Releases 页面确认 $TAG 是不是停在草稿（草稿对外不可见，下载直链与更新入口都会失效）。"
+            echo "读取最新版失败：多数情况是 $TAG 还停在草稿（草稿对外不可见）；也可能是钥匙没权限读 Releases，或正在用补漏流程重跑旧版。挨个确认。"
             exit 1
           }
           if [ "$LATEST_TAG" != "$TAG" ]; then
             echo "直链最新版是 $LATEST_TAG，不是 $TAG：README 的下载直链会指向别的版本，请确认后再发。"
             exit 1
           fi
+          # API 里有 ≠ 直链能下到（CDN 边缘可能还留着旧字节）：真把两条直链下回来比摘要。
+          # 刚上传完边缘没刷新完是常事，等几轮；还对不上就红——绝不放行"看起来发了、实际下到旧东西"的版本。
+          for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
+            ok=""
+            for i in 1 2 3 4 5 6; do
+              if curl -sL --max-time 60 -o "/tmp/envproxy-dl-$want" "https://github.com/$GITHUB_REPOSITORY/releases/latest/download/$want" 2>/dev/null; then
+                if [ "$(sha256sum "/tmp/envproxy-dl-$want" | awk '{print $1}')" = "$(sha256sum "dist/$want" | awk '{print $1}')" ]; then ok=1; break; fi
+              fi
+              sleep 30
+            done
+            rm -f "/tmp/envproxy-dl-$want" 2>/dev/null || true
+            if [ -z "$ok" ]; then echo "直链 $want 下回来的东西与本地不一致（CDN 还没刷新或上传有问题），拒绝放行。"; exit 1; fi
+          done
           echo "资产已就位且最新。"
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}

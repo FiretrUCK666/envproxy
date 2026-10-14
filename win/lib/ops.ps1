@@ -8,6 +8,7 @@
 # ------------------------------------------------------------------------------
 function Install-EnvProxy {
     Write-Host "======== EnvProxy 安装 ========" -ForegroundColor Cyan
+    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
     Set-AutoRun
     # 写完必须读回：装没装上由复读决定，不由"我调用了写入"决定（与自愈路径同一条规矩）。
     # 杀软拦 Run 键是真实发生过的事，那时不能报"已写入"。
@@ -43,6 +44,7 @@ function Install-EnvProxy {
 
 function Uninstall-EnvProxy([bool]$Purge = $false) {
     Write-Host "======== EnvProxy 卸载（一键恢复原状）========" -ForegroundColor Cyan
+    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
     Stop-Monitor
     Remove-AutoRun
     # 顺序是定的：先清我们写的值，再按快照还用户原值。
@@ -50,11 +52,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。
     # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
     Apply-State "off"
-    # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
-    Restore-PrevEnv
-    # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
-    Broadcast-EnvironmentChange
-    # 复检用的期望值现在就抄一份：键删掉之后就没处可查了。
+    # 复检用的期望值先抄一份：Restore 会删掉快照键，抄晚了就没处可查了。
     # 有快照的名字以"与快照一致"为准（用户原值里若含 localhost 这类与默认集重合的项，
     # 它既不是残留也不能删）；没快照的名字才按"有无我们的痕迹"判。
     $restoredWant = @{}
@@ -62,6 +60,10 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         $bv = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
         if ($null -ne $bv) { $restoredWant[$n] = [string]$bv }
     }
+    # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
+    Restore-PrevEnv
+    # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
+    Broadcast-EnvironmentChange
     Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
@@ -108,20 +110,16 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     $dirty = @()
     try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
     if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
+    if (Test-Item $LauncherDir) { $dirty += "定位器目录仍在" }
+    if (Test-Item $ScriptPathRegKey) { $dirty += "路径记录仍在" }
+    if ((Test-Item $PidFile) -or (Test-Item $StopFlag)) { $dirty += "监控运行时文件仍在" }
     # 变量复检不用整表判据：有快照的名字必须与快照一致（用户原值含重合项也算干净），
     # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。
     $varsClean = $true
-    $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
     foreach ($n in $ProxyVarNames) {
         $cur = [Environment]::GetEnvironmentVariable($n, "User")
         if ($restoredWant.ContainsKey($n)) { if ($cur -ne $restoredWant[$n]) { $varsClean = $false } }
-        elseif ($cur) {
-            if ($n -eq "NO_PROXY") {
-                foreach ($e in (Get-NormalizedNoProxyEntries $cur)) { if ($oursSet -contains $e) { $varsClean = $false; break } }
-            }
-            elseif ($n -eq "NODE_USE_ENV_PROXY") { if ($cur -eq "1") { $varsClean = $false } }
-            elseif ($cur -like "http://127.0.0.1:*") { $varsClean = $false }
-        }
+        elseif (Test-IsOwnedProxyValue $n $cur) { $varsClean = $false }
     }
     if (-not $varsClean) { $dirty += "代理变量仍在" }
     if (Get-MonitorProcess) { $dirty += "监控进程仍在" }
@@ -133,7 +131,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         } else {
             Write-Host "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。" -ForegroundColor Yellow
         }
-        Write-Host "        电脑已恢复到安装前的状态，无需重启。" -ForegroundColor Green
+        Write-Host "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。" -ForegroundColor Green
     } else {
         Write-Host ("[未完成] 以下残留请手动处理：{0}" -f ($dirty -join "；")) -ForegroundColor Yellow
         Write-Host "        可再打开菜单选 一键恢复，或手动删除上述位置。" -ForegroundColor Yellow

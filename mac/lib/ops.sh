@@ -71,8 +71,8 @@ self_test() {
     _selftest_assert_eq "本机地址算我们的" "1" "$_o1"
     _selftest_assert_eq "公司地址不算我们的" "0" "$_o2"
     _selftest_assert_eq "转义幂等" "'a'" "$(shell_escape_sq 'a')"
-    if compare_versions "1.0.10" "1.0.9" >/dev/null 2>&1; then _c1=$(compare_versions "1.0.10" "1.0.9"); else _c1="?"; fi
-    _selftest_assert_eq "版本逐段数值比" "1" "$_c1"
+    # compare_versions 结果走 stdout（exit 恒 0），直接取输出断言。
+    _selftest_assert_eq "版本逐段数值比" "1" "$(compare_versions "1.0.10" "1.0.9")"
 
     echo "[3] 注入核对回收往返"
     set_user_env_vars "17890" || true
@@ -146,9 +146,47 @@ self_test() {
     rm -f "$_pkg/win/envproxy.ps1" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p6=1; else _p6=0; fi
     _selftest_assert_eq "缺另一平台入口照样接受" "1" "$_p6"
+    printf '\357\273\277# entry\n' > "$_pkg/win/envproxy.ps1" 2>/dev/null || true
     rm -f "$_pkg/mac/envproxy.sh" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p7=1; else _p7=0; fi
-    _selftest_assert_eq "缺自己平台入口被拒绝" "0" "$_p7"
+    _selftest_assert_eq "只缺自己平台入口也被拒绝" "0" "$_p7"
+
+    echo "[6b] 分包作用域（覆盖 legacy 全量树）"
+    _leg="$_sandbox/legacy"; _spk="$_sandbox/split"; _stg="$_sandbox/stage"
+    mkdir -p "$_leg/win" "$_leg/mac/lib" "$_leg/release-notes" "$_spk/mac/lib" "$_spk/release-notes" "$_stg" 2>/dev/null || true
+    printf '9.9.9' > "$_leg/VERSION" 2>/dev/null || true
+    printf '9.9.9' > "$_spk/VERSION" 2>/dev/null || true
+    printf '#!/bin/bash\n# mac OLD\n' > "$_leg/mac/envproxy.sh" 2>/dev/null || true
+    printf '#!/bin/bash\n# lib OLD\n' > "$_leg/mac/lib/base.sh" 2>/dev/null || true
+    printf 'stale\n' > "$_leg/mac/old.sh" 2>/dev/null || true
+    printf '# win OLD\n' > "$_leg/win/envproxy.ps1" 2>/dev/null || true
+    printf 'stale\n' > "$_leg/win/old.ps1" 2>/dev/null || true
+    printf '#!/bin/bash\n# mac NEW\n' > "$_spk/mac/envproxy.sh" 2>/dev/null || true
+    printf '#!/bin/bash\n# lib NEW\n' > "$_spk/mac/lib/base.sh" 2>/dev/null || true
+    printf 'notes\n' > "$_spk/release-notes/v9.md" 2>/dev/null || true
+    if install_package "$_spk" "$_leg" "$_stg" "mac release-notes assets"; then _q0=1; else _q0=0; fi
+    _selftest_assert_eq "作用域覆盖成功" "1" "$_q0"
+    _selftest_assert_file_eq "本平台入口被更新" "$(printf '#!/bin/bash\n# mac NEW\n')" "$_leg/mac/envproxy.sh"
+    if [ ! -f "$_leg/mac/old.sh" ]; then _q1=1; else _q1=0; fi
+    _selftest_assert_eq "本平台残留被删" "1" "$_q1"
+    _selftest_assert_file_eq "另一平台入口原样不动" "$(printf '# win OLD\n')" "$_leg/win/envproxy.ps1"
+    if [ -f "$_leg/win/old.ps1" ]; then _q2=1; else _q2=0; fi
+    _selftest_assert_eq "另一平台残留原样保留" "1" "$_q2"
+    _selftest_assert_eq "共享 VERSION 落位" "9.9.9" "$(tr -d ' \t\r\n' < "$_leg/VERSION" 2>/dev/null)"
+    # 写失败必须大声失败：目标只读时一个字节都写不进去，且返回非零。
+    # root 不受权限位限制，且 Windows 的 git-bash 下 chmod 拦不住写——这段只在真 POSIX 非 root 跑
+    #（CI 的 ubuntu 与日常的 macOS，本地 Windows 跑门禁时跳过并记一笔）。
+    _q3=0
+    if [ "$(id -u 2>/dev/null)" != "0" ]; then
+        case "$(uname -s 2>/dev/null)" in
+            MINGW*|MSYS*|CYGWIN*) echo "  SKIP 写不进去就报失败（非 POSIX 环境）";;
+            *)
+                chmod -w "$_leg/mac" 2>/dev/null || true
+                if install_package "$_spk" "$_leg" "$_stg" "mac release-notes assets"; then _q3=1; else _q3=0; fi
+                chmod +w "$_leg/mac" 2>/dev/null || true;;
+        esac
+    fi
+    _selftest_assert_eq "写不进去就报失败" "0" "$_q3"
 
     echo "[7] 库清单与库实现"
     # 空壳库（只有注释、没有函数）在语法上完全合法，却会让整个 mac 侧起不来——
@@ -202,6 +240,7 @@ self_test() {
 # ------------------------------------------------------------------------------
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
     snapshot_prev_env || true
     if set_autorun; then
@@ -235,6 +274,7 @@ install_envproxy() {
 uninstall_envproxy() {
     _purge="$1"
     echo "======== EnvProxy 卸载（一键恢复原状）========"
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
     stop_monitor || true
     remove_autorun
     rm -f "$LOCATOR_PATH" "$PATH_CONF" 2>/dev/null || true
@@ -258,6 +298,7 @@ uninstall_envproxy() {
     fi
     _ghost=$(get_monitor_pid || true)
     if [ -n "$_ghost" ]; then kill -9 "$_ghost" 2>/dev/null || true; sleep 0.5; fi
+    # Mac 侧写变量无 Win 式进程内写锁：靠前面先停监控把竞态窗口收到最小（单实例文件锁另保安装互斥）。
     remove_user_env_vars
     # 按安装时的快照还用户原值（若有），还完删掉快照。
     restore_prev_env || true
@@ -278,6 +319,12 @@ uninstall_envproxy() {
     if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位器文件仍在；"; fi
     if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在；"; fi
     if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在；"; fi
+    if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在；"; fi
+    if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
+    # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
+    for _rc in "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+        if grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then _dirty="$_dirty shell hook 残留；"; break; fi
+    done
     if proxy_vars_present 2>/dev/null; then _dirty="$_dirty 代理变量仍在；"; fi
     if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
     if [ $_remove_log -eq 1 ] && [ -f "$LOG_FILE" ]; then _dirty="$_dirty 历史日志未能删除；"; fi

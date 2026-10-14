@@ -258,8 +258,8 @@ jobs:
             $diff2 | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
             exit 1
           }
-          # 分平台包只给新装用：内容 = 完整包减去另一平台目录（与发版流水线同一产包命令）。
-          # 更新入口只认完整包，分包从不进更新校验，所以这里只核形状。
+          # 分平台包：内容 = 全集减去另一平台目录（与发版流水线同集合、不同产包命令）。
+          # 更新入口下载的正是这两个分包，这里的形状校验即更新校验的形状部分。
           foreach ($sp in @(@{ Keep = 'win'; Drop = 'mac' }, @{ Keep = 'mac'; Drop = 'win' })) {
             $sa = Join-Path $tmp ("envproxy-split-{0}.zip" -f $sp.Keep)
             Remove-Item $sa -Force -ErrorAction SilentlyContinue

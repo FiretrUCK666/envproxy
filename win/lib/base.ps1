@@ -65,6 +65,14 @@ $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_U
 # 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
 $DefaultNoProxy = "localhost,127.0.0.1,::1"
 
+# 是否跑在提权身份下：提权后 HKCU 指向管理员的配置，装/停/卸动的都是"另一个人"的状态。
+# 只做提醒不拦截——机器上只有一个日常用户时，提醒一句就够了。
+function Test-IsElevated {
+    try {
+        return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
 function Get-MutexName([string]$Base) {
     # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
     # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。

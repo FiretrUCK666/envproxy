@@ -21,3 +21,5 @@ mac/monitor/stop.flag
 *.tmp
 *.bak
 *.zip
+*.tar.gz
+dist/

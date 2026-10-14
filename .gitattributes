@@ -14,4 +14,3 @@
 /.gitignore       export-ignore
 /.github/         export-ignore
 /tests/           export-ignore
-/HARDENING-BACKLOG.md export-ignore

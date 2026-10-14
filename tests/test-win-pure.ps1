@@ -41,9 +41,14 @@ $t = Get-ProxyVarTable '17890'
 Assert-Eq 'var table count' '5' ($t.Count)
 Assert-Eq 'var table value' 'http://127.0.0.1:17890' ($t['HTTP_PROXY'])
 
-Write-Host '[2] ownership convention'
-Assert-Eq 'local counts as ours' $true ('http://127.0.0.1:7890' -like 'http://127.0.0.1:*')
-Assert-Eq 'corp does not' $false ('http://corp:8080' -like 'http://127.0.0.1:*')
+Write-Host '[2] ownership convention (real predicate)'
+Assert-Eq 'local counts as ours' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7890')
+Assert-Eq 'corp does not' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://corp:8080')
+Assert-Eq 'own no_proxy entry counts' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,example.com')
+Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'example.com')
+Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
+Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
+Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
 
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
@@ -65,6 +70,10 @@ Assert-Eq 'cleanup removes github dir' $false (Test-Path -LiteralPath (Join-Path
 Assert-Eq 'cleanup keeps user files' $true (Test-Path -LiteralPath (Join-Path $fake 'my-notes.txt'))
 Assert-Eq 'converted folder is install copy' $false (Test-SourceCopy -Root $fake)
 Remove-Item -LiteralPath $fake -Recurse -Force
+$bare = New-TempDir 'envproxy_bare_'
+Write-TestFile (Join-Path $bare 'my-notes.txt') 'mine'
+Assert-Eq 'neither marker means install copy' $false (Test-SourceCopy -Root $bare)
+Remove-Item -LiteralPath $bare -Recurse -Force
 
 Write-Host '[5] atomic file copy (every package file goes through this)'
 $dir5 = New-TempDir 'envproxy_atomic_'
@@ -106,13 +115,50 @@ Assert-Throws 'a CRLF shell script is rejected' { Test-Package $pkg '9.9.9' 'win
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 Remove-Item -LiteralPath (Join-Path $pkg 'mac\envproxy.sh') -Force
 Assert-Eq 'a win split without the mac entry is accepted' $false $(try { Test-Package $pkg '9.9.9' 'win'; $false } catch { $true })
+[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 Remove-Item -LiteralPath (Join-Path $pkg 'win\envproxy.ps1') -Force
 Assert-Throws 'a missing own-platform entry is rejected' { Test-Package $pkg '9.9.9' 'win' }
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), '# entry', $bomEnc)
-[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\empty.ps1'), '', $bomEnc)
-Assert-Throws 'an empty script is rejected' { Test-Package $pkg '9.9.9' }
+Assert-Throws 'a BOM-only truncated file is rejected' { Test-Package $pkg '9.9.9' 'win' }
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\empty.ps1') -Force
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\zero.ps1'), '', $plainEnc)
+Assert-Throws 'a zero-byte script is rejected' { Test-Package $pkg '9.9.9' 'win' }
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\zero.ps1') -Force
 Remove-Item -LiteralPath $pkg -Recurse -Force
+
+Write-Host '[6b] scoped install (split onto legacy tree)'
+$leg = New-TempDir 'envproxy_scoped_'
+$spk = New-TempDir 'envproxy_split_'
+$stg = New-TempDir 'envproxy_stage_'
+New-Item -Path (Join-Path $leg 'win\lib'), (Join-Path $leg 'mac'), (Join-Path $leg 'release-notes') -ItemType Directory -Force | Out-Null
+New-Item -Path (Join-Path $spk 'win\lib'), (Join-Path $spk 'release-notes') -ItemType Directory -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $leg 'win\envproxy.ps1'), '# entry OLD', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $leg 'win\lib\base.ps1'), '# lib OLD', $bomEnc)
+Write-TestFile (Join-Path $leg 'win\old.cmd') 'stale'
+Write-TestFile (Join-Path $leg 'mac\envproxy.sh') "#!/bin/bash`n# mac OLD"
+Write-TestFile (Join-Path $leg 'mac\old.sh') 'stale'
+Write-TestFile (Join-Path $leg 'VERSION') '1.0.0'
+[System.IO.File]::WriteAllText((Join-Path $spk 'win\envproxy.ps1'), '# entry NEW', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $spk 'win\lib\base.ps1'), '# lib NEW', $bomEnc)
+Write-TestFile (Join-Path $spk 'release-notes\v9.md') 'notes'
+Write-TestFile (Join-Path $spk 'VERSION') '9.9.9'
+Install-Package -SrcRoot $spk -ProjectRoot $leg -Stage $stg -ShipDirs @('win', 'release-notes', 'assets')
+Assert-Eq 'scoped write updates own entry' '# entry NEW' ([System.IO.File]::ReadAllText((Join-Path $leg 'win\envproxy.ps1'), [System.Text.Encoding]::UTF8))
+Assert-Eq 'scoped delete removes own stale file' $false (Test-Path -LiteralPath (Join-Path $leg 'win\old.cmd'))
+Assert-Eq 'other platform entry untouched' "#!/bin/bash`n# mac OLD" (Get-Content -LiteralPath (Join-Path $leg 'mac\envproxy.sh') -Raw)
+Assert-Eq 'other platform stale file left alone' $true (Test-Path -LiteralPath (Join-Path $leg 'mac\old.sh'))
+Assert-Eq 'shared VERSION updated' '9.9.9' ((Get-Content -LiteralPath (Join-Path $leg 'VERSION') -Raw).Trim())
+# rollback: lock the destination entry, the write must fail and originals come back
+$fs = [System.IO.File]::Open((Join-Path $leg 'win\envproxy.ps1'), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+$rbThrew = $false
+try { Install-Package -SrcRoot $spk -ProjectRoot $leg -Stage $stg -ShipDirs @('win', 'release-notes', 'assets') } catch { $rbThrew = $true }
+$fs.Close()
+Assert-Eq 'locked write fails loudly' $true $rbThrew
+Assert-Eq 'rollback restores entry' '# entry NEW' ([System.IO.File]::ReadAllText((Join-Path $leg 'win\envproxy.ps1'), [System.Text.Encoding]::UTF8))
+Remove-Item -LiteralPath $leg -Recurse -Force
+Remove-Item -LiteralPath $spk -Recurse -Force
+Remove-Item -LiteralPath $stg -Recurse -Force
 
 Write-Host '[7] the library set declared by the entry'
 # The entry is a thin loader: it owns the library list and nothing else. These assertions keep

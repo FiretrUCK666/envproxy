@@ -57,8 +57,8 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
     }
 }
 
-# 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
-# 四个程序目录内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
+# 覆盖安装区。边界三条：作用域内包文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
+# 作用域内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。作用域外的目录碰都不碰。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
 function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage, [string[]]$ShipDirs = @("win", "mac", "release-notes", "assets")) {
     # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。
@@ -89,16 +89,23 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
     $pkg = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
         $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
+        # Stage 复用 SrcRoot 时，备份目录就在包目录里：枚举必须跳过它，否则备份会被当成包内文件。
+        if ($rel -like 'backup\*') { continue }
         $pkg[$rel.ToLower()] = $rel
     }
+    # 生效作用域 = 调用方声明 ∩ 包内实际有的目录：分包本来就没有另一平台目录，
+    # 即使有人传了全量作用域，也绝不碰包外的东西。备份、删残留、写入、回滚、复读全走它。
+    $effShip = @($ShipDirs | Where-Object { Test-Path -LiteralPath (Join-Path $SrcRoot $_) })
     $backup = $null
     if ($Stage) {
         $backup = Join-Path $Stage "backup"
         Remove-ItemSafe (Join-Path $Stage "backup")
         New-Item -Path $backup -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-        foreach ($d in $shipDirs) {
+        foreach ($d in $effShip) {
             $src = Join-Path $ProjectRoot $d
             if (Test-Item $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $backup $d) -Recurse -Force -ErrorAction Stop }
+            # monitor 不备份：日志与 pid 是活的运行时状态，回滚也不碰它们（删残留与回滚各有自己的跳过）。
+            Remove-Item -LiteralPath (Join-Path $backup (Join-Path $d "monitor")) -Recurse -Force -ErrorAction SilentlyContinue
         }
         # 根目录那几个随包文件（VERSION / README / LICENSE）也要备份：只备份程序目录的话，
         # 中途失败回滚后会留下"版本号是新的、程序目录是旧的"——比不滚还难查。
@@ -110,7 +117,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
     }
     try {
         $removed = 0
-        foreach ($d in $shipDirs) {
+        foreach ($d in $effShip) {
             $destDir = Join-Path $ProjectRoot $d
             if (-not (Test-Item $destDir)) { continue }
             foreach ($f in (Get-ChildItem -LiteralPath $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
@@ -139,6 +146,8 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         $rootFiles = @()
         foreach ($rel in $pkg.Values) {
             if ($rel -notmatch '\\') { $rootFiles += $rel; continue }
+            # 只写作用域内的文件：包外目录即使被显式传入也不碰（与备份/删除/回滚同范围）。
+            if ($effShip -notcontains (($rel -split '\\')[0])) { continue }
             $dest = Join-Path $ProjectRoot $rel
             $parent = Split-Path -Parent $dest
             if ($parent -and -not (Test-Item $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
@@ -161,7 +170,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         if ($backup -and (Test-Item $backup)) {
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
             # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
-            foreach ($d in $shipDirs) {
+            foreach ($d in $effShip) {
                 $dst = Join-Path $ProjectRoot $d
                 $bak = Join-Path $backup $d
                 if (-not (Test-Item $bak)) { continue }
@@ -190,7 +199,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             # 实测过：入口文件被占用时，VERSION 会先写成新版本、旧入口留在原地，
             # 于是更新入口认为本地比线上新，用户从此收不到任何新版本。
             $notBack = @()
-            foreach ($d in $shipDirs) {
+            foreach ($d in $effShip) {
                 $bakD = Join-Path $backup $d
                 if (-not (Test-Item $bakD)) { continue }
                 foreach ($f in (Get-ChildItem -LiteralPath $bakD -Recurse -File -Force -ErrorAction SilentlyContinue)) {

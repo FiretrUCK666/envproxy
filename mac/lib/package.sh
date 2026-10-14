@@ -41,7 +41,13 @@ verify_package() {
     return 0
 }
 
-# 覆盖安装区。边界三条：包内文件全部写入；win/monitor 与 mac/monitor 永不覆盖、永不删；
+# 包内根文件（VERSION/README/LICENSE…）：不写死名单，包里有谁算谁。
+# 读调用方的 $_plist（备份前已生成，不含 backup/）。
+_pkg_root_files() {
+    grep -v '/' "$_plist" 2>/dev/null | grep -v '^$' || true
+}
+
+# 覆盖安装区。边界三条：作用域内包文件全部写入；win/monitor 与 mac/monitor 永不覆盖、永不删；
 # 作用域内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
 # $4 是本次覆盖的作用域（默认本平台目录 + 共享）：分平台包只含自己平台，更新时绝不碰
 # 另一平台的目录（不删、不加、不校验）。备份、删残留、回滚全走这一个变量，范围天然一致。
@@ -59,6 +65,18 @@ install_package() {
         echo "拒绝覆盖：目标不是 EnvProxy 安装目录，未做任何改动。"
         return 1
     fi
+    # 生效作用域 = 调用方声明 ∩ 包内实际有的目录（与 Win 侧 Install-Package 同语义）：
+    # 分包本来就没有另一平台目录，即使有人传了全量作用域，也绝不碰包外的东西。
+    _peff=""
+    # shellcheck disable=SC2086
+    for _pd in $_pship; do
+        [ -d "$_proot/$_pd" ] && _peff="$_peff $_pd"
+    done
+    # 上一次覆盖若在中途被杀可能留下临时文件；顺手清干净，不留垃圾。
+    # shellcheck disable=SC2086
+    for _pd in $_peff; do
+        find "$_pdest/$_pd" -type f -name '*.envproxy-new.*' -delete 2>/dev/null || true
+    done
     _plist=$(mktemp /tmp/envproxy_pkglist.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 1; }
     # 清单必须在备份之前生成：备份目录就在 $_pstage 里（真实调用处与 $_proot 是同一个目录），
     # 先生成清单会把 backup/** 当成"包内文件"一起拷进用户安装根（里面还带着上一版核心脚本）。
@@ -74,17 +92,20 @@ install_package() {
         rm -rf "$_pbak" 2>/dev/null || true
         mkdir -p "$_pbak" 2>/dev/null || true
         # shellcheck disable=SC2086
-        for _pd in $_pship; do
+        for _pd in $_peff; do
             [ -d "$_pdest/$_pd" ] && cp -pR "$_pdest/$_pd" "$_pbak/$_pd" 2>/dev/null
+            # monitor 不备份：日志与 pid 是活的运行时状态，回滚也不碰它们。
+            rm -rf "$_pbak/$_pd/monitor" 2>/dev/null || true
         done
         # 根目录那几个随包文件也要备份：只备份程序目录的话，中途失败回滚后会留下
-        # "版本号是新的、程序目录是旧的"——比不滚还难查。
-        for _pf in VERSION README.md README.en.md LICENSE; do
+        # "版本号是新的、程序目录是旧的"——比不滚还难查。名单从包里取，不写死。
+        _pkg_root_files | while IFS= read -r _pf; do
+            [ -n "$_pf" ] || continue
             [ -f "$_pdest/$_pf" ] && cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null
         done
     fi
     # shellcheck disable=SC2086
-    for _pd in $_pship; do
+    for _pd in $_peff; do
         [ -d "$_pdest/$_pd" ] || continue
         find "$_pdest/$_pd" -type f 2>/dev/null | while IFS= read -r _pf; do
             _prel="${_pf#"$_pdest"/}"
@@ -98,27 +119,46 @@ install_package() {
         done
     done
     _pcopy=1
+    # 写两遍：除 VERSION 外先写完，最后单独写 VERSION——它若先变成新版本而程序文件没写完，
+    # 更新入口会认为本地比线上新而拒绝再升级（与 Win 侧同顺序）。
+    for _ppass in 1 2; do
     while IFS= read -r _prel; do
         [ -n "$_prel" ] || continue
+        # 只写作用域内的文件：包外目录即使被显式传入也不碰（与备份/删除/回滚同范围）。
+        case "$_prel" in
+            */*) _ptop="${_prel%%/*}"
+                 case " $_peff " in *" $_ptop "*) ;; *) continue;; esac ;;
+        esac
+        if [ "$_ppass" = "1" ]; then [ "$_prel" = "VERSION" ] && continue
+        else [ "$_prel" = "VERSION" ] || continue; fi
         _ptarget="$_pdest/$_prel"
         mkdir -p "$(dirname "$_ptarget")" 2>/dev/null || { _pcopy=0; continue; }
         # 所有文件一律"写同目录临时文件再改名"：cp 直接截断重写不安全——
         # 其中一个文件可能正在被执行（bash 边读边执行），字符串比对认身份
         # 在大小写不敏感卷/软链下还会失配。不再设特例，一视同仁。
-        _ptmp="$_ptarget.envproxy-new.$$"
-        if cp -p "$_proot/$_prel" "$_ptmp" 2>/dev/null && mv -f "$_ptmp" "$_ptarget" 2>/dev/null; then
-            :
+        # 临时文件用 mktemp 独占创建（不可预测，无残留可预置）；写完核对字节数再改名。
+        _ptmp=$(mktemp "${_ptarget}.envproxy-new.XXXXXX" 2>/dev/null) || { _pcopy=0; continue; }
+        if cp -p "$_proot/$_prel" "$_ptmp" 2>/dev/null; then
+            _ws=$(wc -c < "$_proot/$_prel" 2>/dev/null | tr -d ' \t')
+            _wt=$(wc -c < "$_ptmp" 2>/dev/null | tr -d ' \t')
+            if [ -n "$_ws" ] && [ "$_ws" = "$_wt" ] && mv -f "$_ptmp" "$_ptarget" 2>/dev/null; then
+                :
+            else
+                rm -f "$_ptmp" 2>/dev/null || true
+                _pcopy=0
+            fi
         else
             rm -f "$_ptmp" 2>/dev/null || true
             _pcopy=0
         fi
     done < "$_plist"
+    done
     if [ "$_pok" != "1" ] || [ "$_pcopy" != "1" ]; then
         if [ -n "$_pstage" ] && [ -d "$_pstage/backup" ]; then
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
             # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
             # shellcheck disable=SC2086
-            for _pd in $_pship; do
+            for _pd in $_peff; do
                 _pb="$_pstage/backup/$_pd"
                 [ -d "$_pb" ] || continue
                 mkdir -p "$_pdest/$_pd" 2>/dev/null || true
@@ -132,7 +172,8 @@ install_package() {
                     [ -f "$_pb/$_r" ] || rm -f "$_pdest/$_pd/$_r" 2>/dev/null || true
                 done
             done
-            for _pf in VERSION README.md README.en.md LICENSE; do
+            _pkg_root_files | while IFS= read -r _pf; do
+                [ -n "$_pf" ] || continue
                 [ -f "$_pstage/backup/$_pf" ] && cp -p "$_pstage/backup/$_pf" "$_pdest/$_pf" 2>/dev/null
             done
             echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
