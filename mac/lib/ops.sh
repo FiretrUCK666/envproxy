@@ -164,6 +164,12 @@ self_test() {
         _selftest_assert_eq "库 $_lib 的代表函数 $_fn 已定义" "1" "$_l2"
     done
 
+    echo "[8] 监控启动目标"
+    # 监控必须从入口脚本启动：库不得自行推算"我在哪"——在库里 $0 / BASH_SOURCE 指的是库文件
+    # 自己，拿它启动等于去跑一个跑不起来的文件（装完没有监控，日志里连一行都不会有）。
+    if [ -n "$SCRIPT_PATH" ] && [ "$SCRIPT_PATH" = "$SCRIPT_DIR/envproxy.sh" ] && [ -f "$SCRIPT_PATH" ]; then _l3=1; else _l3=0; fi
+    _selftest_assert_eq "入口公布的 SCRIPT_PATH 指向入口脚本本身" "1" "$_l3"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"
@@ -197,7 +203,8 @@ install_envproxy() {
     if start_monitor 1; then
         echo "[3/3] 监控进程：已启动"
     else
-        echo "[3/3] 监控进程：启动失败，请重试 1-安装"
+        echo "[3/3] 监控进程：未能确认运行，请用 4-查看状态 核对"
+        echo "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。"
     fi
     CURRENT_STATE="off"
     get_current_state || true

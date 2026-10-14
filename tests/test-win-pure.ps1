@@ -134,5 +134,30 @@ Assert-Eq 'launcher command points at the launcher file' $true ($cmd -like ('*' 
 Assert-Eq 'launcher command hides the window' $true ($cmd -like '*WindowStyle Hidden*')
 Assert-Eq 'launcher command bypasses execution policy' $true ($cmd -like '*ExecutionPolicy Bypass*')
 
+Write-Host '[9] the monitor launch target'
+# The monitor is started from the entry script, and libraries must never answer "where am I" on
+# their own: inside a library $PSCommandPath / $PSScriptRoot point at the library file, so using
+# them as the entry path starts a file that cannot run on its own (no monitor, and no log line).
+$entryFile = Join-Path $PSScriptRoot '../win/envproxy.ps1'
+Assert-Eq 'the entry publishes its own path' ((Get-Item -LiteralPath $entryFile).FullName) ((Get-Item -LiteralPath $ScriptPath).FullName)
+Assert-Eq 'the script directory derives from it' ((Get-Item -LiteralPath (Split-Path -Parent $entryFile)).FullName) ((Get-Item -LiteralPath $ScriptDir).FullName)
+$launch = @(Get-MonitorLaunchArgs)
+Assert-Eq 'launch args end with -File' '-File' $launch[-2]
+Assert-Eq 'launch args quote the entry path' ('"{0}"' -f (Get-Item -LiteralPath $entryFile).FullName) $launch[-1]
+Assert-Eq 'launch target is the entry, not a library' 'envproxy.ps1' (Split-Path -Leaf ($launch[-1].Trim('"')))
+Assert-Eq 'launch target exists' $true (Test-Path -LiteralPath ($launch[-1].Trim('"')))
+# Confirming a freshly started monitor judges by the pid file the monitor writes itself (it writes
+# it only after it owns the singleton). "Some process has this script on its command line" is not
+# enough: the process that just lost the singleton race looks like that for a moment too, and that
+# is how an installer came to print "started" while nothing was running.
+$dir9 = New-TempDir 'envproxy_pid_'
+$savedPidFile = $PidFile
+$PidFile = Join-Path $dir9 'monitor.pid'
+Assert-Eq 'no pid file is not a confirmed monitor' '' (Get-MonitorProcessFromPidFile)
+Write-TestFile $PidFile '999999'
+Assert-Eq 'a dead pid is not a confirmed monitor' '' (Get-MonitorProcessFromPidFile)
+$PidFile = $savedPidFile
+Remove-Item -LiteralPath $dir9 -Recurse -Force
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

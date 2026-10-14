@@ -20,8 +20,13 @@ function Install-EnvProxy {
         Write-Host "      请检查杀软拦截，或再双击一次本按钮；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
     Update-ScriptPathRecord
-    Start-Monitor -Force:$true
-    Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
+    # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
+    if (Start-Monitor -Force:$true) {
+        Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
+    } else {
+        Write-Host "[2/3] 监控进程：未能确认运行，请用 4-查看状态 核对。" -ForegroundColor Yellow
+        Write-Host "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。" -ForegroundColor Yellow
+    }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。

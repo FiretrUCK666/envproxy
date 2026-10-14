@@ -232,22 +232,33 @@ remove_shell_hooks() {
 # ------------------------------------------------------------------------------
 # 7. 监控进程管理（PID 文件 + 命令行校验 + 优雅停止）
 # ------------------------------------------------------------------------------
+# 判据一：监控自己写下的 pid 文件（它在拿到单实例锁之后才写）。
+# 这是"监控真的在跑"的唯一可靠判据——命令行特征只能说明"有这么个进程"，
+# 而刚启动、还没抢到锁就在退出的那个也满足它，拿它当"已启动"就会报假话。
+get_monitor_pid_from_file() {
+    [ -f "$PID_FILE" ] || return 1
+    _pid=$(tr -cd '0-9' < "$PID_FILE" 2>/dev/null)
+    [ -n "$_pid" ] || return 1
+    [ "$_pid" != "$$" ] || return 1
+    kill -0 "$_pid" 2>/dev/null || return 1
+    _args=$(ps -p "$_pid" -o args= 2>/dev/null)
+    case "$_args" in
+        *envproxy.sh*)
+            case "$_args" in
+                *install*|*stop*|*uninstall*|*status*|*purge*) return 1;;
+                *) printf '%s' "$_pid"; return 0;;
+            esac
+            ;;
+    esac
+    return 1
+}
+
+# 判据二（兜底）：命令行特征。判"有没有监控在跑"用它——pid 文件缺失或陈旧但确实有监控时
+# 靠它（手工启动、pid 文件被删、跨位置停止）；判"我刚启动的监控起来了吗"不能用它。
 get_monitor_pid() {
-    if [ -f "$PID_FILE" ]; then
-        _pid=$(tr -cd '0-9' < "$PID_FILE" 2>/dev/null)
-        if [ -n "$_pid" ] && [ "$_pid" != "$$" ]; then
-            if kill -0 "$_pid" 2>/dev/null; then
-                _args=$(ps -p "$_pid" -o args= 2>/dev/null)
-                case "$_args" in
-                    *envproxy.sh*)
-                        case "$_args" in
-                            *install*|*stop*|*uninstall*|*status*|*purge*) ;;
-                            *) printf '%s' "$_pid"; return 0;;
-                        esac
-                        ;;
-                esac
-            fi
-        fi
+    if _pid=$(get_monitor_pid_from_file); then
+        printf '%s' "$_pid"
+        return 0
     fi
     # pgrep 是 macOS 自带（10.6 起），直调即可，不留走不到的兜底分支。
     for _pid in $(pgrep -f "envproxy\.sh$" 2>/dev/null); do
@@ -272,15 +283,23 @@ start_monitor() {
         if [ "$_force" = "1" ]; then echo "正在重启监控以加载当前最新代码..."; else echo "检测到旧位置的监控进程，正在迁移到当前路径..."; fi
         stop_monitor || true
     fi
+    # 启动前清掉可能残留的 pid 文件（强杀不给监控机会删它），否则复检会读到上一次运行的 pid。
+    rm -f "$PID_FILE" 2>/dev/null || true
     nohup /bin/bash "$SCRIPT_PATH" >/dev/null 2>&1 < /dev/null &
     # shellcheck disable=SC2312
     disown 2>/dev/null || true
-    sleep 0.5
-    if get_monitor_pid >/dev/null 2>&1; then
+    # 复检判据是 pid 文件（监控拿到单实例锁之后才写）。冷启动要几秒，所以轮询而不是固定等待：
+    # 固定等待既可能把"其实起来了"误报成失败，也可能放过那个正在抢锁失败的进程。
+    _deadline=$(( $(date +%s) + 12 ))
+    while [ "$(date +%s)" -lt "$_deadline" ]; do
+        get_monitor_pid_from_file >/dev/null 2>&1 && break
+        sleep 0.4
+    done
+    if get_monitor_pid_from_file >/dev/null 2>&1; then
         echo "监控进程已启动。"
         return 0
     fi
-    echo "监控进程启动失败，请重试 1-安装。" >&2
+    echo "监控进程未能确认运行（另一个副本的监控可能占着单实例锁）。" >&2
     return 1
 }
 

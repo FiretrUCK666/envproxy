@@ -55,11 +55,13 @@ param(
 # ------------------------------------------------------------------------------
 # 加载核心库（顺序固定：契约常量与纯函数必须先就位）
 # ------------------------------------------------------------------------------
-# 只有入口推算自身目录：库被点源后 $PSScriptRoot 指向 lib\ 自己，用它推路径会把
-# monitor 目录指到 lib\ 里去。所以脚本目录在这里算好，各库一律用这个全局。
-$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot }
-             elseif ($PSCommandPath) { Split-Path -Parent $PSCommandPath }
-             else { (Get-Location).Path }
+# 只有入口能回答"这个程序在哪里"：库被点源后 $PSCommandPath 与 $PSScriptRoot 指的都是
+# **库文件自己**——拿它当入口路径会去启动一个库文件（跑不起来、连日志都写不出来），
+# 拿它推目录会把 monitor 目录指进 lib\。所以入口在这里公布两个事实，各库一律只用它们。
+$ScriptPath = if ($PSCommandPath) { $PSCommandPath }
+              elseif ($PSScriptRoot) { Join-Path $PSScriptRoot "envproxy.ps1" }
+              else { Join-Path (Get-Location).Path "envproxy.ps1" }
+$ScriptDir  = Split-Path -Parent $ScriptPath
 $LibDir = Join-Path $ScriptDir "lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib\ 实际内容一致。
 $CoreLibs = @("base", "probe", "env", "runtime", "package", "update", "ops")

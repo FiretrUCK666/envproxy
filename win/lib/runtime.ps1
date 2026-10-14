@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  runtime.ps1 — 运行时层：日志、监控进程管理、监控主循环、自启动与定位器
-#  路径常量依赖入口先设好的 $ScriptDir；本层不得自行用 $PSScriptRoot 推算脚本目录。
+#  路径常量依赖入口先设好的 $ScriptDir 与 $ScriptPath；本层不得自行推算脚本目录或入口路径。
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -30,10 +30,13 @@ $ErrorActionPreference = "SilentlyContinue"
 $reg = "HKCU:\Software\EnvProxy"
 $target = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).ScriptPath
 
-if (-not $target -or -not (Test-Path -LiteralPath $target)) {
-    # 记录失效（文件夹被移动/删除过）。先顺手清理旧位置的运行时残留：
+# 记录必须指向入口脚本本身：指向别处（例如某个库文件）同样算失效。
+# 只判"文件在不在"不够——记录写坏了、而那个文件恰好存在时，会一直去启动一个跑不起来的
+# 文件，搜索却永远不触发，开机自启动就此静默失效。
+if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Leaf $target) -ne "envproxy.ps1")) {
+    # 记录失效（文件夹被移动/删除过，或记录指向的不是入口脚本）。先顺手清理旧位置的运行时残留：
     # 覆盖"移动后立刻关机"的场景（监控来不及自退，旧位置可能残留 monitor 目录/空壳）。
-    if ($target) {
+    if ($target -and -not (Test-Path -LiteralPath $target)) {
         $oldDir = Split-Path -Parent $target
         Remove-Item -LiteralPath (Join-Path $oldDir "monitor") -Recurse -Force -ErrorAction SilentlyContinue
         $left = Get-ChildItem -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -109,9 +112,10 @@ function Remove-AutoRun {
 }
 
 # 记录"脚本当前路径"（监控启动时写入；定位器靠它快速找到脚本）
+# 记的必须是入口脚本：定位器会直接拿这个值去 -File 启动，记成库文件等于记了个跑不起来的文件。
 function Update-ScriptPathRecord {
     New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null
-    Set-ItemProperty -Path $ScriptPathRegKey -Name "ScriptPath" -Value $PSCommandPath -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $ScriptPathRegKey -Name "ScriptPath" -Value $ScriptPath -ErrorAction SilentlyContinue
 }
 
 # 自启动自愈：让固定位置的自启动配置**与当前代码生成的内容一致**——不只是"存在"。
@@ -153,10 +157,7 @@ function Repair-AutoRun {
 # ------------------------------------------------------------------------------
 # 4. 监控进程管理（PID 文件 + 优雅停止标志 + 兜底强杀）
 # ------------------------------------------------------------------------------
-# 脚本目录（三阶兜底，任何调用方式都不脆弱）：
-#   1) $PSScriptRoot       —— 正常 -File 执行（监控/安装/停止全是这种）
-#   2) $PSCommandPath      —— 个别特殊调用
-#   3) 当前工作目录        —— 最后兜底
+# 脚本目录用入口发布的 $ScriptDir（本层不自行推算：库里的 $PSScriptRoot 指向 lib\ 自己）。
 
 # 所有运行时文件集中放 monitor\ 子文件夹（log / pid / stop 标志），
 # 卸载时整目录删除，一个都不残留。
@@ -175,20 +176,27 @@ function Ensure-MonitorDir {
 # DIVERGE(Mac): macOS 侧等价实现是 `pgrep -f "envproxy\.sh$"`（见 mac/locator.sh），语义相同。
 $MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
 
+# 判据一：监控自己写下的 pid 文件（它在抢到单实例互斥之后才写）。
+# 这是"监控真的在跑"的唯一可靠判据——命令行特征只能说明"有这么个进程"，
+# 而刚启动、还没抢到锁就在退出的那个也满足它，拿它当"已启动"就会报假话。
+function Get-MonitorProcessFromPidFile {
+    if (-not (Test-Item $PidFile)) { return $null }
+    try {
+        $pid2 = [int]((Read-Text $PidFile).Trim())
+        if ($pid2 -ne $PID) {
+            # 校验命令行确实是本脚本，防止 PID 被系统复用而误杀他人
+            $w = Get-CimInstance Win32_Process -Filter "ProcessId=$pid2" -ErrorAction SilentlyContinue
+            if ($w -and $w.CommandLine -match $MonitorCmdLinePattern) { return $w }
+        }
+    } catch {}
+    return $null
+}
+
+# 判据二（兜底）：命令行特征。判"有没有监控在跑"用它——pid 文件缺失或陈旧但确实有监控时
+# 靠它（手工启动、pid 文件被删、跨位置停止）；判"我刚启动的监控起来了吗"不能用它。
 function Get-MonitorProcess {
-    # 先按 PID 文件（校验命令行确实是本脚本，防止 PID 被系统复用而误杀他人）
-    if (Test-Item $PidFile) {
-        try {
-            $pid2 = [int]((Read-Text $PidFile).Trim())
-            if ($pid2 -ne $PID) {
-                $w = Get-CimInstance Win32_Process -Filter "ProcessId=$pid2" -ErrorAction SilentlyContinue
-                if ($w -and $w.CommandLine -match $MonitorCmdLinePattern) { return $w }
-            }
-        } catch {}
-    }
-    # 再按命令行特征兜底：
-    # 监控进程的特征 = 命令行以 -File "...envproxy.ps1" 结尾（不带任何子命令）
-    # 这样执行 -Status / -Install 等命令的进程不会被误认，自身也被排除
+    $fromFile = Get-MonitorProcessFromPidFile
+    if ($fromFile) { return $fromFile }
     return Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $_.ProcessId -ne $PID -and
@@ -196,6 +204,13 @@ function Get-MonitorProcess {
         } | Select-Object -First 1
 }
 
+# 监控启动参数的唯一来源：命令行必须以 -File "<入口路径>" 结尾——这既是监控进程的识别判据
+# （见 $MonitorCmdLinePattern），也是"启动的到底是哪个文件"的唯一出处。测试也从这里取。
+function Get-MonitorLaunchArgs {
+    return @("-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File",('"{0}"' -f $ScriptPath))
+}
+
+# 返回值 = 是否确认监控在跑。调用方据此说话——"我调用过启动"不等于"它起来了"。
 function Start-Monitor([bool]$Force = $false) {
     $existing = Get-MonitorProcess
     if ($existing) {
@@ -204,29 +219,31 @@ function Start-Monitor([bool]$Force = $false) {
         #   - 非 Force 且路径一致：幂等跳过（重复点安装零副作用）
         #   - 非 Force 且路径不一致：旧位置的监控（文件夹被移动过）：先停掉旧的，再启动新的
         # 注意：用 IndexOf 而非 -like——-like 会把路径里的 [ ] 当通配符误判
-        $samePath = ($existing.CommandLine.IndexOf($PSCommandPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $samePath = ($existing.CommandLine.IndexOf($ScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
         if (-not $Force -and $samePath) {
             Write-Host "监控进程已在运行（路径一致），跳过启动。" -ForegroundColor Yellow
-            return
+            return $true
         }
         Write-Host $(if ($Force) { "正在重启监控以加载当前最新代码..." } else { "检测到旧位置的监控进程，正在迁移到当前路径..." }) -ForegroundColor Yellow
         Stop-Monitor
     }
-    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
-        -ArgumentList "-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`""
-    # 启动完必须复查：子进程可能因抢不到单实例互斥而静默退出，
-    # 此时再打印"已启动"就是假话。但也要给它足够时间：PowerShell 5.1 冷启动并加载七个库
-    # 可能要好几秒，固定等 2 秒就下结论会把"其实起来了"误报成"未能确认运行"（实测遇到过）。
+    # 启动前清掉可能残留的 pid 文件（强杀不给监控机会删它），否则复检会读到上一次运行的 pid。
+    Remove-ItemSafe $PidFile
+    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList (Get-MonitorLaunchArgs)
+    # 启动完必须复查，判据是**监控自己写下的 pid 文件**：抢不到单实例互斥的子进程会安静退出，
+    # 而它在退出前同样"命令行里带着本脚本"，只看进程存在就会把这种失败报成"已启动"。
+    # 但也要给它足够时间：PowerShell 5.1 冷启动并加载七个库可能要好几秒，所以轮询而不是固定等。
     $deadline = (Get-Date).AddSeconds(12)
     while ((Get-Date) -lt $deadline) {
-        if (Get-MonitorProcess) { break }
+        if (Get-MonitorProcessFromPidFile) { break }
         Start-Sleep -Milliseconds 400
     }
-    if (Get-MonitorProcess) {
+    if (Get-MonitorProcessFromPidFile) {
         Write-Host "监控进程已启动。" -ForegroundColor Green
-    } else {
-        Write-Host "监控进程未能确认运行，请用 4-查看状态 核对（可能是另一个监控占着单实例锁）。" -ForegroundColor Yellow
+        return $true
     }
+    Write-Host "监控进程未能确认运行（另一个副本的监控可能占着单实例锁）。" -ForegroundColor Yellow
+    return $false
 }
 
 function Stop-Monitor {
@@ -343,7 +360,7 @@ function Run-MonitorLoop {
     while (-not (Test-Item $StopFlag)) {
         # 自退检测：脚本文件不存在 = 文件夹被移动/删除 → 旧位置不再需要本监控。
         # 静默退出并清理旧位置的一切运行时痕迹（下次开机定位器会从新位置启动）。
-        if (-not $PSCommandPath -or -not (Test-Item $PSCommandPath)) { $selfExit = $true; break }
+        if (-not $ScriptPath -or -not (Test-Item $ScriptPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
 

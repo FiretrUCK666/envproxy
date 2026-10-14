@@ -10,8 +10,17 @@ if [ -f "$REG" ]; then
     _target=$(head -n 1 "$REG" 2>/dev/null | tr -d '\r\n')
 fi
 
+# 记录必须指向入口脚本本身：指向别处（例如某个库文件）同样算失效。
+# 只判"文件在不在"不够——记录写坏了、而那个文件恰好存在时，会一直去 exec 一个跑不起来的
+# 文件，搜索却永远不触发，登录自启动就此静默失效。
+case "$_target" in
+    */envproxy.sh) ;;
+    *) _target="" ;;
+esac
+
 if [ -z "$_target" ] || [ ! -f "$_target" ]; then
-    # 记录失效：先顺手清理旧位置残留（移动后立刻关机、监控来不及自退的场景）
+    # 记录失效（文件不在了，或记录指向的不是入口脚本）：先顺手清理旧位置残留
+    # （移动后立刻关机、监控来不及自退的场景）
     if [ -n "$_target" ]; then
         _old_dir=$(dirname "$_target" 2>/dev/null)
         if [ -n "$_old_dir" ]; then

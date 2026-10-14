@@ -221,8 +221,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     # 防呆：点的是备份文件夹时警告（正式路径以注册表记录为准）
     $regPath = $null
     try { $regPath = (Get-ItemProperty $ScriptPathRegKey -ErrorAction SilentlyContinue).ScriptPath } catch {}
-    if ($regPath -and (("$regPath").ToLower() -ne ("$PSCommandPath").ToLower())) {
-        Write-Host ("注意：你现在点的是 [{0}]，" -f $PSCommandPath) -ForegroundColor Yellow
+    if ($regPath -and (("$regPath").ToLower() -ne ("$ScriptPath").ToLower())) {
+        Write-Host ("注意：你现在点的是 [{0}]，" -f $ScriptPath) -ForegroundColor Yellow
         Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
     }

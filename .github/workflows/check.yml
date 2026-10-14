@@ -62,6 +62,19 @@ jobs:
               *envproxy*) echo "$f 文件名含 envproxy，会与定位器/单实例识别冲突"; fail=1;;
             esac
           done
+          # 库不得自行推算"我在哪"：库里的 "$0" 与 $BASH_SOURCE 指的是库文件自己，拿它当入口路径
+          # 会去启动一个跑不起来的文件（装完没有监控、日志里连一行都不会有），要用入口发布的
+          # SCRIPT_DIR / SCRIPT_PATH。只认带引号的 "$0"——awk 程序里的裸 $0 是"当前记录"，不算；
+          # 整行注释里提到这两个名字也不算（规则要能长期留人，不能逼着注释绕开变量名）。
+          for f in mac/lib/*.sh; do
+            [ -f "$f" ] || continue
+            hits=$(grep -nE '"\$0"|\$\{?BASH_SOURCE' "$f" 2>/dev/null | grep -vE '^[0-9]+:[[:space:]]*#' || true)
+            if [ -n "$hits" ]; then
+              echo "$f 引用了入口专属的脚本自身路径（库要用入口发布的 SCRIPT_DIR / SCRIPT_PATH）："
+              echo "$hits"
+              fail=1
+            fi
+          done
           # 函数名不许重复：bash 会静默地用后定义的覆盖先定义的（改了没生效的经典陷阱）。
           # 模式要认全几种写法（function f {、f() {、f () {），否则重名照样漏过去。
           dup=$(cat mac/envproxy.sh mac/lib/*.sh 2>/dev/null \
@@ -133,6 +146,19 @@ jobs:
           # 库文件名不得含 envproxy（监控进程按 -File "...envproxy.ps1" 识别身份，同名会被误认）
           foreach ($f in Get-ChildItem 'win\lib' -Filter *.ps1 -File) {
             if ($f.BaseName -match 'envproxy') { Write-Host ("{0} 文件名含 envproxy，会与监控进程识别冲突" -f $f.Name); exit 1 }
+          }
+          # 库不得自行推算"我在哪"：库被点源后 $PSCommandPath / $PSScriptRoot 指的是库文件自己，
+          # 拿它当入口路径会去启动一个跑不起来的库文件（安装后没有监控、日志里连一行都没有）。
+          # 用语法树找变量引用，注释与字符串里提到不算。
+          foreach ($f in Get-ChildItem 'win\lib' -Filter *.ps1 -File) {
+            $tk2 = $null; $er2 = $null
+            $ast2 = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tk2, [ref]$er2)
+            $selfPath = @($ast2.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and ($n.VariablePath.UserPath -eq 'PSCommandPath' -or $n.VariablePath.UserPath -eq 'PSScriptRoot') }, $true))
+            if ($selfPath.Count) {
+              Write-Host ('{0} 引用了入口专属的自动变量：库里的这两个变量指向库文件自己，库要用入口发布的 $ScriptDir / $ScriptPath。' -f $f.Name)
+              $selfPath | ForEach-Object { Write-Host ("  第 {0} 行: {1}" -f $_.Extent.StartLineNumber, $_.Extent.Text) }
+              exit 1
+            }
           }
           # 函数名不许重复：点源后同名函数会被后定义的静默覆盖（改了没生效的经典陷阱）
           $names = @()
