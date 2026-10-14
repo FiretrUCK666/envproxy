@@ -45,9 +45,7 @@ jobs:
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           mkdir -p dist
-          git archive --format=zip    -o dist/EnvProxy.zip    "$TAG"
-          git archive --format=tar.gz -o dist/EnvProxy.tar.gz "$TAG"
-          # 分平台包只给新装用：完整内容减去另一平台目录；更新入口只认上面的完整包。
+          # 只有分平台包：完整内容减去另一平台目录；更新入口按平台各取各的包。
           git archive --format=zip    -o dist/EnvProxy-win.zip "$TAG" win README.md README.en.md LICENSE VERSION release-notes assets
           git archive --format=tar.gz -o dist/EnvProxy-mac.tar.gz "$TAG" mac README.md README.en.md LICENSE VERSION release-notes assets
           ls -l dist
@@ -58,22 +56,21 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $fail = 0
           $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
-          $zipDir = Join-Path $tmp 'envproxy-pkg-zip'
-          $tgzDir = Join-Path $tmp 'envproxy-pkg-tgz'
-          Remove-Item $zipDir, $tgzDir -Recurse -Force -ErrorAction SilentlyContinue
-          Expand-Archive -Path 'dist/EnvProxy.zip' -DestinationPath $zipDir -Force
-          New-Item -ItemType Directory -Force -Path $tgzDir | Out-Null
-          & tar -xzf dist/EnvProxy.tar.gz -C $tgzDir
-          if ($LASTEXITCODE -ne 0) { Write-Host 'tar.gz 解压失败'; exit 1 }
-
-          $relTgz = @(Get-ChildItem $tgzDir -Recurse -File | ForEach-Object { $_.FullName.Substring($tgzDir.Length).TrimStart('/','\') } | Sort-Object)
-          $relZip = @(Get-ChildItem $zipDir -Recurse -File | ForEach-Object { $_.FullName.Substring($zipDir.Length).TrimStart('/','\') } | Sort-Object)
-          $diff = Compare-Object $relTgz $relZip
-          if ($diff) { Write-Host '两个容器内容不一致：'; $diff | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }; $fail = 1 }
-
-          function Test-OnePackage([string]$pkgPath, [string]$skipDir) {
-            # 分包只校验两件事：内容 = 完整包减去另一平台目录，且每个文件与仓库逐字节一致。
-            # 编码红线不复查：分包与完整包是同一批 git 对象，入口字节相同（完整包那一步已查过）。
+          # 期望清单从仓库现场算：ls-files 减 export-ignore，再减对方平台目录。
+          # 与门禁 4 同源，不在两处各写一份名单。
+          $ignRaw = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+          $inRepo = @(git -c core.quotepath=false ls-files | Sort-Object)
+          function RepoSet([string]$skipDir) {
+            return @($inRepo | Where-Object {
+              $p = $_; $hit = $false
+              foreach ($g in $ignRaw) {
+                if ($g.EndsWith('/')) { if ($p.StartsWith($g)) { $hit = $true; break } }
+                elseif ($p -eq $g) { $hit = $true; break }
+              }
+              (-not $hit) -and ($p -notlike ($skipDir + '/*'))
+            } | Sort-Object)
+          }
+          function Test-OnePackage([string]$pkgPath, [string]$skipDir, [string]$ownEntry) {
             $d = Join-Path $tmp ([System.IO.Path]::GetRandomFileName())
             New-Item -ItemType Directory -Force -Path $d | Out-Null
             if ($pkgPath -like '*.tar.gz') {
@@ -84,7 +81,7 @@ jobs:
             }
             $ok = $true
             $have = @(Get-ChildItem $d -Recurse -File | ForEach-Object { $_.FullName.Substring($d.Length).TrimStart('/','\').Replace('\','/') } | Sort-Object)
-            $want = @($relTgz | ForEach-Object { $_.Replace('\','/') } | Where-Object { $_ -notlike "$skipDir/*" } | Sort-Object)
+            $want = RepoSet $skipDir
             $dd = Compare-Object $want $have
             if ($dd) { Write-Host ("分包内容不对：" + $pkgPath); $dd | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }; $ok = $false }
             foreach ($r in $have) {
@@ -95,51 +92,44 @@ jobs:
               $b = (Get-FileHash $rel -Algorithm SHA256).Hash
               if ($a -ne $b) { Write-Host ("分包与仓库字节不一致：" + $r); $ok = $false }
             }
+            if ($have -notcontains $ownEntry) { Write-Host ("分包缺自己平台入口：" + $ownEntry); $ok = $false }
+            $eb = [System.IO.File]::ReadAllBytes((Join-Path $d ($ownEntry.Replace('/', [System.IO.Path]::DirectorySeparatorChar))))
+            if ($ownEntry -like '*.ps1') {
+              if (-not ($eb[0] -eq 0xEF -and $eb[1] -eq 0xBB -and $eb[2] -eq 0xBF)) { Write-Host '交付的入口丢了 UTF-8 BOM'; $ok = $false }
+            } else {
+              if ($eb[0] -eq 0xEF -and $eb[1] -eq 0xBB -and $eb[2] -eq 0xBF) { Write-Host '交付的入口带了 BOM'; $ok = $false }
+              if ([System.Text.Encoding]::UTF8.GetString($eb).Contains("`r`n")) { Write-Host '交付的入口被改成 CRLF'; $ok = $false }
+            }
             Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue
             return $ok
           }
-          if (-not (Test-OnePackage 'dist/EnvProxy-win.zip' 'mac')) { $fail = 1 }
-          if (-not (Test-OnePackage 'dist/EnvProxy-mac.tar.gz' 'win')) { $fail = 1 }
-
-          foreach ($r in $relTgz) {
-            if (-not (Test-Path $r)) { Write-Host ("安装包里有仓库没有的文件：{0}" -f $r); $fail = 1; continue }
-            $inPkg = (Get-FileHash (Join-Path $tgzDir $r) -Algorithm SHA256).Hash
-            $inRepo = (Get-FileHash $r -Algorithm SHA256).Hash
-            if ($inPkg -ne $inRepo) { Write-Host ("安装包与仓库字节不一致：{0}" -f $r); $fail = 1 }
-          }
-
-          $ps1 = Join-Path $tgzDir 'win/envproxy.ps1'
-          $sh = Join-Path $tgzDir 'mac/envproxy.sh'
-          $pb = [System.IO.File]::ReadAllBytes($ps1)
-          if (-not ($pb[0] -eq 0xEF -and $pb[1] -eq 0xBB -and $pb[2] -eq 0xBF)) { Write-Host '交付的 envproxy.ps1 丢了 UTF-8 BOM'; $fail = 1 }
-          $sb = [System.IO.File]::ReadAllBytes($sh)
-          if ($sb[0] -eq 0xEF -and $sb[1] -eq 0xBB -and $sb[2] -eq 0xBF) { Write-Host '交付的 envproxy.sh 带了 BOM'; $fail = 1 }
-          if ([System.Text.Encoding]::UTF8.GetString($sb).Contains("`r`n")) { Write-Host '交付的 envproxy.sh 被改成 CRLF'; $fail = 1 }
+          if (-not (Test-OnePackage 'dist/EnvProxy-win.zip' 'mac' 'win/envproxy.ps1')) { $fail = 1 }
+          if (-not (Test-OnePackage 'dist/EnvProxy-mac.tar.gz' 'win' 'mac/envproxy.sh')) { $fail = 1 }
 
           if ($fail) { exit 1 }
-          Write-Host ("安装包校验通过：{0} 个文件，与仓库逐字节一致。" -f $relTgz.Count)
+          Write-Host '安装包校验通过。'
 
       - name: 建 Release 并挂安装包（幂等：已存在则补齐资产）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在：上传（覆盖）四个资产，并刷新发版说明。"
-            gh release upload "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz --clobber
+            echo "Release $TAG 已存在：上传（覆盖）两个资产，并刷新发版说明。"
+            gh release upload "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz --clobber
             gh release edit "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG"
           else
-            gh release create "$TAG" dist/EnvProxy.zip dist/EnvProxy.tar.gz dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz \
+            gh release create "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz \
               --notes-file "release-notes/$TAG.md" --title "$TAG"
           fi
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
-      - name: 自校验（四个资产都在、是最新、与本地一致，README 的下载直链才有效）
+      - name: 自校验（两个资产都在、是最新、与本地一致，README 的下载直链才有效）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           # gh release view 的 --json 字段集随版本变化（如 isLatest 老版本没有），只用最稳的 assets；
           # "是否最新"改从 releases/latest 反查：重建旧标签时直链仍指新版，此时必须拒绝。
           JSON="$(gh release view "$TAG" --json assets)" || { echo "读取 Release 失败：$TAG"; exit 1; }
-          for want in EnvProxy.zip EnvProxy.tar.gz EnvProxy-win.zip EnvProxy-mac.tar.gz; do
+          for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
             SIZE="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .size // empty')"
             if [ -z "$SIZE" ]; then
               echo "资产缺失：$want（README 的下载直链与更新入口都会失效）"

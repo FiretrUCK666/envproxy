@@ -11,7 +11,8 @@ UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：GitHub Release 里的安装包资产（EnvProxy.tar.gz；Windows 侧取 EnvProxy.zip）。
+# 更新源：GitHub Release 里的分平台安装包资产（EnvProxy-mac.tar.gz；Windows 侧取 EnvProxy-win.zip）。
+#   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
@@ -182,7 +183,7 @@ update_envproxy() {
     fi
     # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
     _repo=$(get_update_repo)
-    _url="https://github.com/$_repo/releases/download/$REMOTE_TAG/EnvProxy.tar.gz"
+    _url="https://github.com/$_repo/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz"
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
     # 下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
@@ -214,7 +215,7 @@ update_envproxy() {
         rm -rf "$_exdir" 2>/dev/null || true
         return 0
     fi
-    if ! verify_package "$_exdir" "$REMOTE_VERSION"; then
+    if ! verify_package "$_exdir" "$REMOTE_VERSION" "mac"; then
         echo "更新失败：校验失败（包内容与目标版本对不上，或编码红线被改过），未做任何改动。"
         rm -f "$_tgz" 2>/dev/null || true
         rm -rf "$_exdir" 2>/dev/null || true

@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">Download the latest version (zip package — the download starts right away)</a></b> · unzip anywhere, then double-click <code>打开菜单.cmd</code> in <code>win</code> (on Mac, in <code>mac</code>) — see <a href="#1-install-3-steps-5-minutes">section 1</a>
+  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip">Download the Windows build</a></b> · <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz">Mac build here</a></b> · unzip anywhere, then double-click <code>打开菜单.cmd</code> in <code>win</code> (on Mac, in <code>mac</code>) — see <a href="#1-install-3-steps-5-minutes">section 1</a>
 </p>
 
 > Connect your proxy app and the terminal follows. Disconnect it and the terminal goes direct again. Nothing to operate, no admin rights, and nothing left behind in your system configuration.
@@ -95,7 +95,7 @@ Windows gets 5 variables, macOS gets 9 — the same 5 plus lowercase spellings. 
 
 ## 1. Install (3 steps, 5 minutes)
 
-1. Click **[download the latest package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (one zip, works on Windows and Mac; Windows only: [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip); Mac only: [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz))
+1. Click **[download the Windows package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)** (Mac: [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz))
 2. Unzip it anywhere — rename the folder if you like. Open `win` and double-click **`打开菜单.cmd`** (on Mac, open `mac` and double-click **`打开菜单.command`**), then choose **`1 Install / Fix`**
 3. When you see the monitor started message, you are done
 
@@ -198,8 +198,8 @@ It does not care about brands, process names or port numbers; it only cares who 
 | The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
 | Update check reports a check failure | GitHub is temporarily unreachable from this machine | try again later; toggling the proxy on or off and retrying often works |
 | An error during an update | the download, extraction, verification or write step failed | run "Check for updates" from the menu again (it fills in what is missing), or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
-| "This version does not provide a package" | that release did not get its package uploaded | download `EnvProxy.zip` from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
-| The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no zip downloaded from the site (package, source code or branch) contains them | for daily use download `EnvProxy.zip` from Releases; keep the clone for code and sync it with `git pull` |
+| "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
+| The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no zip downloaded from the site (package, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
 | You want to undo everything | — | open the menu and choose "Full restore", then answer the log question |
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
@@ -262,8 +262,8 @@ EnvProxy\
   assets\readme\          images used by these READMEs
 ```
 
-The four assets: `EnvProxy.zip` / `EnvProxy.tar.gz` are the full packages (both platforms inside; updates use them).
-`EnvProxy-win.zip` / `EnvProxy-mac.tar.gz` are per-platform packages (only your own platform folder, everything else included, for fresh installs — a later update with the full package brings the other side back in line).
+The two assets: `EnvProxy-win.zip` is the Windows package (`win\` plus the docs, version, notes and images),
+`EnvProxy-mac.tar.gz` is the Mac package (`mac\` plus the same shared files). Download your own side; updates use the same per-platform package, and each side leaves the other platform folder alone.
 
 `win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns these four folders with the package contents, so do not keep your own files in them. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
 
@@ -281,7 +281,7 @@ You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no har
 
 ## 10. Deploying to a friend or a new machine
 
-1. Get the package onto the new machine, either way works: click **[the latest download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)** (Windows only: [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)), or copy the already unzipped folder over (USB drive, cloud storage, an archive — all fine)
+1. Get the package onto the new machine, either way works: click **[the Windows download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)**, or copy the already unzipped folder over (USB drive, cloud storage, an archive — all fine)
 2. Double-click `win\打开菜单.cmd` (on Mac, `mac\打开菜单.command`), then choose `1 Install / Fix`
 3. Done
 

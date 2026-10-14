@@ -127,25 +127,28 @@ self_test() {
     printf '\357\273\277# entry\n' > "$_pkg/win/envproxy.ps1" 2>/dev/null || true
     printf '\357\273\277# lib\n' > "$_pkg/win/lib/base.ps1" 2>/dev/null || true
     printf '#!/bin/bash\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
-    if verify_package "$_pkg" "9.9.9"; then _p1=1; else _p1=0; fi
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p1=1; else _p1=0; fi
     _selftest_assert_eq "结构完整的包被接受" "1" "$_p1"
-    if verify_package "$_pkg" "1.2.3"; then _p2=1; else _p2=0; fi
+    if verify_package "$_pkg" "1.2.3" "mac"; then _p2=1; else _p2=0; fi
     _selftest_assert_eq "版本不符被拒绝" "0" "$_p2"
     printf '# lib\n' > "$_pkg/win/lib/base.ps1" 2>/dev/null || true
-    if verify_package "$_pkg" "9.9.9"; then _p3=1; else _p3=0; fi
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p3=1; else _p3=0; fi
     _selftest_assert_eq "库缺 BOM 被拒绝" "0" "$_p3"
     printf '\357\273\277# lib\n' > "$_pkg/win/lib/base.ps1" 2>/dev/null || true
     printf '#!/bin/bash\r\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
-    if verify_package "$_pkg" "9.9.9"; then _p4=1; else _p4=0; fi
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p4=1; else _p4=0; fi
     _selftest_assert_eq "壳含 CRLF 被拒绝" "0" "$_p4"
     printf '#!/bin/bash\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
     printf '\357\273\277' > "$_pkg/win/lib/empty.ps1" 2>/dev/null || true
-    if verify_package "$_pkg" "9.9.9"; then _p5=1; else _p5=0; fi
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p5=1; else _p5=0; fi
     _selftest_assert_eq "只剩 BOM 的截断文件被拒绝" "0" "$_p5"
     rm -f "$_pkg/win/lib/empty.ps1" 2>/dev/null || true
+    rm -f "$_pkg/win/envproxy.ps1" 2>/dev/null || true
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p6=1; else _p6=0; fi
+    _selftest_assert_eq "缺另一平台入口照样接受" "1" "$_p6"
     rm -f "$_pkg/mac/envproxy.sh" 2>/dev/null || true
-    if verify_package "$_pkg" "9.9.9"; then _p6=1; else _p6=0; fi
-    _selftest_assert_eq "缺平台入口被拒绝" "0" "$_p6"
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p7=1; else _p7=0; fi
+    _selftest_assert_eq "缺自己平台入口被拒绝" "0" "$_p7"
 
     echo "[7] 库清单与库实现"
     # 空壳库（只有注释、没有函数）在语法上完全合法，却会让整个 mac 侧起不来——

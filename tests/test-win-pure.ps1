@@ -95,17 +95,20 @@ New-Item -Path (Join-Path $pkg 'win\lib'), (Join-Path $pkg 'mac') -ItemType Dire
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $bomEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 $threw = $false
-try { Test-Package $pkg '9.9.9' } catch { $threw = $true }
+try { Test-Package $pkg '9.9.9' 'win' } catch { $threw = $true }
 Assert-Eq 'a well-formed package is accepted' $false $threw
-Assert-Throws 'version mismatch is rejected' { Test-Package $pkg '1.2.3' }
+Assert-Throws 'version mismatch is rejected' { Test-Package $pkg '1.2.3' 'win' }
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $plainEnc)
-Assert-Throws 'a library without BOM is rejected' { Test-Package $pkg '9.9.9' }
+Assert-Throws 'a library without BOM is rejected' { Test-Package $pkg '9.9.9' 'win' }
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $bomEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!`r`n", $plainEnc)
-Assert-Throws 'a CRLF shell script is rejected' { Test-Package $pkg '9.9.9' }
+Assert-Throws 'a CRLF shell script is rejected' { Test-Package $pkg '9.9.9' 'win' }
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 Remove-Item -LiteralPath (Join-Path $pkg 'mac\envproxy.sh') -Force
-Assert-Throws 'a missing platform entry is rejected' { Test-Package $pkg '9.9.9' }
+Assert-Eq 'a win split without the mac entry is accepted' $false $(try { Test-Package $pkg '9.9.9' 'win'; $false } catch { $true })
+Remove-Item -LiteralPath (Join-Path $pkg 'win\envproxy.ps1') -Force
+Assert-Throws 'a missing own-platform entry is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), '# entry', $bomEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\empty.ps1'), '', $bomEnc)
 Assert-Throws 'an empty script is rejected' { Test-Package $pkg '9.9.9' }

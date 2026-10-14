@@ -3,17 +3,17 @@
 #  覆盖前必校验目的地；任何一步失败回滚到更新前，安装区不留半截。
 # ==============================================================================
 
-# 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
+# 校验安装包：包内 VERSION 与目标一致、本平台的核心文件在、两条编码红线没被改过。
+# $Platform 决定认哪个入口（分平台包只含自己平台，另一端的不认也不拦）。
 # 任何一项不过就抛异常，调用方据此中止——安装区一个字节都不动。
-function Test-Package([string]$Root, [string]$WantVersion) {
+function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "win") {
     $srcVer = ""
     try { $srcVer = ((Read-Text (Join-Path $Root "VERSION")).Trim()) } catch {}
     if (-not $srcVer -or ($srcVer -ne $WantVersion)) { throw "校验失败（包内 VERSION 与目标版本不一致），未做任何改动。" }
-    # 结构校验，不点名具体文件：两个入口必须在，包内每一个脚本都要过编码红线。
+    # 结构校验，不点名具体文件：本平台入口必须在，包内每一个脚本都要过编码红线。
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
-    foreach ($entry in @("win\envproxy.ps1", "mac\envproxy.sh")) {
-        if (-not (Test-Item (Join-Path $Root $entry))) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f $entry) }
-    }
+    $wantEntry = if ($Platform -eq "mac") { "mac\envproxy.sh" } else { "win\envproxy.ps1" }
+    if (-not (Test-Item (Join-Path $Root $wantEntry))) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f $wantEntry) }
     $scripts = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -eq '.ps1' -or $_.Extension -eq '.sh' })
     foreach ($f in $scripts) {
@@ -60,9 +60,12 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
 # 覆盖安装区。边界三条：包内文件全部写入；win\monitor 与 mac\monitor 永不覆盖、永不删；
 # 四个程序目录内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
-function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage) {
+function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage, [string[]]$ShipDirs = @("win", "mac", "release-notes", "assets")) {
     # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。
     if (-not $Stage) { throw "内部错误：覆盖安装区必须提供备份目录（-Stage）。" }
+    # $ShipDirs 是本次覆盖的作用域：分平台包只含自己平台目录，更新时绝不碰另一平台的目录
+    # （不删、不加、不校验——那是另一端的地盘）。备份、删残留、回滚、复读全走这一个变量，
+    # 范围天然一致。调用方不传即全量（旧行为）。
     # 路径形态归一：参数可能是 8.3 短名（例如从 %TEMP% 拼出来的临时目录，或短名形态的启动路径），
     # 而 Get-ChildItem 枚举子项返回的是长名——两种写法长度不同，"减掉根前缀"算出来的相对路径
     # 就会整体错位：那会误删不该删的文件（连 monitor 日志一起）并把新文件写到错位置。
@@ -83,7 +86,6 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage)
     #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方。
     # 本函数内所有路径读写一律走字面量语义（-LiteralPath / 第 0.5 节 helper），
     # 安装文件夹改名带上 [ ] 也不影响。
-    $shipDirs = @("win", "mac", "release-notes", "assets")
     $pkg = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
         $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')

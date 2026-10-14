@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip">点这里下载最新版（安装包 zip，点击就开始下载）</a></b> · 解压到任意位置，进 <code>win</code> 双击 <code>打开菜单.cmd</code>（Mac 进 <code>mac</code>）——三步说清见 <a href="#1-安装3-步5-分钟">第 1 节</a>
+  <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip">点这里下载 Windows 版</a></b> · <b><a href="https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz">Mac 版点这里</a></b> · 解压到任意位置，进 <code>win</code> 双击 <code>打开菜单.cmd</code>（Mac 进 <code>mac</code>）——三步说清见 <a href="#1-安装3-步5-分钟">第 1 节</a>
 </p>
 
 > 打开翻墙软件 = 终端自动翻墙；关掉 = 终端自动恢复直连。全程零操作、零管理员权限，系统配置零残留。
@@ -95,7 +95,7 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 
 ## 1. 安装（3 步，5 分钟）
 
-1. 点 **[这里下载最新版安装包](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**（一个 zip，Windows 和 Mac 通用；只要 Windows 版点 [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)，只要 Mac 版点 [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz)）
+1. 点 **[这里下载 Windows 版安装包](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)**（Mac 版点 [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz)）
 2. 解压到任意位置，文件夹随便改名。进 `win` 双击 **`打开菜单.cmd`**（Mac 进 `mac` 双击 **`打开菜单.command`**），再选 **`1 安装 / 修复`**
 3. 看到"监控进程：已启动"就装好了
 
@@ -200,8 +200,8 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 | 日志里出现"检测异常" | 单轮检测出错，不影响整体 | 不用管，会自己恢复；持续出现就打开菜单选一次"安装 / 修复" |
 | 检查更新显示"检查失败" | 本机暂时到不了 GitHub | 稍后重试；翻墙开、关换个状态再试一次也常有效 |
 | 更新中途报错 | 下载、解压、校验或写入失败 | 重跑一次菜单里的"检查更新"（会补齐）；也可以手动下载安装包覆盖后打开菜单选一次"安装 / 修复" |
-| 提示"这个版本没有提供安装包" | 那次发布没把安装包挂上去 | 到 Releases 页面手动下载 `EnvProxy.zip`，覆盖解压后打开菜单选一次"安装 / 修复"。不是你机器的问题 |
-| 文件夹里有 `AGENTS.md`、`CONTRIBUTING.md`、`.github`、`tests/` 这些看不懂的东西 | 你 clone 了整个仓库——只有克隆才有这些开发文件，页面上下载的任何 zip（安装包、Source code、分支包）里都没有 | 纯使用请去 Releases 页下载 `EnvProxy.zip`；这个 clone 留着看代码，同步上游用 `git pull` |
+| 提示"这个版本没有提供安装包" | 那次发布没把安装包挂上去 | 到 Releases 页面手动下载你平台的包（Windows 下 `EnvProxy-win.zip`），覆盖解压后打开菜单选一次"安装 / 修复"。不是你机器的问题 |
+| 文件夹里有 `AGENTS.md`、`CONTRIBUTING.md`、`.github`、`tests/` 这些看不懂的东西 | 你 clone 了整个仓库——只有克隆才有这些开发文件，页面上下载的任何 zip（安装包、Source code、分支包）里都没有 | 纯使用请去 Releases 页下载你平台的包；这个 clone 留着看代码，同步上游用 `git pull` |
 | 提示"这是开发副本" | 文件夹里有 `.git`，是 git 工作树 | 预期行为：更新入口不动 git 副本，同步上游用 `git pull` |
 | 想彻底回到没装之前 | — | 打开菜单选"一键恢复"，日志留不留当场选 |
 | TUN / 增强模式下终端本来就通 | 流量被全局接管，检测不到本地端口就不写变量 | 正常现象，不用处理（显示通或不通都对） |
@@ -265,9 +265,9 @@ EnvProxy\
   assets\readme\          README 的配图
 ```
 
-四个资产的关系：`EnvProxy.zip` / `EnvProxy.tar.gz` 是完整包（两边平台都在，更新走它）；
-`EnvProxy-win.zip` / `EnvProxy-mac.tar.gz` 是分平台包（只有自己平台的目录，其余文件都有，
-只给新装用——更新时完整包会把另一边按清单补回来）。
+两个资产的关系：`EnvProxy-win.zip` 是 Windows 包（`win\` + 说明、版本、发版说明、配图），
+`EnvProxy-mac.tar.gz` 是 Mac 包（`mac\` + 同样的共享文件）。各下各的，更新也各走各的包，
+另一平台的目录互不干扰。
 
 `win\`、`mac\`、`release-notes\`、`assets\` 这四个目录是程序的地盘：更新会按包内清单对齐它们的内容，别放自己的文件。日常只用打开 `win\`（Mac 上是 `mac\`），顶层的文件不用管。
 
@@ -285,7 +285,7 @@ EnvProxy\
 
 ## 10. 给朋友/新电脑部署
 
-1. 把安装包弄到新电脑（二选一）：点 **[最新版下载](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy.zip)**（只要 Windows 版下 [`EnvProxy-win.zip`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)）；或者把已经解压好的整个文件夹拷过去（U 盘、网盘、压缩包都行）
+1. 把安装包弄到新电脑（二选一）：点 **[Windows 版下载](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)**；或者把已经解压好的整个文件夹拷过去（U 盘、网盘、压缩包都行）
 2. 双击 `win\打开菜单.cmd`（Mac 双击 `mac\打开菜单.command`），选 `1 安装 / 修复`
 3. 完事
 

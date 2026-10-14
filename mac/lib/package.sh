@@ -3,15 +3,18 @@
 #  每个文件都写同目录临时文件再改名，不留半截文件。
 # ------------------------------------------------------------------------------
 
-# 校验安装包：包内 VERSION 与目标一致、两个平台的核心文件都在、两条编码红线没被改过。
+# 校验安装包：包内 VERSION 与目标一致、本平台的核心文件在、两条编码红线没被改过。
+# $3 决定认哪个入口（分平台包只含自己平台，另一端的不认也不拦）。
 verify_package() {
     _vroot="$1"
     _vwant="$2"
+    _vplat="${3:-mac}"
     _vver=$(tr -d ' \t\r\n' < "$_vroot/VERSION" 2>/dev/null || true)
     [ -n "$_vver" ] && [ "$_vver" = "$_vwant" ] || return 1
-    # 结构校验，不点名具体文件：两个入口必须在，包内每一个脚本都要过编码红线。
+    # 结构校验，不点名具体文件：本平台入口必须在，包内每一个脚本都要过编码红线。
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
-    [ -f "$_vroot/win/envproxy.ps1" ] && [ -f "$_vroot/mac/envproxy.sh" ] || return 1
+    if [ "$_vplat" = "win" ]; then _ventry="win/envproxy.ps1"; else _ventry="mac/envproxy.sh"; fi
+    [ -f "$_vroot/$_ventry" ] || return 1
     _vlist=$(mktemp /tmp/envproxy_verify.XXXXXX 2>/dev/null) || return 1
     find "$_vroot" -type f \( -name '*.ps1' -o -name '*.sh' \) > "$_vlist" 2>/dev/null
     if [ ! -s "$_vlist" ]; then rm -f "$_vlist" 2>/dev/null || true; return 1; fi
@@ -39,7 +42,9 @@ verify_package() {
 }
 
 # 覆盖安装区。边界三条：包内文件全部写入；win/monitor 与 mac/monitor 永不覆盖、永不删；
-# 四个程序目录内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
+# 作用域内、新包没有的文件按清单删除（旧入口不会残留成"点了没反应"）。
+# $4 是本次覆盖的作用域（默认本平台目录 + 共享）：分平台包只含自己平台，更新时绝不碰
+# 另一平台的目录（不删、不加、不校验）。备份、删残留、回滚全走这一个变量，范围天然一致。
 # 安装根目录只覆盖同名文件，绝不删任何东西——根目录可能有用户自己的东西。
 # 参数 3 是本次更新的临时目录（放备份）。覆盖全走临时文件改名，运行中的旧脚本不受影响。
 # 任何一步失败就逐文件回滚，并返回非零。
@@ -47,6 +52,7 @@ install_package() {
     _proot="$1"
     _pdest="$2"
     _pstage="${3:-}"
+    _pship="${4:-mac release-notes assets}"
     # 目的地校验（第二道）：目标必须已经是一个安装根。调用方进门时已验过一次，
     # 这里是给"函数被别处直接调用"留的底线——后面的删除循环只认这个结论。
     if [ ! -f "$_pdest/mac/envproxy.sh" ] || [ ! -f "$_pdest/VERSION" ]; then
@@ -67,7 +73,8 @@ install_package() {
         _pbak="$_pstage/backup"
         rm -rf "$_pbak" 2>/dev/null || true
         mkdir -p "$_pbak" 2>/dev/null || true
-        for _pd in win mac release-notes assets; do
+        # shellcheck disable=SC2086
+        for _pd in $_pship; do
             [ -d "$_pdest/$_pd" ] && cp -pR "$_pdest/$_pd" "$_pbak/$_pd" 2>/dev/null
         done
         # 根目录那几个随包文件也要备份：只备份程序目录的话，中途失败回滚后会留下
@@ -76,7 +83,8 @@ install_package() {
             [ -f "$_pdest/$_pf" ] && cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null
         done
     fi
-    for _pd in win mac release-notes assets; do
+    # shellcheck disable=SC2086
+    for _pd in $_pship; do
         [ -d "$_pdest/$_pd" ] || continue
         find "$_pdest/$_pd" -type f 2>/dev/null | while IFS= read -r _pf; do
             _prel="${_pf#"$_pdest"/}"
@@ -109,7 +117,8 @@ install_package() {
         if [ -n "$_pstage" ] && [ -d "$_pstage/backup" ]; then
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
             # 后者会被同一个被占用的文件挡住（更新失败的原因往往就是它），把安装区弄成半截。
-            for _pd in win mac release-notes assets; do
+            # shellcheck disable=SC2086
+            for _pd in $_pship; do
                 _pb="$_pstage/backup/$_pd"
                 [ -d "$_pb" ] || continue
                 mkdir -p "$_pdest/$_pd" 2>/dev/null || true

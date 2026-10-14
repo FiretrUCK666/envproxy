@@ -60,7 +60,7 @@ bash -n mac/*.sh mac/lib/*.sh
 （`Parser::ParseFile`，见 `AGENTS.md` 的构建与验证节）；改完行为后 Windows 打开菜单选"查看状态"、
 Mac 跑 `bash mac/envproxy.sh status` 确认。
 
-**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`（Windows）/ `EnvProxy.tar.gz`（macOS），由 `git archive`
+**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy-win.zip`（Windows）/ `EnvProxy-mac.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
 更新入口（菜单"检查更新" / `bash mac/envproxy.sh update`）认得这一点，只报版本、不改动任何文件，同步上游用
 `git pull`。要验证更新逻辑，把安装包解压到别处当安装副本，在那里面点检查更新——不要指望在本仓库里

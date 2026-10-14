@@ -6,7 +6,8 @@
 # ------------------------------------------------------------------------------
 # 8. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：GitHub Release 里的安装包资产（EnvProxy.zip；Mac 侧取 EnvProxy.tar.gz）。
+# 更新源：GitHub Release 里的分平台安装包资产（EnvProxy-win.zip；Mac 侧取 EnvProxy-mac.tar.gz）。
+#   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
 #   下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
 #   不硬编码任何第三方域名，不为它放宽校验。
@@ -262,7 +263,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     }
     # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
     $repo = Get-UpdateRepo
-    $zipUrl = "https://github.com/{0}/releases/download/{1}/EnvProxy.zip" -f $repo, $remote.Tag
+    $zipUrl = "https://github.com/{0}/releases/download/{1}/EnvProxy-win.zip" -f $repo, $remote.Tag
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_'))
     $zipFile = "$tmpBase.zip"
@@ -277,7 +278,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         if ($dl -ne "ok") { throw "下载失败（网络不可达），未做任何改动。" }
         Write-Host "正在解压并校验..." -ForegroundColor Cyan
         Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
-        Test-Package $extractDir $remote.Version
+        Test-Package $extractDir $remote.Version "win"
         # 先把这一版改了什么给用户看，再问要不要装
         Show-ReleaseNotes $extractDir $remote.Tag
         if (-not $AutoYes) {
@@ -292,8 +293,9 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         $root = Split-Path -Parent $ScriptDir
         try {
             # 全部文件一次覆盖到位，包含正在执行的这个核心脚本：PowerShell 启动时已把整份脚本读进
-            # 内存，之后覆盖文件不影响本次运行。任何一步失败会整体回滚。
-            Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir
+            # 内存，之后覆盖文件不影响本次运行。只同步本平台目录与共享文件，另一平台目录不动。
+            # 任何一步失败会整体回滚。
+            Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir -ShipDirs @("win", "release-notes", "assets")
         } catch {
             Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
             Write-Host "已恢复原状，正在重启监控..." -ForegroundColor Yellow
