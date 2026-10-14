@@ -147,6 +147,23 @@ self_test() {
     if verify_package "$_pkg" "9.9.9"; then _p6=1; else _p6=0; fi
     _selftest_assert_eq "缺平台入口被拒绝" "0" "$_p6"
 
+    echo "[7] 库清单与库实现"
+    # 空壳库（只有注释、没有函数）在语法上完全合法，却会让整个 mac 侧起不来——
+    # 装上去之后监控第一次调用就挂。这里逐个查"存在、非空、至少有一个函数定义"。
+    for _lib in $CORE_LIBS; do
+        _lf="$LIB_DIR/$_lib.sh"
+        if [ -s "$_lf" ]; then _l0=1; else _l0=0; fi
+        _selftest_assert_eq "库 $_lib.sh 存在且非空" "1" "$_l0"
+        if grep -qE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{' "$_lf" 2>/dev/null; then _l1=1; else _l1=0; fi
+        _selftest_assert_eq "库 $_lib.sh 里有函数定义" "1" "$_l1"
+    done
+    # 每个库的代表入口函数必须真的被定义出来（改名或写空壳都会在这里露出来）。
+    for _pair in "base:merge_no_proxy" "probe:get_current_state" "env:apply_state" "runtime:run_monitor_loop" "package:install_package" "update:update_envproxy" "ops:install_envproxy"; do
+        _lib="${_pair%%:*}"; _fn="${_pair##*:}"
+        if [ "$(type -t "$_fn" 2>/dev/null || true)" = "function" ]; then _l2=1; else _l2=0; fi
+        _selftest_assert_eq "库 $_lib 的代表函数 $_fn 已定义" "1" "$_l2"
+    done
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"

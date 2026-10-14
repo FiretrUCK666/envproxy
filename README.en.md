@@ -204,7 +204,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | You want to undo everything | — | double-click `3-一键恢复` and answer the log question |
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
 | Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | `1-安装` now reads the setting back and tells you when it did not stick; whitelist the install folder (in Huorong, turn off HTTPS scanning features first) and do not turn the antivirus off |
-| "安装不完整，缺少程序文件：lib\xxx" (incomplete install) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over; running `1-安装` once may also fix it |
+| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. `1-安装` cannot fix this — it needs those same files to run |
 
 <details>
 <summary>Less common cases</summary>

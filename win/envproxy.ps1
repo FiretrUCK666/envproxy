@@ -74,7 +74,7 @@ if ($missingLib.Count) {
     Write-Host "安装不完整，缺少程序文件：" -ForegroundColor Yellow
     foreach ($m in $missingLib) { Write-Host ("  " + $m) -ForegroundColor Yellow }
     Write-Host "这个文件夹没有完整拷过来，或者文件被删掉了。" -ForegroundColor Yellow
-    Write-Host "到 Releases 页面重新下载安装包覆盖一次即可（也可以先双击 1-安装 试试）。" -ForegroundColor Yellow
+    Write-Host "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时 1-安装 也修不了——它自己就要用到这些文件）。" -ForegroundColor Yellow
     exit 1
 }
 foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) }
@@ -84,16 +84,7 @@ foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) 
 # ------------------------------------------------------------------------------
 # 操作锁：安装与更新会改同一批文件，同一时刻只允许一个在跑；撞上就直接退出、不做任何改动。
 # 用命名互斥体：进程结束由系统自动释放，不需要（也不该）手工解锁。
-function Get-MutexName([string]$Base) {
-    # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
-    # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。
-    # 拿不到 SID 就回落到无后缀（行为与过去一致），绝不因此罢工。
-    try {
-        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        if ($sid) { return ("Global\{0}-{1}" -f $Base, $sid) }
-    } catch {}
-    return ("Global\{0}" -f $Base)
-}
+# 互斥体的名字由 base 层的 Get-MutexName 生成（库里的写变量锁也用它，所以它不在入口）。
 function Get-OpLock {
     try {
         $m = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp"))

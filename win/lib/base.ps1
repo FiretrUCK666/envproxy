@@ -65,6 +65,18 @@ $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_U
 # 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
 $DefaultNoProxy = "localhost,127.0.0.1,::1"
 
+function Get-MutexName([string]$Base) {
+    # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
+    # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。
+    # 拿不到 SID 就回落到无后缀（行为与过去一致），绝不因此罢工。
+    # 放在 base：入口的安装/更新锁与库里的写变量锁都用它，库不许回头依赖入口。
+    try {
+        $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        if ($sid) { return ("Global\{0}-{1}" -f $Base, $sid) }
+    } catch {}
+    return ("Global\{0}" -f $Base)
+}
+
 # 小写化 + 去空白，用于合并去重（比较时大小写不敏感）
 function Get-NormalizedNoProxyEntries([string]$Value) {
     $out = @()

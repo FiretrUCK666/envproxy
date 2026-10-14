@@ -215,8 +215,13 @@ function Start-Monitor([bool]$Force = $false) {
     Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
         -ArgumentList "-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$PSCommandPath`""
     # 启动完必须复查：子进程可能因抢不到单实例互斥而静默退出，
-    # 此时再打印"已启动"就是假话。
-    Start-Sleep -Seconds 2
+    # 此时再打印"已启动"就是假话。但也要给它足够时间：PowerShell 5.1 冷启动并加载七个库
+    # 可能要好几秒，固定等 2 秒就下结论会把"其实起来了"误报成"未能确认运行"（实测遇到过）。
+    $deadline = (Get-Date).AddSeconds(12)
+    while ((Get-Date) -lt $deadline) {
+        if (Get-MonitorProcess) { break }
+        Start-Sleep -Milliseconds 400
+    }
     if (Get-MonitorProcess) {
         Write-Host "监控进程已启动。" -ForegroundColor Green
     } else {

@@ -63,12 +63,26 @@ jobs:
             esac
           done
           # 函数名不许重复：bash 会静默地用后定义的覆盖先定义的（改了没生效的经典陷阱）。
-          dup=$(cat mac/envproxy.sh mac/lib/*.sh 2>/dev/null | grep -oE '^[a-z_][a-z0-9_]*\(\) \{' | sort | uniq -d)
+          # 模式要认全几种写法（function f {、f() {、f () {），否则重名照样漏过去。
+          dup=$(cat mac/envproxy.sh mac/lib/*.sh 2>/dev/null \
+            | grep -oE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{' \
+            | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)[[:space:]]*\{$//' \
+            | sort | uniq -d)
           if [ -n "$dup" ]; then
             echo "库之间出现重名函数（后定义的会静默覆盖先定义的）："
             echo "$dup"
             fail=1
           fi
+          # 每个声明的库都必须真的实现了东西：空壳或只有注释的文件在语法上完全合法，
+          # 却会让整个 mac 侧起不来（Windows 侧同样有一条，见 tests/test-win-pure.ps1 第 7 节）。
+          for _lib in $declared; do
+            _lf="mac/lib/$_lib.sh"
+            if [ ! -f "$_lf" ]; then echo "声明的库不存在：$_lf"; fail=1; continue; fi
+            if ! grep -qE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{' "$_lf"; then
+              echo "库 $_lf 里没有任何函数定义（空壳），装上去 mac 侧起不来"
+              fail=1
+            fi
+          done
           # macOS 自带 bash 3.2，而 CI 是 bash 5：只有 4.0+ 才有的写法在这就被拦住。
           for f in mac/envproxy.sh mac/lib/*.sh; do
             [ -f "$f" ] || continue
@@ -389,10 +403,13 @@ jobs:
           $sh = (@(Get-ChildItem 'mac' -Filter *.sh -File -Recurse | Sort-Object Name |
               ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
           $fail = 0
+          # 语料是"整个脚本集拼起来"的，同一模式可能在多处命中；取第一个匹配就等于悄悄
+          # 选了一个未必是运行时那个的值。所以命中数必须恰好为 1，模棱两可就当场失败。
           function Grab([string]$text, [string]$pattern, [string]$label) {
-            $m = [regex]::Match($text, $pattern)
-            if (-not $m.Success) { Write-Host ("找不到 " + $label); return $null }
-            return $m.Groups[1].Value
+            $ms = [regex]::Matches($text, $pattern)
+            if ($ms.Count -eq 0) { Write-Host ("找不到 " + $label); return $null }
+            if ($ms.Count -gt 1) { Write-Host ("语料里有多处匹配，无法确定权威值：" + $label + "（" + $ms.Count + " 处）"); return $null }
+            return $ms[0].Groups[1].Value
           }
           # 变量集合：Windows 5 个全大写；macOS 9 个（含 4 个小写拼写）
           $winSet = Grab $ps '\$ProxyVarNames\s*=\s*@\(([^)]*)\)' 'Windows 变量集合'
@@ -405,6 +422,16 @@ jobs:
           } else { $fail = 1 }
           $macNames = @([regex]::Matches($sh, "(?m)^\s*printf 'export ([A-Za-z_]+)=") | ForEach-Object { $_.Groups[1].Value })
           if ($macNames.Count -ne 9) { Write-Host ("macOS 变量数不是 9：{0}" -f $macNames.Count); $fail = 1 }
+          # 变量名单散在五处用法里（写 proxy.env、launchctl setenv、幂等核对、快照、回收），
+          # 契约明令"注入/删除/复查清单不许分家写"。这里把所有循环清单并起来比集合：
+          # 少一个（例如把 ALL_PROXY 从回收清单里删掉）或多一个拼错的名字，都当场失败。
+          $mac8 = @('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')
+          $loops = @([regex]::Matches($sh, 'for [A-Za-z_]+ in ([A-Za-z_ ]+); do') | ForEach-Object { $_.Groups[1].Value })
+          $loopNames = @($loops | ForEach-Object { $_ -split '\s+' } | Where-Object { $_ -match '(_PROXY|_proxy)$' } | Sort-Object -Unique)
+          $outside = @($loopNames | Where-Object { $mac8 -notcontains $_ })
+          if ($outside.Count) { Write-Host ("变量循环清单里出现契约外的名字：" + ($outside -join ' ')); $fail = 1 }
+          $absent = @($mac8 | Where-Object { $loopNames -notcontains $_ })
+          if ($absent.Count) { Write-Host ("以下变量没有出现在任何循环清单里（注入/删除/复查有一套分家了）：" + ($absent -join ' ')); $fail = 1 }
           $lowerCount = @($macNames | Where-Object { $_ -ceq $_.ToLower() }).Count
           if ($lowerCount -ne 4) { Write-Host ("macOS 侧小写拼写应恰为 4 个，实际 {0}" -f $lowerCount); $fail = 1 }
           # NO_PROXY 默认值：两侧一致、含裸写 ::1、不含方括号

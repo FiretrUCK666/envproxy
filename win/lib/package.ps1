@@ -41,7 +41,10 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
     if ($dir -and -not [System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
     $tmp = "$Dest.envproxy-new$PID"
     try {
+        $wantLen = (Get-Item -LiteralPath $Src).Length
         [System.IO.File]::Copy($Src, $tmp, $true)
+        # 写完核对字节数：磁盘满或中途被杀会留下截断文件，而"非空"检查分辨不出 1 字节和完整文件。
+        if ((Get-Item -LiteralPath $tmp).Length -ne $wantLen) { throw ("写入不完整（{0}：源 {1} 字节，已写 {2} 字节）" -f $Dest, $wantLen, (Get-Item -LiteralPath $tmp).Length) }
         if ([System.IO.File]::Exists($Dest)) {
             try { [System.IO.File]::Replace($tmp, $Dest, $null) }
             catch { [System.IO.File]::Copy($tmp, $Dest, $true); [System.IO.File]::Delete($tmp) }
@@ -128,14 +131,28 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage)
                     if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
                 }
         }
+        # 写入顺序：先程序文件 → 再根目录随包文件 → 最后才写 VERSION。
+        # VERSION 是"这一份是哪一版"的判据：它若先变成新版本而程序文件没写完，更新入口会
+        # 认为本地比线上新而拒绝再升级，用户就被卡在坏状态里出不来。
+        $rootFiles = @()
         foreach ($rel in $pkg.Values) {
+            if ($rel -notmatch '\\') { $rootFiles += $rel; continue }
             $dest = Join-Path $ProjectRoot $rel
             $parent = Split-Path -Parent $dest
             if ($parent -and -not (Test-Item $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
             Copy-FileAtomic (Join-Path $SrcRoot $rel) $dest
         }
+        foreach ($rel in $rootFiles) {
+            if ($rel -ieq 'VERSION') { continue }
+            Copy-FileAtomic (Join-Path $SrcRoot $rel) (Join-Path $ProjectRoot $rel)
+        }
+        if ($rootFiles -contains 'VERSION') {
+            Copy-FileAtomic (Join-Path $SrcRoot 'VERSION') (Join-Path $ProjectRoot 'VERSION')
+        }
         # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
-        Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Filter "*.envproxy-new*" -Force -ErrorAction SilentlyContinue |
+        # 两种命名都扫：新版是 *.envproxy-new*，旧版 Write-Text 留下的是 *.tmp<数字>。
+        Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -like '*.tmp[0-9]*' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }
         if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
     } catch {
@@ -164,8 +181,34 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage)
             }
             foreach ($rel in $pkg.Values) {
                 if ($rel -match '\\') { continue }
-                $bak = Join-Path $backup $rel
-                if (Test-Item $bak) { Copy-Item -LiteralPath $bak -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
+                $bakFile = Join-Path $backup $rel
+                if (Test-Item $bakFile) { Copy-Item -LiteralPath $bakFile -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
+            }
+            # 回滚也要复读：上面的复制都带 SilentlyContinue，不回读就敢说"已回滚"是假话。
+            # 实测过：入口文件被占用时，VERSION 会先写成新版本、旧入口留在原地，
+            # 于是更新入口认为本地比线上新，用户从此收不到任何新版本。
+            $notBack = @()
+            foreach ($d in $shipDirs) {
+                $bakD = Join-Path $backup $d
+                if (-not (Test-Item $bakD)) { continue }
+                foreach ($f in (Get-ChildItem -LiteralPath $bakD -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+                    $rel = $f.FullName.Substring($bakD.Length).TrimStart('\')
+                    if ($rel -like 'monitor\*') { continue }
+                    $cur = Join-Path (Join-Path $ProjectRoot $d) $rel
+                    if (-not (Test-Item $cur)) { $notBack += ("{0}\{1}" -f $d, $rel); continue }
+                    if ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $cur -Algorithm SHA256).Hash) { $notBack += ("{0}\{1}" -f $d, $rel) }
+                }
+            }
+            foreach ($rel in $pkg.Values) {
+                if ($rel -match '\\') { continue }
+                $bakFile = Join-Path $backup $rel
+                if (-not (Test-Item $bakFile)) { continue }
+                $curFile = Join-Path $ProjectRoot $rel
+                if (-not (Test-Item $curFile)) { $notBack += $rel; continue }
+                if ((Get-FileHash -LiteralPath $bakFile -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $curFile -Algorithm SHA256).Hash) { $notBack += $rel }
+            }
+            if ($notBack.Count) {
+                throw ("安装区写入失败，且回滚未完成——以下文件没能还原：{0}。请到 Releases 页面手动下载安装包覆盖一次。" -f (($notBack | Select-Object -First 6) -join '；'))
             }
             throw ("安装区写入失败，已回滚到更新前的状态：{0}" -f $_.Exception.Message)
         }
