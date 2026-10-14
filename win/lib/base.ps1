@@ -1,0 +1,124 @@
+﻿# ==============================================================================
+#  base.ps1 — 基础层：契约常量、纯函数、文件读写助手
+#  由入口 envproxy.ps1 按固定顺序点源加载，不单独运行。
+#  本层必须加载期安全（无顶层副作用、不依赖 Windows 专有环境），自检只点源这一层。
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 0.5 文件与路径的唯一入口（治本：所有读写都从这里走，内部一律 -LiteralPath）
+# 使用者能给安装文件夹改名，名字里可能出现 [ ] * ? 这类字符——在 PowerShell 里它们是通配符，
+# 直接用 Test-Path / Get-Content / Remove-Item 会出现"文件明明在、却说不存在"，甚至删错对象。
+# 因此凡是路径可能来自用户环境的读写（安装根、注册表记录、命令行、搜索结果），
+# 一律走下面四个函数；新代码直接调它们就不会踩到通配符语义。
+# 门禁会扫描"关键 cmdlet 是否直接吃裸变量路径"，绕过去当场失败。
+# ------------------------------------------------------------------------------
+function Test-Item([string]$Path) {
+    if (-not $Path) { return $false }
+    try { return [bool]([System.IO.File]::Exists($Path) -or [System.IO.Directory]::Exists($Path)) } catch { return $false }
+}
+function Read-Text([string]$Path) {
+    # 读文本：显式 UTF-8，绝不交给系统代码页去猜（中文 Windows 上会读成乱码）
+    return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+}
+function Write-Text([string]$Path, [string]$Text, [bool]$WithBom = $false) {
+    # 原子写：先写同目录临时文件，再整体替换——中途断电也不会留下半个文件。
+    # 需要 BOM 的地方（PowerShell 5.1 要认的脚本）由调用方显式声明，不靠编辑器的默认行为。
+    $dir = Split-Path -Parent $Path
+    if ($dir -and -not [System.IO.Directory]::Exists($dir)) { [System.IO.Directory]::CreateDirectory($dir) | Out-Null }
+    $enc = New-Object System.Text.UTF8Encoding($WithBom)
+    $tmp = "$Path.tmp$PID"
+    [System.IO.File]::WriteAllText($tmp, $Text, $enc)
+    if ([System.IO.File]::Exists($Path)) {
+        try { [System.IO.File]::Replace($tmp, $Path, $null) }
+        catch { [System.IO.File]::Copy($tmp, $Path, $true); [System.IO.File]::Delete($tmp) }
+    } else {
+        [System.IO.File]::Move($tmp, $Path)
+    }
+}
+function Remove-ItemSafe([string]$Path) {
+    if (-not $Path) { return }
+    try {
+        if ([System.IO.Directory]::Exists($Path)) { [System.IO.Directory]::Delete($Path, $true) }
+        elseif ([System.IO.File]::Exists($Path)) { [System.IO.File]::Delete($Path) }
+    } catch {}
+}
+
+# ------------------------------------------------------------------------------
+# 2. 读写用户级环境变量（注册表 HKCU\Environment，不需要管理员）
+# ------------------------------------------------------------------------------
+# 变量名一律用规范大写拼写；一张表同时是「注入清单」与「删除清单」，两者不可能再漂移。
+#
+# DIVERGE(Win): Windows 的环境命名空间大小写不敏感（注册表 HKCU\Environment 尤其如此），
+# 同名不同大小写就是同一个变量：写两遍只会互相覆盖，注册表里始终只有一个键。
+# 而"大小写各写一份"会在运行期留下**同名两种拼写的重复环境块**——.NET 系宿主按
+# "大小写不敏感字典"建表时直接抛 "An item with the same key has already been added"，
+# 连 Get-ChildItem Env: 都枚举不出来；子进程继续继承同一个块，一个终端窗口里跑的东西
+# 一起中招。故 Windows 侧对一个逻辑变量只写一个规范拼写，共 5 个变量名。
+# DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧写 9 个。
+$ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
+
+# 本机地址直连的默认例外集，写法遵循 NO_PROXY 的通行规范：IPv6 地址**裸写**。
+# 裸写是各家的共同要求——httpx 的规范示例就是 `NO_PROXY=example.com,::1,localhost,...`，
+# 而且它会自己给 IPv6 补上方括号去构造内部模式（见其 _utils.is_ipv6_hostname 分支）；
+# 预先写成 `[::1]` 会被当成普通域名，生成非法模式，反而让每一次请求都抛
+# `InvalidURL: Invalid port: ':1]'`。也就是说方括号属于 URL 字面量的写法，
+# 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
+$DefaultNoProxy = "localhost,127.0.0.1,::1"
+
+# 小写化 + 去空白，用于合并去重（比较时大小写不敏感）
+function Get-NormalizedNoProxyEntries([string]$Value) {
+    $out = @()
+    foreach ($part in ($Value -split ',')) {
+        $t = $part.Trim()
+        if ($t) { $out += $t.ToLowerInvariant() }
+    }
+    return $out
+}
+
+# NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。
+# 这样做是因为环境变量是用户级共享资源——用户自己加的例外（公司内网等）与
+# 别的工具写下的例外都必须留着，本工具只负责"本机地址一定直连"这一件事。
+# 后果是两条：用户手动加例外不会被下一轮冲掉，也不会与轮次之间来回互相覆盖。
+function Merge-NoProxy([string]$Existing, [string]$Default) {
+    $parts = @()
+    foreach ($p in ($Default -split ',')) { $t = $p.Trim(); if ($t) { $parts += $t } }
+    $seen = Get-NormalizedNoProxyEntries $Default
+    foreach ($p in ($Existing -split ',')) {
+        $t = $p.Trim()
+        if (-not $t) { continue }
+        if ($seen -notcontains $t.ToLowerInvariant()) { $parts += $t; $seen += $t.ToLowerInvariant() }
+    }
+    return ($parts -join ',')
+}
+
+function Get-ProxyVarTable([string]$Port) {
+    # 代理值统一用 http:// 协议写法：本地代理端口（MonoCloud/Clash 等）几乎都是
+    # 混合端口，HTTP 与 SOCKS5 都能应答；而部分工具（如 dsh/新版 Node 系）只认
+    # http:// 写法、不支持 socks5://（会提示不支持并跳过）。统一 http:// 兼容面最大。
+    $http = "http://127.0.0.1:$Port"
+    $table = [ordered]@{}
+    foreach ($n in $ProxyVarNames) { $table[$n] = $http }
+    # 本机地址直连（与 README 变量表一致）
+    $table["NO_PROXY"] = $DefaultNoProxy
+    # 让新版 Node 系工具的原生 fetch 也自动读环境变量代理（老版本自动忽略）
+    $table["NODE_USE_ENV_PROXY"] = "1"
+    return $table
+}
+
+# 版本比较：按 . 分段逐段数值比（"1.10" > "1.9"；字符串比会错）。
+# 返回 1（A 新）/ 0（相等）/ -1（A 旧）。
+# 注意：PowerShell 变量名不分大小写，$a 即 $A（[string] 参数），赋值会被转回字符串，
+# 因此循环变量必须另起名（$va/$vb），否则逐段数值比会退化成字符串比（"10" < "9"）。
+function Compare-Versions([string]$A, [string]$B) {
+    $pa = @(); $pb = @()
+    foreach ($s in ($A -split '\.')) { if ($s -match '(\d+)') { $pa += [int]$Matches[1] } else { $pa += 0 } }
+    foreach ($s in ($B -split '\.')) { if ($s -match '(\d+)') { $pb += [int]$Matches[1] } else { $pb += 0 } }
+    $n = [Math]::Max($pa.Count, $pb.Count)
+    for ($i = 0; $i -lt $n; $i++) {
+        $va = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }
+        $vb = if ($i -lt $pb.Count) { $pb[$i] } else { 0 }
+        if ($va -gt $vb) { return 1 }
+        if ($va -lt $vb) { return -1 }
+    }
+    return 0
+}

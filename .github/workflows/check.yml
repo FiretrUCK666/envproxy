@@ -24,7 +24,9 @@ jobs:
       - name: 门禁 1：sh 语法检查
         run: |
           fail=0
-          for f in mac/*.sh; do
+          # 目录级通配：口与 lib/ 下的脚本一起查，新增库自动纳入，不需要改这里。
+          for f in mac/*.sh mac/lib/*.sh; do
+            [ -f "$f" ] || continue
             bash -n "$f" || fail=1
           done
           # 壳↔核心：小 .sh 调的子命令必须在核心分派里；.command 必须指向同目录已存在的 .sh
@@ -43,28 +45,96 @@ jobs:
               fail=1
             fi
           done
+          # 入口声明的库清单必须与 lib/ 实际内容一致：加库忘改入口、删库留空壳、改名漏一处都拦住。
+          # 比的是集合（都排序后比），不比顺序——入口里的顺序是加载依赖顺序，不必等于字母序。
+          declared=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//' | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+          actual=$(ls mac/lib/*.sh 2>/dev/null | sed 's|^mac/lib/||; s|\.sh$||' | sort | tr '\n' ' ' | sed 's/ $//')
+          if [ "$declared" != "$actual" ]; then
+            echo "入口声明的库清单与 lib/ 实际内容不一致"
+            echo "  入口声明: [$declared]"
+            echo "  实际文件: [$actual]"
+            fail=1
+          fi
+          # 库文件名不得含 envproxy：定位器按 find -name "envproxy.sh" 找入口，同名会被误选成入口。
+          for f in mac/lib/*.sh; do
+            [ -f "$f" ] || continue
+            case "$f" in
+              *envproxy*) echo "$f 文件名含 envproxy，会与定位器/单实例识别冲突"; fail=1;;
+            esac
+          done
+          # 函数名不许重复：bash 会静默地用后定义的覆盖先定义的（改了没生效的经典陷阱）。
+          dup=$(cat mac/envproxy.sh mac/lib/*.sh 2>/dev/null | grep -oE '^[a-z_][a-z0-9_]*\(\) \{' | sort | uniq -d)
+          if [ -n "$dup" ]; then
+            echo "库之间出现重名函数（后定义的会静默覆盖先定义的）："
+            echo "$dup"
+            fail=1
+          fi
+          # macOS 自带 bash 3.2，而 CI 是 bash 5：只有 4.0+ 才有的写法在这就被拦住。
+          for f in mac/envproxy.sh mac/lib/*.sh; do
+            [ -f "$f" ] || continue
+            hits=$(grep -nE 'declare[[:space:]]+-A|(^|[^[:alnum:]_])mapfile([[:space:]]|$)|(^|[^[:alnum:]_])readarray([[:space:]]|$)|local[[:space:]]+-n[[:space:]]|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(\^\^|,,)|&>>|\|&' "$f" 2>/dev/null || true)
+            if [ -n "$hits" ]; then
+              echo "$f 出现 bash 4+ 专有写法（macOS 自带 3.2 会失败）："
+              echo "$hits"
+              fail=1
+            fi
+          done
           exit $fail
 
       - name: 门禁 2：ps1 语法检查
         shell: pwsh
         run: |
-          $tokens = $null; $errs = $null
-          [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
-          if ($errs.Count) { $errs | ForEach-Object { $_.Message }; exit 1 }
+          # 目录级：入口与 lib\ 下的每一个 .ps1 都单独解析（点源方案里，坏一个库等于整个程序起不来）
+          $psFiles = @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)
+          foreach ($f in $psFiles) {
+            $tokens = $null; $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
+            if ($errs.Count) { Write-Host ("{0} 解析失败：" -f $f.Name); $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          }
           # 裸变量路径扫描（第 0.5 节的承诺）：关键 cmdlet 直接吃变量路径会踩通配符语义，
           # 必须走 helper 或 -LiteralPath。注释行与带 -LiteralPath 的行不计。
-          $lines2 = Get-Content 'win/envproxy.ps1' -Encoding UTF8
-          for ($i = 0; $i -lt $lines2.Count; $i++) {
-            $l = $lines2[$i]
-            if ($l.Trim().StartsWith('#')) { continue }
-            if ($l -match '(Test-Path|Get-Content|Set-Content|Add-Content|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Get-Item)\s+\$[A-Za-z_]+(\s|\)|;|,|$)') {
-              if ($l -match '-LiteralPath') { continue }
-              Write-Host ("裸变量路径（第 {0} 行）：{1}" -f ($i + 1), $l.Trim())
-              exit 1
+          foreach ($f in $psFiles) {
+            $lines2 = Get-Content $f.FullName -Encoding UTF8
+            for ($i = 0; $i -lt $lines2.Count; $i++) {
+              $l = $lines2[$i]
+              if ($l.Trim().StartsWith('#')) { continue }
+              if ($l -match '(Test-Path|Get-Content|Set-Content|Add-Content|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Get-Item)\s+\$[A-Za-z_]+(\s|\)|;|,|$)') {
+                if ($l -match '-LiteralPath') { continue }
+                Write-Host ("裸变量路径（{0} 第 {1} 行）：{2}" -f $f.Name, ($i + 1), $l.Trim())
+                exit 1
+              }
             }
           }
+          # 库清单一致：入口声明的 $CoreLibs 必须与 lib\ 实际内容完全一致
+          $entryText = Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8
+          $declaredRaw = [regex]::Match($entryText, '\$CoreLibs\s*=\s*@\(([^)]*)\)').Groups[1].Value
+          $declared = @([regex]::Matches($declaredRaw, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+          $actual = @(Get-ChildItem 'win\lib' -Filter *.ps1 -File | ForEach-Object { $_.BaseName } | Sort-Object)
+          if (($declared -join ',') -ne ($actual -join ',')) {
+            Write-Host '入口声明的库清单与 lib\ 实际内容不一致'
+            Write-Host ("  入口声明: {0}" -f ($declared -join ' '))
+            Write-Host ("  实际文件: {0}" -f ($actual -join ' '))
+            exit 1
+          }
+          # 库文件名不得含 envproxy（监控进程按 -File "...envproxy.ps1" 识别身份，同名会被误认）
+          foreach ($f in Get-ChildItem 'win\lib' -Filter *.ps1 -File) {
+            if ($f.BaseName -match 'envproxy') { Write-Host ("{0} 文件名含 envproxy，会与监控进程识别冲突" -f $f.Name); exit 1 }
+          }
+          # 函数名不许重复：点源后同名函数会被后定义的静默覆盖（改了没生效的经典陷阱）
+          $names = @()
+          foreach ($f in $psFiles) {
+            $tk = $null; $er = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tk, [ref]$er)
+            $names += @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) | ForEach-Object { $_.Name })
+          }
+          $dup = @($names | Group-Object | Where-Object { $_.Count -gt 1 })
+          if ($dup.Count) {
+            Write-Host '库之间出现重名函数（后定义的会静默覆盖先定义的）：'
+            $dup | ForEach-Object { Write-Host ("  {0} x{1}" -f $_.Name, $_.Count) }
+            exit 1
+          }
           # 壳↔核心：.cmd 用的开关必须在核心 param() 里存在
-          $paramBlock = [regex]::Match((Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8), '(?s)param\((.*?)\n\)').Groups[1].Value
+          $paramBlock = [regex]::Match($entryText, '(?s)param\((.*?)\n\)').Groups[1].Value
           foreach ($f in Get-ChildItem win/*.cmd) {
             $t = Get-Content $f.FullName -Raw
             foreach ($m in [regex]::Matches($t, 'envproxy\.ps1"?\s+-(\w+)')) {
@@ -77,28 +147,22 @@ jobs:
         shell: pwsh
         run: |
           $fail = 0
-          $b = [System.IO.File]::ReadAllBytes('win/envproxy.ps1')
-          if (-not ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
-            Write-Host 'win/envproxy.ps1 缺少 UTF-8 BOM'
-            $fail = 1
-          }
-          $s = [System.IO.File]::ReadAllBytes('mac/envproxy.sh')
-          if ($s[0] -eq 0xEF -and $s[1] -eq 0xBB -and $s[2] -eq 0xBF) {
-            Write-Host 'mac/envproxy.sh 带了 BOM'
-            $fail = 1
-          }
-          $text = [System.Text.Encoding]::UTF8.GetString($s)
-          if ($text.Contains("`r`n")) {
-            Write-Host 'mac/envproxy.sh 含 CRLF'
-            $fail = 1
-          }
-          # 其余脚本与壳：mac 全部 .sh/.command 同样 LF、无 BOM；
-          # win 全部 .cmd 纯 ASCII（.cmd 按 OEM 代码页读取，非 ASCII 会乱码）。
-          foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command)) {
+          # win：入口与 lib\ 下的每个 .ps1 都必须带 UTF-8 BOM
+          # （PowerShell 5.1 在中文系统按 ANSI 读无 BOM 文件会语法报错）
+          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
-            if ($b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
+            if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
+              Write-Host ("{0} 缺少 UTF-8 BOM" -f $f.FullName.Replace($PWD.Path + [System.IO.Path]::DirectorySeparatorChar, ''))
+              $fail = 1
+            }
+          }
+          # mac：入口、五个壳、六个入口脚本与 lib\ 下的每个 .sh 都必须 LF、无 BOM
+          foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command) + @(Get-ChildItem mac/lib/*.sh)) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
             if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
           }
+          # win 全部 .cmd 纯 ASCII（.cmd 按 OEM 代码页读取，非 ASCII 会乱码）
           foreach ($f in Get-ChildItem win/*.cmd) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
             if (@($b | Where-Object { $_ -gt 0x7E }).Count) { Write-Host ("{0} 含非 ASCII 字符" -f $f.Name); $fail = 1 }
@@ -318,8 +382,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $ps = Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8
-          $sh = Get-Content 'mac/envproxy.sh' -Raw -Encoding UTF8
+          # 常量住在哪一个库里不是门禁该管的事：把整个脚本集拼起来再找。
+          # 于是新增库、把常量挪到别的库、入口变薄，都不会让这条门禁误报或失明。
+          $ps = (@(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse | Sort-Object Name |
+              ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
+          $sh = (@(Get-ChildItem 'mac' -Filter *.sh -File -Recurse | Sort-Object Name |
+              ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
           $fail = 0
           function Grab([string]$text, [string]$pattern, [string]$label) {
             $m = [regex]::Match($text, $pattern)
@@ -379,8 +447,10 @@ jobs:
           $shBytes = [int](Grab $sh '\$_size"\s+-gt\s+(\d+)' 'Mac 日志上限')
           if (-not $psKB -or -not $shBytes) { $fail = 1 }
           elseif ($psKB * 1024 -ne $shBytes) { Write-Host ("日志上限两侧不一致：Win {0}KB / Mac {1}B" -f $psKB, $shBytes); $fail = 1 }
-          $psTail = [int](Grab $ps 'Select-Object -Last (\d+)' 'Win 截断行数')
-          $shTail = [int](Grab $sh 'tail -n (\d+)' 'Mac 截断行数')
+          # 日志截断行数必须锚定到"截断"那一行：状态显示也用 Select-Object -Last 3 / tail -n 3，
+          # 不锚定就会取到状态显示的行数。常量住在哪个库不该影响门禁，所以按用法锚定而不是按文件。
+          $psTail = [int](Grab $ps '\$keep\s*=\s*[^\n]*Select-Object -Last (\d+)' 'Win 截断行数')
+          $shTail = [int](Grab $sh 'tail -n (\d+)\s+"\$LOG_FILE"\s+>\s+"\$LOG_FILE\.tmp"' 'Mac 截断行数')
           if (-not $psTail -or -not $shTail) { $fail = 1 }
           elseif ($psTail -ne $shTail) { Write-Host ("截断行数两侧不一致：Win {0} / Mac {1}" -f $psTail, $shTail); $fail = 1 }
           $psRep = [int](Grab $ps 'repairRound -ge (\d+)' 'Win 自愈轮次')
@@ -531,9 +601,12 @@ jobs:
       - name: 门禁 2b：ps1 语法检查（PowerShell 5.1）
         shell: powershell
         run: |
-          $tokens = $null; $errs = $null
-          [System.Management.Automation.Language.Parser]::ParseFile('win/envproxy.ps1', [ref]$tokens, [ref]$errs) | Out-Null
-          if ($errs.Count) { $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          # 用户真实环境是系统自带的 5.1：入口与每个库都要在 5.1 下解析一遍。
+          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
+            $tokens = $null; $errs = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
+            if ($errs.Count) { Write-Host ("{0} 在 5.1 下解析失败：" -f $f.Name); $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
+          }
           powershell -NoProfile -File tests/test-win-pure.ps1
           if ($LASTEXITCODE -ne 0) { Write-Host 'Win 功能自检（5.1）失败'; exit 1 }
           Write-Host '5.1 语法与功能自检通过'
