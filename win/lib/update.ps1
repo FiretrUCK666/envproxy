@@ -25,7 +25,8 @@ function Test-DevCopy {
     return (Test-Item (Join-Path $root ".git"))
 }
 
-# 源码包：有 .github、无 .git（网页上下载的 Source code 包，或删掉了 .git 的克隆）。
+# 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
+# 现在网页上下载的 zip 已不再含这些文件，见 README 故障排查）。
 # 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
 # 传参则判指定目录（自检用），不传判安装根。
 function Test-SourceCopy {
