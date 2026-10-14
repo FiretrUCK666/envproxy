@@ -170,7 +170,11 @@ update_envproxy() {
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
     _reg=""
     [ -f "$PATH_CONF" ] && _reg=$(head -n 1 "$PATH_CONF" 2>/dev/null | tr -d '\r\n' || true)
-    if [ -n "$_reg" ] && [ "$_reg" != "$SCRIPT_PATH" ]; then
+    # 大小写不敏感地比：macOS 默认卷不区分大小写，只差大小写的路径是同一个文件夹，
+    # 那时不该弹"你点的是备份副本"的警告（Windows 侧同样是两边都转小写后比）。
+    _reg_lc=$(printf '%s' "$_reg" | tr 'A-Z' 'a-z')
+    _self_lc=$(printf '%s' "$SCRIPT_PATH" | tr 'A-Z' 'a-z')
+    if [ -n "$_reg" ] && [ "$_reg_lc" != "$_self_lc" ]; then
         echo "注意：你现在点的是 [$SCRIPT_PATH]，"
         echo "但正式安装在 [$_reg]。"
         echo "继续会更新【当前这个文件夹】并把它切换为正式安装。"
@@ -235,6 +239,8 @@ update_envproxy() {
     # 写的是同目录临时文件再改名，运行中的旧文件不受影响）。
     # 注意顺序：先覆盖、后停监控——停得越晚，监控裸奔的窗口越短。
     # 旧监控在覆盖期间只读写变量与自启动，不碰程序文件，不会打架。
+    # DIVERGE(Mac): Windows 侧是先停监控再覆盖。两侧收尾都会由新脚本的安装再对齐一次，
+    # 最终状态相同；这里选"后停"只为缩短变量无人纠正的窗口。
     echo "正在安装新版（保留日志）..."
     if ! install_package "$_exdir" "$_uroot" "$_exdir"; then
         rm -f "$_tgz" 2>/dev/null || true

@@ -9,7 +9,16 @@
 function Install-EnvProxy {
     Write-Host "======== EnvProxy 安装 ========" -ForegroundColor Cyan
     Set-AutoRun
-    Write-Host "[1/3] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
+    # 写完必须读回：装没装上由复读决定，不由"我调用了写入"决定（与自愈路径同一条规矩）。
+    # 杀软拦 Run 键是真实发生过的事，那时不能报"已写入"。
+    $runHave = $null
+    try { $runHave = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName } catch {}
+    if (($runHave -eq (Get-LauncherCommand)) -and (Test-LauncherCurrent)) {
+        Write-Host "[1/3] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
+    } else {
+        Write-Host "[1/3] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
+        Write-Host "      请检查杀软拦截，或再双击一次本按钮；仍然不行就把它加进白名单。" -ForegroundColor Yellow
+    }
     Update-ScriptPathRecord
     Start-Monitor -Force:$true
     Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green

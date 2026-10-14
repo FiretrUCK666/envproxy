@@ -60,6 +60,16 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
 function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage) {
     # $Stage 必填：没有它就没有备份，也就没有回滚——不留"可以无回滚地覆盖安装区"的口子。
     if (-not $Stage) { throw "内部错误：覆盖安装区必须提供备份目录（-Stage）。" }
+    # 路径形态归一：参数可能是 8.3 短名（例如从 %TEMP% 拼出来的临时目录，或短名形态的启动路径），
+    # 而 Get-ChildItem 枚举子项返回的是长名——两种写法长度不同，"减掉根前缀"算出来的相对路径
+    # 就会整体错位：那会误删不该删的文件（连 monitor 日志一起）并把新文件写到错位置。
+    # 先各自解析成长名，后面所有相对路径计算才对得上。
+    $SrcRoot = (Get-Item -LiteralPath $SrcRoot -ErrorAction SilentlyContinue).FullName
+    $ProjectRoot = (Get-Item -LiteralPath $ProjectRoot -ErrorAction SilentlyContinue).FullName
+    # $Stage 允许还不存在（调用方只给一个临时目录名）：先建出来再解析，保持原有的容忍度。
+    if ($Stage -and -not (Test-Item $Stage)) { New-Item -Path $Stage -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+    $Stage = (Get-Item -LiteralPath $Stage -ErrorAction SilentlyContinue).FullName
+    if (-not $SrcRoot -or -not $ProjectRoot -or -not $Stage) { throw "更新中止：安装包目录或安装目录不可访问，未做任何改动。" }
     # 目的地校验：目标必须已经是一个安装根（有 VERSION 与核心脚本），否则一律拒绝。
     # 根目录是从"脚本所在目录的父目录"推出来的；脚本一旦不在 <根>\win\ 布局里，
     # 推导出的"安装根"就是错的，后面的删除循环会删掉用户自己的文件。这道闸让那种情况到此为止。

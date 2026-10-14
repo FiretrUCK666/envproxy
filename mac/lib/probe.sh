@@ -196,8 +196,10 @@ test_single_endpoint() {
     _first=$(printf '%s' "$_out" | head -n 1)
     _code=$(printf '%s' "$_first" | grep -oE ' [0-9]{3} ' | tr -cd '0-9')
     case "$_code" in
-        # 与 Windows 侧同一口径：2xx 与 3xx 都算"通过代理能到外网"。
-        2??|3??) return 0;;
+        # 与 Windows 侧同一口径：只认"正常响应"——200 / 204（连通性检查端点）与 3xx 重定向。
+        # 不把 2xx 全收进来：其它 2xx 语义不明，宁可判"断"——错判"通"会把终端流量送进坏节点，
+        # 错判"断"只是不注入（终端走直连），两个代价不对称。
+        200|204|30[0-9]) return 0;;
         *) return 1;;
     esac
 }

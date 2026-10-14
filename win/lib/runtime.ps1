@@ -93,11 +93,15 @@ if (-not $running) {
 }
 
 # 把定位器写到固定位置，并把 Run 键指向定位器
+function Get-LauncherCommand {
+    # 定位器命令行是同一事实的三处用法（写入、自愈比对、安装后复检）的唯一来源。
+    return ('powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath)
+}
+
 function Set-AutoRun {
     New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
     [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
-    $launcherCmd = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath
-    Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $launcherCmd -ErrorAction Stop
+    Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value (Get-LauncherCommand) -ErrorAction Stop
 }
 
 function Remove-AutoRun {
@@ -127,7 +131,7 @@ function Test-LauncherCurrent {
 
 function Repair-AutoRun {
     try {
-        $expected = 'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath
+        $expected = Get-LauncherCommand
         $actual = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
         if ((-not (Test-LauncherCurrent)) -or $actual -ne $expected) {
             New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null

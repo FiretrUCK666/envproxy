@@ -316,7 +316,12 @@ stop_monitor() {
     if [ "$_target_dir" != "$MONITOR_DIR" ] && [ -d "$_target_dir" ]; then
         if [ -z "$(ls -A "$_target_dir" 2>/dev/null)" ]; then rmdir "$_target_dir" 2>/dev/null || true; fi
     fi
-    echo "监控进程已停止。"
+    # 定论由复读决定，不由"我发了停止信号"决定：进程还在就不能报"已停止"。
+    if [ -n "$(get_monitor_pid || true)" ]; then
+        echo "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
+    else
+        echo "监控进程已停止。"
+    fi
 }
 
 # ------------------------------------------------------------------------------

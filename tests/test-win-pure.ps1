@@ -126,5 +126,13 @@ $empty = @($declared | Where-Object {
 Assert-Eq 'every library defines at least one function' '0' ($empty.Count)
 Assert-Eq 'the entry stays a thin loader' $true (@([regex]::Matches($entryText, '(?m)^function\s')).Count -le 6)
 
+Write-Host '[8] autorun launcher command'
+# The command line written into the Run key has one source of truth; the installer's read-back
+# check and the self-heal comparison both compare against it, so its shape is an invariant.
+$cmd = Get-LauncherCommand
+Assert-Eq 'launcher command points at the launcher file' $true ($cmd -like ('*' + $LauncherPath + '*'))
+Assert-Eq 'launcher command hides the window' $true ($cmd -like '*WindowStyle Hidden*')
+Assert-Eq 'launcher command bypasses execution policy' $true ($cmd -like '*ExecutionPolicy Bypass*')
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
