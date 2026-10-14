@@ -24,26 +24,26 @@ jobs:
       - name: 门禁 1：sh 语法检查
         run: |
           fail=0
-          # 目录级通配：口与 lib/ 下的脚本一起查，新增库自动纳入，不需要改这里。
+          # 目录级通配：mac/ 根与 lib/ 下的脚本一起查，新增文件自动纳入，不需要改这里。
           for f in mac/*.sh mac/lib/*.sh; do
             [ -f "$f" ] || continue
             bash -n "$f" || fail=1
           done
-          # 壳↔核心：小 .sh 调的子命令必须在核心分派里；.command 必须指向同目录已存在的 .sh
-          for f in mac/install.sh mac/stop.sh mac/uninstall.sh mac/status.sh mac/update.sh; do
-            for cmd in $(grep -oE 'envproxy\.sh [a-z]+' "$f" | awk '{print $2}'); do
+          # 壳↔核心：.command 直调入口，用的子命令必须在核心分派里；
+          # mac/ 根下只留入口与定位器模板，多出来的 .sh 就是没回家的传话层。
+          for f in mac/*.command; do
+            for cmd in $(grep -oE 'envproxy\.sh [a-z-]+' "$f" | awk '{print $2}'); do
               if ! grep -qE "^[[:space:]]*$cmd\)" mac/envproxy.sh; then
                 echo "$f 用的子命令 $cmd 在核心分派里没有"
                 fail=1
               fi
             done
           done
-          for f in mac/*.command; do
-            ref=$(grep -oE '[a-z]+\.sh' "$f" | head -n 1)
-            if [ -n "$ref" ] && [ ! -f "mac/$ref" ]; then
-              echo "$f 指向的 $ref 不存在"
-              fail=1
-            fi
+          for f in mac/*.sh; do
+            case "$f" in
+              mac/envproxy.sh|mac/locator.sh) ;;
+              *) echo "$f 在 mac/ 根下没有家：根下只留入口与定位器模板"; fail=1;;
+            esac
           done
           # 入口声明的库清单必须与 lib/ 实际内容一致：加库忘改入口、删库留空壳、改名漏一处都拦住。
           # 比的是集合（都排序后比），不比顺序——入口里的顺序是加载依赖顺序，不必等于字母序。
@@ -196,7 +196,7 @@ jobs:
               $fail = 1
             }
           }
-          # mac：入口、五个壳、六个入口脚本与 lib\ 下的每个 .sh 都必须 LF、无 BOM
+          # mac：入口、定位器、五个双击壳与 lib\ 下的每个 .sh 都必须 LF、无 BOM
           foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command) + @(Get-ChildItem mac/lib/*.sh)) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
             if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }

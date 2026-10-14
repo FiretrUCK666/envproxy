@@ -205,7 +205,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
 | Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | `1-安装` now reads the setting back and tells you when it did not stick; whitelist the install folder (in Huorong, turn off HTTPS scanning features first) and do not turn the antivirus off |
 | After `1-安装` it reports the monitor could not be confirmed | a second copy on the same machine already holds the single-instance lock (only one monitor runs at a time), or the launch was blocked | double-click `4-查看状态` to see the real state; if you no longer need that other copy, run `3-一键恢复` inside its folder, then click `1-安装` once |
-| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. `1-安装` cannot fix this — it needs those same files to run |
+| "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over the folder. If files from an older release are left behind after covering (such as `install.sh` under `mac/`), just delete them by hand — the new release no longer uses them. `1-安装` cannot fix this — it needs those same files to run |
 
 <details>
 <summary>Less common cases</summary>
@@ -331,7 +331,7 @@ All five live in the `mac` folder.
 | **4-查看状态.command** | shows monitor, start at login, proxy state, variables, version, recent log |
 | **5-检查更新.command** | checks the latest release and installs after you agree |
 
-Terminal users can also run the commands directly from the project root: `bash mac/install.sh`, `bash mac/stop.sh`, `bash mac/uninstall.sh` (add `--purge` to delete the log without asking), `bash mac/status.sh`, `bash mac/update.sh` (add `--yes` to skip the confirmation). The `.command` files are only double-click shells; the logic lives in the `.sh` files.
+Terminal users can also run the commands directly from the project root: `bash mac/envproxy.sh install`, `bash mac/envproxy.sh stop`, `bash mac/envproxy.sh uninstall` (add `--purge` to delete the log without asking), `bash mac/envproxy.sh status`, `bash mac/envproxy.sh update` (add `--yes` to skip the confirmation). The `.command` files are only double-click shells; the logic lives in the entry script and the libraries under `lib/`.
 
 ### 12.4 What is inside the `mac` folder
 
@@ -341,8 +341,7 @@ EnvProxy/
     envproxy.sh          entry (counterpart of win\envproxy.ps1, system tools only)
     lib/                 seven libraries: base / probe / env / runtime / package / update / ops
     locator.sh           locator template (copied to ~/.envproxy/locator.sh at install time)
-    install.sh / stop.sh / uninstall.sh / status.sh / update.sh
-    1-安装.command ... 5-检查更新.command   (double-click entry points)
+    1-安装.command ... 5-检查更新.command   (double-click entry points, each calls the matching envproxy.sh subcommand)
     monitor/             created at runtime (monitor.log, monitor.pid, stop.flag; same log format as Windows)
 ```
 
@@ -350,7 +349,7 @@ EnvProxy/
 
 ### 12.5 Three things that may block the first install on a Mac
 
-1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: right-click, then Open, once; or go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it); or run `bash mac/install.sh` in a terminal (always works); otherwise run `xattr -d com.apple.quarantine mac/1-安装.command` and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
+1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: right-click, then Open, once; or go to System Settings, Privacy and Security and click "Open Anyway" (that button only shows up within an hour after you tried to open it); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/*.command` first (clears all five buttons at once, also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
 2. **The executable bit is lost** (common when the folder came from Windows): run `chmod +x *.command *.sh` once inside the `mac` folder.
 3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — double-clicking 1-安装 once fixes it.
 

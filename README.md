@@ -205,7 +205,7 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 | TUN / 增强模式下终端本来就通 | 流量被全局接管，检测不到本地端口就不写变量 | 正常现象，不用处理（显示通或不通都对） |
 | 安装或自启动被杀软拦 | Run 键与用户目录脚本是启发式引擎的重点观察对象 | 双击 `1-安装` 会读回复检自启动有没有真的写上，装不上会直接告诉你；把安装目录加白名单（火绒先关"HTTPS 加密扫描"一类功能），不要关杀软 |
 | 按 `1-安装` 后提示「监控进程未能确认运行」 | 同一台电脑上第二个副本的监控正占着单实例锁（同一时刻只允许一个监控），或启动被拦 | 双击 `4-查看状态` 核对实际状态；那份副本确实不用了，就进它的文件夹点 `3-一键恢复`，再点一次 `1-安装` |
-| 报「安装不完整，缺少程序文件」（随后逐行列出缺哪些） | 文件夹没完整拷过来，或里面的文件被删掉了（程序是「入口 + lib\ 里七个库」的结构，缺一个都起不来） | 到 Releases 页面重新下载安装包，解压后覆盖这个文件夹。缺文件时 `1-安装` 也修不了——它自己就要用到这些文件 |
+| 报「安装不完整，缺少程序文件」（随后逐行列出缺哪些） | 文件夹没完整拷过来，或里面的文件被删掉了（程序是「入口 + lib\ 里七个库」的结构，缺一个都起不来） | 到 Releases 页面重新下载安装包，解压后覆盖这个文件夹。覆盖后如果多出旧版残留文件（比如 `mac/` 里的 `install.sh`），手动删掉即可，新版已不再用它们。缺文件时 `1-安装` 也修不了——它自己就要用到这些文件 |
 
 <details>
 <summary>不常遇到的情况（点开看）</summary>
@@ -331,7 +331,7 @@ Mac 版注入整套 9 个变量，比 Windows 多的是一份小写拼写——m
 | **4-查看状态.command** | 显示监控、自启动、翻墙状态、变量、版本、最近日志 |
 | **5-检查更新.command** | 查最新版，问过才装 |
 
-终端用户也可以直接用命令（在项目根目录）：`bash mac/install.sh`、`bash mac/stop.sh`、`bash mac/uninstall.sh`（加 `--purge` 连日志一起删、不询问）、`bash mac/status.sh`、`bash mac/update.sh`（加 `--yes` 跳过确认）。`.command` 只是双击壳，逻辑全在 `.sh` 里。
+终端用户也可以直接用命令（在项目根目录）：`bash mac/envproxy.sh install`、`bash mac/envproxy.sh stop`、`bash mac/envproxy.sh uninstall`（加 `--purge` 连日志一起删、不询问）、`bash mac/envproxy.sh status`、`bash mac/envproxy.sh update`（加 `--yes` 跳过确认）。`.command` 只是双击壳，逻辑全在入口与 `lib/` 里的库里。
 
 ### 12.4 `mac` 文件夹里都有什么
 
@@ -341,8 +341,7 @@ EnvProxy/
     envproxy.sh          入口（对标 win\envproxy.ps1，只用系统自带命令）
     lib/                 七个程序库：base / probe / env / runtime / package / update / ops
     locator.sh           定位器模板（安装时复制到 ~/.envproxy/locator.sh）
-    install.sh / stop.sh / uninstall.sh / status.sh / update.sh
-    1-安装.command … 5-检查更新.command（双击入口）
+    1-安装.command … 5-检查更新.command（双击入口，直调 envproxy.sh 对应子命令）
     monitor/             运行时自建（monitor.log / monitor.pid / stop.flag；日志行格式与 Windows 一致）
 ```
 
@@ -350,7 +349,7 @@ EnvProxy/
 
 ### 12.5 Mac 上首次安装可能遇到的三个拦路虎
 
-1. **双击没反应，或提示"无法打开"**：Gatekeeper 拦的。按省事程度来：右键 → 打开放行一次；或去系统设置 → 隐私与安全性点"仍要打开"（这个按钮只在你尝试打开后 1 小时内出现）；或在终端里跑 `bash mac/install.sh`（永远有效）；还不行就先执行 `xattr -d com.apple.quarantine mac/1-安装.command` 再双击。不要用 `spctl --master-disable` 关整个 Gatekeeper——`.command` 只是没签名的脚本，签了解决不了问题，关了等于给恶意软件开门。
+1. **双击没反应，或提示"无法打开"**：Gatekeeper 拦的。按省事程度来：右键 → 打开放行一次；或去系统设置 → 隐私与安全性点"仍要打开"（这个按钮只在你尝试打开后 1 小时内出现）；或在终端里跑 `bash mac/envproxy.sh install`（永远有效，但要在项目根目录下执行）；还不行就先执行 `xattr -d com.apple.quarantine mac/*.command`（五个按钮一次放行，同样在项目根目录下执行）再双击。不要用 `spctl --master-disable` 关整个 Gatekeeper——`.command` 只是没签名的脚本，签了解决不了问题，关了等于给恶意软件开门。
 2. **`chmod` 权限丢了**（从 Windows 拷过来常见）：进 `mac` 目录跑一次 `chmod +x *.command *.sh`。
 3. **首次登录弹出"终端想访问文稿、桌面"**：点"好"就行（定位器要搜索新位置）。点了"不允许"也不坏，手动双击一次安装就纠正了。
 
