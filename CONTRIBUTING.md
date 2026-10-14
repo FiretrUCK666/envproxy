@@ -53,12 +53,12 @@ git clone https://github.com/FiretrUCK666/envproxy.git
 cd envproxy
 
 # 改完自检（与 CI 同款；门禁的权威定义只有一处：.github/workflows/check.yml）
-bash -n mac/*.sh
+bash -n mac/*.sh mac/lib/*.sh
 ```
 
-`win\envproxy.ps1` 的语法检查在 Windows 本机用 PowerShell 语法解析跑（`Parser::ParseFile`，见
-`AGENTS.md` 的构建与验证节）；改完 Windows 进 `win` 双击 `4-查看状态`、Mac 跑 `bash mac/status.sh`
-确认行为。
+`win\` 下每个 `.ps1`（入口与 `lib\` 里的库）的语法检查在 Windows 本机用 PowerShell 语法解析跑
+（`Parser::ParseFile`，见 `AGENTS.md` 的构建与验证节）；改完 Windows 进 `win` 双击 `4-查看状态`、
+Mac 跑 `bash mac/status.sh` 确认行为。
 
 **开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy.zip`（Windows）/ `EnvProxy.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
@@ -72,7 +72,7 @@ bash -n mac/*.sh
 
 ```sh
 # 门禁 1：sh 语法（CI 同款）
-bash -n mac/*.sh
+bash -n mac/*.sh mac/lib/*.sh
 # 门禁 2：ps1 语法（本机 PowerShell 5.1；CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
 # 门禁 10：功能自检（纯函数 + hook/归属/注入回收/快照，沙箱跑，不碰用户文件）
 pwsh -NoProfile -File tests/test-win-pure.ps1
@@ -90,8 +90,8 @@ bash mac/envproxy.sh self-test
 
 对贡献者同样成立的几条（**完整规范以 `AGENTS.md` 为准**）：
 
-- `win\envproxy.ps1` 永远 UTF-8 **带 BOM** 保存，`mac\envproxy.sh` 永远 LF **无 BOM**保存，
-  改一侧不许顺手“统一”另一侧；
+- `win\` 下每个 `.ps1`（入口与 `lib\` 里的库）永远 UTF-8 **带 BOM** 保存，`mac\` 下每个 `.sh`
+  永远 LF **无 BOM** 保存，改一侧不许顺手“统一”另一侧；
 - 只用系统自带命令，不引入 Python/Node/第三方模块；
 - 不写死端口、进程名、路径，新增适配只向端口表/进程名特征追加；
 - 包装壳（`.cmd`/`.command`/小 `.sh`）不许长逻辑；

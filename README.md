@@ -204,6 +204,7 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 | 想彻底回到没装之前 | — | 双击 `3-一键恢复`，日志留不留当场选 |
 | TUN / 增强模式下终端本来就通 | 流量被全局接管，检测不到本地端口就不写变量 | 正常现象，不用处理（显示通或不通都对） |
 | 安装或自启动被杀软拦 | Run 键与用户目录脚本是启发式引擎的重点观察对象 | 把安装目录加白名单（火绒先关"HTTPS 加密扫描"一类功能）；不要关杀软 |
+| 报「安装不完整，缺少程序文件：lib\xxx」 | 文件夹没完整拷过来，或里面的文件被删掉了（程序是「入口 + lib\ 里七个库」的结构，缺一个都起不来） | 到 Releases 页面重新下载安装包覆盖一次；也可以先双击一次 `1-安装` 试试 |
 
 <details>
 <summary>不常遇到的情况（点开看）</summary>
@@ -240,9 +241,13 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 
 ```
 EnvProxy\
-  win\                    Windows 版：5 个按钮 + 核心脚本
+  win\                    Windows 版：5 个按钮 + 入口 + 程序库
+    envproxy.ps1         入口：解析参数、挂操作锁、加载自检、分派
+    lib\                 七个程序库：base / probe / env / runtime / package / update / ops
     monitor\              运行时自建：monitor.log（日志）、monitor.pid、stop.flag
-  mac\                    Mac 版：同样 5 个按钮 + 核心脚本
+  mac\                    Mac 版：同样 5 个按钮 + 入口 + 程序库
+    envproxy.sh          入口（与 win\envproxy.ps1 对等）
+    lib\                 七个程序库（与 Windows 同名同职责）
   README.md               中文说明（本文）
   README.en.md            英文说明
   LICENSE                 MIT 许可证
@@ -276,7 +281,7 @@ EnvProxy\
 <details>
 <summary>手动改过文件的话，编码要注意（点开看）</summary>
 
-- `win\envproxy.ps1` 是 **UTF-8 带 BOM**。这是为了让它在任何中文、英文系统的 Windows 上都能被 PowerShell 5.1 正确读取——没有 BOM 时，中文系统按 GBK 读、英文系统按 Latin1 读，都可能报语法错误。用编辑器改过它，保存时务必选"UTF-8 with BOM"，改完进 `win` 双击一次"安装"让监控加载新代码。
+- `win\` 下的每个 `.ps1`（入口与 `lib\` 里的库）都是 **UTF-8 带 BOM**。这是为了让它在任何中文、英文系统的 Windows 上都能被 PowerShell 5.1 正确读取——没有 BOM 时，中文系统按 GBK 读、英文系统按 Latin1 读，都可能报语法错误。用编辑器改过它，保存时务必选"UTF-8 with BOM"，改完进 `win` 双击一次"安装"让监控加载新代码。
 - 日志 `monitor\monitor.log` 相反，是 **UTF-8 无 BOM**，读写两端都显式指定 UTF-8，放哪种代码页的系统上都不会乱码（Windows 侧行尾 CRLF，Mac 侧 LF）。不要把日志也统一成带 BOM——文件开头会多出三个字节，被当成日志内容。
 - 拷贝文件夹的时候，别用文本编辑器另存里面的 `.ps1` 文件，那会破坏 BOM。
 
@@ -332,7 +337,8 @@ Mac 版注入整套 9 个变量，比 Windows 多的是一份小写拼写——m
 ```
 EnvProxy/
   mac/
-    envproxy.sh          Mac 核心（对标 win\envproxy.ps1，单文件、只用系统自带命令）
+    envproxy.sh          入口（对标 win\envproxy.ps1，只用系统自带命令）
+    lib/                 七个程序库：base / probe / env / runtime / package / update / ops
     locator.sh           定位器模板（安装时复制到 ~/.envproxy/locator.sh）
     install.sh / stop.sh / uninstall.sh / status.sh / update.sh
     1-安装.command … 5-检查更新.command（双击入口）
@@ -354,7 +360,7 @@ EnvProxy/
 新增两条：
 
 1. **旧终端要重开**：已经开着的窗口不变，只有新开的终端和 App 才生效（与 Windows 一致）。
-2. **核心用 shell 写，不用 python**：Mac 自带的 `/usr/bin/python3` 是 Xcode 附带的旧版本，新系统上缺组件会直接报错。所以 Mac 版只用 `zsh`、`bash` 和系统自带命令（`curl`、`lsof`、`nc`、`netstat`、`ps`、`launchctl`、`awk`、`sed`、`tar`、`cmp` 等），不装任何东西。**改完 `mac/envproxy.sh` 要保存为 LF、无 BOM**（与 Windows 的 UTF-8 带 BOM 相反，BOM 会顶掉 shebang 导致无法执行）。
+2. **核心用 shell 写，不用 python**：Mac 自带的 `/usr/bin/python3` 是 Xcode 附带的旧版本，新系统上缺组件会直接报错。所以 Mac 版只用 `zsh`、`bash` 和系统自带命令（`curl`、`lsof`、`nc`、`netstat`、`ps`、`launchctl`、`awk`、`sed`、`tar`、`cmp` 等），不装任何东西。**改完 `mac` 下任何 `.sh`（入口与 `lib/` 里的库）都要保存为 LF、无 BOM**（与 Windows 的 UTF-8 带 BOM 相反，BOM 会顶掉 shebang 导致无法执行）。
 
 ### 12.7 给朋友/新 Mac 部署
 

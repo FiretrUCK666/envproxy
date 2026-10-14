@@ -204,6 +204,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | You want to undo everything | — | double-click `3-一键恢复` and answer the log question |
 | The terminal already works under TUN / enhanced mode | traffic is captured globally, so with no local port detected nothing is written | expected, nothing to do (either state is correct) |
 | Install or start at login is blocked by antivirus | Run keys and scripts in user folders are heuristic engines' favourite suspects | whitelist the install folder (in Huorong, turn off HTTPS scanning features first); do not turn the antivirus off |
+| "安装不完整，缺少程序文件：lib\xxx" (incomplete install) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download the package again from the Releases page and copy it over; running `1-安装` once may also fix it |
 
 <details>
 <summary>Less common cases</summary>
@@ -240,9 +241,13 @@ After unzipping you have this (the folder name is yours to change):
 
 ```
 EnvProxy\
-  win\                    Windows build: five buttons and the core script
+  win\                    Windows build: five buttons, the entry script and the libraries
+    envproxy.ps1          entry: parses arguments, takes the op lock, verifies and loads the libraries, dispatches
+    lib\                  seven libraries: base / probe / env / runtime / package / update / ops
     monitor\              created at runtime: monitor.log, monitor.pid, stop.flag
-  mac\                    Mac build: the same five buttons and core script
+  mac\                    Mac build: the same five buttons, entry script and libraries
+    envproxy.sh           entry (counterpart of win\envproxy.ps1)
+    lib\                  seven libraries (same names, same jobs as on Windows)
   README.md               Chinese documentation
   README.en.md            English documentation
   LICENSE                 MIT license
@@ -276,7 +281,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 <details>
 <summary>If you edit the files by hand, mind the encoding</summary>
 
-- `win\envproxy.ps1` is **UTF-8 with a BOM**. That is what lets PowerShell 5.1 read it correctly on both Chinese and English systems: without a BOM, a Chinese system reads it as GBK and an English one as Latin-1, and either can produce syntax errors. If you edit it, save as "UTF-8 with BOM" and double-click 1-安装 once so the monitor loads the new code.
+- Every `.ps1` under `win\` (the entry and the libraries in `lib\`) is **UTF-8 with a BOM**. That is what lets PowerShell 5.1 read it correctly on both Chinese and English systems: without a BOM, a Chinese system reads it as GBK and an English one as Latin-1, and either can produce syntax errors. If you edit it, save as "UTF-8 with BOM" and double-click 1-安装 once so the monitor loads the new code.
 - The log `monitor\monitor.log` is the opposite: **UTF-8 without a BOM**, with UTF-8 specified explicitly on both the writing and reading side, so it never looks wrong on any code page (CRLF line endings on Windows, LF on Mac). Do not "unify" the log to a BOM either — the three extra bytes at the start would be read as log content.
 - When copying the folder around, do not re-save the `.ps1` files with a text editor, which would break the BOM.
 
@@ -332,7 +337,8 @@ Terminal users can also run the commands directly from the project root: `bash m
 ```
 EnvProxy/
   mac/
-    envproxy.sh          the Mac core (counterpart of win\envproxy.ps1, one file, system tools only)
+    envproxy.sh          entry (counterpart of win\envproxy.ps1, system tools only)
+    lib/                 seven libraries: base / probe / env / runtime / package / update / ops
     locator.sh           locator template (copied to ~/.envproxy/locator.sh at install time)
     install.sh / stop.sh / uninstall.sh / status.sh / update.sh
     1-安装.command ... 5-检查更新.command   (double-click entry points)
@@ -354,7 +360,7 @@ The Windows ones: TUN mode gets nothing (correct behaviour); "disconnected" is n
 Two more:
 
 1. **Old terminals must be reopened**: existing windows do not change, only newly opened terminals and apps pick up the variables (same as Windows).
-2. **The core is shell, not python**: the `/usr/bin/python3` that ships with macOS is an old version bundled with Xcode, and it fails outright on newer systems when components are missing. So the Mac build uses only `zsh`, `bash` and system tools (`curl`, `lsof`, `nc`, `netstat`, `ps`, `launchctl`, `awk`, `sed`, `tar`, `cmp` and the like), and installs nothing. **After editing `mac/envproxy.sh`, save it as LF with no BOM** — the opposite of Windows, where the BOM is required; here a BOM would displace the shebang and the script would not run.
+2. **The core is shell, not python**: the `/usr/bin/python3` that ships with macOS is an old version bundled with Xcode, and it fails outright on newer systems when components are missing. So the Mac build uses only `zsh`, `bash` and system tools (`curl`, `lsof`, `nc`, `netstat`, `ps`, `launchctl`, `awk`, `sed`, `tar`, `cmp` and the like), and installs nothing. **After editing any `.sh` under `mac` (the entry and the libraries in `lib/`), save it as LF with no BOM** — the opposite of Windows, where the BOM is required; here a BOM would displace the shebang and the script would not run.
 
 ### 12.7 Deploying to a friend or a new Mac
 
