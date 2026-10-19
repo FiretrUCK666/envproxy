@@ -3,17 +3,38 @@
 #  状态显示只读；动手只走更新入口。
 # ------------------------------------------------------------------------------
 
-# 更新源：GitHub Release 里的安装包资产（见第 9 节）。
+# 更新源：分平台安装包资产（见第 9 节），按源表逐源尝试。
 # 开发副本（安装根有 .git）的只读版本检查跟自己的 git remote 走，
 # 覆盖文件这条路上 git 副本一律不参与。
 UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
+# 镜像仓库：在 Gitee 建好镜像仓库后填 "<用户名>/<仓库名>"（例如 "FiretrUCK666/envproxy"）。
+# 留空 = 这一源尚未启用，逐源尝试时直接跳过——这是源表的正常状态（镜像还没建），
+# 不是特例分支，所以不需要任何开关变量。
+GITEE_MIRROR_REPO=""
+
+# 更新源表：每行一条 "<标识来源> <显示名> <API> <下载前缀>"，有序，逐个尝试，
+# 第一个能回答"最新版是什么"的胜出。
+# 两处地址里的 @@ 接仓库标识（用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
+# 加一个镜像源 = 加一行，不动任何判断逻辑。
+# 顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
+# 两个源的 API 返回体同构（都取 tag_name），下载路径也同构（/<仓库>/releases/download/<标签>/<文件名>），
+# 因此下面的解析与下载代码对它们完全共用。
+# 通道不止一条的理由是产品自身的前提——用这个工具的人可能正处在"还没连上代理"的时刻，
+# 而官方源在那个时刻通常不可达；没有镜像兜底，更新就变成了"必须先能翻墙才能更新"。
+# 两个源都归维护者所有，信任级别一致，因此校验口径一个字都不用放宽。
+UPDATE_SOURCE_TABLE='official GitHub https://api.github.com/repos/@@/releases/latest https://github.com/@@
+mirror Gitee https://gitee.com/api/v5/repos/@@/releases/latest https://gitee.com/@@'
+
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：GitHub Release 里的分平台安装包资产（EnvProxy-mac.tar.gz；Windows 侧取 EnvProxy-win.zip）。
+# 更新源：分平台安装包资产（EnvProxy-mac.tar.gz；Windows 侧取 EnvProxy-win.zip），按上面的源表逐源尝试。
 #   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
+#   不接公共加速站：那些站点靠站长自掏腰包维持、生命周期以月计，而且包从它手里过一遍
+#   就等于多信一个陌生人。镜像走的是维护者自己在国内平台建的仓库，与自己 GitHub 仓库同级，
+#   因此校验口径一个字都不用放宽。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
 #     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
@@ -73,6 +94,17 @@ get_update_repo() {
     printf '%s' "$UPDATE_REPO_DEFAULT"
 }
 
+# 这一源的仓库标识从哪里取。
+#   official：环境事实——开发副本跟自己的 git remote 走（fork 后看得见自己仓库的 Release），
+#             安装副本用内置默认；
+#   mirror：维护者在 Gitee 建好镜像仓库后填进 GITEE_MIRROR_REPO，留空 = 这一源尚未启用。
+update_source_id() {
+    case "$1" in
+        mirror) printf '%s' "$GITEE_MIRROR_REPO" ;;
+        *) printf '%s' "$(get_update_repo)" ;;
+    esac
+}
+
 # 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
 # DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
 # Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
@@ -93,20 +125,49 @@ fetch_update_file() {
         curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$2" "$1" 2>/dev/null
 }
 
-# 查最新 Release：成功时置 REMOTE_VERSION / REMOTE_TAG 并返回 0，否则返回 1（只读）。
+# 查最新 Release：成功时置 REMOTE_VERSION / REMOTE_TAG / REMOTE_SOURCE_BASE / REMOTE_SOURCE_NAME
+# 并返回 0，所有源都问不到才返回 1（只读，不写文件）。
+# 逐个源尝试，第一个答出来的胜出：官方源在前，它不通就自动换镜像源。
+# 顺带记下胜出源的下载前缀——版本与安装包必须来自同一个源，
+# 否则会出现"拿 A 源的版本号去下 B 源的包"。
 REMOTE_VERSION=""
 REMOTE_TAG=""
+REMOTE_SOURCE_BASE=""
+REMOTE_SOURCE_NAME=""
+
+# 本机这次实际可用的源（有序）：每行一条 "<显示名>|<API>|<下载前缀>"，仓库标识已代入。
+# 没有仓库标识的源直接跳过——镜像还没建是正常状态，不是特例分支。
+get_update_sources() {
+    while read -r _sid _sname _sapi _sbase; do
+        [ -n "$_sid" ] || continue
+        _gid=$(update_source_id "$_sid")
+        [ -n "$_gid" ] || continue
+        printf '%s|%s|%s\n' "$_sname" "${_sapi//@@/$_gid}" "${_sbase//@@/$_gid}"
+    done <<_ENVPROXY_SOURCES_
+$UPDATE_SOURCE_TABLE
+_ENVPROXY_SOURCES_
+}
 
 get_remote_version() {
-    _repo=$(get_update_repo)
-    _json=$(fetch_update_text "https://api.github.com/repos/$_repo/releases/latest" || true)
-    [ -n "$_json" ] || return 1
-    _tag=$(printf '%s' "$_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
-    [ -n "$_tag" ] || return 1
-    REMOTE_TAG="$_tag"
-    REMOTE_VERSION=$(printf '%s' "$_tag" | sed -E 's/^v//')
-    [ -n "$REMOTE_VERSION" ] || return 1
-    return 0
+    # 源表用 here-doc 喂给 while，不用管道：管道会把 while 丢进子 shell，
+    # 里面赋的 REMOTE_* 出了循环就没了——而那正是调用方要读的东西。
+    while IFS='|' read -r _sname _sapi _sbase; do
+        [ -n "$_sname" ] || continue
+        _json=$(fetch_update_text "$_sapi" || true)
+        [ -n "$_json" ] || continue
+        _tag=$(printf '%s' "$_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+        [ -n "$_tag" ] || continue
+        _ver=$(printf '%s' "$_tag" | sed -E 's/^v//')
+        [ -n "$_ver" ] || continue
+        REMOTE_TAG="$_tag"
+        REMOTE_VERSION="$_ver"
+        REMOTE_SOURCE_BASE="$_sbase"
+        REMOTE_SOURCE_NAME="$_sname"
+        return 0
+    done <<_ENVPROXY_SRCS_
+$(get_update_sources)
+_ENVPROXY_SRCS_
+    return 1
 }
 
 update_envproxy() {
@@ -114,13 +175,13 @@ update_envproxy() {
     echo "======== EnvProxy 检查更新 ========"
     _local=$(get_local_version || true)
     if [ -n "$_local" ]; then echo "本地版本 : v$_local"; else echo "本地版本 : 未知"; fi
-    echo "正在检查最新版本（最多等几秒）..."
+    echo "正在检查最新版本（官方源不通会自动换国内镜像，最多等十几秒）..."
     if ! get_remote_version; then
-        echo "最新版本 : 检查失败（网络不可达或 GitHub API 限流）"
+        echo "最新版本 : 检查失败（所有更新源都不可达）"
         echo "请稍后重试；把翻墙软件开关一次再试也是常见解法。"
         return 0
     fi
-    echo "最新版本 : $REMOTE_TAG"
+    echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     _clean_source=0
     if is_dev_copy; then
         echo "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
@@ -182,8 +243,9 @@ update_envproxy() {
         echo "继续会更新【当前这个文件夹】并把它切换为正式安装。"
     fi
     # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
-    _repo=$(get_update_repo)
-    _url="https://github.com/$_repo/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz"
+    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区。
+    # 地址由**胜出源**给出（REMOTE_SOURCE_BASE）：版本与安装包来自同一个源，不会串源。
+    _url="$REMOTE_SOURCE_BASE/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz"
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
     # 下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，

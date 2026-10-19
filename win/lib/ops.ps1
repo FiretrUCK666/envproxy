@@ -205,7 +205,7 @@ function Show-Status {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
     } else {
-        Write-Host "最新版本 : 检查失败（网络不可达或 GitHub API 限流，稍后重试）" -ForegroundColor Yellow
+        Write-Host "最新版本 : 检查失败（所有更新源都不可达，稍后重试）" -ForegroundColor Yellow
         Write-Host "更新状态 : 未知" -ForegroundColor DarkGray
     }
 

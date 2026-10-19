@@ -557,6 +557,30 @@ jobs:
             if ($zh -notmatch [regex]::Escape($n)) { Write-Host ("中文 README 里没有变量 {0}" -f $n); $fail = 1 }
             if ($en -notmatch [regex]::Escape($n)) { Write-Host ("英文 README 里没有变量 {0}" -f $n); $fail = 1 }
           }
+          # h) 更新源表：两侧必须同表（同条数、官方源都在最前），且镜像目标与发布流水线同源。
+          # 镜像标识住在三个地方——两端脚本各一份、发布流水线一份；任一处漂移，用户端就会回退到
+          # 一个空仓库或旧仓库。那比没有镜像更糟：它看起来在工作，拿到的却是错的东西。
+          # 定义行都顶格写（自检里的临时赋值有缩进），所以锚定行首，避免 Grab 撞上多处匹配。
+          $mirrorWin = Grab $ps '(?m)^\$GiteeMirrorRepo\s*=\s*"([^"]*)"' 'Win 侧镜像仓库标识'
+          $mirrorMac = Grab $sh '(?m)^GITEE_MIRROR_REPO="([^"]*)"' 'Mac 侧镜像仓库标识'
+          if (($null -eq $mirrorWin) -or ($null -eq $mirrorMac)) { $fail = 1 }
+          elseif ($mirrorWin -ne $mirrorMac) {
+            Write-Host ("镜像仓库标识两侧不一致：Win [{0}] / Mac [{1}]" -f $mirrorWin, $mirrorMac); $fail = 1
+          }
+          $relText = Get-Content '.github/workflows/release.yml' -Raw -Encoding UTF8
+          $mirrorCi = [regex]::Match($relText, 'GITEE_REPO:\s*"?([^"\r\n]*)"?').Groups[1].Value.Trim()
+          if ($mirrorCi -ne $mirrorWin) {
+            Write-Host ("发布流水线的 GITEE_REPO 与脚本里的镜像标识不一致：流水线 [{0}] / 脚本 [{1}]" -f $mirrorCi, $mirrorWin); $fail = 1
+          }
+          $srcWin = @([regex]::Matches($ps, '@\{ Id = "\w+"'))
+          $macTable = [regex]::Match($sh, "(?s)UPDATE_SOURCE_TABLE='(.*?)'").Groups[1].Value
+          $srcMac = @($macTable -split "`n" | Where-Object { $_.Trim() })
+          if ($srcWin.Count -ne $srcMac.Count) {
+            Write-Host ("更新源表条数两侧不一致：Win {0} / Mac {1}" -f $srcWin.Count, $srcMac.Count); $fail = 1
+          }
+          # 顺序即优先级：官方源必须排在第一位，否则镜像会被当成首选（墙内可用时它更慢，也不该越过官方源）。
+          if ($ps -notmatch '@\{ Id = "official"') { Write-Host 'Win 侧源表里没有 official 源'; $fail = 1 }
+          if ($srcMac.Count -and ($srcMac[0] -notmatch '^official[ ]')) { Write-Host 'Mac 侧源表第一条不是官方源'; $fail = 1 }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

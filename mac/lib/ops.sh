@@ -223,6 +223,39 @@ self_test() {
         _selftest_assert_eq "菜单子命令 $_ms 在入口分派里存在" "1" "$_l6"
     done
 
+    echo "[10] 更新源表"
+    # 更新入口按源表逐个试，第一个答出来的胜出。表坏了不会报错，只会悄悄退化成"只剩官方源"，
+    # 直到官方源不可达那天才暴露——而那天正是最需要兜底的时刻。所以表的形状在这里钉住：
+    # 每条四个字段、模板保留 @@ 占位符、官方源排第一、未启用的镜像被跳过而不是变成空源。
+    _st_all=$(get_update_sources)
+    if [ -n "$_st_all" ]; then _st1=1; else _st1=0; fi
+    _selftest_assert_eq "源表至少有一个可用源" "1" "$_st1"
+    _selftest_assert_eq "官方源排第一" "GitHub" "$(printf '%s\n' "$_st_all" | head -n 1 | cut -d'|' -f1)"
+    # 模板表每条必须正好四个字段、且保留 @@ 占位符；代入后每行必须是成形地址
+    # （两个地址都非空、占位符替换干净、API 落在 releases/latest 上）。
+    _st_tpl_ok=$(printf '%s\n' "$UPDATE_SOURCE_TABLE" | awk '
+        NF != 4 { bad = 1 }
+        $0 !~ /@@/ { bad = 1 }
+        END { print (bad ? 0 : 1) }')
+    _selftest_assert_eq "源表每条四字段、模板都带占位符" "1" "$_st_tpl_ok"
+    _st_out_ok=$(get_update_sources | awk -F'|' '
+        NF != 3 { bad = 1 }
+        $2 == "" || $3 == "" { bad = 1 }
+        $2 $3 ~ /@@/ { bad = 1 }
+        $2 !~ /repos\/.+\/releases\/latest$/ { bad = 1 }
+        END { print (bad ? 0 : 1) }')
+    _selftest_assert_eq "仓库标识代入后地址成形、无占位符残留" "1" "$_st_out_ok"
+    # 镜像仓库标识留空时（默认状态：镜像还没建）该源必须被跳过，而不是变成一个地址带洞的源。
+    _saved_mirror="$GITEE_MIRROR_REPO"
+    GITEE_MIRROR_REPO=""
+    _st_one=$(printf '%s\n' "$(get_update_sources)" | grep -c . || true)
+    _selftest_assert_eq "未启用的镜像被跳过、只剩官方源" "1" "$_st_one"
+    if [ -n "$(update_source_id official)" ]; then _st2=1; else _st2=0; fi
+    _selftest_assert_eq "official 给出非空仓库标识" "1" "$_st2"
+    GITEE_MIRROR_REPO="x/y"
+    _selftest_assert_eq "mirror 取镜像常量" "x/y" "$(update_source_id mirror)"
+    GITEE_MIRROR_REPO="$_saved_mirror"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"
@@ -384,7 +417,7 @@ show_status() {
             fi
         fi
     else
-        echo "最新版本 : 检查失败（网络不可达，稍后重试）"
+        echo "最新版本 : 检查失败（所有更新源都不可达，稍后重试）"
         echo "更新状态 : 未知"
     fi
     echo "---------------- 最近日志 ----------------"

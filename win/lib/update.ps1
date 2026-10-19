@@ -6,11 +6,12 @@
 # ------------------------------------------------------------------------------
 # 8. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：GitHub Release 里的分平台安装包资产（EnvProxy-win.zip；Mac 侧取 EnvProxy-mac.tar.gz）。
+# 更新源：分平台安装包资产（EnvProxy-win.zip；Mac 侧取 EnvProxy-mac.tar.gz），按下面的源表逐源尝试。
 #   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
-#   下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
-#   不硬编码任何第三方域名，不为它放宽校验。
+#   不接公共加速站：那些站点靠站长自掏腰包维持、生命周期以月计，而且包从它手里过一遍
+#   就等于多信一个陌生人。镜像走的是维护者自己在国内平台建的仓库，与自己 GitHub 仓库同级，
+#   因此校验口径一个字都不用放宽。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
 #     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
@@ -18,7 +19,31 @@
 #     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 #   读版本时开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；
 #   覆盖文件这条路上，git 副本一律不参与。
+#
+#   通道不止一条：官方源（GitHub）之外还有一个墙内可达的镜像源（Gitee）。
+#   理由是产品自身的前提——用这个工具的人可能正处在"还没连上代理"的时刻，
+#   而官方源在那个时刻通常不可达；没有镜像兜底，更新就变成了"必须先能翻墙才能更新"。
+#   两个源都归维护者所有，信任级别一致，因此校验口径一个字都不用放宽。
 $UpdateRepoDefault = "FiretrUCK666/envproxy"
+
+# 镜像仓库：在 Gitee 建好镜像仓库后填 "<用户名>/<仓库名>"（例如 "FiretrUCK666/envproxy"）。
+# 留空 = 这一源尚未启用，逐源尝试时直接跳过——这是源表的正常状态（镜像还没建），
+# 不是特例分支，所以不需要任何开关变量。
+$GiteeMirrorRepo = ""
+
+# 更新源表：有序，逐个尝试，第一个能回答"最新版是什么"的胜出。
+# 每项声明三件事：
+#   Id    这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
+#   Api   怎么问"最新版是几版"     Base  安装包挂在哪个地址前缀下
+# Api 与 Base 里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把镜像地址里的符号当元字符）。
+# 加一个镜像源 = 表里加一行 + （若引入新的标识来源）Get-UpdateRepoId 里加一个分支，
+# 不涉及任何判断逻辑。顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
+# 两个源的 API 返回体同构（都取 tag_name），下载路径也同构（/<仓库>/releases/download/<标签>/<文件名>），
+# 因此下面的解析与下载代码对它们完全共用。
+$UpdateSourceTable = @(
+    @{ Id = "official"; Name = "GitHub"; Api = "https://api.github.com/repos/@@/releases/latest"; Base = "https://github.com/@@"; }
+    @{ Id = "mirror";   Name = "Gitee";  Api = "https://gitee.com/api/v5/repos/@@/releases/latest"; Base = "https://gitee.com/@@"; }
+)
 
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
 function Test-DevCopy {
@@ -70,6 +95,29 @@ function Get-UpdateRepo {
     return $UpdateRepoDefault
 }
 
+# 这一源的仓库标识从哪里取。
+#   official：环境事实——开发副本跟自己的 git remote 走（fork 后看得见自己仓库的 Release），
+#             安装副本用内置默认；
+#   mirror：维护者在 Gitee 建好镜像仓库后填进 $GiteeMirrorRepo，留空 = 这一源尚未启用。
+function Get-UpdateRepoId([string]$Key) {
+    if ($Key -eq "mirror") { return $GiteeMirrorRepo }
+    return (Get-UpdateRepo)
+}
+
+# 本机这次实际可用的源（有序）：没有仓库标识的源直接跳过——镜像还没建是正常状态。
+function Get-UpdateSources {
+    $out = @()
+    foreach ($s in $UpdateSourceTable) {
+        $id = Get-UpdateRepoId $s.Id
+        if (-not $id) { continue }
+        $out += @{ Name = $s.Name; Repo = $id; Api = $s.Api; Base = $s.Base }
+    }
+    # 前面那个逗号不能省：PowerShell 会把单元素集合解包成元素本身，
+    # 于是"只剩官方源"（镜像还没建，也就是默认状态）时调用方拿到的是一个哈希表而不是源的表，
+    # foreach 会去遍历它的键值对、.Count 会变成键的个数。逗号包一层强制它始终是数组。
+    return ,$out
+}
+
 function Get-LocalVersion {
     try {
         $root = Split-Path -Parent $ScriptDir
@@ -117,19 +165,25 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
     }
 }
 
-# 查最新 Release：返回 @{ Version="1.2.0"; Tag="v1.2.0" }，查不到返回 $null（只读，不抛异常）。
+# 查最新 Release：返回 @{ Version="1.2.0"; Tag="v1.2.0"; Base="<下载前缀>"; Name="<源名>" }，
+# 所有源都问不到才返回 $null（只读，不抛异常，不写文件）。
+# 逐个源尝试，第一个答出来的胜出：官方源在前，它不通就自动换镜像源。
+# 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
+# 否则会出现"拿 A 源的版本号去下 B 源的包"。
 function Get-RemoteVersion {
-    try {
-        $repo = Get-UpdateRepo
-        $json = Invoke-UpdateText ("https://api.github.com/repos/{0}/releases/latest" -f $repo)
-        if (-not $json) { return $null }
-        $obj = $json | ConvertFrom-Json
-        $tag = ("{0}" -f $obj.tag_name).Trim()
-        if (-not $tag) { return $null }
-        $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
-        if (-not $ver) { return $null }
-        return @{ Version = $ver; Tag = $tag }
-    } catch { return $null }
+    foreach ($src in (Get-UpdateSources)) {
+        try {
+            $json = Invoke-UpdateText ($src.Api.Replace('@@', $src.Repo))
+            if (-not $json) { continue }
+            $obj = $json | ConvertFrom-Json
+            $tag = ("{0}" -f $obj.tag_name).Trim()
+            if (-not $tag) { continue }
+            $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
+            if (-not $ver) { continue }
+            return @{ Version = $ver; Tag = $tag; Base = $src.Base.Replace('@@', $src.Repo); Name = $src.Name }
+        } catch { continue }
+    }
+    return $null
 }
 
 # 带代理兜底的 HTTPS 下载：返回 "ok" / "missing"（这个版本没提供该文件）/ "fail"。
@@ -212,14 +266,14 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $local = Get-LocalVersion
     if ($local) { Write-Host ("本地版本 : v{0}" -f $local) -ForegroundColor Green }
     else { Write-Host "本地版本 : 未知" -ForegroundColor Yellow }
-    Write-Host "正在检查最新版本（最多等几秒）..." -ForegroundColor DarkGray
+    Write-Host "正在检查最新版本（官方源不通会自动换国内镜像，最多等十几秒）..." -ForegroundColor DarkGray
     $remote = Get-RemoteVersion
     if (-not $remote) {
-        Write-Host "最新版本 : 检查失败（网络不可达或 GitHub API 限流）" -ForegroundColor Yellow
+        Write-Host "最新版本 : 检查失败（所有更新源都不可达）" -ForegroundColor Yellow
         Write-Host "请稍后重试。也可以先关掉、再打开翻墙软件，让它换一个状态，常常就能连上。" -ForegroundColor Yellow
         return
     }
-    Write-Host ("最新版本 : {0}" -f $remote.Tag) -ForegroundColor Green
+    Write-Host ("最新版本 : {0}（来源：{1}）" -f $remote.Tag, $remote.Name) -ForegroundColor Green
     $cleanSource = $false
     if (Test-DevCopy) {
         Write-Host "这是开发副本（安装根有 .git）：更新入口不改动任何文件。" -ForegroundColor DarkGray
@@ -261,9 +315,9 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
     }
-    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
-    $repo = Get-UpdateRepo
-    $zipUrl = "https://github.com/{0}/releases/download/{1}/EnvProxy-win.zip" -f $repo, $remote.Tag
+    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区。
+    # 地址由**胜出源**给出（$remote.Base）：版本与安装包来自同一个源，不会串源。
+    $zipUrl = "{0}/releases/download/{1}/EnvProxy-win.zip" -f $remote.Base, $remote.Tag
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
     $zipFile = "$tmpBase.zip"

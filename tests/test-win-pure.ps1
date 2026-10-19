@@ -231,5 +231,32 @@ foreach ($k in @('1', '2', '3', '4', '5', '0')) { Assert-Eq ('menu has key ' + $
 $menuSwitches = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Switch })
 foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update')) { Assert-Eq ('menu covers -' + $sw) $true ($menuSwitches -contains $sw) }
 
+Write-Host '[12] the online update source table'
+# The updater walks an ordered source table and takes the first source that answers, so a broken
+# table degrades silently: updates keep "working" until the day the official source is unreachable.
+# Two properties are load-bearing:
+#   - it must ALWAYS come back as a list. PowerShell unwraps a single-element collection, so with
+#     only the official source enabled (the default state before a mirror repository exists) the
+#     caller would receive one hashtable instead of a list of sources: foreach then walks its
+#     key/value pairs, and .Count reports the number of keys (4) rather than the number of sources.
+#   - every entry must carry the four fields the walker reads, with the @@ placeholder intact.
+$srcTable0 = Get-UpdateSources
+Assert-Eq 'sources always come back as a list' 'Object[]' $srcTable0.GetType().Name
+Assert-Eq 'at least one source is usable' $true ($srcTable0.Count -ge 1)
+Assert-Eq 'the official source stays first' 'official' $UpdateSourceTable[0].Id
+foreach ($s in $UpdateSourceTable) {
+    Assert-Eq ('source ' + $s.Name + ' declares exactly Id/Name/Api/Base') 4 (@($s.Keys).Count)
+    Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Api') $true ($s.Api -like '*@@*')
+    Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Base') $true ($s.Base -like '*@@*')
+}
+Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
+# An unset mirror (the state before the mirror repository exists) is skipped instead of becoming an
+# empty source: the walker would otherwise try to fetch a URL with a hole where the repo id goes.
+$savedMirror = $GiteeMirrorRepo
+$GiteeMirrorRepo = ''
+Assert-Eq 'an unset mirror is skipped, not fetched' '1' (@(Get-UpdateSources).Count)
+Assert-Eq 'skipping a source keeps the result a list' 'Object[]' (Get-UpdateSources).GetType().Name
+$GiteeMirrorRepo = $savedMirror
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
