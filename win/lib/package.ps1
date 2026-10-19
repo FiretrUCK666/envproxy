@@ -181,19 +181,24 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                     $target = Join-Path $dst $rel
                     $tp = Split-Path -Parent $target
                     if ($tp -and -not (Test-Item $tp)) { New-Item -Path $tp -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
-                    Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction SilentlyContinue
+                    # 单个文件还原不了，绝不能拖垮整趟回滚：Windows PowerShell 5.1 下被占用的目标
+                    # 会让 Copy-Item 抛**终止性错误**，-ErrorAction SilentlyContinue 拦不住它
+                    # （PowerShell 7 下同一情形不抛，所以这个差异在本地极容易漏过去）。
+                    # 异常一旦冲出 catch，后面的"删新增文件"、其余作用域目录、根文件还原、以及
+                    # 最后那段回读复检就全都不跑了——恰好在"回滚唯一存在的理由"那个场景失效。
+                    try { Copy-Item -LiteralPath $f.FullName -Destination $target -Force -ErrorAction Stop } catch {}
                 }
                 foreach ($f in (Get-ChildItem -LiteralPath $dst -Recurse -File -Force -ErrorAction SilentlyContinue)) {
                     if (-not $f.FullName.StartsWith($dst, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                     $rel = $f.FullName.Substring($dst.Length).TrimStart('\')
                     if ($rel -like 'monitor\*') { continue }
-                    if (-not (Test-Item (Join-Path $bak $rel))) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+                    if (-not (Test-Item (Join-Path $bak $rel))) { try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop } catch {} }
                 }
             }
             foreach ($rel in $pkg.Values) {
                 if ($rel -match '\\') { continue }
                 $bakFile = Join-Path $backup $rel
-                if (Test-Item $bakFile) { Copy-Item -LiteralPath $bakFile -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction SilentlyContinue }
+                if (Test-Item $bakFile) { try { Copy-Item -LiteralPath $bakFile -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction Stop } catch {} }
             }
             # 回滚也要复读：上面的复制都带 SilentlyContinue，不回读就敢说"已回滚"是假话。
             # 实测过：入口文件被占用时，VERSION 会先写成新版本、旧入口留在原地，
