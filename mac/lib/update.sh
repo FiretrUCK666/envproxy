@@ -151,10 +151,12 @@ get_asset_id_from_json() {
 }
 
 # 下载成功不等于拿到的是安装包：请求头被网络中间层丢掉时，资产端点会回 200 + JSON。
-# 判前两个字节是不是 gzip 头（1f 8b）；不是就丢弃这份内容，让调用方继续试直连那条路。
+# 先判前两个字节是不是 gzip 头（1f8b），再**真开一次**——魔数只能证明"不是 JSON/HTML"，
+# 截断的包同样以 1f8b 开头；打不开就丢弃这份内容，让调用方继续试直连那条路。
 _is_gzip() {
     [ -s "$1" ] || return 1
-    [ "$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d ' \n')" = "1f8b" ]
+    [ "$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d ' \n')" = "1f8b" ] || return 1
+    tar -tzf "$1" >/dev/null 2>&1
 }
 
 # 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到输出空，绝不报错退出。
@@ -299,6 +301,22 @@ _ENVPROXY_SRCS_
     return 1
 }
 
+# 换源时这个源该不该接受（纯函数，自检可测）：必须比本地新，且不能比已经选定的胜出版本旧。
+# 只看"比本地新"是不够的——那样 A 源答 9.9.9 却拿不到包时，B 源的 1.5.0 也会被接受，
+# 用户会被"换源"带到更旧的版本上（Windows 侧比的是胜出版本，两侧必须同一套判据）。
+# 返回 0 = 接受，1 = 跳过。
+source_acceptable() {
+    _sa_ver="$1"; _sa_win="$2"; _sa_local="$3"
+    [ -n "$_sa_ver" ] || return 1
+    _sa_cmp=$(compare_versions "$_sa_ver" "$_sa_local" 2>/dev/null || echo 0)
+    [ "$_sa_cmp" -gt 0 ] 2>/dev/null || return 1
+    if [ -n "$_sa_win" ]; then
+        _sa_cmp2=$(compare_versions "$_sa_ver" "$_sa_win" 2>/dev/null || echo 0)
+        [ "$_sa_cmp2" -lt 0 ] 2>/dev/null && return 1
+    fi
+    return 0
+}
+
 update_envproxy() {
     _yes="$1"
     echo "======== EnvProxy 检查更新 ========"
@@ -398,9 +416,8 @@ update_envproxy() {
         else
             get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" || continue
         fi
-        # 只接受比本地新的版本：换源不能把用户带到更旧的版本上。
-        _cmp=$(compare_versions "$REMOTE_VERSION" "$_local" 2>/dev/null || echo 0)
-        [ "$_cmp" -gt 0 ] 2>/dev/null || continue
+        # 换源不能把用户带到更旧的版本上：既要比本地新，也不能比已选定的胜出版本旧。
+        source_acceptable "$REMOTE_VERSION" "$_pre_ver" "$_local" || continue
         _sl=$(printf '%s' "$_sname" | tr -c 'A-Za-z0-9' '_')
         _try_tgz="${_rnd}.${_sl}.tar.gz"
         _try_dir="${_rnd}.${_sl}-src"

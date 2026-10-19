@@ -130,9 +130,19 @@ function Get-ProxyVarTable([string]$Port) {
 # 注意：PowerShell 变量名不分大小写，$a 即 $A（[string] 参数），赋值会被转回字符串，
 # 因此循环变量必须另起名（$va/$vb），否则逐段数值比会退化成字符串比（"10" < "9"）。
 function Compare-Versions([string]$A, [string]$B) {
+    # 段值用 64 位整数并做溢出兜底：远端 tag 是外部输入，一个 20 位的数字会让 [int] 转换
+    # 抛异常，而调用点不在 try 里——整个更新入口会因此崩掉。超范围按"最大"处理，不抛。
     $pa = @(); $pb = @()
-    foreach ($s in ($A -split '\.')) { if ($s -match '(\d+)') { $pa += [int]$Matches[1] } else { $pa += 0 } }
-    foreach ($s in ($B -split '\.')) { if ($s -match '(\d+)') { $pb += [int]$Matches[1] } else { $pb += 0 } }
+    foreach ($s in ($A -split '\.')) {
+        [long]$v = 0
+        if ($s -match '^(\d+)$') { if (-not [long]::TryParse($Matches[1], [ref]$v)) { $v = [long]::MaxValue } }
+        $pa += $v
+    }
+    foreach ($s in ($B -split '\.')) {
+        [long]$v = 0
+        if ($s -match '^(\d+)$') { if (-not [long]::TryParse($Matches[1], [ref]$v)) { $v = [long]::MaxValue } }
+        $pb += $v
+    }
     $n = [Math]::Max($pa.Count, $pb.Count)
     for ($i = 0; $i -lt $n; $i++) {
         $va = if ($i -lt $pa.Count) { $pa[$i] } else { 0 }

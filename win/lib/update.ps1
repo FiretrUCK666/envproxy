@@ -352,15 +352,22 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
 # 丢掉时会回 200 + JSON（GitHub 的资产元数据），透明的错误页也可能回 200 + HTML。
 # 那种东西写进 .zip 会让解包报"找不到中央目录"，把网络问题说成发布问题；
 # 更糟的是它会让"成功"分支提前 break，把本该救场的直连兜底挡在门外。
-function Test-ZipMagic([string]$Path) {
+function Test-UsableZip([string]$Path) {
     try {
         $fs = [System.IO.File]::OpenRead($Path)
         try {
             $buf = New-Object byte[] 4
             if ($fs.Read($buf, 0, 4) -lt 4) { return $false }
             # 本地文件头 PK\x03\x04（常见）、空档 PK\x05\x06、分卷 PK\x07\x08
-            return ($buf[0] -eq 0x50 -and $buf[1] -eq 0x4B)
+            if (-not ($buf[0] -eq 0x50 -and $buf[1] -eq 0x4B)) { return $false }
         } finally { $fs.Dispose() }
+    } catch { return $false }
+    # 魔数只能证明"不是 JSON/HTML"：截断的 zip 同样以 PK 开头。真开一次中央目录——
+    # 打不开就说明这份内容不可用，让调用方继续试直连，而不是把网络问题说成发布问题。
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        $z = [System.IO.Compression.ZipFile]::OpenRead($Path)
+        try { return ($z.Entries.Count -gt 0) } finally { $z.Dispose() }
     } catch { return $false }
 }
 
@@ -394,8 +401,8 @@ function Get-UpdatePackage([hashtable]$Remote) {
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
             if ($r -eq "ok") {
-                if (Test-ZipMagic $zipFile) { $dl = "ok"; break }
-                # 200 但不是 zip：丢掉这份内容，继续试下一条路（多半是直连）。
+                if (Test-UsableZip $zipFile) { $dl = "ok"; break }
+                # 200 但不是一个能打开的 zip：丢掉这份内容，继续试下一条路（多半是直连）。
                 Remove-ItemSafe $zipFile
                 $r = "fail"
             }
@@ -532,7 +539,9 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
                 if ($pkg) { break }
             }
         }
-        if (-not $pkg) { throw "没能取到可用的安装包（下载失败或校验没通过），未做任何改动。请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。" }
+        # 这里不再复述"下载失败/校验没过"：上面每一条路失败时已经按真实原因说过一句
+        # （缺包 / 下载失败 / 校验没通过），这里再说一遍就会自相矛盾。
+        if (-not $pkg) { throw "更新失败：没有可用的安装包（具体原因见上面那一行），未做任何改动。请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。" }
         $extractDir = $pkg.Root
         $zipFile = $pkg.Zip
         # 先把这一版改了什么给用户看，再问要不要装

@@ -122,11 +122,17 @@ self_test() {
 
     echo "[6] 安装包结构校验"
     _pkg="$_sandbox/pkg"
-    mkdir -p "$_pkg/win/lib" "$_pkg/mac" 2>/dev/null || true
+    mkdir -p "$_pkg/win/lib" "$_pkg/mac/lib" 2>/dev/null || true
     printf '9.9.9' > "$_pkg/VERSION" 2>/dev/null || true
+    # 本平台（mac）的包必须完整：入口自己声明库清单，目录里只放入口 + 菜单壳 + 定位器 + 声明的库。
+    printf 'CORE_LIBS="base probe"\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
+    printf '# menu\n' > "$_pkg/mac/打开菜单.command" 2>/dev/null || true
+    printf '# locator\n' > "$_pkg/mac/locator.sh" 2>/dev/null || true
+    printf '# lib\n' > "$_pkg/mac/lib/base.sh" 2>/dev/null || true
+    printf '# lib\n' > "$_pkg/mac/lib/probe.sh" 2>/dev/null || true
+    # 另一平台目录只是陪衬：校验只看本平台目录的文件集，但编码红线会扫全树。
     printf '\357\273\277# entry\n' > "$_pkg/win/envproxy.ps1" 2>/dev/null || true
     printf '\357\273\277# lib\n' > "$_pkg/win/lib/base.ps1" 2>/dev/null || true
-    printf '#!/bin/bash\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p1=1; else _p1=0; fi
     _selftest_assert_eq "结构完整的包被接受" "1" "$_p1"
     if verify_package "$_pkg" "1.2.3" "mac"; then _p2=1; else _p2=0; fi
@@ -135,10 +141,10 @@ self_test() {
     if verify_package "$_pkg" "9.9.9" "mac"; then _p3=1; else _p3=0; fi
     _selftest_assert_eq "库缺 BOM 被拒绝" "0" "$_p3"
     printf '\357\273\277# lib\n' > "$_pkg/win/lib/base.ps1" 2>/dev/null || true
-    printf '#!/bin/bash\r\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
+    printf 'CORE_LIBS="base probe"\r\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p4=1; else _p4=0; fi
     _selftest_assert_eq "壳含 CRLF 被拒绝" "0" "$_p4"
-    printf '#!/bin/bash\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
+    printf 'CORE_LIBS="base probe"\n' > "$_pkg/mac/envproxy.sh" 2>/dev/null || true
     printf '\357\273\277' > "$_pkg/win/lib/empty.ps1" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p5=1; else _p5=0; fi
     _selftest_assert_eq "只剩 BOM 的截断文件被拒绝" "0" "$_p5"
@@ -147,9 +153,19 @@ self_test() {
     if verify_package "$_pkg" "9.9.9" "mac"; then _p6=1; else _p6=0; fi
     _selftest_assert_eq "缺另一平台入口照样接受" "1" "$_p6"
     printf '\357\273\277# entry\n' > "$_pkg/win/envproxy.ps1" 2>/dev/null || true
-    rm -f "$_pkg/mac/envproxy.sh" 2>/dev/null || true
+    # 内容集：缺一个声明的库、或多一个没声明的文件，都必须拒收——否则覆盖时
+    # 删除循环会把缺的库当旧版残留删空，安装区变空壳还报成功。
+    rm -f "$_pkg/mac/lib/probe.sh" 2>/dev/null || true
     if verify_package "$_pkg" "9.9.9" "mac"; then _p7=1; else _p7=0; fi
-    _selftest_assert_eq "只缺自己平台入口也被拒绝" "0" "$_p7"
+    _selftest_assert_eq "缺一个声明的库被拒绝" "0" "$_p7"
+    printf '# lib\n' > "$_pkg/mac/lib/probe.sh" 2>/dev/null || true
+    printf '# x\n' > "$_pkg/mac/lib/backdoor.sh" 2>/dev/null || true
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p8=1; else _p8=0; fi
+    _selftest_assert_eq "多一个未声明的文件被拒绝" "0" "$_p8"
+    rm -f "$_pkg/mac/lib/backdoor.sh" 2>/dev/null || true
+    rm -f "$_pkg/mac/envproxy.sh" 2>/dev/null || true
+    if verify_package "$_pkg" "9.9.9" "mac"; then _p9=1; else _p9=0; fi
+    _selftest_assert_eq "只缺自己平台入口也被拒绝" "0" "$_p9"
 
     echo "[6b] 分包作用域（覆盖 legacy 全量树）"
     _leg="$_sandbox/legacy"; _spk="$_sandbox/split"; _stg="$_sandbox/stage"
@@ -249,7 +265,8 @@ self_test() {
         $6 !~ /^https:\/\/[^\/]+\/./ { bad = 1 }
         END { print (bad ? 0 : 1) }')
     _selftest_assert_eq "仓库标识代入后四处地址成形、无占位符残留" "1" "$_st_out_ok"
-    # 资产 id 解析是纯函数：取"文件名前面最后一个 id"，不依赖字段顺序，找不到就留空。
+    # 资产 id 解析是纯函数：按对象切段、优先从该段 url 里的 assets/<id> 取，与字段顺序无关；
+    # 找不到就留空（调用方据此退回直连）。
     # 样本必须照抄服务端真实格式：GitHub 的响应是带缩进的（冒号后带空格），
     # 只拿压缩 JSON 测等于钉住自己的假设，而不是钉住外部世界的事实。
     _st_asset_pretty='{
@@ -280,14 +297,24 @@ self_test() {
     _selftest_assert_eq "资产 JSON 里没有该文件时留空" "" "$(get_asset_id_from_json "$_st_asset_pretty" 'EnvProxy-nope.zip')"
     _selftest_assert_eq "资产 JSON 不合法时留空" "" "$(get_asset_id_from_json 'not json' 'EnvProxy-win.zip')"
     _selftest_assert_eq "限流错误页不会给出 id" "" "$(get_asset_id_from_json '{"message":"API rate limit exceeded"}' 'EnvProxy-mac.tar.gz')"
+    # 换源判据：必须比本地新，且不能比已选定的胜出版本旧。只判"比本地新"会让 1.5.0
+    # 在 9.9.9 取不到包时被接受，把用户带到更旧的版本上。
+    _selftest_assert_eq "换源：同版本接受" "0" "$(source_acceptable 9.9.9 9.9.9 1.0.0; echo $?)"
+    _selftest_assert_eq "换源：更旧于胜出版本要拒绝" "1" "$(source_acceptable 1.5.0 9.9.9 1.0.0; echo $?)"
+    _selftest_assert_eq "换源：不比本地新要拒绝" "1" "$(source_acceptable 1.0.0 9.9.9 1.0.0; echo $?)"
+    _selftest_assert_eq "换源：没有胜出版本时只比本地" "0" "$(source_acceptable 2.0.0 '' 1.0.0; echo $?)"
+    _selftest_assert_eq "换源：空版本要拒绝" "1" "$(source_acceptable '' 9.9.9 1.0.0; echo $?)"
     # 从重定向目标取标签必须做形态校验：仓库改名时对方会先 302 到改名后的路径，
     # 最后一段是字面量 "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
     _selftest_assert_eq "从 tag 页重定向取标签" "v1.2.3" "$(get_tag_from_location 'https://github.com/o/r/releases/tag/v1.2.3')"
     _selftest_assert_eq "改名仓库的重定向不给标签" "" "$(get_tag_from_location 'https://github.com/new/r/releases/latest')"
     _selftest_assert_eq "含括号的标签原样保留" "v2026.09(jdk25)" "$(get_tag_from_location 'https://github.com/o/r/releases/tag/v2026.09(jdk25)')"
     # 源表展开后每条都必须带仓库标识，不能出现地址带洞的源。
+    # 期望条数从表里现算，不写死：写死"1"会让以后按"加源 = 表里加一行"加第二个源时
+    # 自检直接失败——那测的是"当前只有一条源"，不是行为对不对。
+    _st_want=$(printf '%s\n' "$UPDATE_SOURCE_TABLE" | grep -c . || true)
     _st_one=$(printf '%s\n' "$(get_update_sources)" | grep -c . || true)
-    _selftest_assert_eq "源表展开后的条数与表里一致" "1" "$_st_one"
+    _selftest_assert_eq "源表展开后的条数与表里一致" "$_st_want" "$_st_one"
     if [ -n "$(update_source_id official)" ]; then _st2=1; else _st2=0; fi
     _selftest_assert_eq "official 给出非空仓库标识" "1" "$_st2"
 

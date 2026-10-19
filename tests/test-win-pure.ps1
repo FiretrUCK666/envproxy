@@ -100,8 +100,12 @@ $bomEnc = New-Object System.Text.UTF8Encoding($true)
 $plainEnc = New-Object System.Text.UTF8Encoding($false)
 Write-TestFile (Join-Path $pkg 'VERSION') '9.9.9'
 New-Item -Path (Join-Path $pkg 'win\lib'), (Join-Path $pkg 'mac') -ItemType Directory -Force | Out-Null
-[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), '# entry', $bomEnc)
+# The package must be complete under the content-set rule: the entry declares its libraries,
+# and the platform folder may hold nothing beyond entry + menu + those libraries.
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), "# entry`n`$CoreLibs = @(`"base`", `"probe`")`n", $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\打开菜单.cmd'), "@echo off`n", $plainEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 $threw = $false
 try { Test-Package $pkg '9.9.9' 'win' } catch { $threw = $true }
@@ -118,13 +122,20 @@ Assert-Eq 'a win split without the mac entry is accepted' $false $(try { Test-Pa
 [System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
 Remove-Item -LiteralPath (Join-Path $pkg 'win\envproxy.ps1') -Force
 Assert-Throws 'a missing own-platform entry is rejected' { Test-Package $pkg '9.9.9' 'win' }
-[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), '# entry', $bomEnc)
-[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\empty.ps1'), '', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), "# entry`n`$CoreLibs = @(`"base`", `"probe`")`n", $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), ([char]0xFEFF).ToString(), $plainEnc)
 Assert-Throws 'a BOM-only truncated file is rejected' { Test-Package $pkg '9.9.9' 'win' }
-Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\empty.ps1') -Force
-[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\zero.ps1'), '', $plainEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '', $plainEnc)
 Assert-Throws 'a zero-byte script is rejected' { Test-Package $pkg '9.9.9' 'win' }
-Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\zero.ps1') -Force
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
+# A package missing one declared library, or carrying a file nobody declared, must be refused:
+# otherwise the overwrite step deletes the missing library as "stale" and still reports success.
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\probe.ps1') -Force
+Assert-Throws 'a package missing a declared library is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\backdoor.ps1'), '# lib', $bomEnc)
+Assert-Throws 'a package carrying an undeclared file is rejected' { Test-Package $pkg '9.9.9' 'win' }
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\backdoor.ps1') -Force
 Remove-Item -LiteralPath $pkg -Recurse -Force
 
 Write-Host '[6b] scoped install (split onto legacy tree)'
@@ -299,7 +310,7 @@ Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/rep
 # Count is taken straight off the returned value, never wrapped in @(): Get-UpdateSources returns
 # ,$out to force an array, and @(...) around a call collapses that into "one element".
 Assert-Eq 'no source comes back with an empty repo id' '0' (@($srcTable0 | Where-Object { -not $_.Repo }).Count)
-Assert-Eq 'every exported source carries its five walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Base -or -not $_.Preferred -or -not $_.ApiRepo }).Count)
+Assert-Eq 'every exported source carries its five walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Web -or -not $_.Base -or -not $_.Preferred -or -not $_.ApiRepo }).Count)
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

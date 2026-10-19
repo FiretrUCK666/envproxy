@@ -14,6 +14,42 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
     $wantEntry = if ($Platform -eq "mac") { "mac\envproxy.sh" } else { "win\envproxy.ps1" }
     if (-not (Test-Item (Join-Path $Root $wantEntry))) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f $wantEntry) }
+    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 定位器(mac) + 入口自己声明的每个库"，
+    # 缺一个或多一个都拒收。只查"入口在不在"是不够的——一个只剩 VERSION + 入口的包能过那一关，
+    # 而覆盖时"作用域内、新包没有的文件按清单删除"会把所有库当成旧版残留删掉：
+    # 安装区被清空、VERSION 却被抬高，之后更新入口还会拒绝回退，用户卡在坏状态里。
+    # 声明的库清单从**包内入口**读（而不是在本文件里再写一份名单），加库改名都不用改这里。
+    $platDir = if ($Platform -eq "mac") { "mac" } else { "win" }
+    $entryName = Split-Path -Leaf $wantEntry
+    $libExt = if ($Platform -eq "mac") { ".sh" } else { ".ps1" }
+    $declPattern = if ($Platform -eq "mac") { 'CORE_LIBS="([^"]*)"' } else { '\$CoreLibs\s*=\s*@\(([^)]*)\)' }
+    $decl = [regex]::Match((Read-Text (Join-Path $Root $wantEntry)), $declPattern)
+    if (-not $decl.Success) { throw "校验失败（包内入口没有声明库清单），未做任何改动。" }
+    $declared = @()
+    foreach ($m in [regex]::Matches($decl.Groups[1].Value, '"([^"]+)"')) { $declared += $m.Groups[1].Value }
+    if (-not $declared.Count) { $declared = @($decl.Groups[1].Value -split '\s+' | Where-Object { $_ }) }
+    if (-not $declared.Count) { throw "校验失败（包内入口声明的库清单是空的），未做任何改动。" }
+    $allowed = @()
+    $allowed += "$platDir/$entryName"
+    if ($Platform -eq "mac") { $allowed += @("mac/打开菜单.command", "mac/locator.sh") }
+    else { $allowed += "win/打开菜单.cmd" }
+    foreach ($l in $declared) { $allowed += "$platDir/lib/$l$libExt" }
+    # 相对路径要么按传入的 Root 剥、要么按它的长名剥：Windows 上同一个目录可能以 8.3 短名
+    # （FIRETR~1）出现，而 Get-ChildItem 回的是长名——只按一种剥会算出空名单，
+    # 于是"包内缺少所有文件"，把好包也拒了。
+    $rootTrim = $Root.TrimEnd('\', '/')
+    $rootFull = $rootTrim
+    try { $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\', '/') } catch {}
+    $actual = @(Get-ChildItem -LiteralPath (Join-Path $Root $platDir) -Recurse -File -Force -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            $p = $_.FullName
+            if ($p.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase)) { $p.Substring($rootFull.Length) }
+            else { $p.Substring([Math]::Min($rootTrim.Length, $p.Length)) }
+        } | ForEach-Object { $_.TrimStart('\', '/').Replace('\', '/') })
+    $missing = @($allowed | Where-Object { $actual -notcontains $_ })
+    $extra = @($actual | Where-Object { $allowed -notcontains $_ })
+    if ($missing.Count) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f ($missing -join ', ')) }
+    if ($extra.Count) { throw ("校验失败（安装包里有清单外的文件：{0}），未做任何改动。" -f ($extra -join ', ')) }
     $scripts = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue |
         Where-Object { $_.Extension -eq '.ps1' -or $_.Extension -eq '.sh' })
     foreach ($f in $scripts) {

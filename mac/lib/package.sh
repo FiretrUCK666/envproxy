@@ -15,6 +15,36 @@ verify_package() {
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
     if [ "$_vplat" = "win" ]; then _ventry="win/envproxy.ps1"; else _ventry="mac/envproxy.sh"; fi
     [ -f "$_vroot/$_ventry" ] || return 1
+    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 定位器(mac) + 入口自己声明的每个库"，
+    # 缺一个或多一个都拒收。只查"入口在不在"是不够的——一个只剩 VERSION + 入口的包能过那一关，
+    # 而覆盖时"作用域内、新包没有的文件按清单删除"会把所有库当成旧版残留删掉：
+    # 安装区被清空、VERSION 却被抬高，之后更新入口还会拒绝回退，用户卡在坏状态里。
+    # 库清单从**包内入口**读，不在本文件里再写一份名单——加库改名都不用改这里。
+    if [ "$_vplat" = "win" ]; then
+        _vplat_dir=win; _vlib_ext=".ps1"; _ventry_name="envproxy.ps1"
+        _vdecl=$(sed -n 's/.*\$CoreLibs[ ]*=[ ]*@(\([^)]*\)).*/\1/p' "$_vroot/$_ventry" 2>/dev/null | head -n 1 | tr -d '"')
+    else
+        _vplat_dir=mac; _vlib_ext=".sh"; _ventry_name="envproxy.sh"
+        _vdecl=$(sed -n 's/^CORE_LIBS="\([^"]*\)".*/\1/p' "$_vroot/$_ventry" 2>/dev/null | head -n 1)
+    fi
+    [ -n "$_vdecl" ] || return 1
+    for _vl in $_vdecl; do
+        [ -f "$_vroot/$_vplat_dir/lib/$_vl$_vlib_ext" ] || return 1
+    done
+    while IFS= read -r _vf; do
+        [ -n "$_vf" ] || continue
+        _vr=${_vf#"$_vroot"/}
+        case "$_vr" in
+            "$_vplat_dir/$_ventry_name") ;;
+            "$_vplat_dir/打开菜单.command"|"$_vplat_dir/locator.sh"|"$_vplat_dir/打开菜单.cmd") ;;
+            "$_vplat_dir/lib/"*"$_vlib_ext")
+                _vbase=$(basename "$_vr" "$_vlib_ext")
+                case " $_vdecl " in *" $_vbase "*) ;; *) return 1 ;; esac ;;
+            *) return 1 ;;
+        esac
+    done <<_VPKG_
+$(find "$_vroot/$_vplat_dir" -type f 2>/dev/null)
+_VPKG_
     _vlist=$(mktemp /tmp/envproxy_verify.XXXXXX 2>/dev/null) || return 1
     find "$_vroot" -type f \( -name '*.ps1' -o -name '*.sh' \) > "$_vlist" 2>/dev/null
     if [ ! -s "$_vlist" ]; then rm -f "$_vlist" 2>/dev/null || true; return 1; fi
