@@ -245,12 +245,23 @@ Assert-Eq 'sources always come back as a list' 'Object[]' $srcTable0.GetType().N
 Assert-Eq 'at least one source is usable' $true ($srcTable0.Count -ge 1)
 Assert-Eq 'the official source stays first' 'official' $UpdateSourceTable[0].Id
 foreach ($s in $UpdateSourceTable) {
-    Assert-Eq ('source ' + $s.Name + ' declares exactly Id/Name/Preferred/Api/Web/Base') 6 (@($s.Keys).Count)
+    Assert-Eq ('source ' + $s.Name + ' declares exactly Id/Name/Preferred/Api/Web/Base/ApiRepo') 7 (@($s.Keys).Count)
     Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Api') $true ($s.Api -like '*@@*')
     Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Web') $true ($s.Web -like '*@@*')
     Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Base') $true ($s.Base -like '*@@*')
+    Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in ApiRepo') $true ($s.ApiRepo -like '*@@*')
     Assert-Eq ('source ' + $s.Name + ' prefers a known path') $true (@('Api', 'Web') -contains $s.Preferred)
 }
+# Picking an asset id out of a release payload decides whether a package download ever leaves
+# api.github.com for the flaky github.com host, so the shape rules are pinned here: the id must be
+# the one belonging to the named asset (never the release id, never the uploader id), and any
+# unparsable payload must come back empty so the caller falls back to the direct URL.
+$assetJson = '{"id":99,"tag_name":"v1.2.3","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/12345","id":12345,"name":"EnvProxy-win.zip","uploader":{"login":"u","id":777}},{"url":"https://api.github.com/repos/o/r/releases/assets/67890","id":67890,"name":"EnvProxy-mac.tar.gz"}]}'
+Assert-Eq 'an asset id is taken by file name' '67890' (Get-AssetIdFromJson $assetJson 'EnvProxy-mac.tar.gz')
+Assert-Eq 'the first asset is still matched exactly' '12345' (Get-AssetIdFromJson $assetJson 'EnvProxy-win.zip')
+Assert-Eq 'a missing file name yields nothing' '' (Get-AssetIdFromJson $assetJson 'EnvProxy-nope.zip')
+Assert-Eq 'an unparsable payload yields nothing' '' (Get-AssetIdFromJson 'not json' 'EnvProxy-win.zip')
+Assert-Eq 'an empty payload yields nothing' '' (Get-AssetIdFromJson '' 'EnvProxy-win.zip')
 # Reading a tag out of a redirect target is shape-checked, and that check is not cosmetic: a repo
 # that got renamed answers /releases/latest with a redirect to the renamed repo's path, whose last
 # segment is the literal "latest". Taking the tail blindly would turn that into a version number
@@ -266,7 +277,7 @@ Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/rep
 # Count is taken straight off the returned value, never wrapped in @(): Get-UpdateSources returns
 # ,$out to force an array, and @(...) around a call collapses that into "one element".
 Assert-Eq 'no source comes back with an empty repo id' '0' (@($srcTable0 | Where-Object { -not $_.Repo }).Count)
-Assert-Eq 'every exported source carries its four walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Base -or -not $_.Preferred }).Count)
+Assert-Eq 'every exported source carries its five walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Base -or -not $_.Preferred -or -not $_.ApiRepo }).Count)
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

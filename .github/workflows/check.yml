@@ -557,7 +557,8 @@ jobs:
             if ($zh -notmatch [regex]::Escape($n)) { Write-Host ("中文 README 里没有变量 {0}" -f $n); $fail = 1 }
             if ($en -notmatch [regex]::Escape($n)) { Write-Host ("英文 README 里没有变量 {0}" -f $n); $fail = 1 }
           }
-          # h) 更新源表：两侧必须同表（同条数），且官方源都在最前。
+          # h) 更新源表：两侧必须同表（同条数、同字段数），官方源都在最前，
+          #    且"API 资产端点优先"这条下载路径两侧都实现（含它必须的 Accept 头）。
           # 源表是「加源 = 加一行」的数据结构，两侧结构漂移会让回退行为不一致。
           $srcWin = @([regex]::Matches($ps, '@\{ Id = "\w+"'))
           $macTable = [regex]::Match($sh, "(?s)UPDATE_SOURCE_TABLE='(.*?)'").Groups[1].Value
@@ -568,6 +569,20 @@ jobs:
           # 顺序即优先级：官方源必须排在第一位。
           if ($ps -notmatch '@\{ Id = "official"') { Write-Host 'Win 侧源表里没有 official 源'; $fail = 1 }
           if ($srcMac.Count -and ($srcMac[0] -notmatch '^official[ ]')) { Write-Host 'Mac 侧源表第一条不是官方源'; $fail = 1 }
+          # 字段数：Win 每源 7 个键（Id/Name/Preferred/Api/Web/Base/ApiRepo），Mac 每行 7 个空白分隔字段。
+          $winEntry = [regex]::Match($ps, '@\{ Id = "official";(.*?)\}')
+          if (-not $winEntry.Success) { Write-Host 'Win 侧源表条目没解析出来'; $fail = 1 }
+          elseif (([regex]::Matches($winEntry.Groups[1].Value, '=')).Count + 1 -ne 7) {
+            Write-Host 'Win 侧源表字段数不是 7（Id/Name/Preferred/Api/Web/Base/ApiRepo）'; $fail = 1
+          }
+          foreach ($line in $srcMac) {
+            if (($line.Trim() -split '\s+').Count -ne 7) { Write-Host ("Mac 侧源表字段数不是 7：{0}" -f $line.Trim()); $fail = 1 }
+          }
+          # API 资产端点优先：两侧都要有资产下载路径，以及它必须的 Accept 头。
+          foreach ($pair in @(@('Win', $ps), @('Mac', $sh))) {
+            if ($pair[1] -notmatch '/releases/assets/') { Write-Host ("{0} 侧没有 API 资产端点下载路径" -f $pair[0]); $fail = 1 }
+            if ($pair[1] -notmatch 'application/octet-stream') { Write-Host ("{0} 侧下载资产时没带 Accept: application/octet-stream" -f $pair[0]); $fail = 1 }
+          }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

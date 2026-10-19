@@ -8,24 +8,22 @@
 # 覆盖文件这条路上 git 副本一律不参与。
 UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
-# 更新源表：每行一条 "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀>"，有序，逐个尝试，
+# 更新源表：每行一条
+#   "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀> <API 前缀>"，有序，逐个尝试，
 # 第一个能回答"最新版是什么"的胜出。
-# 每行一条 "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀>"，@@ 接仓库标识
-# （用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
-# 加一个源 = 加一行，不动任何判断逻辑。目前只有官方源一条。
-# 顺序即优先级。
-# 网页路径 302 到 /releases/tag/<标签>、
-# 下载路径是 /<仓库>/releases/download/<标签>/<文件名>，两者共用同一段解析与下载代码。
+# @@ 接仓库标识（用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
+# 加一个源 = 加一行，不动任何判断逻辑。目前只有官方源一条。顺序即优先级。
 #
-# 为什么每个源要两条路径、且优先顺序按源定：两条各有短板。
-#   Api 语义明确，但匿名配额只有 60 次/小时/IP。
-#
-#   Web 走网页重定向，不吃 API 配额；但 GitHub 侧的网页路径在受限网络里会整段超时
-#       （实测同一条 URL：curl 拿到 302、.NET 超时）。
-# 所以 Api 优先、Web 兜底：API 被限流时网页能救回来。
+# 两段地址的分工：
+#   问版本：Api 读 JSON、Web 读 302 的 Location。Api 优先——它语义明确，但匿名配额只有
+#           60 次/小时/IP；Web 不吃配额，可网页路径在受限网络里会整段超时
+#           （实测同一条 URL：curl 拿到 302、.NET 超时）。所以 Api 优先、Web 兜底。
+#   取安装包：先走 API 的资产端点（回 302 到 release-assets 的 CDN），再退回直连下载。
+#           GitHub 网页主机在受限网络里时通时不通（同一台机器实测过连续 5 次下载超时），
+#           而 api.github.com 稳定可达（实测 200 / 0.2s），所以 API 在前、直连兜底。
 
 
-UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@'
+UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@ https://api.github.com/repos/@@'
 
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
@@ -112,18 +110,68 @@ fetch_update_text() {
         curl -fsSL --max-time 3 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
 }
 
-# 下载文件。返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404/410，不必再试代理），其余 = 失败。
+# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产 id（纯函数，自检可测）。
+# 找不到、或 JSON 形状不对，一律输出空——调用方据此退回直连下载，不当错误处理。
+# 做法：先定位 `"name":"<文件名>"`，再取它**前面**最后一次出现的 `"id":<数字>`。
+# 资产对象里 id 与 name 同在一个对象内且 id 在前（url/id/node_id/name…），所以
+# "前面最后一个 id" 就是这条资产自己的；不依赖字段顺序，也不要求整段 JSON 单行。
+# 不用 jq：macOS 自带环境没有它，零依赖是安装口号。
+get_asset_id_from_json() {
+    printf '%s' "$1" | tr '\n' ' ' | awk -v want="$2" '
+    {
+        pos = index($0, "\"name\":\"" want "\"")
+        if (pos == 0) exit
+        head = substr($0, 1, pos - 1)
+        last = ""
+        while (match(head, /"id"[ ]*:[ ]*[0-9]+/)) {
+            m = substr(head, RSTART, RLENGTH)
+            sub(/.*[^0-9]/, "", m)
+            last = m
+            head = substr(head, RSTART + RLENGTH)
+        }
+        if (last != "") print last
+    }'
+}
+
+# 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到输出空，绝不报错退出。
+get_update_asset_id() {
+    _ga_json=$(fetch_update_text "$1/releases/tags/$2" || true)
+    [ -n "$_ga_json" ] || return 0
+    get_asset_id_from_json "$_ga_json" "$3"
+}
+
+# 取一个文件到本地：$1=目标文件 $2=额外请求头（空则不带）$3=URL
+# 拆成两个小函数是为了让"带不带请求头"只在一个地方分支，调用方（含直连兜底）不必各写两遍。
+_fetch_to_file() {
+    if [ -n "$2" ]; then
+        curl -fsSL --max-time 60 -A "EnvProxyUpdate" -H "$2" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+    else
+        curl -fsSL --max-time 60 -A "EnvProxyUpdate" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+    fi
+}
+
+_fetch_to_file_direct() {
+    if [ -n "$2" ]; then
+        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -H "$2" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+    else
+        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+    fi
+}
+
+# 下载文件：$1=URL $2=目标文件 $3=额外请求头（可空，API 资产端点要 Accept: application/octet-stream）
+# 返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404/410，不必再试代理），其余 = 失败。
 # 判据必须是**真实状态码**，不能拿 curl -f 的退出码当语义：-f 对任何 >=400 一律返回 22
 # （实测 400/401/403/404/410/429/500/502/503 全是 22），把 22 当"没提供安装包"会把限流和
 # 服务端故障一起误报成缺包，还会掐掉本该有的直连重试。Windows 侧判的就是 404/410。
 fetch_update_file() {
-    _code=$(curl -fsSL --max-time 60 -A "EnvProxyUpdate" -o "$2" -w '%{http_code}' "$1" 2>/dev/null)
+    _code=$(_fetch_to_file "$2" "$3" "$1")
     _rc=$?
     [ "$_rc" -eq 0 ] && return 0
     case "$_code" in 404|410) return 22 ;; esac
     # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
-    _code2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$2" -w '%{http_code}' "$1" 2>/dev/null)
+    _code2=$(_fetch_to_file_direct "$2" "$3" "$1")
     _rc2=$?
     [ "$_rc2" -eq 0 ] && return 0
     case "$_code2" in 404|410) return 22 ;; esac
@@ -138,16 +186,18 @@ fetch_update_file() {
 REMOTE_VERSION=""
 REMOTE_TAG=""
 REMOTE_SOURCE_BASE=""
+REMOTE_SOURCE_API=""
 REMOTE_SOURCE_NAME=""
 
-# 本机这次实际可用的源（有序）：每行一条 "<显示名>|<优先路径>|<Api>|<Web>|<下载前缀>"，仓库标识已代入。
+# 本机这次实际可用的源（有序）：每行一条
+# "<显示名>|<优先路径>|<Api>|<Web>|<下载前缀>|<API 前缀>"，仓库标识已代入。
 # 没有仓库标识的源直接跳过（目前只有官方源一条）。
 get_update_sources() {
-    while read -r _sid _sname _spref _sapi _sweb _sbase; do
+    while read -r _sid _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sid" ] || continue
         _gid=$(update_source_id "$_sid")
         [ -n "$_gid" ] || continue
-        printf '%s|%s|%s|%s|%s\n' "$_sname" "$_spref" "${_sapi//@@/$_gid}" "${_sweb//@@/$_gid}" "${_sbase//@@/$_gid}"
+        printf '%s|%s|%s|%s|%s|%s\n' "$_sname" "$_spref" "${_sapi//@@/$_gid}" "${_sweb//@@/$_gid}" "${_sbase//@@/$_gid}" "${_sapirepo//@@/$_gid}"
     done <<_ENVPROXY_SOURCES_
 $UPDATE_SOURCE_TABLE
 _ENVPROXY_SOURCES_
@@ -197,7 +247,7 @@ get_tag_from_source() {
 # 从**一个**源查最新 Release：这一源自己的两条路径都试过还不行，才算它答不上来。
 # 拆出这一层是为了让更新入口能按源做完整尝试（问版本 + 取包），而不只是问版本。
 get_remote_version_from() {
-    _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"
+    _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"; _rsapirepo="$6"
     _rstag=$(get_tag_from_source "$_rsname" "$_rspref" "$_rsapi" "$_rsweb")
     [ -n "$_rstag" ] || return 1
     _rsver=$(printf '%s' "$_rstag" | sed -E 's/^v//')
@@ -205,6 +255,7 @@ get_remote_version_from() {
     REMOTE_TAG="$_rstag"
     REMOTE_VERSION="$_rsver"
     REMOTE_SOURCE_BASE="$_rsbase"
+    REMOTE_SOURCE_API="$_rsapirepo"
     REMOTE_SOURCE_NAME="$_rsname"
     return 0
 }
@@ -213,9 +264,9 @@ get_remote_version_from() {
 get_remote_version() {
     # 源表用 here-doc 喂给 while，不用管道：管道会把 while 丢进子 shell，
     # 里面赋的 REMOTE_* 出了循环就没了——而那正是调用方要读的东西。
-    while IFS='|' read -r _sname _spref _sapi _sweb _sbase; do
+    while IFS='|' read -r _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sname" ] || continue
-        if get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase"; then
+        if get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" "$_sapirepo"; then
             return 0
         fi
     done <<_ENVPROXY_SRCS_
@@ -307,9 +358,9 @@ update_envproxy() {
     _tgz=""
     _exdir=""
     echo "正在下载安装包..."
-    while IFS='|' read -r _sname _spref _sapi _sweb _sbase; do
+    while IFS='|' read -r _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sname" ] || continue
-        get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" || continue
+        get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" "$_sapirepo" || continue
         # 只接受比本地新的版本：换源不能把用户带到更旧的版本上。
         _cmp=$(compare_versions "$REMOTE_VERSION" "$_local" 2>/dev/null || echo 0)
         [ "$_cmp" -gt 0 ] 2>/dev/null || continue
@@ -319,7 +370,17 @@ update_envproxy() {
         rm -f "$_try_tgz" 2>/dev/null || true
         rm -rf "$_try_dir" 2>/dev/null || true
         mkdir -p "$_try_dir" 2>/dev/null || continue
-        if ! fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz"; then
+        # 下载顺序：API 资产端点优先，直连下载兜底（见源表上方的说明）。
+        # 两条路都可能"这一版没提供这个文件"，任一条拿到就算成功；都不成才换源。
+        _got=1
+        _asset_id=$(get_update_asset_id "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true)
+        if [ -n "$_asset_id" ]; then
+            fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream" && _got=0
+        fi
+        if [ "$_got" -ne 0 ]; then
+            fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz" && _got=0
+        fi
+        if [ "$_got" -ne 0 ]; then
             rm -f "$_try_tgz" 2>/dev/null || true
             rm -rf "$_try_dir" 2>/dev/null || true
             continue

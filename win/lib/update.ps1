@@ -20,21 +20,27 @@
 $UpdateRepoDefault = "FiretrUCK666/envproxy"
 
 # 更新源表：有序，逐个尝试，第一个能给出"可用的新版本安装包"的胜出。
-# 每项声明四件事：
+# 每项声明五件事：
 #   Id        这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
 #   Api/Web   两条"怎么问最新版"的路径，Preferred 决定先试哪条，另一条是兜底
-#   Base      安装包挂在哪个地址前缀下
+#   Base      安装包直连下载的地址前缀（最后一道兜底）
+#   ApiRepo   API 端点前缀，用来查资产 id 并从 API 取包（首选下载路径）
 # 地址里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把地址里的符号当元字符）。
 # 目前只有官方源一条；新增一个源 = 表里加一行（若引入新的标识来源，再加一个 Id 分支），
 # 不涉及任何判断逻辑。顺序即优先级。
 #
-# 为什么要两条路径：各有短板。
+# 为什么要两条问版本的路：各有短板。
 #   Api 语义明确，但匿名配额只有 60 次/小时/IP。
 #   Web 走网页重定向、不吃 API 配额；但网页路径在受限网络里会整段超时
 #       （同一台机器实测：同一条 URL，curl 拿到 302、.NET 超时）。
 # 所以 Api 优先、Web 兜底：API 被限流时网页能救回来。
+#
+# 为什么下载也分两条路、且 API 在前：GitHub 的网页主机（github.com）在受限网络里时通时不通
+# （同一台机器实测过连续 5 次下载超时），而 api.github.com 稳定可达（实测 200 / 0.2s）。
+# API 的资产端点回 302 到 release-assets 的 CDN 域名，那条链在同类网络里也通。
+# 所以先走 API 资产端点，再退回直连下载——两条都失败才算这个源不可用。
 $UpdateSourceTable = @(
-    @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; }
+    @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; ApiRepo = "https://api.github.com/repos/@@"; }
 )
 
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
@@ -100,7 +106,7 @@ function Get-UpdateSources {
     foreach ($s in $UpdateSourceTable) {
         $id = Get-UpdateRepoId $s.Id
         if (-not $id) { continue }
-        $out += @{ Name = $s.Name; Repo = $id; Preferred = $s.Preferred; Api = $s.Api; Web = $s.Web; Base = $s.Base }
+        $out += @{ Name = $s.Name; Repo = $id; Preferred = $s.Preferred; Api = $s.Api; Web = $s.Web; Base = $s.Base; ApiRepo = $s.ApiRepo }
     }
     # 前面那个逗号不能省：PowerShell 会把单元素集合解包成元素本身，
     # 于是"只剩一个源"时调用方拿到的是一个哈希表而不是源的表，
@@ -177,7 +183,7 @@ function Get-RemoteVersionFrom([hashtable]$Src) {
         if (-not $tag) { return $null }
         $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
         if (-not $ver) { return $null }
-        return @{ Version = $ver; Tag = $tag; Base = $Src.Base.Replace('@@', $Src.Repo); Name = $Src.Name }
+        return @{ Version = $ver; Tag = $tag; Base = $Src.Base.Replace('@@', $Src.Repo); ApiRepo = $Src.ApiRepo.Replace('@@', $Src.Repo); Name = $Src.Name }
     } catch { return $null }
 }
 
@@ -255,19 +261,42 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
     }
 }
 
+# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产 id（纯函数，可单测）。
+# 找不到、或者 JSON 形状不对，一律返回空串——调用方据此退回直连下载，不把它当错误。
+# 用 @() 包一层：只有一个资产的发布会让 PowerShell 把数组解包成对象本身。
+function Get-AssetIdFromJson([string]$Json, [string]$FileName) {
+    if (-not $Json -or -not $FileName) { return "" }
+    try {
+        $rel = $Json | ConvertFrom-Json
+        foreach ($a in @($rel.assets)) {
+            if ($a -and (("{0}" -f $a.name) -eq $FileName)) { return ("{0}" -f $a.id) }
+        }
+    } catch { }
+    return ""
+}
+
+# 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到就返回空，绝不抛。
+# 这一步多花一次 API 配额（匿名 60 次/小时），换来的是不用碰时通时不通的 github.com。
+function Get-UpdateAssetId([hashtable]$Remote, [string]$FileName) {
+    if (-not $Remote.ApiRepo) { return "" }
+    $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, $Remote.Tag
+    return (Get-AssetIdFromJson (Invoke-UpdateText $url) $FileName)
+}
+
 # 带代理兜底的 HTTPS 下载：返回 "ok" / "missing"（这个版本没提供该文件）/ "fail"。
 # 单独分出 "missing"，是为了把「这次发布漏了安装包」和「本机网络不通」两句提示分开。
-function Save-UpdateFile([string]$Url, [string]$DestFile) {
-    $r = Save-UpdateFileVia $Url $DestFile ""
+# Headers 用于 API 资产端点那条路（Accept: application/octet-stream 才会回二进制）。
+function Save-UpdateFile([string]$Url, [string]$DestFile, [hashtable]$Headers = @{}) {
+    $r = Save-UpdateFileVia $Url $DestFile "" $Headers
     if ($r -ne "fail") { return $r }
     $port = $null
     try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
     if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
-    if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port") }
+    if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port" $Headers) }
     return "fail"
 }
 
-function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort) {
+function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort, [hashtable]$Headers = @{}) {
     $handler = $null; $client = $null
     try {
         if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
@@ -281,6 +310,9 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort)
         $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(60)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        # 自定义头（API 资产端点要 Accept: application/octet-stream）。TryAdd 不校验，不会因为
+        # 头名不标准而抛异常——这里只要把调用方给的东西原样送出去。
+        if ($Headers) { foreach ($hk in $Headers.Keys) { [void]$client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk]) } }
         $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
         if (-not $respTask.Wait(60000)) { return "fail" }
         $resp = $respTask.Result
@@ -311,7 +343,25 @@ function Get-UpdatePackage([hashtable]$Remote) {
         Remove-ItemSafe $extractDir
         New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
         # 地址由**这一源自己**给出：版本与安装包来自同一个源，不会串源。
-        $dl = Save-UpdateFile ("{0}/releases/download/{1}/EnvProxy-win.zip" -f $Remote.Base, $Remote.Tag) $zipFile
+        # 下载顺序：API 资产端点优先，直连下载兜底（见源表上方关于两条路的说明）。
+        # 两条路都可能"没有这个文件"，所以先各跑一遍再判：任何一条拿到就算成功，
+        # 全部失败时才按"有真失败就报失败、否则报缺包"给提示。
+        $file = "EnvProxy-win.zip"
+        $targets = @()
+        $assetId = Get-UpdateAssetId $Remote $file
+        if ($assetId) {
+            $targets += @{ Url = ("{0}/releases/assets/{1}" -f $Remote.ApiRepo, $assetId); Headers = @{ Accept = "application/octet-stream" } }
+        }
+        $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, $Remote.Tag, $file); Headers = @{} }
+        $dl = "fail"
+        $sawFail = $false
+        $sawMissing = $false
+        foreach ($t in $targets) {
+            $r = Save-UpdateFile $t.Url $zipFile $t.Headers
+            if ($r -eq "ok") { $dl = "ok"; break }
+            if ($r -eq "missing") { $sawMissing = $true } else { $sawFail = $true }
+        }
+        if ($dl -ne "ok") { $dl = if ($sawFail) { "fail" } elseif ($sawMissing) { "missing" } else { "fail" } }
         if ($dl -eq "missing") {
             Write-Host ("  {0} 上没有提供这个版本的安装包。" -f $Remote.Name) -ForegroundColor DarkGray
         } elseif ($dl -ne "ok") {
