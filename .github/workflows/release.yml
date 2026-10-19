@@ -216,14 +216,17 @@ jobs:
           API="https://gitee.com/api/v5/repos/$GITEE_REPO"
           DL="https://gitee.com/$GITEE_REPO"
           # 先读仓库信息：既确认仓库真的可达，也拿到默认分支——创建发行版时 target_commitish 是必填项。
-          REPO_JSON="$(curl -fsS --max-time 30 "$API" 2>/dev/null || true)"
+          # 三条读接口都带上 token：匿名配额是按出口 IP 共享的，而发布 runner 的 IP 是共享的，
+          # 为了"确认仓库可达"去打匿名请求，恰恰是最容易被限流打掉的那一下——
+          # 一旦 403，就会被误报成"仓库不存在"，把人指到完全错误的方向。
+          REPO_JSON="$(curl -fsS --max-time 30 "$API?access_token=$GITEE_TOKEN" 2>/dev/null || true)"
           if [ -z "$REPO_JSON" ]; then
-            echo "读不到 Gitee 仓库 $GITEE_REPO：确认它已建好，且拼写与大小写都对得上。"
+            echo "读不到 Gitee 仓库 $GITEE_REPO：确认它已建好、拼写与大小写都对、token 有效（403 也可能是限流）。"
             exit 1
           fi
           BRANCH="$(printf '%s' "$REPO_JSON" | jq -r '.default_branch // "master"')"
           # 幂等：发行版已存在就复用（重跑只补附件，不会重复建）。
-          REL_ID="$(curl -fsS --max-time 30 "$API/releases/tags/$TAG" 2>/dev/null | jq -r '.id // empty' 2>/dev/null || true)"
+          REL_ID="$(curl -fsS --max-time 30 "$API/releases/tags/$TAG?access_token=$GITEE_TOKEN" 2>/dev/null | jq -r '.id // empty' 2>/dev/null || true)"
           if [ -z "$REL_ID" ]; then
             echo "在 Gitee 创建发行版 $TAG（目标分支 $BRANCH）..."
             REL_ID="$(curl -fsS --max-time 60 -X POST "$API/releases" \
@@ -239,12 +242,15 @@ jobs:
           fi
           for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
             # 同名附件先删后传：Gitee 不接受同名重复上传，而重跑必须得到同一个结果。
-            OLD_ID="$(curl -fsS --max-time 30 "$API/releases/$REL_ID/attach_files" 2>/dev/null \
-              | jq -r --arg w "$want" '.[] | select(.name==$w) | .id' 2>/dev/null | head -n 1 || true)"
-            if [ -n "$OLD_ID" ]; then
-              curl -fsS --max-time 30 -X DELETE "$API/releases/$REL_ID/attach_files/$OLD_ID" \
-                --data-urlencode "access_token=$GITEE_TOKEN" >/dev/null || true
-            fi
+            # 三处细节都是规范里写明的，写错会静默失效：
+            #   列表默认分页 20 条 → 显式要满页（per_page=100），否则同名附件一多就查不到；
+            #   同名的**全部**删掉 → 只删一条时，历史上删失败的残留会继续挡着上传；
+            #   DELETE 的 access_token 在 **query** → 规范里 32/32 个 DELETE 端点都声明在 query，
+            #     放请求体是查无此用法，会被 || true 静默吞掉。
+            for old_id in $(curl -fsS --max-time 30 "$API/releases/$REL_ID/attach_files?per_page=100&access_token=$GITEE_TOKEN" 2>/dev/null \
+              | jq -r --arg w "$want" '.[] | select(.name==$w) | .id' 2>/dev/null || true); do
+              curl -fsS --max-time 30 -X DELETE "$API/releases/$REL_ID/attach_files/$old_id?access_token=$GITEE_TOKEN" >/dev/null || true
+            done
             echo "上传 $want ..."
             curl -fsS --max-time 180 -X POST "$API/releases/$REL_ID/attach_files" \
               -F "access_token=$GITEE_TOKEN" \

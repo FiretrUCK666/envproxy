@@ -231,20 +231,27 @@ self_test() {
     if [ -n "$_st_all" ]; then _st1=1; else _st1=0; fi
     _selftest_assert_eq "源表至少有一个可用源" "1" "$_st1"
     _selftest_assert_eq "官方源排第一" "GitHub" "$(printf '%s\n' "$_st_all" | head -n 1 | cut -d'|' -f1)"
-    # 模板表每条必须正好四个字段、且保留 @@ 占位符；代入后每行必须是成形地址
-    # （两个地址都非空、占位符替换干净、API 落在 releases/latest 上）。
+    # 模板表每条必须正好六个字段、保留 @@ 占位符、优先路径是已知值；代入后每行必须是成形地址
+    # （三个地址都非空、占位符替换干净、网页路径落在 releases/latest 上）。
     _st_tpl_ok=$(printf '%s\n' "$UPDATE_SOURCE_TABLE" | awk '
-        NF != 4 { bad = 1 }
+        NF != 6 { bad = 1 }
         $0 !~ /@@/ { bad = 1 }
+        $3 != "Api" && $3 != "Web" { bad = 1 }
         END { print (bad ? 0 : 1) }')
-    _selftest_assert_eq "源表每条四字段、模板都带占位符" "1" "$_st_tpl_ok"
+    _selftest_assert_eq "源表每条六字段、模板带占位符、优先路径合法" "1" "$_st_tpl_ok"
     _st_out_ok=$(get_update_sources | awk -F'|' '
-        NF != 3 { bad = 1 }
-        $2 == "" || $3 == "" { bad = 1 }
-        $2 $3 ~ /@@/ { bad = 1 }
-        $2 !~ /repos\/.+\/releases\/latest$/ { bad = 1 }
+        NF != 5 { bad = 1 }
+        $2 != "Api" && $2 != "Web" { bad = 1 }
+        $3 == "" || $4 == "" || $5 == "" { bad = 1 }
+        $3 $4 $5 ~ /@@/ { bad = 1 }
+        $4 !~ /releases\/latest$/ { bad = 1 }
         END { print (bad ? 0 : 1) }')
-    _selftest_assert_eq "仓库标识代入后地址成形、无占位符残留" "1" "$_st_out_ok"
+    _selftest_assert_eq "仓库标识代入后三处地址成形、无占位符残留" "1" "$_st_out_ok"
+    # 从重定向目标取标签必须做形态校验：仓库改名时 Gitee 会先 302 到改名后的路径，
+    # 最后一段是字面量 "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
+    _selftest_assert_eq "从 tag 页重定向取标签" "v1.2.3" "$(get_tag_from_location 'https://gitee.com/o/r/releases/tag/v1.2.3')"
+    _selftest_assert_eq "改名仓库的重定向不给标签" "" "$(get_tag_from_location 'https://gitee.com/new/r/releases/latest')"
+    _selftest_assert_eq "含括号的标签原样保留" "v2026.09(jdk25)" "$(get_tag_from_location 'https://gitee.com/o/r/releases/tag/v2026.09(jdk25)')"
     # 镜像仓库标识留空时（默认状态：镜像还没建）该源必须被跳过，而不是变成一个地址带洞的源。
     _saved_mirror="$GITEE_MIRROR_REPO"
     GITEE_MIRROR_REPO=""

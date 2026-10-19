@@ -101,7 +101,7 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. It keeps a second update source (a mirror reachable from mainland China) and switches to it when GitHub does not answer, so updating no longer requires a working proxy first.
+To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. It reserves a second update source (a mirror reachable from mainland China); once that mirror is provisioned, updates switch to it automatically when GitHub does not answer.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
@@ -117,7 +117,7 @@ Only one thing lives in `win\` to double-click (in `mac/` on Mac). The rest stay
 | **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log | you want to confirm it is working |
 | **3 Stop monitor** | stops the monitor and deletes the variables (direct connection immediately), keeps start at login so it returns on the next boot | you want to pause it |
 | **4 Full restore** | stops the monitor, deletes the variables, removes start at login, the locator and the path record | you are done with it |
-| **5 Check for updates** | checks the latest release (falls back to the mirror when GitHub is unreachable), shows what changed, installs after you agree | you want to upgrade |
+| **5 Check for updates** | checks the latest release (falls back to the mirror once it is provisioned), shows what changed, installs after you agree | you want to upgrade |
 
 If you remember nothing else: **open the menu — 1 fixes everything, 2 checks, 3 pauses, 4 uninstalls, 5 upgrades.**
 
@@ -353,7 +353,7 @@ Only one thing lives in the `mac` folder to double-click. The menu is identical 
 | **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log |
 | **3 Stop monitor** | stop the monitor and delete the variables (start at login stays, it returns on the next login) |
 | **4 Full restore** | stop the monitor, delete the variables, remove start at login, the locator and the hook; asks about the log |
-| **5 Check for updates** | checks the latest release (falls back to the mirror when GitHub is unreachable) and installs after you agree |
+| **5 Check for updates** | checks the latest release (falls back to the mirror once it is provisioned) and installs after you agree |
 
 </details>
 

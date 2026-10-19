@@ -31,18 +31,26 @@ $UpdateRepoDefault = "FiretrUCK666/envproxy"
 # 不是特例分支，所以不需要任何开关变量。
 $GiteeMirrorRepo = ""
 
-# 更新源表：有序，逐个尝试，第一个能回答"最新版是什么"的胜出。
-# 每项声明三件事：
-#   Id    这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
-#   Api   怎么问"最新版是几版"     Base  安装包挂在哪个地址前缀下
-# Api 与 Base 里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把镜像地址里的符号当元字符）。
+# 更新源表：有序，逐个尝试，第一个能给出"可用的新版本安装包"的胜出。
+# 每项声明四件事：
+#   Id        这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
+#   Api/Web   两条"怎么问最新版"的路径，Preferred 决定先试哪条，另一条是兜底
+#   Base      安装包挂在哪个地址前缀下
+# 三处地址里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把地址里的符号当元字符）。
 # 加一个镜像源 = 表里加一行 + （若引入新的标识来源）Get-UpdateRepoId 里加一个分支，
 # 不涉及任何判断逻辑。顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
-# 两个源的 API 返回体同构（都取 tag_name），下载路径也同构（/<仓库>/releases/download/<标签>/<文件名>），
-# 因此下面的解析与下载代码对它们完全共用。
+# 两个源的 release JSON 同构（都取 tag_name）、网页路径也同构（都 302 到 /releases/tag/<标签>），
+# 下载路径同样同构（/<仓库>/releases/download/<标签>/<文件名>），所以解析与下载代码完全共用。
+#
+# 为什么要两条路径：两条各有短板，且短板的分布按源不同。
+#   Api 语义明确，但两个源都有配额——Gitee 的匿名 API 会整段回 403 Rate Limit Exceeded（实测），
+#       GitHub 的匿名 API 只有 60 次/小时/IP。
+#   Web 走网页重定向，不吃 API 配额；但 GitHub 侧的网页路径在受限网络里会整段超时
+#       （同一台机器实测：同一条 URL，curl 拿到 302、.NET 超时），Gitee 侧反而稳（约 240ms）。
+# 所以优先顺序是按源定的，不是全局统一。
 $UpdateSourceTable = @(
-    @{ Id = "official"; Name = "GitHub"; Api = "https://api.github.com/repos/@@/releases/latest"; Base = "https://github.com/@@"; }
-    @{ Id = "mirror";   Name = "Gitee";  Api = "https://gitee.com/api/v5/repos/@@/releases/latest"; Base = "https://gitee.com/@@"; }
+    @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; }
+    @{ Id = "mirror";   Name = "Gitee";  Preferred = "Web"; Web = "https://gitee.com/@@/releases/latest"; Api = "https://gitee.com/api/v5/repos/@@/releases/latest"; Base = "https://gitee.com/@@"; }
 )
 
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
@@ -110,7 +118,7 @@ function Get-UpdateSources {
     foreach ($s in $UpdateSourceTable) {
         $id = Get-UpdateRepoId $s.Id
         if (-not $id) { continue }
-        $out += @{ Name = $s.Name; Repo = $id; Api = $s.Api; Base = $s.Base }
+        $out += @{ Name = $s.Name; Repo = $id; Preferred = $s.Preferred; Api = $s.Api; Web = $s.Web; Base = $s.Base }
     }
     # 前面那个逗号不能省：PowerShell 会把单元素集合解包成元素本身，
     # 于是"只剩官方源"（镜像还没建，也就是默认状态）时调用方拿到的是一个哈希表而不是源的表，
@@ -165,25 +173,104 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
     }
 }
 
-# 查最新 Release：返回 @{ Version="1.2.0"; Tag="v1.2.0"; Base="<下载前缀>"; Name="<源名>" }，
+# 查最新 Release（状态显示与更新入口共用）：
+# 返回 @{ Version="1.2.0"; Tag="v1.2.0"; Base="<下载前缀>"; Name="<源名>" }，
 # 所有源都问不到才返回 $null（只读，不抛异常，不写文件）。
 # 逐个源尝试，第一个答出来的胜出：官方源在前，它不通就自动换镜像源。
 # 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
 # 否则会出现"拿 A 源的版本号去下 B 源的包"。
 function Get-RemoteVersion {
     foreach ($src in (Get-UpdateSources)) {
-        try {
-            $json = Invoke-UpdateText ($src.Api.Replace('@@', $src.Repo))
-            if (-not $json) { continue }
-            $obj = $json | ConvertFrom-Json
-            $tag = ("{0}" -f $obj.tag_name).Trim()
-            if (-not $tag) { continue }
-            $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
-            if (-not $ver) { continue }
-            return @{ Version = $ver; Tag = $tag; Base = $src.Base.Replace('@@', $src.Repo); Name = $src.Name }
-        } catch { continue }
+        $r = Get-RemoteVersionFrom $src
+        if ($r) { return $r }
     }
     return $null
+}
+
+# 从**一个**源查最新 Release：这一源自己的两条路径都试过还不行，才算它答不上来。
+# 拆出这一层是为了让更新入口能按源做完整的尝试（问版本 + 取包），而不只是问版本。
+function Get-RemoteVersionFrom([hashtable]$Src) {
+    try {
+        $tag = Get-TagFromSource $Src
+        if (-not $tag) { return $null }
+        $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
+        if (-not $ver) { return $null }
+        return @{ Version = $ver; Tag = $tag; Base = $Src.Base.Replace('@@', $Src.Repo); Name = $Src.Name }
+    } catch { return $null }
+}
+
+# 按这一源声明的优先顺序问版本，先答出来的那条胜出。
+function Get-TagFromSource([hashtable]$Src) {
+    $order = if ("$($Src.Preferred)" -eq "Web") { @("Web", "Api") } else { @("Api", "Web") }
+    foreach ($kind in $order) {
+        $tpl = if ($kind -eq "Web") { $Src.Web } else { $Src.Api }
+        if (-not $tpl) { continue }
+        $url = $tpl.Replace('@@', $Src.Repo)
+        $tag = if ($kind -eq "Web") { Get-TagFromWeb $url } else { Get-TagFromApi $url }
+        if ($tag) { return $tag }
+    }
+    return ""
+}
+
+# API 路径：读 JSON 的 tag_name。
+function Get-TagFromApi([string]$Url) {
+    try {
+        $json = Invoke-UpdateText $Url
+        if (-not $json) { return "" }
+        $obj = $json | ConvertFrom-Json
+        return (("{0}" -f $obj.tag_name).Trim())
+    } catch { return "" }
+}
+
+# 从重定向目标里提取标签；形状不对就返回空（调用方据此换另一条路径）。
+# 抽成纯函数是为了能进回归测试：必须校验它确实落在 /releases/tag/<标签> 上，不能只取最后一段——
+# 仓库改名时 Gitee 会先 302 到改名后的仓库路径（实测 dromara/hutool），那时最后一段是字面量
+# "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
+# 标签本身可能含括号等字符且不做百分号编码（实测 v2026.09(jdk25)），所以整段取、不解码。
+function Get-TagFromLocation([string]$Location) {
+    if (-not $Location) { return "" }
+    $m = [regex]::Match($Location, '/releases/tag/([^/?#]+)$')
+    if (-not $m.Success) { return "" }
+    return $m.Groups[1].Value
+}
+
+# 网页路径：读 302 的 Location 取标签。带代理兜底（与 API 路径同一个模式）。
+function Get-TagFromWeb([string]$Url) {
+    $tag = Get-TagFromWebVia $Url ""
+    if ($tag) { return $tag }
+    $port = $null
+    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+    if (-not $port) { return "" }
+    return (Get-TagFromWebVia $Url "$port")
+}
+
+function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
+    $handler = $null; $client = $null
+    try {
+        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        if ($ProxyPort) {
+            $handler.UseProxy = $true
+            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+        } else {
+            $handler.UseProxy = $false
+        }
+        # 不跟随重定向：只有拦住第一跳，才读得到 Location 里的标签。
+        $handler.AllowAutoRedirect = $false
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        $client.Timeout = [TimeSpan]::FromSeconds(8)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        $task = $client.GetAsync($Url)
+        if (-not $task.Wait(8000)) { return "" }
+        $loc = $task.Result.Headers.Location
+        if (-not $loc) { return "" }
+        return (Get-TagFromLocation $loc.ToString())
+    } catch { return "" }
+    finally {
+        if ($client) { try { $client.Dispose() } catch {} }
+        if ($handler) { try { $handler.Dispose() } catch {} }
+    }
 }
 
 # 带代理兜底的 HTTPS 下载：返回 "ok" / "missing"（这个版本没提供该文件）/ "fail"。
@@ -226,6 +313,42 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort)
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
     }
+}
+
+# 从**指定源**取一个合格的安装包：下载 → 解压 → 结构校验，全过才算数。
+# 任何一步不过都返回 $null（换不换源由调用方决定），并把临时物清干净——
+# 失败路径绝不给安装区留下任何东西。
+function Get-UpdatePackage([hashtable]$Remote) {
+    # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
+    $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($Remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
+    $zipFile = "$tmpBase.zip"
+    $extractDir = "${tmpBase}-pkg"
+    $ok = $false
+    try {
+        Remove-ItemSafe $zipFile
+        Remove-ItemSafe $extractDir
+        New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        # 地址由**这一源自己**给出：版本与安装包来自同一个源，不会串源。
+        $dl = Save-UpdateFile ("{0}/releases/download/{1}/EnvProxy-win.zip" -f $Remote.Base, $Remote.Tag) $zipFile
+        if ($dl -eq "missing") {
+            Write-Host ("  {0} 上没有提供这个版本的安装包。" -f $Remote.Name) -ForegroundColor DarkGray
+        } elseif ($dl -ne "ok") {
+            Write-Host ("  从 {0} 下载失败。" -f $Remote.Name) -ForegroundColor DarkGray
+        } else {
+            Write-Host "正在解压并校验..." -ForegroundColor Cyan
+            Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
+            Test-Package $extractDir $Remote.Version "win"
+            $ok = $true
+        }
+    } catch {
+        Write-Host ("  {0} 的安装包没通过校验：{1}" -f $Remote.Name, $_.Exception.Message) -ForegroundColor DarkGray
+    }
+    if (-not $ok) {
+        Remove-ItemSafe $zipFile
+        Remove-ItemSafe $extractDir
+        return $null
+    }
+    return @{ Root = $extractDir; Zip = $zipFile; Tag = $Remote.Tag; Version = $Remote.Version; Name = $Remote.Name }
 }
 
 # 跑一次"安装收尾"：启动安装根里的入口脚本（-Install）并等它结束。返回"它有没有正常跑完"，
@@ -315,29 +438,34 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
     }
-    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区。
-    # 地址由**胜出源**给出（$remote.Base）：版本与安装包来自同一个源，不会串源。
-    $zipUrl = "{0}/releases/download/{1}/EnvProxy-win.zip" -f $remote.Base, $remote.Tag
-    # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
-    $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
-    $zipFile = "$tmpBase.zip"
-    $extractDir = "${tmpBase}-pkg"
+    # 取包：先试胜出源，它取不到就换下一个源再试。
+    # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
+    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻镜像本来能救回来。
+    # 换源必须**连同版本一起换**：用那一源自己的标签下它自己的包，保持"版本与包同源"。
+    $zipFile = $null
+    $extractDir = $null
     try {
-        Write-Host "正在下载安装包..." -ForegroundColor Cyan
-        Remove-ItemSafe $zipFile
-        Remove-ItemSafe $extractDir
-        New-Item -Path $extractDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        $dl = Save-UpdateFile $zipUrl $zipFile
-        if ($dl -eq "missing") { throw "这个版本没有提供安装包（下载地址返回 404），未做任何改动。请到 Releases 页面手动下载。" }
-        if ($dl -ne "ok") { throw "下载失败（网络不可达），未做任何改动。" }
-        Write-Host "正在解压并校验..." -ForegroundColor Cyan
-        Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
-        Test-Package $extractDir $remote.Version "win"
+        $pkg = Get-UpdatePackage $remote
+        if (-not $pkg) {
+            foreach ($src in (Get-UpdateSources)) {
+                $alt = Get-RemoteVersionFrom $src
+                if (-not $alt) { continue }
+                if ($alt.Name -eq $remote.Name) { continue }
+                # 只接受不比当前目标更旧的源：更新到一个更旧的版本没有意义。
+                if ((Compare-Versions $alt.Version $remote.Version) -lt 0) { continue }
+                Write-Host ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag) -ForegroundColor Cyan
+                $pkg = Get-UpdatePackage $alt
+                if ($pkg) { break }
+            }
+        }
+        if (-not $pkg) { throw "没能取到可用的安装包（下载失败或校验没通过），未做任何改动。请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。" }
+        $extractDir = $pkg.Root
+        $zipFile = $pkg.Zip
         # 先把这一版改了什么给用户看，再问要不要装
-        Show-ReleaseNotes $extractDir $remote.Tag
+        Show-ReleaseNotes $extractDir $pkg.Tag
         if (-not $AutoYes) {
             $answer = ""
-            try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $remote.Tag) } catch { $answer = "" }
+            try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $pkg.Tag) } catch { $answer = "" }
             if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
         }
         # 停监控 → 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位）→ 用安装根新脚本收尾
@@ -384,9 +512,10 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
     } finally {
-        try { Remove-ItemSafe $zipFile } catch {}
+        # 取包失败时这两个变量还是 $null：没拿到包就说明临时物已经在取包函数里清过了。
+        if ($zipFile) { try { Remove-ItemSafe $zipFile } catch {} }
         # 解压目录在收尾完成后清理；收尾跑的是安装根里的新脚本，这里只是兜底删除。
-        try { if (Test-Item $extractDir) { Remove-ItemSafe $extractDir } } catch {}
+        if ($extractDir) { try { if (Test-Item $extractDir) { Remove-ItemSafe $extractDir } } catch {} }
     }
 }
 

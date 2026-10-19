@@ -15,16 +15,23 @@ GITEE_MIRROR_REPO=""
 
 # 更新源表：每行一条 "<标识来源> <显示名> <API> <下载前缀>"，有序，逐个尝试，
 # 第一个能回答"最新版是什么"的胜出。
-# 两处地址里的 @@ 接仓库标识（用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
+# 每行一条 "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀>"，@@ 接仓库标识
+# （用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
 # 加一个镜像源 = 加一行，不动任何判断逻辑。
 # 顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
-# 两个源的 API 返回体同构（都取 tag_name），下载路径也同构（/<仓库>/releases/download/<标签>/<文件名>），
-# 因此下面的解析与下载代码对它们完全共用。
+# 两个源的 release JSON 同构（都取 tag_name）、网页路径同构（都 302 到 /releases/tag/<标签>）、
+# 下载路径同构（/<仓库>/releases/download/<标签>/<文件名>），所以解析与下载代码完全共用。
+#
+# 为什么每个源要两条路径、且优先顺序按源定：两条各有短板。
+#   Api 语义明确，但两个源都有配额——Gitee 匿名 API 会整段回 403 Rate Limit Exceeded（实测），
+#       GitHub 匿名 API 只有 60 次/小时/IP。
+#   Web 走网页重定向，不吃 API 配额；但 GitHub 侧的网页路径在受限网络里会整段超时
+#       （实测同一条 URL curl 拿到 302、.NET 超时），Gitee 侧反而稳（约 240ms）。
 # 通道不止一条的理由是产品自身的前提——用这个工具的人可能正处在"还没连上代理"的时刻，
 # 而官方源在那个时刻通常不可达；没有镜像兜底，更新就变成了"必须先能翻墙才能更新"。
 # 两个源都归维护者所有，信任级别一致，因此校验口径一个字都不用放宽。
-UPDATE_SOURCE_TABLE='official GitHub https://api.github.com/repos/@@/releases/latest https://github.com/@@
-mirror Gitee https://gitee.com/api/v5/repos/@@/releases/latest https://gitee.com/@@'
+UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@
+mirror Gitee Web https://gitee.com/api/v5/repos/@@/releases/latest https://gitee.com/@@/releases/latest https://gitee.com/@@'
 
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
@@ -115,14 +122,22 @@ fetch_update_text() {
         curl -fsSL --max-time 3 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
 }
 
-# 下载文件：返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404，不必再试代理），其余 = 失败。
+# 下载文件。返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404/410，不必再试代理），其余 = 失败。
+# 判据必须是**真实状态码**，不能拿 curl -f 的退出码当语义：-f 对任何 >=400 一律返回 22
+# （实测 400/401/403/404/410/429/500/502/503 全是 22），把 22 当"没提供安装包"会把限流和
+# 服务端故障一起误报成缺包，还会掐掉本该有的直连重试。Windows 侧判的就是 404/410。
 fetch_update_file() {
-    curl -fsSL --max-time 60 -A "EnvProxyUpdate" -o "$2" "$1" 2>/dev/null
-    _curlrc=$?
-    [ "$_curlrc" -eq 0 ] && return 0
-    [ "$_curlrc" -eq 22 ] && return 22
-    env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$2" "$1" 2>/dev/null
+    _code=$(curl -fsSL --max-time 60 -A "EnvProxyUpdate" -o "$2" -w '%{http_code}' "$1" 2>/dev/null)
+    _rc=$?
+    [ "$_rc" -eq 0 ] && return 0
+    case "$_code" in 404|410) return 22 ;; esac
+    # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
+    _code2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl -fsSL --max-time 60 --noproxy '*' -A "EnvProxyUpdate" -o "$2" -w '%{http_code}' "$1" 2>/dev/null)
+    _rc2=$?
+    [ "$_rc2" -eq 0 ] && return 0
+    case "$_code2" in 404|410) return 22 ;; esac
+    return 1
 }
 
 # 查最新 Release：成功时置 REMOTE_VERSION / REMOTE_TAG / REMOTE_SOURCE_BASE / REMOTE_SOURCE_NAME
@@ -135,35 +150,84 @@ REMOTE_TAG=""
 REMOTE_SOURCE_BASE=""
 REMOTE_SOURCE_NAME=""
 
-# 本机这次实际可用的源（有序）：每行一条 "<显示名>|<API>|<下载前缀>"，仓库标识已代入。
+# 本机这次实际可用的源（有序）：每行一条 "<显示名>|<优先路径>|<Api>|<Web>|<下载前缀>"，仓库标识已代入。
 # 没有仓库标识的源直接跳过——镜像还没建是正常状态，不是特例分支。
 get_update_sources() {
-    while read -r _sid _sname _sapi _sbase; do
+    while read -r _sid _sname _spref _sapi _sweb _sbase; do
         [ -n "$_sid" ] || continue
         _gid=$(update_source_id "$_sid")
         [ -n "$_gid" ] || continue
-        printf '%s|%s|%s\n' "$_sname" "${_sapi//@@/$_gid}" "${_sbase//@@/$_gid}"
+        printf '%s|%s|%s|%s|%s\n' "$_sname" "$_spref" "${_sapi//@@/$_gid}" "${_sweb//@@/$_gid}" "${_sbase//@@/$_gid}"
     done <<_ENVPROXY_SOURCES_
 $UPDATE_SOURCE_TABLE
 _ENVPROXY_SOURCES_
 }
 
+# 从重定向目标里取标签；形状不对就返回空（调用方据此换另一条路径）。
+# 必须校验它确实落在 /releases/tag/<标签> 上，不能只取最后一段：仓库改名时 Gitee 会先
+# 302 到改名后的仓库路径（实测 dromara/hutool），那时最后一段是字面量 "latest"，
+# naive 取尾段会把垃圾当成版本号去拼下载地址。
+# 标签可能含括号等字符且不做百分号编码（实测 v2026.09(jdk25)），所以整段取、不解码。
+get_tag_from_location() {
+    [ -n "$1" ] || return 0
+    printf '%s' "$1" | sed -n 's#.*/releases/tag/\([^/?#]*\)$#\1#p'
+}
+
+# 网页路径：读 302 的 Location 取标签。带直连兜底（与 API 路径同一个模式）。
+get_tag_from_web() {
+    _wloc=$(curl -sI -o /dev/null -w '%{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+    [ -n "$_wloc" ] || _wloc=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl -sI -o /dev/null -w '%{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+    get_tag_from_location "$_wloc"
+}
+
+# API 路径：读 JSON 的 tag_name。
+get_tag_from_api() {
+    _ajson=$(fetch_update_text "$1" || true)
+    [ -n "$_ajson" ] || return 0
+    printf '%s' "$_ajson" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/'
+}
+
+# 按这一源声明的优先顺序问版本：先 Preferred 那条，不行再试另一条。
+get_tag_from_source() {
+    if [ "$2" = "Web" ]; then _k1=Web; _k2=Api; else _k1=Api; _k2=Web; fi
+    for _kind in $_k1 $_k2; do
+        if [ "$_kind" = "Web" ]; then
+            [ -n "$4" ] || continue
+            _tag=$(get_tag_from_web "$4")
+        else
+            [ -n "$3" ] || continue
+            _tag=$(get_tag_from_api "$3")
+        fi
+        if [ -n "$_tag" ]; then printf '%s' "$_tag"; return 0; fi
+    done
+    return 0
+}
+
+# 从**一个**源查最新 Release：这一源自己的两条路径都试过还不行，才算它答不上来。
+# 拆出这一层是为了让更新入口能按源做完整尝试（问版本 + 取包），而不只是问版本。
+get_remote_version_from() {
+    _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"
+    _rstag=$(get_tag_from_source "$_rsname" "$_rspref" "$_rsapi" "$_rsweb")
+    [ -n "$_rstag" ] || return 1
+    _rsver=$(printf '%s' "$_rstag" | sed -E 's/^v//')
+    [ -n "$_rsver" ] || return 1
+    REMOTE_TAG="$_rstag"
+    REMOTE_VERSION="$_rsver"
+    REMOTE_SOURCE_BASE="$_rsbase"
+    REMOTE_SOURCE_NAME="$_rsname"
+    return 0
+}
+
+# 查最新 Release（状态显示与更新入口共用）：第一个答出来的源胜出（只读，不写文件）。
 get_remote_version() {
     # 源表用 here-doc 喂给 while，不用管道：管道会把 while 丢进子 shell，
     # 里面赋的 REMOTE_* 出了循环就没了——而那正是调用方要读的东西。
-    while IFS='|' read -r _sname _sapi _sbase; do
+    while IFS='|' read -r _sname _spref _sapi _sweb _sbase; do
         [ -n "$_sname" ] || continue
-        _json=$(fetch_update_text "$_sapi" || true)
-        [ -n "$_json" ] || continue
-        _tag=$(printf '%s' "$_json" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
-        [ -n "$_tag" ] || continue
-        _ver=$(printf '%s' "$_tag" | sed -E 's/^v//')
-        [ -n "$_ver" ] || continue
-        REMOTE_TAG="$_tag"
-        REMOTE_VERSION="$_ver"
-        REMOTE_SOURCE_BASE="$_sbase"
-        REMOTE_SOURCE_NAME="$_sname"
-        return 0
+        if get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase"; then
+            return 0
+        fi
     done <<_ENVPROXY_SRCS_
 $(get_update_sources)
 _ENVPROXY_SRCS_
@@ -242,47 +306,56 @@ update_envproxy() {
         echo "但正式安装在 [$_reg]。"
         echo "继续会更新【当前这个文件夹】并把它切换为正式安装。"
     fi
-    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区
-    # 下载安装包到临时目录并校验；校验没过就一个字节都不动安装区。
-    # 地址由**胜出源**给出（REMOTE_SOURCE_BASE）：版本与安装包来自同一个源，不会串源。
-    _url="$REMOTE_SOURCE_BASE/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz"
+    # 取包：逐源尝试"问版本 → 下载 → 解压 → 校验"，第一个拿到合格包的源胜出。
+    # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
+    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻镜像本来能救回来。
+    # 换源连同版本一起换：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
-    # 下载失败只提示确认 GitHub 可达后重试：镜像站只收录部分项目，加速代理属透明中转，
-    # 不硬编码任何第三方域名，不为它放宽校验。
     _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 0; }
     rm -f "$_rnd" 2>/dev/null || true
-    _tgz="$_rnd.tar.gz"
-    _exdir="$_rnd-src"
+    _tgz=""
+    _exdir=""
     echo "正在下载安装包..."
-    rm -f "$_tgz" 2>/dev/null || true
-    rm -rf "$_exdir" 2>/dev/null || true
-    mkdir -p "$_exdir" 2>/dev/null || { echo "更新失败：临时目录建不起，未做任何改动。"; return 0; }
-    fetch_update_file "$_url" "$_tgz"
-    _dlrc=$?
-    if [ "$_dlrc" -ne 0 ]; then
-        if [ "$_dlrc" -eq 22 ]; then
-            echo "更新失败：这个版本没有提供安装包（下载地址返回 404），未做任何改动。请到 Releases 页面手动下载。"
-        else
-            echo "更新失败：下载失败（网络不可达），未做任何改动。"
+    while IFS='|' read -r _sname _spref _sapi _sweb _sbase; do
+        [ -n "$_sname" ] || continue
+        get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" || continue
+        # 只接受比本地新的版本：换源不能把用户带到更旧的版本上。
+        _cmp=$(compare_versions "$REMOTE_VERSION" "$_local" 2>/dev/null || echo 0)
+        [ "$_cmp" -gt 0 ] 2>/dev/null || continue
+        _sl=$(printf '%s' "$_sname" | tr -c 'A-Za-z0-9' '_')
+        _try_tgz="${_rnd}.${_sl}.tar.gz"
+        _try_dir="${_rnd}.${_sl}-src"
+        rm -f "$_try_tgz" 2>/dev/null || true
+        rm -rf "$_try_dir" 2>/dev/null || true
+        mkdir -p "$_try_dir" 2>/dev/null || continue
+        if ! fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz"; then
+            rm -f "$_try_tgz" 2>/dev/null || true
+            rm -rf "$_try_dir" 2>/dev/null || true
+            continue
         fi
-        rm -f "$_tgz" 2>/dev/null || true
-        rm -rf "$_exdir" 2>/dev/null || true
+        if ! tar -xzf "$_try_tgz" -C "$_try_dir" 2>/dev/null; then
+            rm -f "$_try_tgz" 2>/dev/null || true
+            rm -rf "$_try_dir" 2>/dev/null || true
+            continue
+        fi
+        if ! verify_package "$_try_dir" "$REMOTE_VERSION" "mac"; then
+            rm -f "$_try_tgz" 2>/dev/null || true
+            rm -rf "$_try_dir" 2>/dev/null || true
+            continue
+        fi
+        _tgz="$_try_tgz"
+        _exdir="$_try_dir"
+        break
+    done <<_ENVPROXY_PKG_
+$(get_update_sources)
+_ENVPROXY_PKG_
+    if [ -z "$_exdir" ]; then
+        echo "更新失败：没能取到可用的安装包（下载失败，或校验没通过），未做任何改动。"
+        echo "请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。"
         return 0
     fi
-    echo "正在解压并校验..."
-    if ! tar -xzf "$_tgz" -C "$_exdir" 2>/dev/null; then
-        echo "更新失败：解压失败，未做任何改动。"
-        rm -f "$_tgz" 2>/dev/null || true
-        rm -rf "$_exdir" 2>/dev/null || true
-        return 0
-    fi
-    if ! verify_package "$_exdir" "$REMOTE_VERSION" "mac"; then
-        echo "更新失败：校验失败（包内容与目标版本对不上，或编码红线被改过），未做任何改动。"
-        rm -f "$_tgz" 2>/dev/null || true
-        rm -rf "$_exdir" 2>/dev/null || true
-        return 0
-    fi
+    echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     # 先把这一版改了什么给用户看，再问要不要装
     show_release_notes "$_exdir" "$REMOTE_TAG"
     if [ "$_yes" != "1" ]; then

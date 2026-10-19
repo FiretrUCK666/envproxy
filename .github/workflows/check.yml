@@ -581,6 +581,15 @@ jobs:
           # 顺序即优先级：官方源必须排在第一位，否则镜像会被当成首选（墙内可用时它更慢，也不该越过官方源）。
           if ($ps -notmatch '@\{ Id = "official"') { Write-Host 'Win 侧源表里没有 official 源'; $fail = 1 }
           if ($srcMac.Count -and ($srcMac[0] -notmatch '^official[ ]')) { Write-Host 'Mac 侧源表第一条不是官方源'; $fail = 1 }
+          # i) 文档与开关联动：镜像仓库标识为空 = 该源未启用，此时两语 README 不得声称"会自动换镜像"。
+          # 只查三处"彼此一致"拦不住"一致地失效"——三处都空照样全绿，而文档已经把它当卖点写给了用户。
+          if (-not $mirrorWin) {
+            foreach ($f in @('README.md', 'README.en.md')) {
+              $t = Get-Content $f -Raw -Encoding UTF8
+              if ($t -match '自动换国内镜像') { Write-Host ("{0}: 镜像仓库标识为空（该源未启用），文档却声称会自动换国内镜像" -f $f); $fail = 1 }
+              if ($t -match 'falls back to the mirror when') { Write-Host ("{0}: the mirror id is empty (source disabled), but the doc promises the fallback" -f $f); $fail = 1 }
+            }
+          }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

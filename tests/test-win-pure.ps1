@@ -245,17 +245,40 @@ Assert-Eq 'sources always come back as a list' 'Object[]' $srcTable0.GetType().N
 Assert-Eq 'at least one source is usable' $true ($srcTable0.Count -ge 1)
 Assert-Eq 'the official source stays first' 'official' $UpdateSourceTable[0].Id
 foreach ($s in $UpdateSourceTable) {
-    Assert-Eq ('source ' + $s.Name + ' declares exactly Id/Name/Api/Base') 4 (@($s.Keys).Count)
+    Assert-Eq ('source ' + $s.Name + ' declares exactly Id/Name/Preferred/Api/Web/Base') 6 (@($s.Keys).Count)
     Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Api') $true ($s.Api -like '*@@*')
+    Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Web') $true ($s.Web -like '*@@*')
     Assert-Eq ('source ' + $s.Name + ' keeps a placeholder in Base') $true ($s.Base -like '*@@*')
+    Assert-Eq ('source ' + $s.Name + ' prefers a known path') $true (@('Api', 'Web') -contains $s.Preferred)
 }
+# Reading a tag out of a redirect target is shape-checked, and that check is not cosmetic: a repo
+# that got renamed answers /releases/latest with a redirect to the renamed repo's path, whose last
+# segment is the literal "latest". Taking the tail blindly would turn that into a version number
+# and then into a download URL built from garbage.
+Assert-Eq 'a tag-page redirect yields its tag' 'v0.3.2' (Get-TagFromLocation 'https://gitee.com/oschina/gitee-cli/releases/tag/v0.3.2')
+Assert-Eq 'a renamed-repo redirect yields nothing' '' (Get-TagFromLocation 'https://gitee.com/chinabugotech/hutool/releases/latest')
+Assert-Eq 'a tag with parentheses survives intact' 'v2026.09(jdk25)' (Get-TagFromLocation 'https://gitee.com/x/y/releases/tag/v2026.09(jdk25)')
+Assert-Eq 'an empty redirect target yields nothing' '' (Get-TagFromLocation '')
+Assert-Eq 'a location without a tag segment yields nothing' '' (Get-TagFromLocation 'https://gitee.com/oschina/gitee-cli/releases')
 Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
 # An unset mirror (the state before the mirror repository exists) is skipped instead of becoming an
 # empty source: the walker would otherwise try to fetch a URL with a hole where the repo id goes.
+# Count is taken straight off the returned value, never wrapped in @(): Get-UpdateSources returns
+# ,$out to force an array, and @(...) collapses that into "one element" - it reads as 1 even when
+# the skip is broken, so the assertion would pass while testing nothing.
 $savedMirror = $GiteeMirrorRepo
 $GiteeMirrorRepo = ''
-Assert-Eq 'an unset mirror is skipped, not fetched' '1' (@(Get-UpdateSources).Count)
-Assert-Eq 'skipping a source keeps the result a list' 'Object[]' (Get-UpdateSources).GetType().Name
+$srcTableOff = Get-UpdateSources
+Assert-Eq 'an unset mirror is skipped, not fetched' '1' $srcTableOff.Count
+Assert-Eq 'skipping a source keeps the result a list' 'Object[]' $srcTableOff.GetType().Name
+# And the other direction: an enabled mirror really does add exactly one source carrying the
+# configured repo id. Without this pair, renaming the mirror's Id would silently make the Gitee URL
+# get built from GitHub's repo id, and the suite would stay green.
+$GiteeMirrorRepo = 'test-owner/envproxy'
+$srcTableOn = Get-UpdateSources
+Assert-Eq 'enabling the mirror adds exactly one source' '2' $srcTableOn.Count
+Assert-Eq 'the added source carries the mirror repo id' 'test-owner/envproxy' $srcTableOn[1].Repo
+Assert-Eq 'the added source is the mirror entry' 'mirror' $UpdateSourceTable[1].Id
 $GiteeMirrorRepo = $savedMirror
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
