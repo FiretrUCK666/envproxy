@@ -183,7 +183,10 @@ function Get-RemoteVersionFrom([hashtable]$Src) {
         if (-not $tag) { return $null }
         $ver = if ($tag -match '^v(.*)$') { $Matches[1].Trim() } else { $tag }
         if (-not $ver) { return $null }
-        return @{ Version = $ver; Tag = $tag; Base = $Src.Base.Replace('@@', $Src.Repo); ApiRepo = $Src.ApiRepo.Replace('@@', $Src.Repo); Name = $Src.Name }
+        # ApiRepo 缺省时置空，而不是让 .Replace 在 $null 上抛：那个异常会被外层的 catch
+        # 吞成"这个源答不上来"，整条源被静默跳过——"加源 = 表里加一行"就成了陷阱。
+        $apiRepo = if ($Src.ApiRepo) { $Src.ApiRepo.Replace('@@', $Src.Repo) } else { "" }
+        return @{ Version = $ver; Tag = $tag; Base = $Src.Base.Replace('@@', $Src.Repo); ApiRepo = $apiRepo; Name = $Src.Name }
     } catch { return $null }
 }
 
@@ -310,9 +313,13 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(60)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
-        # 自定义头（API 资产端点要 Accept: application/octet-stream）。TryAdd 不校验，不会因为
-        # 头名不标准而抛异常——这里只要把调用方给的东西原样送出去。
-        if ($Headers) { foreach ($hk in $Headers.Keys) { [void]$client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk]) } }
+        # 自定义头（API 资产端点要 Accept: application/octet-stream）。返回 false 说明头没加上，
+        # 那这条请求拿回来的会是 JSON 而不是安装包——当场判失败，别把 JSON 当包往下走。
+        if ($Headers) {
+            foreach ($hk in $Headers.Keys) {
+                if (-not $client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk])) { return "fail" }
+            }
+        }
         $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
         if (-not $respTask.Wait(60000)) { return "fail" }
         $resp = $respTask.Result
@@ -327,6 +334,22 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
     }
+}
+
+# 文件头是不是一个 zip。下载"成功"不等于拿到的是安装包：资产端点在请求头被网络中间层
+# 丢掉时会回 200 + JSON（GitHub 的资产元数据），透明的错误页也可能回 200 + HTML。
+# 那种东西写进 .zip 会让解包报"找不到中央目录"，把网络问题说成发布问题；
+# 更糟的是它会让"成功"分支提前 break，把本该救场的直连兜底挡在门外。
+function Test-ZipMagic([string]$Path) {
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try {
+            $buf = New-Object byte[] 4
+            if ($fs.Read($buf, 0, 4) -lt 4) { return $false }
+            # 本地文件头 PK\x03\x04（常见）、空档 PK\x05\x06、分卷 PK\x07\x08
+            return ($buf[0] -eq 0x50 -and $buf[1] -eq 0x4B)
+        } finally { $fs.Dispose() }
+    } catch { return $false }
 }
 
 # 从**指定源**取一个合格的安装包：下载 → 解压 → 结构校验，全过才算数。
@@ -358,7 +381,12 @@ function Get-UpdatePackage([hashtable]$Remote) {
         $sawMissing = $false
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
-            if ($r -eq "ok") { $dl = "ok"; break }
+            if ($r -eq "ok") {
+                if (Test-ZipMagic $zipFile) { $dl = "ok"; break }
+                # 200 但不是 zip：丢掉这份内容，继续试下一条路（多半是直连）。
+                Remove-ItemSafe $zipFile
+                $r = "fail"
+            }
             if ($r -eq "missing") { $sawMissing = $true } else { $sawFail = $true }
         }
         if ($dl -ne "ok") { $dl = if ($sawFail) { "fail" } elseif ($sawMissing) { "missing" } else { "fail" } }
@@ -480,9 +508,11 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         $pkg = Get-UpdatePackage $remote
         if (-not $pkg) {
             foreach ($src in (Get-UpdateSources)) {
+                # 同名源跳过必须排在联网之前：胜出源刚刚已经试过，再问一次只会白烧一次
+                # API 配额，而取包失败的时刻往往正是配额最紧张的时候。
+                if ($src.Name -eq $remote.Name) { continue }
                 $alt = Get-RemoteVersionFrom $src
                 if (-not $alt) { continue }
-                if ($alt.Name -eq $remote.Name) { continue }
                 # 只接受不比当前目标更旧的源：更新到一个更旧的版本没有意义。
                 if ((Compare-Versions $alt.Version $remote.Version) -lt 0) { continue }
                 Write-Host ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag) -ForegroundColor Cyan

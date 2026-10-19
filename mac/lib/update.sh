@@ -32,8 +32,7 @@ UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/release
 #   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
 #   不接公共加速站：那些站点靠站长自掏腰包维持、生命周期以月计，而且包从它手里过一遍
-#   就等于多信一个陌生人。镜像走的是维护者自己在国内平台建的仓库，与自己 GitHub 仓库同级，
-#   因此校验口径一个字都不用放宽。
+#   就等于多信一个陌生人。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
 #     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
@@ -104,33 +103,52 @@ update_source_id() {
 # DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
 # Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
 fetch_update_text() {
-    _out=$(curl -fsSL --max-time 3 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
+    _out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
         && { printf '%s' "$_out"; return 0; }
     env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 3 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
+        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
 }
 
 # 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产 id（纯函数，自检可测）。
 # 找不到、或 JSON 形状不对，一律输出空——调用方据此退回直连下载，不当错误处理。
-# 做法：先定位 `"name":"<文件名>"`，再取它**前面**最后一次出现的 `"id":<数字>`。
-# 资产对象里 id 与 name 同在一个对象内且 id 在前（url/id/node_id/name…），所以
-# "前面最后一个 id" 就是这条资产自己的；不依赖字段顺序，也不要求整段 JSON 单行。
+# 做法：先按 "},{" 把 assets 里的对象切成一段一段，在**同一段**里同时找文件名与编号。
+#   编号优先从这段的 url 取（…/releases/assets/<id>）——url 属于这条资产自己，与字段
+#   先后无关；取不到才退回这段里的第一个 "id"。这样既不依赖 JSON 是单行还是带缩进
+#   （GitHub 按 Accept 不同两种都会回），也不依赖 id 与 name 谁先谁后（那只是当前实现的
+#   巧合，顺序一换旧写法就会返回上一条资产的 id）。
 # 不用 jq：macOS 自带环境没有它，零依赖是安装口号。
 get_asset_id_from_json() {
     printf '%s' "$1" | tr '\n' ' ' | awk -v want="$2" '
+    BEGIN {
+        w = want
+        gsub(/[\\.^$*+?()\[\]{}|]/, "\\\\&", w)
+        pat = "\"name\"[ \t]*:[ \t]*\"" w "\""
+    }
     {
-        pos = index($0, "\"name\":\"" want "\"")
-        if (pos == 0) exit
-        head = substr($0, 1, pos - 1)
-        last = ""
-        while (match(head, /"id"[ ]*:[ ]*[0-9]+/)) {
-            m = substr(head, RSTART, RLENGTH)
-            sub(/.*[^0-9]/, "", m)
-            last = m
-            head = substr(head, RSTART + RLENGTH)
+        s = $0
+        # 对象之间可能是 "},{"，也可能是 "}," 加换行加缩进（服务端带缩进时就是后者），
+        # 所以分隔符要容忍空白，否则整段数组被当成一个对象、取到第一条资产的编号。
+        gsub(/\},[ \t]*\{/, "}\n{", s)
+        n = split(s, obj, "\n")
+        for (i = 1; i <= n; i++) {
+            if (obj[i] !~ pat) continue
+            if (match(obj[i], /releases\/assets\/[0-9]+/)) {
+                m = substr(obj[i], RSTART, RLENGTH); gsub(/[^0-9]/, "", m)
+                if (m != "") { print m; exit }
+            }
+            if (match(obj[i], /"id"[ \t]*:[ \t]*[0-9]+/)) {
+                m = substr(obj[i], RSTART, RLENGTH); gsub(/[^0-9]/, "", m)
+                if (m != "") { print m; exit }
+            }
         }
-        if (last != "") print last
     }'
+}
+
+# 下载成功不等于拿到的是安装包：请求头被网络中间层丢掉时，资产端点会回 200 + JSON。
+# 判前两个字节是不是 gzip 头（1f 8b）；不是就丢弃这份内容，让调用方继续试直连那条路。
+_is_gzip() {
+    [ -s "$1" ] || return 1
+    [ "$(od -An -tx1 -N2 "$1" 2>/dev/null | tr -d ' \n')" = "1f8b" ]
 }
 
 # 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到输出空，绝不报错退出。
@@ -161,17 +179,19 @@ _fetch_to_file_direct() {
 }
 
 # 下载文件：$1=URL $2=目标文件 $3=额外请求头（可空，API 资产端点要 Accept: application/octet-stream）
+# 入口开着 set -u，所以 $3 必须带默认值：两参调用（直连兜底那条）不许因为少一个参数就整条失效。
 # 返回 0 = 成功，22 = 这个地址确实没有文件（HTTP 404/410，不必再试代理），其余 = 失败。
 # 判据必须是**真实状态码**，不能拿 curl -f 的退出码当语义：-f 对任何 >=400 一律返回 22
 # （实测 400/401/403/404/410/429/500/502/503 全是 22），把 22 当"没提供安装包"会把限流和
 # 服务端故障一起误报成缺包，还会掐掉本该有的直连重试。Windows 侧判的就是 404/410。
 fetch_update_file() {
-    _code=$(_fetch_to_file "$2" "$3" "$1")
+    _fuf_hdr="${3:-}"
+    _code=$(_fetch_to_file "$2" "$_fuf_hdr" "$1")
     _rc=$?
     [ "$_rc" -eq 0 ] && return 0
     case "$_code" in 404|410) return 22 ;; esac
     # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
-    _code2=$(_fetch_to_file_direct "$2" "$3" "$1")
+    _code2=$(_fetch_to_file_direct "$2" "$_fuf_hdr" "$1")
     _rc2=$?
     [ "$_rc2" -eq 0 ] && return 0
     case "$_code2" in 404|410) return 22 ;; esac
@@ -186,7 +206,6 @@ fetch_update_file() {
 REMOTE_VERSION=""
 REMOTE_TAG=""
 REMOTE_SOURCE_BASE=""
-REMOTE_SOURCE_API=""
 REMOTE_SOURCE_NAME=""
 
 # 本机这次实际可用的源（有序）：每行一条
@@ -247,7 +266,7 @@ get_tag_from_source() {
 # 从**一个**源查最新 Release：这一源自己的两条路径都试过还不行，才算它答不上来。
 # 拆出这一层是为了让更新入口能按源做完整尝试（问版本 + 取包），而不只是问版本。
 get_remote_version_from() {
-    _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"; _rsapirepo="$6"
+    _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"
     _rstag=$(get_tag_from_source "$_rsname" "$_rspref" "$_rsapi" "$_rsweb")
     [ -n "$_rstag" ] || return 1
     _rsver=$(printf '%s' "$_rstag" | sed -E 's/^v//')
@@ -255,7 +274,6 @@ get_remote_version_from() {
     REMOTE_TAG="$_rstag"
     REMOTE_VERSION="$_rsver"
     REMOTE_SOURCE_BASE="$_rsbase"
-    REMOTE_SOURCE_API="$_rsapirepo"
     REMOTE_SOURCE_NAME="$_rsname"
     return 0
 }
@@ -266,7 +284,7 @@ get_remote_version() {
     # 里面赋的 REMOTE_* 出了循环就没了——而那正是调用方要读的东西。
     while IFS='|' read -r _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sname" ] || continue
-        if get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" "$_sapirepo"; then
+        if get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase"; then
             return 0
         fi
     done <<_ENVPROXY_SRCS_
@@ -357,10 +375,23 @@ update_envproxy() {
     rm -f "$_rnd" 2>/dev/null || true
     _tgz=""
     _exdir=""
+    _pkg_missing=0
+    _pkg_fail=0
+    # 已经问到的胜出源（上面那轮问版本的结果）：这条源在下面不必再问一次，
+    # 省下的一次 API 配额正好留给最需要的取资产那一步。
+    _pre_name="$REMOTE_SOURCE_NAME"
+    _pre_tag="$REMOTE_TAG"
+    _pre_ver="$REMOTE_VERSION"
+    _pre_base="$REMOTE_SOURCE_BASE"
     echo "正在下载安装包..."
     while IFS='|' read -r _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sname" ] || continue
-        get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" "$_sapirepo" || continue
+        if [ "$_sname" = "$_pre_name" ]; then
+            REMOTE_TAG="$_pre_tag"; REMOTE_VERSION="$_pre_ver"
+            REMOTE_SOURCE_BASE="$_pre_base"; REMOTE_SOURCE_NAME="$_pre_name"
+        else
+            get_remote_version_from "$_sname" "$_spref" "$_sapi" "$_sweb" "$_sbase" || continue
+        fi
         # 只接受比本地新的版本：换源不能把用户带到更旧的版本上。
         _cmp=$(compare_versions "$REMOTE_VERSION" "$_local" 2>/dev/null || echo 0)
         [ "$_cmp" -gt 0 ] 2>/dev/null || continue
@@ -372,25 +403,43 @@ update_envproxy() {
         mkdir -p "$_try_dir" 2>/dev/null || continue
         # 下载顺序：API 资产端点优先，直连下载兜底（见源表上方的说明）。
         # 两条路都可能"这一版没提供这个文件"，任一条拿到就算成功；都不成才换源。
+        # 22 = 404/410（确实没这个文件），其余 = 网络或服务故障——两者分开记，
+        # 最后的提示才能和 Windows 侧一样诚实地分开说（见下面的 _pkg_missing / _pkg_fail）。
         _got=1
+        _miss=0
+        _fail=0
         _asset_id=$(get_update_asset_id "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true)
         if [ -n "$_asset_id" ]; then
-            fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream" && _got=0
+            fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream"
+            _rc=$?
+            if [ "$_rc" -eq 0 ]; then
+                # 200 不等于拿到包：请求头被中间层丢掉时这里回的是 JSON。不是 gzip 就丢弃，
+                # 让下面的直连兜底接手——否则会把"网络问题"报成"发布缺包/校验失败"。
+                if _is_gzip "$_try_tgz"; then _got=0; else rm -f "$_try_tgz" 2>/dev/null || true; _fail=1; fi
+            elif [ "$_rc" -eq 22 ]; then _miss=1; else _fail=1; fi
         fi
         if [ "$_got" -ne 0 ]; then
-            fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz" && _got=0
+            fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz" ""
+            _rc=$?
+            if [ "$_rc" -eq 0 ]; then
+                if _is_gzip "$_try_tgz"; then _got=0; else rm -f "$_try_tgz" 2>/dev/null || true; _fail=1; fi
+            elif [ "$_rc" -eq 22 ]; then _miss=1; else _fail=1; fi
         fi
         if [ "$_got" -ne 0 ]; then
+            # 记下这次是怎么失败的：所有源都试完仍没有包时，用它们决定说"缺包"还是"下载失败"。
+            if [ "$_fail" -eq 1 ]; then _pkg_fail=1; elif [ "$_miss" -eq 1 ]; then _pkg_missing=1; else _pkg_fail=1; fi
             rm -f "$_try_tgz" 2>/dev/null || true
             rm -rf "$_try_dir" 2>/dev/null || true
             continue
         fi
         if ! tar -xzf "$_try_tgz" -C "$_try_dir" 2>/dev/null; then
+            _pkg_fail=1
             rm -f "$_try_tgz" 2>/dev/null || true
             rm -rf "$_try_dir" 2>/dev/null || true
             continue
         fi
         if ! verify_package "$_try_dir" "$REMOTE_VERSION" "mac"; then
+            _pkg_fail=1
             rm -f "$_try_tgz" 2>/dev/null || true
             rm -rf "$_try_dir" 2>/dev/null || true
             continue
@@ -402,8 +451,13 @@ update_envproxy() {
 $(get_update_sources)
 _ENVPROXY_PKG_
     if [ -z "$_exdir" ]; then
-        echo "更新失败：没能取到可用的安装包（下载失败，或校验没通过），未做任何改动。"
-        echo "请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。"
+        if [ "$_pkg_fail" -eq 0 ] && [ "$_pkg_missing" -eq 1 ]; then
+            echo "这个版本没有提供安装包：${REMOTE_SOURCE_NAME:-更新源} 上没有挂 EnvProxy-mac.tar.gz。"
+            echo "请到 Releases 页面手动下载 EnvProxy-mac.tar.gz 覆盖一次。"
+        else
+            echo "更新失败：没能取到可用的安装包（下载失败，或校验没通过），未做任何改动。"
+            echo "请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。"
+        fi
         return 0
     fi
     echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"

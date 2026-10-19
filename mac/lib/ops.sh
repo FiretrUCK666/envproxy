@@ -232,7 +232,8 @@ self_test() {
     _selftest_assert_eq "源表至少有一个可用源" "1" "$_st1"
     _selftest_assert_eq "官方源排第一" "GitHub" "$(printf '%s\n' "$_st_all" | head -n 1 | cut -d'|' -f1)"
     # 模板表每条必须正好七个字段、保留 @@ 占位符、优先路径是已知值；代入后每行必须是成形地址
-    # （四个地址都非空、占位符替换干净、网页路径落在 releases/latest 上、API 前缀落在 api.github.com）。
+    # （四个地址都非空、占位符替换干净、网页路径落在 releases/latest 上、API 前缀是个 https 根）。
+    # 不点名具体域名：加源是"表里加一行"，把域名写死会让以后加非 GitHub 源时自检直接失败。
     _st_tpl_ok=$(printf '%s\n' "$UPDATE_SOURCE_TABLE" | awk '
         NF != 7 { bad = 1 }
         $0 !~ /@@/ { bad = 1 }
@@ -245,14 +246,40 @@ self_test() {
         $3 == "" || $4 == "" || $5 == "" || $6 == "" { bad = 1 }
         $3 $4 $5 $6 ~ /@@/ { bad = 1 }
         $4 !~ /releases\/latest$/ { bad = 1 }
-        $6 !~ /^https:\/\/api\.github\.com\/repos\// { bad = 1 }
+        $6 !~ /^https:\/\/[^\/]+\/./ { bad = 1 }
         END { print (bad ? 0 : 1) }')
     _selftest_assert_eq "仓库标识代入后四处地址成形、无占位符残留" "1" "$_st_out_ok"
     # 资产 id 解析是纯函数：取"文件名前面最后一个 id"，不依赖字段顺序，找不到就留空。
+    # 样本必须照抄服务端真实格式：GitHub 的响应是带缩进的（冒号后带空格），
+    # 只拿压缩 JSON 测等于钉住自己的假设，而不是钉住外部世界的事实。
+    _st_asset_pretty='{
+  "id": 99,
+  "tag_name": "v1.2.3",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/o/r/releases/assets/12345",
+      "id": 12345,
+      "name": "EnvProxy-win.zip",
+      "uploader": { "login": "u", "id": 777 }
+    },
+    {
+      "url": "https://api.github.com/repos/o/r/releases/assets/67890",
+      "id": 67890,
+      "name": "EnvProxy-mac.tar.gz"
+    }
+  ]
+}'
     _st_asset_json='{"id":99,"tag_name":"v1.2.3","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/12345","id":12345,"name":"EnvProxy-win.zip","uploader":{"login":"u","id":777}},{"url":"https://api.github.com/repos/o/r/releases/assets/67890","id":67890,"name":"EnvProxy-mac.tar.gz"}]}'
-    _selftest_assert_eq "从资产 JSON 里按文件名取 id" "67890" "$(get_asset_id_from_json "$_st_asset_json" 'EnvProxy-mac.tar.gz')"
-    _selftest_assert_eq "资产 JSON 里没有该文件时留空" "" "$(get_asset_id_from_json "$_st_asset_json" 'EnvProxy-nope.zip')"
+    _selftest_assert_eq "按文件名取 id（服务端缩进格式）" "67890" "$(get_asset_id_from_json "$_st_asset_pretty" 'EnvProxy-mac.tar.gz')"
+    _selftest_assert_eq "按文件名取 id（压缩格式也认）" "67890" "$(get_asset_id_from_json "$_st_asset_json" 'EnvProxy-mac.tar.gz')"
+    # 字段顺序是服务端的实现细节：name 在前时也必须取到**本条资产**的 id，不能取到上一条。
+    _st_asset_reordered='{"assets":[{"id":111,"name":"EnvProxy-win.zip"},{"name":"EnvProxy-mac.tar.gz","id":222}]}'
+    _selftest_assert_eq "字段顺序反过来仍取本条资产的 id" "222" "$(get_asset_id_from_json "$_st_asset_reordered" 'EnvProxy-mac.tar.gz')"
+    _st_asset_space='{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/333","name":"Env Proxy mac.tar.gz"}]}'
+    _selftest_assert_eq "文件名里带空格也能匹配" "333" "$(get_asset_id_from_json "$_st_asset_space" 'Env Proxy mac.tar.gz')"
+    _selftest_assert_eq "资产 JSON 里没有该文件时留空" "" "$(get_asset_id_from_json "$_st_asset_pretty" 'EnvProxy-nope.zip')"
     _selftest_assert_eq "资产 JSON 不合法时留空" "" "$(get_asset_id_from_json 'not json' 'EnvProxy-win.zip')"
+    _selftest_assert_eq "限流错误页不会给出 id" "" "$(get_asset_id_from_json '{"message":"API rate limit exceeded"}' 'EnvProxy-mac.tar.gz')"
     # 从重定向目标取标签必须做形态校验：仓库改名时对方会先 302 到改名后的路径，
     # 最后一段是字面量 "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
     _selftest_assert_eq "从 tag 页重定向取标签" "v1.2.3" "$(get_tag_from_location 'https://github.com/o/r/releases/tag/v1.2.3')"

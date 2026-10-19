@@ -1,4 +1,4 @@
-# EnvProxy Windows pure-function regression tests (no side effects, registry untouched).
+﻿# EnvProxy Windows pure-function regression tests (no side effects, registry untouched).
 # Run: pwsh tests/test-win-pure.ps1   (PowerShell 5.1 compatible, ASCII only)
 #
 # The core is loaded through its real entry point: that exercises the library loader and its
@@ -257,6 +257,28 @@ foreach ($s in $UpdateSourceTable) {
 # the one belonging to the named asset (never the release id, never the uploader id), and any
 # unparsable payload must come back empty so the caller falls back to the direct URL.
 $assetJson = '{"id":99,"tag_name":"v1.2.3","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/12345","id":12345,"name":"EnvProxy-win.zip","uploader":{"login":"u","id":777}},{"url":"https://api.github.com/repos/o/r/releases/assets/67890","id":67890,"name":"EnvProxy-mac.tar.gz"}]}'
+# The sample mirrors what the server actually sends: indented, with a space after each colon.
+# Pinning only a minified payload would pin our own assumption instead of the outside world.
+$assetPretty = @'
+{
+  "id": 99,
+  "tag_name": "v1.2.3",
+  "assets": [
+    {
+      "url": "https://api.github.com/repos/o/r/releases/assets/12345",
+      "id": 12345,
+      "name": "EnvProxy-win.zip",
+      "uploader": { "login": "u", "id": 777 }
+    },
+    {
+      "url": "https://api.github.com/repos/o/r/releases/assets/67890",
+      "id": 67890,
+      "name": "EnvProxy-mac.tar.gz"
+    }
+  ]
+}
+'@
+Assert-Eq 'an asset id is taken from the indented payload the server really sends' '67890' (Get-AssetIdFromJson $assetPretty 'EnvProxy-mac.tar.gz')
 Assert-Eq 'an asset id is taken by file name' '67890' (Get-AssetIdFromJson $assetJson 'EnvProxy-mac.tar.gz')
 Assert-Eq 'the first asset is still matched exactly' '12345' (Get-AssetIdFromJson $assetJson 'EnvProxy-win.zip')
 Assert-Eq 'a missing file name yields nothing' '' (Get-AssetIdFromJson $assetJson 'EnvProxy-nope.zip')

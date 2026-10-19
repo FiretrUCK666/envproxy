@@ -101,7 +101,7 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. Both the check and the download try `api.github.com` first, so it usually works over a direct connection without a VPN.
+To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. Both the check and the download try `api.github.com` first, so on most home networks it works without a VPN; if neither route works, toggle your proxy app once and retry.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
@@ -120,6 +120,8 @@ Only one thing lives in `win\` to double-click (in `mac/` on Mac). The rest stay
 | **5 Check for updates** | checks the latest release, shows what changed, installs after you agree | you want to upgrade |
 
 If you remember nothing else: **open the menu — 1 fixes everything, 2 checks, 3 pauses, 4 uninstalls, 5 upgrades.**
+
+"The monitor" in the menu is this tool's background checker; "Full restore" means uninstalling cleanly.
 
 Choosing "Full restore" stops and asks one question: keep the log? Press Enter to keep it, type `N` and press Enter to delete it along with everything else.
 
@@ -204,7 +206,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
 | The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
 | The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
-| Update check reports a check failure | neither route reaches GitHub: it tries `api.github.com` first, falls back to `github.com`, and only calls it a failure when both fail | try again later. This needs no VPN: the check and the download both prefer `api.github.com`, which avoids the web host that comes and goes |
+| Update check reports a check failure | neither route reaches GitHub: it tries `api.github.com` first, falls back to `github.com`, and only calls it a failure when both fail | try again later; **toggling your proxy app once and retrying often works** (when both routes fail, the proxy is the only way left) |
 | An error during an update | the download, extraction, verification or write step failed | run "Check for updates" from the menu again (it fills in what is missing), or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
 | "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no package downloaded from the site (installer, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
