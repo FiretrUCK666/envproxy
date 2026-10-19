@@ -6,12 +6,10 @@
 # ------------------------------------------------------------------------------
 # 8. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
-# 更新源：分平台安装包资产（EnvProxy-win.zip；Mac 侧取 EnvProxy-mac.tar.gz），按下面的源表逐源尝试。
+# 更新源：分平台安装包资产（EnvProxy-win.zip；Mac 侧取 EnvProxy-mac.tar.gz），按下面的源表尝试。
 #   只同步本平台目录与共享文件，另一平台目录不动（分平台包里本来就没有它）。
 #   安装包内容由仓库 .gitattributes 的 export-ignore 声明，发布流水线用 git archive 产出。
-#   不接公共加速站：那些站点靠站长自掏腰包维持、生命周期以月计，而且包从它手里过一遍
-#   就等于多信一个陌生人。镜像走的是维护者自己在国内平台建的仓库，与自己 GitHub 仓库同级，
-#   因此校验口径一个字都不用放宽。
+#   不接公共加速站：那些站点靠站长自掏腰包维持、生命周期以月计，包从它手里过一遍还等于多信一个陌生人。
 #   判据是环境事实，不看是谁在用：
 #     安装根有 .git = 开发副本 → 更新只读，不改动任何文件，提示走 git pull；
 #     有 .github、无 .git = 源码包 → 先确认用途（当安装包用就更新并清理源码文件，
@@ -19,38 +17,24 @@
 #     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 #   读版本时开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；
 #   覆盖文件这条路上，git 副本一律不参与。
-#
-#   通道不止一条：官方源（GitHub）之外还有一个墙内可达的镜像源（Gitee）。
-#   理由是产品自身的前提——用这个工具的人可能正处在"还没连上代理"的时刻，
-#   而官方源在那个时刻通常不可达；没有镜像兜底，更新就变成了"必须先能翻墙才能更新"。
-#   两个源都归维护者所有，信任级别一致，因此校验口径一个字都不用放宽。
 $UpdateRepoDefault = "FiretrUCK666/envproxy"
-
-# 镜像仓库：在 Gitee 建好镜像仓库后填 "<用户名>/<仓库名>"（例如 "FiretrUCK666/envproxy"）。
-# 留空 = 这一源尚未启用，逐源尝试时直接跳过——这是源表的正常状态（镜像还没建），
-# 不是特例分支，所以不需要任何开关变量。
-$GiteeMirrorRepo = ""
 
 # 更新源表：有序，逐个尝试，第一个能给出"可用的新版本安装包"的胜出。
 # 每项声明四件事：
 #   Id        这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
 #   Api/Web   两条"怎么问最新版"的路径，Preferred 决定先试哪条，另一条是兜底
 #   Base      安装包挂在哪个地址前缀下
-# 三处地址里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把地址里的符号当元字符）。
-# 加一个镜像源 = 表里加一行 + （若引入新的标识来源）Get-UpdateRepoId 里加一个分支，
-# 不涉及任何判断逻辑。顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
-# 两个源的 release JSON 同构（都取 tag_name）、网页路径也同构（都 302 到 /releases/tag/<标签>），
-# 下载路径同样同构（/<仓库>/releases/download/<标签>/<文件名>），所以解析与下载代码完全共用。
+# 地址里的 @@ 接仓库标识（用纯字符串替换，不经正则——正则会把地址里的符号当元字符）。
+# 目前只有官方源一条；新增一个源 = 表里加一行（若引入新的标识来源，再加一个 Id 分支），
+# 不涉及任何判断逻辑。顺序即优先级。
 #
-# 为什么要两条路径：两条各有短板，且短板的分布按源不同。
-#   Api 语义明确，但两个源都有配额——Gitee 的匿名 API 会整段回 403 Rate Limit Exceeded（实测），
-#       GitHub 的匿名 API 只有 60 次/小时/IP。
-#   Web 走网页重定向，不吃 API 配额；但 GitHub 侧的网页路径在受限网络里会整段超时
-#       （同一台机器实测：同一条 URL，curl 拿到 302、.NET 超时），Gitee 侧反而稳（约 240ms）。
-# 所以优先顺序是按源定的，不是全局统一。
+# 为什么要两条路径：各有短板。
+#   Api 语义明确，但匿名配额只有 60 次/小时/IP。
+#   Web 走网页重定向、不吃 API 配额；但网页路径在受限网络里会整段超时
+#       （同一台机器实测：同一条 URL，curl 拿到 302、.NET 超时）。
+# 所以 Api 优先、Web 兜底：API 被限流时网页能救回来。
 $UpdateSourceTable = @(
     @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; }
-    @{ Id = "mirror";   Name = "Gitee";  Preferred = "Web"; Web = "https://gitee.com/@@/releases/latest"; Api = "https://gitee.com/api/v5/repos/@@/releases/latest"; Base = "https://gitee.com/@@"; }
 )
 
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
@@ -103,16 +87,14 @@ function Get-UpdateRepo {
     return $UpdateRepoDefault
 }
 
-# 这一源的仓库标识从哪里取。
-#   official：环境事实——开发副本跟自己的 git remote 走（fork 后看得见自己仓库的 Release），
-#             安装副本用内置默认；
-#   mirror：维护者在 Gitee 建好镜像仓库后填进 $GiteeMirrorRepo，留空 = 这一源尚未启用。
+# 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
+# （fork 后看得见自己仓库的 Release），安装副本用内置默认。
+# 参数保留是为了源表的 Id 字段：将来加源时按 Id 分派，不必改调用方。
 function Get-UpdateRepoId([string]$Key) {
-    if ($Key -eq "mirror") { return $GiteeMirrorRepo }
     return (Get-UpdateRepo)
 }
 
-# 本机这次实际可用的源（有序）：没有仓库标识的源直接跳过——镜像还没建是正常状态。
+# 本机这次实际可用的源（有序）：没有仓库标识的源直接跳过（目前只有官方源一条）。
 function Get-UpdateSources {
     $out = @()
     foreach ($s in $UpdateSourceTable) {
@@ -121,7 +103,7 @@ function Get-UpdateSources {
         $out += @{ Name = $s.Name; Repo = $id; Preferred = $s.Preferred; Api = $s.Api; Web = $s.Web; Base = $s.Base }
     }
     # 前面那个逗号不能省：PowerShell 会把单元素集合解包成元素本身，
-    # 于是"只剩官方源"（镜像还没建，也就是默认状态）时调用方拿到的是一个哈希表而不是源的表，
+    # 于是"只剩一个源"时调用方拿到的是一个哈希表而不是源的表，
     # foreach 会去遍历它的键值对、.Count 会变成键的个数。逗号包一层强制它始终是数组。
     return ,$out
 }
@@ -176,7 +158,7 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
 # 查最新 Release（状态显示与更新入口共用）：
 # 返回 @{ Version="1.2.0"; Tag="v1.2.0"; Base="<下载前缀>"; Name="<源名>" }，
 # 所有源都问不到才返回 $null（只读，不抛异常，不写文件）。
-# 逐个源尝试，第一个答出来的胜出：官方源在前，它不通就自动换镜像源。
+# 逐个源尝试，第一个答出来的胜出。
 # 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
 # 否则会出现"拿 A 源的版本号去下 B 源的包"。
 function Get-RemoteVersion {
@@ -224,7 +206,7 @@ function Get-TagFromApi([string]$Url) {
 
 # 从重定向目标里提取标签；形状不对就返回空（调用方据此换另一条路径）。
 # 抽成纯函数是为了能进回归测试：必须校验它确实落在 /releases/tag/<标签> 上，不能只取最后一段——
-# 仓库改名时 Gitee 会先 302 到改名后的仓库路径（实测 dromara/hutool），那时最后一段是字面量
+# 仓库改名时对方会先 302 到改名后的仓库路径（实测过 dromara/hutool），那时最后一段是字面量
 # "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
 # 标签本身可能含括号等字符且不做百分号编码（实测 v2026.09(jdk25)），所以整段取、不解码。
 function Get-TagFromLocation([string]$Location) {
@@ -389,7 +371,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $local = Get-LocalVersion
     if ($local) { Write-Host ("本地版本 : v{0}" -f $local) -ForegroundColor Green }
     else { Write-Host "本地版本 : 未知" -ForegroundColor Yellow }
-    Write-Host "正在检查最新版本（官方源不通会自动换国内镜像，最多等十几秒）..." -ForegroundColor DarkGray
+    Write-Host "正在检查最新版本（最多等十几秒）..." -ForegroundColor DarkGray
     $remote = Get-RemoteVersion
     if (-not $remote) {
         Write-Host "最新版本 : 检查失败（所有更新源都不可达）" -ForegroundColor Yellow
@@ -440,7 +422,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     }
     # 取包：先试胜出源，它取不到就换下一个源再试。
     # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
-    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻镜像本来能救回来。
+    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻另一个源本来能救回来。
     # 换源必须**连同版本一起换**：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     $zipFile = $null
     $extractDir = $null

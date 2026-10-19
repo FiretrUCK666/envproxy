@@ -101,7 +101,7 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. It reserves a second update source (a mirror reachable from mainland China); once that mirror is provisioned, updates switch to it automatically when GitHub does not answer.
+To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
@@ -117,7 +117,7 @@ Only one thing lives in `win\` to double-click (in `mac/` on Mac). The rest stay
 | **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log | you want to confirm it is working |
 | **3 Stop monitor** | stops the monitor and deletes the variables (direct connection immediately), keeps start at login so it returns on the next boot | you want to pause it |
 | **4 Full restore** | stops the monitor, deletes the variables, removes start at login, the locator and the path record | you are done with it |
-| **5 Check for updates** | checks the latest release (falls back to the mirror once it is provisioned), shows what changed, installs after you agree | you want to upgrade |
+| **5 Check for updates** | checks the latest release, shows what changed, installs after you agree | you want to upgrade |
 
 If you remember nothing else: **open the menu — 1 fixes everything, 2 checks, 3 pauses, 4 uninstalls, 5 upgrades.**
 
@@ -204,7 +204,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
 | The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
 | The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
-| Update check reports a check failure | no update source is reachable from this machine (neither GitHub nor the mirror) | try again later; toggling the proxy on or off and retrying often works |
+| Update check reports a check failure | GitHub is unreachable from this machine right now | try again later; toggling the proxy on or off and retrying often works |
 | An error during an update | the download, extraction, verification or write step failed | run "Check for updates" from the menu again (it fills in what is missing), or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
 | "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no package downloaded from the site (installer, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
@@ -353,7 +353,7 @@ Only one thing lives in the `mac` folder to double-click. The menu is identical 
 | **2 Show status** | shows monitor, start at login, proxy state, variables, version, recent log |
 | **3 Stop monitor** | stop the monitor and delete the variables (start at login stays, it returns on the next login) |
 | **4 Full restore** | stop the monitor, delete the variables, remove start at login, the locator and the hook; asks about the log |
-| **5 Check for updates** | checks the latest release (falls back to the mirror once it is provisioned) and installs after you agree |
+| **5 Check for updates** | checks the latest release and installs after you agree |
 
 </details>
 

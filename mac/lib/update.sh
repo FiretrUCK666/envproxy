@@ -8,30 +8,24 @@
 # 覆盖文件这条路上 git 副本一律不参与。
 UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 
-# 镜像仓库：在 Gitee 建好镜像仓库后填 "<用户名>/<仓库名>"（例如 "FiretrUCK666/envproxy"）。
-# 留空 = 这一源尚未启用，逐源尝试时直接跳过——这是源表的正常状态（镜像还没建），
-# 不是特例分支，所以不需要任何开关变量。
-GITEE_MIRROR_REPO=""
-
-# 更新源表：每行一条 "<标识来源> <显示名> <API> <下载前缀>"，有序，逐个尝试，
+# 更新源表：每行一条 "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀>"，有序，逐个尝试，
 # 第一个能回答"最新版是什么"的胜出。
 # 每行一条 "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀>"，@@ 接仓库标识
 # （用参数展开做纯字符串替换，不经 sed——正则会把地址里的符号当元字符）。
-# 加一个镜像源 = 加一行，不动任何判断逻辑。
-# 顺序即优先级：官方源在前（能通时它最快、也最权威），镜像源在后兜底。
-# 两个源的 release JSON 同构（都取 tag_name）、网页路径同构（都 302 到 /releases/tag/<标签>）、
-# 下载路径同构（/<仓库>/releases/download/<标签>/<文件名>），所以解析与下载代码完全共用。
+# 加一个源 = 加一行，不动任何判断逻辑。目前只有官方源一条。
+# 顺序即优先级。
+# 网页路径 302 到 /releases/tag/<标签>、
+# 下载路径是 /<仓库>/releases/download/<标签>/<文件名>，两者共用同一段解析与下载代码。
 #
 # 为什么每个源要两条路径、且优先顺序按源定：两条各有短板。
-#   Api 语义明确，但两个源都有配额——Gitee 匿名 API 会整段回 403 Rate Limit Exceeded（实测），
-#       GitHub 匿名 API 只有 60 次/小时/IP。
+#   Api 语义明确，但匿名配额只有 60 次/小时/IP。
+#
 #   Web 走网页重定向，不吃 API 配额；但 GitHub 侧的网页路径在受限网络里会整段超时
-#       （实测同一条 URL curl 拿到 302、.NET 超时），Gitee 侧反而稳（约 240ms）。
-# 通道不止一条的理由是产品自身的前提——用这个工具的人可能正处在"还没连上代理"的时刻，
-# 而官方源在那个时刻通常不可达；没有镜像兜底，更新就变成了"必须先能翻墙才能更新"。
-# 两个源都归维护者所有，信任级别一致，因此校验口径一个字都不用放宽。
-UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@
-mirror Gitee Web https://gitee.com/api/v5/repos/@@/releases/latest https://gitee.com/@@/releases/latest https://gitee.com/@@'
+#       （实测同一条 URL：curl 拿到 302、.NET 超时）。
+# 所以 Api 优先、Web 兜底：API 被限流时网页能救回来。
+
+
+UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@'
 
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
@@ -101,15 +95,11 @@ get_update_repo() {
     printf '%s' "$UPDATE_REPO_DEFAULT"
 }
 
-# 这一源的仓库标识从哪里取。
-#   official：环境事实——开发副本跟自己的 git remote 走（fork 后看得见自己仓库的 Release），
-#             安装副本用内置默认；
-#   mirror：维护者在 Gitee 建好镜像仓库后填进 GITEE_MIRROR_REPO，留空 = 这一源尚未启用。
+# 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
+# （fork 后看得见自己仓库的 Release），安装副本用内置默认。
+# 参数保留是为了源表的标识字段：将来加源时按它分派，不必改调用方。
 update_source_id() {
-    case "$1" in
-        mirror) printf '%s' "$GITEE_MIRROR_REPO" ;;
-        *) printf '%s' "$(get_update_repo)" ;;
-    esac
+    printf '%s' "$(get_update_repo)"
 }
 
 # 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
@@ -142,7 +132,7 @@ fetch_update_file() {
 
 # 查最新 Release：成功时置 REMOTE_VERSION / REMOTE_TAG / REMOTE_SOURCE_BASE / REMOTE_SOURCE_NAME
 # 并返回 0，所有源都问不到才返回 1（只读，不写文件）。
-# 逐个源尝试，第一个答出来的胜出：官方源在前，它不通就自动换镜像源。
+# 逐个源尝试，第一个答出来的胜出。
 # 顺带记下胜出源的下载前缀——版本与安装包必须来自同一个源，
 # 否则会出现"拿 A 源的版本号去下 B 源的包"。
 REMOTE_VERSION=""
@@ -151,7 +141,7 @@ REMOTE_SOURCE_BASE=""
 REMOTE_SOURCE_NAME=""
 
 # 本机这次实际可用的源（有序）：每行一条 "<显示名>|<优先路径>|<Api>|<Web>|<下载前缀>"，仓库标识已代入。
-# 没有仓库标识的源直接跳过——镜像还没建是正常状态，不是特例分支。
+# 没有仓库标识的源直接跳过（目前只有官方源一条）。
 get_update_sources() {
     while read -r _sid _sname _spref _sapi _sweb _sbase; do
         [ -n "$_sid" ] || continue
@@ -164,7 +154,7 @@ _ENVPROXY_SOURCES_
 }
 
 # 从重定向目标里取标签；形状不对就返回空（调用方据此换另一条路径）。
-# 必须校验它确实落在 /releases/tag/<标签> 上，不能只取最后一段：仓库改名时 Gitee 会先
+# 必须校验它确实落在 /releases/tag/<标签> 上，不能只取最后一段：仓库改名时对方会先
 # 302 到改名后的仓库路径（实测 dromara/hutool），那时最后一段是字面量 "latest"，
 # naive 取尾段会把垃圾当成版本号去拼下载地址。
 # 标签可能含括号等字符且不做百分号编码（实测 v2026.09(jdk25)），所以整段取、不解码。
@@ -239,7 +229,7 @@ update_envproxy() {
     echo "======== EnvProxy 检查更新 ========"
     _local=$(get_local_version || true)
     if [ -n "$_local" ]; then echo "本地版本 : v$_local"; else echo "本地版本 : 未知"; fi
-    echo "正在检查最新版本（官方源不通会自动换国内镜像，最多等十几秒）..."
+    echo "正在检查最新版本（最多等十几秒）..."
     if ! get_remote_version; then
         echo "最新版本 : 检查失败（所有更新源都不可达）"
         echo "请稍后重试；把翻墙软件开关一次再试也是常见解法。"
@@ -308,7 +298,7 @@ update_envproxy() {
     fi
     # 取包：逐源尝试"问版本 → 下载 → 解压 → 校验"，第一个拿到合格包的源胜出。
     # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
-    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻镜像本来能救回来。
+    # （同一台机器实测 api.github.com 通、github.com 整段超时），而那一刻另一个源本来能救回来。
     # 换源连同版本一起换：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。

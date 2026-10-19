@@ -25,11 +25,6 @@ jobs:
     concurrency:
       group: release-${{ github.ref }}
       cancel-in-progress: false
-    env:
-      # 国内镜像仓库（Gitee）：维护者建好镜像仓库后填 "<用户名>/<仓库名>"，留空 = 未启用（跳过同步）。
-      # 这个值必须与两侧脚本里的 GiteeMirrorRepo / GITEE_MIRROR_REPO 完全一致：
-      # 客户端按它去查版本、这里按它去上传，口径分家会让用户端回退到一个空仓库，门禁 6 负责拦下漂移。
-      GITEE_REPO: ""
     steps:
       - name: 检出标签
         uses: actions/checkout@v4
@@ -196,79 +191,3 @@ jobs:
           echo "资产已就位且最新。"
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-
-      # 国内镜像：墙内到不了 GitHub 的用户靠它拿到更新（客户端按源表逐源尝试，见 win/lib/update.ps1）。
-      # 未启用是正常状态（镜像仓库还没建）：明确打一行日志说明，不算失败。
-      # 但"配了地址却没配钥匙"必须当场红——那会让镜像悄悄停在旧版本，比不做镜像更危险：
-      # 用户端会老老实实回退过来，拿到的却是几个月前的东西。
-      - name: 同步到国内镜像（Gitee）
-        run: |
-          TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
-          if [ -z "$GITEE_REPO" ]; then
-            echo "未配置国内镜像仓库：跳过同步（官方源已照常发布）。"
-            exit 0
-          fi
-          if [ -z "${GITEE_TOKEN:-}" ]; then
-            echo "配了 GITEE_REPO 却没有 GITEE_TOKEN：拒绝静默跳过。"
-            echo "请在仓库 Secrets 里加上 GITEE_TOKEN（Gitee 私人令牌，勾 projects 权限）。"
-            exit 1
-          fi
-          API="https://gitee.com/api/v5/repos/$GITEE_REPO"
-          DL="https://gitee.com/$GITEE_REPO"
-          # 先读仓库信息：既确认仓库真的可达，也拿到默认分支——创建发行版时 target_commitish 是必填项。
-          # 三条读接口都带上 token：匿名配额是按出口 IP 共享的，而发布 runner 的 IP 是共享的，
-          # 为了"确认仓库可达"去打匿名请求，恰恰是最容易被限流打掉的那一下——
-          # 一旦 403，就会被误报成"仓库不存在"，把人指到完全错误的方向。
-          REPO_JSON="$(curl -fsS --max-time 30 "$API?access_token=$GITEE_TOKEN" 2>/dev/null || true)"
-          if [ -z "$REPO_JSON" ]; then
-            echo "读不到 Gitee 仓库 $GITEE_REPO：确认它已建好、拼写与大小写都对、token 有效（403 也可能是限流）。"
-            exit 1
-          fi
-          BRANCH="$(printf '%s' "$REPO_JSON" | jq -r '.default_branch // "master"')"
-          # 幂等：发行版已存在就复用（重跑只补附件，不会重复建）。
-          REL_ID="$(curl -fsS --max-time 30 "$API/releases/tags/$TAG?access_token=$GITEE_TOKEN" 2>/dev/null | jq -r '.id // empty' 2>/dev/null || true)"
-          if [ -z "$REL_ID" ]; then
-            echo "在 Gitee 创建发行版 $TAG（目标分支 $BRANCH）..."
-            REL_ID="$(curl -fsS --max-time 60 -X POST "$API/releases" \
-              --data-urlencode "access_token=$GITEE_TOKEN" \
-              --data-urlencode "tag_name=$TAG" \
-              --data-urlencode "name=$TAG" \
-              --data-urlencode "target_commitish=$BRANCH" \
-              --data-urlencode "body@release-notes/$TAG.md" | jq -r '.id // empty')"
-          fi
-          if [ -z "$REL_ID" ]; then
-            echo "Gitee 发行版创建失败：确认 token 勾了 projects 权限，且仓库是公开的。"
-            exit 1
-          fi
-          for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
-            # 同名附件先删后传：Gitee 不接受同名重复上传，而重跑必须得到同一个结果。
-            # 三处细节都是规范里写明的，写错会静默失效：
-            #   列表默认分页 20 条 → 显式要满页（per_page=100），否则同名附件一多就查不到；
-            #   同名的**全部**删掉 → 只删一条时，历史上删失败的残留会继续挡着上传；
-            #   DELETE 的 access_token 在 **query** → 规范里 32/32 个 DELETE 端点都声明在 query，
-            #     放请求体是查无此用法，会被 || true 静默吞掉。
-            for old_id in $(curl -fsS --max-time 30 "$API/releases/$REL_ID/attach_files?per_page=100&access_token=$GITEE_TOKEN" 2>/dev/null \
-              | jq -r --arg w "$want" '.[] | select(.name==$w) | .id' 2>/dev/null || true); do
-              curl -fsS --max-time 30 -X DELETE "$API/releases/$REL_ID/attach_files/$old_id?access_token=$GITEE_TOKEN" >/dev/null || true
-            done
-            echo "上传 $want ..."
-            curl -fsS --max-time 180 -X POST "$API/releases/$REL_ID/attach_files" \
-              -F "access_token=$GITEE_TOKEN" \
-              -F "file=@dist/$want" >/dev/null || { echo "上传失败：$want"; exit 1; }
-          done
-          # 自校验：从 Gitee 真下回来比摘要，与官方源那条同一条标准。
-          # 用户端会照单全收镜像里的东西，所以"看起来同步了、实际下到旧东西"绝不放行。
-          for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
-            ok=""
-            for i in 1 2 3 4 5 6; do
-              if curl -fsSL --max-time 60 -o "/tmp/gitee-$want" "$DL/releases/download/$TAG/$want" 2>/dev/null; then
-                if [ "$(sha256sum "/tmp/gitee-$want" | awk '{print $1}')" = "$(sha256sum "dist/$want" | awk '{print $1}')" ]; then ok=1; break; fi
-              fi
-              sleep 15
-            done
-            rm -f "/tmp/gitee-$want" 2>/dev/null || true
-            if [ -z "$ok" ]; then echo "Gitee 上的 $want 与本地不一致，镜像没同步成功（用户端会拿到旧包）。"; exit 1; fi
-          done
-          echo "国内镜像已就位，且与本地逐字节一致。"
-        env:
-          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}

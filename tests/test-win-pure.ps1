@@ -236,7 +236,7 @@ Write-Host '[12] the online update source table'
 # table degrades silently: updates keep "working" until the day the official source is unreachable.
 # Two properties are load-bearing:
 #   - it must ALWAYS come back as a list. PowerShell unwraps a single-element collection, so with
-#     only the official source enabled (the default state before a mirror repository exists) the
+#     only the official source enabled (the normal state) the
 #     caller would receive one hashtable instead of a list of sources: foreach then walks its
 #     key/value pairs, and .Count reports the number of keys (4) rather than the number of sources.
 #   - every entry must carry the four fields the walker reads, with the @@ placeholder intact.
@@ -255,31 +255,18 @@ foreach ($s in $UpdateSourceTable) {
 # that got renamed answers /releases/latest with a redirect to the renamed repo's path, whose last
 # segment is the literal "latest". Taking the tail blindly would turn that into a version number
 # and then into a download URL built from garbage.
-Assert-Eq 'a tag-page redirect yields its tag' 'v0.3.2' (Get-TagFromLocation 'https://gitee.com/oschina/gitee-cli/releases/tag/v0.3.2')
-Assert-Eq 'a renamed-repo redirect yields nothing' '' (Get-TagFromLocation 'https://gitee.com/chinabugotech/hutool/releases/latest')
-Assert-Eq 'a tag with parentheses survives intact' 'v2026.09(jdk25)' (Get-TagFromLocation 'https://gitee.com/x/y/releases/tag/v2026.09(jdk25)')
+Assert-Eq 'a tag-page redirect yields its tag' 'v0.3.2' (Get-TagFromLocation 'https://github.com/owner/repo/releases/tag/v0.3.2')
+Assert-Eq 'a renamed-repo redirect yields nothing' '' (Get-TagFromLocation 'https://github.com/new-owner/repo/releases/latest')
+Assert-Eq 'a tag with parentheses survives intact' 'v2026.09(jdk25)' (Get-TagFromLocation 'https://github.com/x/y/releases/tag/v2026.09(jdk25)')
 Assert-Eq 'an empty redirect target yields nothing' '' (Get-TagFromLocation '')
-Assert-Eq 'a location without a tag segment yields nothing' '' (Get-TagFromLocation 'https://gitee.com/oschina/gitee-cli/releases')
+Assert-Eq 'a location without a tag segment yields nothing' '' (Get-TagFromLocation 'https://github.com/owner/repo/releases')
 Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
-# An unset mirror (the state before the mirror repository exists) is skipped instead of becoming an
-# empty source: the walker would otherwise try to fetch a URL with a hole where the repo id goes.
+# No source may come back with an empty repo id: the walker would build a URL with a hole where the
+# id goes, and the fetch would fail in a way that looks like a network problem.
 # Count is taken straight off the returned value, never wrapped in @(): Get-UpdateSources returns
-# ,$out to force an array, and @(...) collapses that into "one element" - it reads as 1 even when
-# the skip is broken, so the assertion would pass while testing nothing.
-$savedMirror = $GiteeMirrorRepo
-$GiteeMirrorRepo = ''
-$srcTableOff = Get-UpdateSources
-Assert-Eq 'an unset mirror is skipped, not fetched' '1' $srcTableOff.Count
-Assert-Eq 'skipping a source keeps the result a list' 'Object[]' $srcTableOff.GetType().Name
-# And the other direction: an enabled mirror really does add exactly one source carrying the
-# configured repo id. Without this pair, renaming the mirror's Id would silently make the Gitee URL
-# get built from GitHub's repo id, and the suite would stay green.
-$GiteeMirrorRepo = 'test-owner/envproxy'
-$srcTableOn = Get-UpdateSources
-Assert-Eq 'enabling the mirror adds exactly one source' '2' $srcTableOn.Count
-Assert-Eq 'the added source carries the mirror repo id' 'test-owner/envproxy' $srcTableOn[1].Repo
-Assert-Eq 'the added source is the mirror entry' 'mirror' $UpdateSourceTable[1].Id
-$GiteeMirrorRepo = $savedMirror
+# ,$out to force an array, and @(...) around a call collapses that into "one element".
+Assert-Eq 'no source comes back with an empty repo id' '0' (@($srcTable0 | Where-Object { -not $_.Repo }).Count)
+Assert-Eq 'every exported source carries its four walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Base -or -not $_.Preferred }).Count)
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
