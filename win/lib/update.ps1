@@ -71,7 +71,19 @@ function Remove-SourceOnlyFiles([string]$Root) {
             if ($t -match '^/(\S+?)\s+export-ignore') { $list += $Matches[1] }
         }
         foreach ($e in $list) {
+            if (-not $e) { continue }
+            # 只允许安装根内的相对路径：绝对路径、盘符、任何一段 .. 一律跳过。
+            # 清单来自随包的 .gitattributes，但"随包"不等于"可信"——一个 ../Documents 就能
+            # 删掉安装根同级的目录，而这条路只有"点检查更新 + 源码包"才走得到。
+            if ($e -match '^[/\\]' -or $e -match '^[A-Za-z]:') { continue }
+            if ($e -match '(^|[/\\])\.\.([/\\]|$)') { continue }
             $p = Join-Path $Root $e
+            # 再按解析后的绝对路径复核一次：拼出来的路径必须仍在安装根里，否则跳过。
+            try {
+                $fullP = [System.IO.Path]::GetFullPath($p)
+                $fullRoot = [System.IO.Path]::GetFullPath($Root)
+                if (-not $fullP.StartsWith($fullRoot + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            } catch { continue }
             if (-not (Test-Item $p)) { continue }
             if ($e.EndsWith('/')) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
             else { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }

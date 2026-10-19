@@ -32,6 +32,10 @@ merge_no_proxy() {
     _out="$_default"
     _lower=$(printf '%s' "$_default" | tr 'A-Z' 'a-z')
     _old=$IFS; IFS=','
+    # 关掉通配：NO_PROXY 里合法写着 *.corp 这类条目，不关的话 for 会把它当 glob 展开成
+    # 当前目录里的文件名（实测 `*.corp` 变成 alpha.corp,beta.corp），值就被改写了。
+    _had_f=0; case $- in *f*) _had_f=1;; esac
+    set -f
     for _p in $_existing; do
         _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
         [ -n "$_pt" ] || continue
@@ -44,6 +48,7 @@ merge_no_proxy() {
         esac
     done
     IFS=$_old
+    [ "$_had_f" -eq 1 ] || set +f
     printf '%s' "$_out"
 }
 

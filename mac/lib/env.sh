@@ -80,6 +80,12 @@ env_vars_in_sync() {
         [ "$(launchctl getenv ALL_PROXY 2>/dev/null)" = "$_http" ] || return 1
         [ "$(launchctl getenv NO_PROXY 2>/dev/null)" = "$_np" ] || return 1
         [ "$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null)" = "1" ] || return 1
+        # 小写拼写也是我们写下的那一份：只核 5 个大写变量，等于放任 4 个小写变量漂移，
+        # 而"齐了"的判定一旦撒谎，自愈就永远不修（macOS 大小写敏感，少一个就是真的少）。
+        [ "$(launchctl getenv http_proxy 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv https_proxy 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv all_proxy 2>/dev/null)" = "$_http" ] || return 1
+        [ "$(launchctl getenv no_proxy 2>/dev/null)" = "$_np" ] || return 1
     fi
     return 0
 }
@@ -145,6 +151,9 @@ remove_user_env_vars() {
         [ -n "$_cur" ] || continue
         _keep=""
         _old=$IFS; IFS=','
+        # 关掉通配：条目里可能合法地写着 *.corp，不关会被展开成当前目录的文件名。
+        _had_f=0; case $- in *f*) _had_f=1;; esac
+        set -f
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
@@ -152,6 +161,7 @@ remove_user_env_vars() {
             _keep="${_keep:+$_keep,}$_pt"
         done
         IFS=$_old
+        [ "$_had_f" -eq 1 ] || set +f
         if [ -n "$_keep" ]; then launchctl setenv "$_v" "$_keep" 2>/dev/null || true
         else launchctl unsetenv "$_v" 2>/dev/null || true; fi
     done
@@ -180,12 +190,19 @@ proxy_vars_present() {
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
         _old=$IFS; IFS=','
+        # 同 remove_user_env_vars：条目不关 glob，*.corp 会被展开成文件名，判据就失真了。
+        _had_f=0; case $- in *f*) _had_f=1;; esac
+        set -f
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
-            if is_default_no_proxy_entry "$_pt"; then IFS=$_old; return 0; fi
+            if is_default_no_proxy_entry "$_pt"; then
+                IFS=$_old; [ "$_had_f" -eq 1 ] || set +f
+                return 0
+            fi
         done
         IFS=$_old
+        [ "$_had_f" -eq 1 ] || set +f
     done
     if [ "$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")" = "1" ]; then return 0; fi
     return 1

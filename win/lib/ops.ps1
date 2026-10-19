@@ -21,6 +21,10 @@ function Install-EnvProxy {
         Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
     Update-ScriptPathRecord
+    # 先快照用户原值，再动任何东西：监控一启动就会在几秒内自愈、把代理变量写进去，
+    # 那时再快照，存下的就是"我们写下的值"而不是用户原值，卸载还原会留下我们的条目。
+    # （快照只记一次；已经存在时这里是无副作用的空操作。）
+    Snapshot-PrevEnv
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     if (Start-Monitor -Force:$true) {
         Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
@@ -30,8 +34,6 @@ function Install-EnvProxy {
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
-    # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
-    Snapshot-PrevEnv
     Apply-State (Get-CurrentState)
     Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
     Start-Sleep -Seconds 1

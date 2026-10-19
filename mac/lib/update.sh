@@ -64,6 +64,12 @@ clean_source_files() {
     _clist=$(grep -E '^/[^ ]+[ ]+export-ignore' "$_croot/.gitattributes" 2>/dev/null | sed -E 's#^/([^ ]+)[ ]+export-ignore.*#\1#' || true)
     [ -n "$_clist" ] || return 0
     for _cent in $_clist; do
+        # 只允许安装根内的相对路径：绝对路径、任何一段 .. 一律跳过。
+        # 清单来自随包的 .gitattributes，但"随包"不等于"可信"——一个 ../Documents 就能
+        # 删掉安装根同级的目录，而这条路只有"点检查更新 + 源码包"才走得到。
+        case "/$_cent/" in
+            //*|*/../*) continue ;;
+        esac
         case "$_cent" in
             */) [ -e "$_croot/$_cent" ] && rm -rf "$_croot/$_cent" 2>/dev/null || true ;;
             *) [ -e "$_croot/$_cent" ] && rm -f "$_croot/$_cent" 2>/dev/null || true ;;
