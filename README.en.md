@@ -27,6 +27,7 @@
 
 - [What it does](#what-it-does)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
+- [1.5 Updating](#15-updating)
 - [2. The menu](#2-the-menu)
 - [2.5 The log (monitor.log)](#25-the-log-monitorlog)
 - [3. Day to day (nothing to do after install)](#3-day-to-day-nothing-to-do-after-install)
@@ -101,11 +102,33 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, choose **`5 Check for updates`** in the menu: it shows what the release changed and installs only after you agree. Both the check and the download reach GitHub directly first (`api.github.com`), so most networks need no VPN for this; if it fails, toggle your proxy app once and retry. Before installing it compares the package against the checksum GitHub publishes and refuses a mismatch — a broken install is worse than no install.
+To update later, choose **`5 Check for updates`** in the menu and see the next section for the details.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
 > If the first double-click is blocked on a package downloaded from the web: right-click the file, Properties, Unblock (or run `Unblock-File` once) — do not change the execution policy.
+
+## 1.5 Updating
+
+Choose **`5 Check for updates`** in the menu: it shows the new version and what the release changed, and installs only after you agree.
+
+- **No VPN needed for this**: the check and the download reach GitHub directly first (`api.github.com`) and retry once by themselves; if that still fails, toggle your proxy app once.
+- **Checked before install**: the package is compared against the sha256 GitHub publishes, and a mismatch is refused — a broken install is worse than no install.
+- **Only program files are touched**: your own files, the log and the run markers in `monitor\` stay as they are, and the monitor restarts on the new code afterwards.
+- **Failures say which kind**: unreachable, quota exhausted, server error, wrong package, or this release ships nothing — each with its own next step.
+
+<details>
+<summary>Updating from a terminal instead</summary>
+
+Windows: `powershell -ExecutionPolicy Bypass -File win\envproxy.ps1 -Update` (add `-Yes` to skip the prompt)
+
+Mac: `bash mac/envproxy.sh update` (add `--yes` to skip the prompt)
+
+Exit codes: `0` success; `1` failed (the message says why); `2` wrong argument.
+
+</details>
+
+> A normal install updates in place. A `git clone` copy is left alone; sync it with `git pull` (see section 13).
 
 ## 2. The menu
 
