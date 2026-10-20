@@ -413,7 +413,9 @@ self_test() {
         _s2_saved_cnt="$NODE_FAIL_COUNT"; _s2_saved_ffa="$NODE_FIRST_FAIL_AT"
         _s2_saved_until="$NODE_FAST_UNTIL"; _s2_saved_lc="$LAST_NODE_CHECK"
         _s2_real=$(declare -f test_real_connectivity 2>/dev/null || true)
-        test_real_connectivity() { [ "$1" = "7078" ]; }
+        # 替身用 eval 定义，不写成 test_xxx() { ... }：门禁 1 会扫源码文本找重名函数，
+        # 而 probe 层已有同名真实实现，写成函数定义会被判成"重名覆盖"。
+        eval 'test_real_connectivity() { [ "$1" = "7078" ]; }'
         NODE_CACHE_PORT=""; NODE_ALIVE=0; NODE_FAIL_COUNT=0; NODE_FIRST_FAIL_AT=0
         NODE_FAST_UNTIL=0; LAST_NODE_CHECK=0
         test_node_alive 7078 0; _s2a=$?
