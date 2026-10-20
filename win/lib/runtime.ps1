@@ -118,7 +118,8 @@ Set-ItemProperty -Path $reg -Name "ScriptPath" -Value $target -ErrorAction Silen
 # 监控进程识别判据：与核心脚本里的 $MonitorCmdLinePattern 保持同一语义。
 # 这里必须写字面量——本模板是单引号 here-string，变量在生成时不会被展开，
 # 写变量名会让生成的定位器引用一个未定义变量（空模式恒匹配，反而误判"监控已在跑"）。
-$MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
+# 引号可有可无：引号是启动方式决定的，不是身份的一部分。
+$MonitorCmdLinePattern = '-File\s+"?[^"]*envproxy\.ps1"?\s*$'
 $running = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -match $MonitorCmdLinePattern }
 if (-not $running) {
@@ -206,8 +207,11 @@ function Ensure-MonitorDir {
 # 监控进程的特征 = 命令行以 -File "...envproxy.ps1" 结尾、且不带任何子命令。
 # 执行 -Status / -Install / -Stop 的进程带了子命令参数，故不会被误认；调用方自身另行排除。
 # 收紧到行尾锚定是为了排除"命令行里恰好含 envproxy 字样"的其他进程（如带 -Command 的诊断调用）。
+# 路径两侧的引号可有可无：引号由启动方式决定（自己起的时候常常没加），不是身份的一部分。
+# 把引号当成条件会出这种事：认不出已经跑着的监控 → 安装器以为监控没在跑 → 起第二份 →
+# 单实例锁又把第二份挡掉 → 于是再也起不来监控，状态页还报"未运行"。判身份要看实质。
 # DIVERGE(Mac): macOS 侧等价实现是 `pgrep -f "envproxy\.sh$"`（见 mac/locator.sh），语义相同。
-$MonitorCmdLinePattern = '-File\s+"[^"]*envproxy\.ps1"\s*$'
+$MonitorCmdLinePattern = '-File\s+"?[^"]*envproxy\.ps1"?\s*$'
 
 # 判据一：监控自己写下的 pid 文件（它在抢到单实例互斥之后才写）。
 # 这是"监控真的在跑"的唯一可靠判据——命令行特征只能说明"有这么个进程"，

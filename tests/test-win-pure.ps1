@@ -724,5 +724,17 @@ if (Test-Path -LiteralPath $contractFile) {
     Write-Host '  SKIP 找不到 tests/asset-cases.txt（仓库内的用例文件）'
 }
 
+# ------------------------------------------------------------------------------
+# [9] 监控进程的身份判据：看实质，不看启动方式的细节
+# ------------------------------------------------------------------------------
+# 判据是"命令行结尾跑的是本脚本、且没有子命令"。路径两侧的引号可有可无：
+# 引号是启动方式决定的，不是身份的一部分。把引号当成条件会出这种事——
+# 认不出已经跑着的监控，安装器就以为监控没在跑而起第二份，单实例锁又把第二份挡掉，
+# 于是再也起不来监控，状态页还报"未运行"。
+Assert-Eq '监控判据认得带引号的命令行' $true ('powershell.exe -NoProfile -File "D:\EnvProxy\win\envproxy.ps1"' -match $MonitorCmdLinePattern)
+Assert-Eq '监控判据认得不带引号的命令行' $true ('powershell.exe -NoProfile -File D:\EnvProxy\win\envproxy.ps1' -match $MonitorCmdLinePattern)
+Assert-Eq '监控判据认不得带子命令的进程' $false ('powershell.exe -File "D:\EnvProxy\win\envproxy.ps1" -Status' -match $MonitorCmdLinePattern)
+Assert-Eq '监控判据认不得命令行中间提到脚本的进程' $false ('powershell.exe -Command "Get-Content D:\EnvProxy\win\envproxy.ps1"' -match $MonitorCmdLinePattern)
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
