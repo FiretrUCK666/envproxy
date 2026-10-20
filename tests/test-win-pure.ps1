@@ -461,5 +461,42 @@ Assert-Eq 'the local advice points at the disk' '1' ([int]($msgLocal -match '磁
 $advices = @('missing', 'quota', 'server', 'network', 'bad-content', 'local') | ForEach-Object { Get-UpdateFailureMessage $_ 'GitHub' }
 Assert-Eq 'no advice claims success' '0' (@($advices | Where-Object { $_ -match '成功' }).Count)
 
+Write-Host '[7b] listening port enumeration'
+
+# The listening port list drives the whole judgment, so the netstat parsing has to be exact.
+# netstat writes IPv4 as "127.0.0.1:8080" and IPv6 as "[::1]:8080" (with brackets).
+$ep4 = ConvertTo-ListenEndpoint '127.0.0.1:8080'
+Assert-Eq 'an IPv4 endpoint splits into address and port' '127.0.0.1|8080' ("$($ep4.Address)|$($ep4.Port)")
+$ep6 = ConvertTo-ListenEndpoint '[::1]:8080'
+Assert-Eq 'a bracketed IPv6 endpoint splits too' '::1|8080' ("$($ep6.Address)|$($ep6.Port)")
+$epAny = ConvertTo-ListenEndpoint '[::]:135'
+Assert-Eq 'the any-address IPv6 form is understood' '::|135' ("$($epAny.Address)|$($epAny.Port)")
+$epHigh = ConvertTo-ListenEndpoint '0.0.0.0:65535'
+Assert-Eq 'the highest port is understood' '65535' "$($epHigh.Port)"
+# A line that is not an endpoint must be dropped, never guessed at.
+Assert-Eq 'a line without a port is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint 'nonsense')))
+Assert-Eq 'a port that is not a number is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '127.0.0.1:abc')))
+Assert-Eq 'port zero is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '127.0.0.1:0')))
+Assert-Eq 'a port above the range is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '127.0.0.1:70000')))
+Assert-Eq 'a broken bracket is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '[::1:8080')))
+
+# The enumeration has to agree with the system: a port that is really listening must be found,
+# and a port that is not must not be. This is the one check that would catch a parse that
+# silently returns nothing -- which would make the monitor believe there is no proxy.
+$probeListen = Get-ListeningTcpConnections
+# 取第一个元素的属性名：直接对数组取 .PSObject 拿到的是数组自己的属性（Count/Length），不是元素的。
+$probeFirst = @($probeListen)[0]
+$probeNames = @()
+if ($probeFirst) { $probeNames = @($probeFirst.PSObject.Properties.Name) }
+Assert-Eq 'the enumeration exposes the local address' '1' ([int]($probeNames -contains 'LocalAddress'))
+Assert-Eq 'the enumeration exposes the local port' '1' ([int]($probeNames -contains 'LocalPort'))
+Assert-Eq 'the enumeration exposes the owning process' '1' ([int]($probeNames -contains 'OwningProcess'))
+if (@($probeListen).Count -gt 0) {
+    $somePort = @($probeListen)[0].LocalPort
+    Assert-Eq 'a port the system reports as listening is found' '1' ([int](Test-PortListening $somePort))
+    Assert-Eq 'the same port is found in the port list' '1' ([int](@($probeListen.LocalPort) -contains $somePort))
+}
+Assert-Eq 'a port nothing listens on is not reported' '0' ([int](Test-PortListening 1))
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

@@ -22,11 +22,79 @@ $ProxyProcessPatterns = @("monocloud", "clash", "mihomo", "verge", "v2ray", "xra
     "sing-box", "singbox", "hiddify", "shadowsocks", "ss-local", "trojan", "hysteria",
     "neko", "netch", "surge", "outline")
 
+# 把 netstat 的本地端点拆成地址与端口。
+# IPv6 写成 "[::1]:445"（带方括号），IPv4 写成 "127.0.0.1:8080"（不带）——两种形态都要认。
+# 拆不出合法端口就返回 $null（这一行当噪声丢掉，不影响别的行）。
+function ConvertTo-ListenEndpoint([string]$Local) {
+    $addr = ""
+    $portText = ""
+    if ($Local.StartsWith("[")) {
+        $close = $Local.LastIndexOf("]")
+        if ($close -lt 1) { return $null }
+        $addr = $Local.Substring(1, $close - 1)
+        $portText = $Local.Substring($close + 1)
+        if (-not $portText.StartsWith(":")) { return $null }
+        $portText = $portText.Substring(1)
+    } else {
+        $colon = $Local.LastIndexOf(":")
+        if ($colon -lt 1) { return $null }
+        $addr = $Local.Substring(0, $colon)
+        $portText = $Local.Substring($colon + 1)
+    }
+    $port = 0
+    if (-not [int]::TryParse($portText, [ref]$port)) { return $null }
+    if ($port -lt 1 -or $port -gt 65535) { return $null }
+    return @{ Address = $addr; Port = $port }
+}
+
+# 列出本机所有处于监听状态的 TCP 连接。
+# 用 netstat 而不是 Get-NetTCPConnection：后者每次 1.7–2.3 秒（WMI 启动开销），
+# 而监控每 2–3 秒跑一轮、在位复核每轮还要查一次端口——这一项就吃掉了整个周期。
+# 同一台机器实测 netstat 30–50 毫秒，快 40 倍以上。
+# netstat 不可用（被裁剪的系统）或状态列被本地化时，退回 WMI：慢，但可靠。
+# 返回与 Get-NetTCPConnection 同形的对象（LocalAddress / LocalPort / OwningProcess）。
+function Get-ListeningTcpConnections {
+    $raw = $null
+    try { $raw = & netstat.exe -ano -p TCP 2>$null } catch { $raw = $null }
+    if (-not $raw) {
+        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    }
+    $listeners = New-Object System.Collections.ArrayList
+    $sawListening = $false
+    $sawTcp = $false
+    foreach ($line in $raw) {
+        if ($line -notmatch '^\s*TCP\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$') { continue }
+        $sawTcp = $true
+        $state = $Matches[3]
+        if ($state -ne "LISTENING") { continue }
+        $sawListening = $true
+        $endpoint = ConvertTo-ListenEndpoint $Matches[1]
+        if (-not $endpoint) { continue }
+        [void]$listeners.Add([pscustomobject]@{
+            LocalAddress = $endpoint.Address
+            LocalPort = $endpoint.Port
+            OwningProcess = [int]$Matches[4]
+        })
+    }
+    if ($listeners.Count -gt 0) { return $listeners }
+    if ($sawListening) { throw "netstat 解析出错：有 LISTENING 行但没解析出端口" }
+    if ($sawTcp) {
+        # 有 TCP 行、却一个 LISTENING 都没有：状态列多半被本地化了。改走 WMI 那一路。
+        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    }
+    return $listeners
+}
+
 function Test-PortListening([int]$Port) {
     # 命令本身可能不可用（被裁剪的系统、极老版本）：-ErrorAction 拦不住 CommandNotFoundException，
     # 必须包 try，否则 -Install 与监控主循环都会被一条终端命令打断（与 Find-CandidatePorts 同一套处理）。
     for ($i = 0; $i -lt 2; $i++) {
-        try { return [bool](Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop) } catch {}
+        try {
+            foreach ($l in (Get-ListeningTcpConnections)) {
+                if ($l.LocalPort -eq $Port) { return $true }
+            }
+            return $false
+        } catch {}
     }
     return $false
 }
@@ -148,7 +216,7 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
     $enumerated = $false
     for ($attempt = 0; $attempt -lt 2 -and -not $enumerated; $attempt++) {
         try {
-            $listeners = Get-NetTCPConnection -State Listen -ErrorAction Stop
+            $listeners = Get-ListeningTcpConnections
             $enumerated = $true
         } catch {
             if ($attempt -eq 0) { Start-Sleep -Milliseconds 300 }
