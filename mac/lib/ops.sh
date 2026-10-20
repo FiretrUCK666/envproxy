@@ -381,6 +381,19 @@ self_test() {
     _selftest_assert_eq "问版本：重定向到预期之外的地方算服务端问题" "server" "$TAG_FAILURE"
     tag_from_web_response "429" "" ""
     _selftest_assert_eq "问版本：网页路 429 是配额用尽" "quota" "$TAG_FAILURE"
+    # 下载到的文件要跟 GitHub 发布的资产校验值对一下。那个 digest 是查资产编号时顺带拿到的，
+    # 不额外发请求也不额外下文件；老版本没有这个字段就跳过校验，不因此拦住更新。
+    # 期望值用 "hello" 的已知 sha256 写死：这样测的是"对不对"，不是"某个工具算出来多少"，
+    # 也不会因为本机少了 shasum 或 openssl 而测不成。
+    _st_dg_file="${TMPDIR:-/tmp}/envproxy-selftest-digest.$$"
+    printf 'hello' > "$_st_dg_file"
+    check_asset_digest "sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" "$_st_dg_file"
+    _selftest_assert_eq "校验值对得上" "0" "$?"
+    check_asset_digest "sha256:$(printf '0%.0s' $(seq 1 64))" "$_st_dg_file"
+    _selftest_assert_eq "校验值对不上要报出来" "1" "$?"
+    check_asset_digest "" "$_st_dg_file"
+    _selftest_assert_eq "没有校验值就跳过" "2" "$?"
+    rm -f "$_st_dg_file" 2>/dev/null || true
     # 查资产编号失败的原因也要参与挑选：否则"这条失败的路没走成"会隐形，
     # 最后只剩直连那一次的结果——直连 404 就被报成"发布方没提供安装包"，
     # 而真实原因可能是配额用尽，那是在冤枉维护者。

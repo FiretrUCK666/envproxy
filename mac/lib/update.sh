@@ -431,6 +431,33 @@ ASSET_DIGEST=""
 # 查资产编号失败的原因（调用方直接调用本函数，所以全局传得出去）。
 ASSET_FAILURE=""
 
+# 算一个文件的 sha256（用系统自带命令，不引入任何依赖）。
+# shasum 是 macOS 自带的（Perl 的一部分）；openssl 是第二选择。
+# 两个都没有就返回空——调用方据此跳过校验，而不是当成校验失败。
+_file_sha256() {
+    [ -f "$1" ] || return 0
+    if command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+    fi
+}
+
+# 拿下载到的文件跟 GitHub 发布的资产校验值对一下。
+# digest 是 GitHub 自己算的 sha256，查资产编号那一步顺带就拿到了——
+# 不额外发请求、不额外下文件、不依赖我们自己的发版流程。
+# 旧版本没有这个字段（那时 GitHub 还不给），那就跳过校验，不因此拦住更新。
+# 返回 0=对得上 1=对不上 2=没得对（没有 digest，或本机没有校验工具）
+check_asset_digest() {
+    _cad_want="$1"
+    _cad_file="$2"
+    [ -n "$_cad_want" ] || return 2
+    _cad_got=$(_file_sha256 "$_cad_file")
+    [ -n "$_cad_got" ] || return 2
+    [ "$_cad_got" = "${_cad_want#sha256:}" ] && return 0
+    return 1
+}
+
 # 下载文件：$1=URL $2=目标文件 $3=额外请求头（可空，API 资产端点要 Accept: application/octet-stream）
 # 入口开着 set -u，所以 $3 必须带默认值：两参调用（直连兜底那条）不许因为少一个参数就整条失效。
 # 成功返回 0，失败返回非 0，并把失败原因写进全局 FETCH_FAILURE（见失败原因词表）。
@@ -780,16 +807,45 @@ update_envproxy() {
             if [ "$_rc" -eq 0 ]; then
                 # 200 不等于拿到包：请求头被中间层丢掉时这里回的是 JSON。不是 gzip 就丢弃，
                 # 让下面的直连兜底接手——否则会把"网络问题"报成"发布缺包/校验失败"。
-                if _is_gzip "$_try_tgz"; then _got=0; else rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true; _pkg_kinds="$_pkg_kinds bad-content"; fi
+                if _is_gzip "$_try_tgz"; then
+                    # 校验值对不上：拿回来的不是 GitHub 发布的那份内容（下载被改写或截断）。
+                    # 这跟"不是 gzip"是同一类问题：内容不可信，丢掉它换下一条路。
+                    check_asset_digest "$_asset_digest" "$_try_tgz"
+                    _cad_rc=$?
+                    if [ "$_cad_rc" -eq 0 ] || [ "$_cad_rc" -eq 2 ]; then
+                        _got=0
+                    else
+                        rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
+                        _pkg_kinds="$_pkg_kinds bad-content"
+                    fi
+                else
+                    rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
+                    _pkg_kinds="$_pkg_kinds bad-content"
+                fi
             else
                 _pkg_kinds="$_pkg_kinds $FETCH_FAILURE"
             fi
         fi
         if [ "$_got" -ne 0 ]; then
+            # 直连拿到的也是同一份资产（同一个 tag 下的同一个文件），所以 digest 一样适用——
+            # 校验值不是只管 API 那条路。
             fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz" ""
             _rc=$?
             if [ "$_rc" -eq 0 ]; then
-                if _is_gzip "$_try_tgz"; then _got=0; else rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true; _pkg_kinds="$_pkg_kinds bad-content"; fi
+                if _is_gzip "$_try_tgz"; then
+                    # 同样对一下校验值：直连拿到的也是同一份资产，一样要验。
+                    check_asset_digest "$_asset_digest" "$_try_tgz"
+                    _cad_rc=$?
+                    if [ "$_cad_rc" -eq 0 ] || [ "$_cad_rc" -eq 2 ]; then
+                        _got=0
+                    else
+                        rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
+                        _pkg_kinds="$_pkg_kinds bad-content"
+                    fi
+                else
+                    rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
+                    _pkg_kinds="$_pkg_kinds bad-content"
+                fi
             else
                 _pkg_kinds="$_pkg_kinds $FETCH_FAILURE"
             fi

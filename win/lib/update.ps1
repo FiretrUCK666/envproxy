@@ -476,6 +476,20 @@ function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
     return @{ Id = ""; Digest = ""; Failure = $failure }
 }
 
+# 拿下载到的文件跟 GitHub 发布的资产校验值对一下。
+# digest 是 GitHub 自己算的 sha256，查资产编号那一步顺带就拿到了——
+# 不额外发请求、不额外下文件、不依赖我们自己的发版流程。
+# 旧版本没有这个字段（那时 GitHub 还不给），那就跳过校验，不因此拦住更新。
+# 返回 "ok" / "mismatch" / "skip"。
+function Test-AssetDigest([string]$Path, [string]$Digest) {
+    if (-not $Digest) { return "skip" }
+    try {
+        $actual = "sha256:" + (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
+        if ($actual -eq $Digest) { return "ok" }
+    } catch { }
+    return "mismatch"
+}
+
 # 带代理兜底的 HTTPS 下载：成功返回 "ok"，失败返回**失败原因**（见 Get-UpdateFailureKind 的词表）。
 # 单独分出每一种原因，是为了让最终提示能说清"等一会儿""开代理"还是"手动下载"——
 # 这些动作互不相同，塌缩成一个 fail 就只能把判断推给使用者。
@@ -603,10 +617,21 @@ function Get-UpdatePackage([hashtable]$Remote) {
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
             if ($r -eq "ok") {
-                if (Test-UsableZip $zipFile) { $dl = "ok"; break }
-                # 200 但不是一个能打开的 zip：丢掉这份内容，继续试下一条路（多半是直连）。
-                Remove-ItemSafe $zipFile
-                $r = "bad-content"
+                if (Test-UsableZip $zipFile) {
+                    # 校验值对不上：拿回来的不是 GitHub 发布的那份内容（下载被改写或截断）。
+                    # 这跟"打不开的 zip"是同一类问题：内容不可信，丢掉它换下一条路。
+                    if ((Test-AssetDigest $zipFile $asset.Digest) -eq "mismatch") {
+                        Remove-ItemSafe $zipFile
+                        $r = "bad-content"
+                    } else {
+                        $dl = "ok"
+                        break
+                    }
+                } else {
+                    # 200 但不是一个能打开的 zip：丢掉这份内容，继续试下一条路（多半是直连）。
+                    Remove-ItemSafe $zipFile
+                    $r = "bad-content"
+                }
             }
             $kinds += $r
         }

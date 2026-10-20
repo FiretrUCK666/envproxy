@@ -397,6 +397,18 @@ try {
     $null = Invoke-UpdateText "http://127.0.0.1:$($srv.Port)/repos/o/r/releases/latest"
     Assert-Eq 'a refused version query with quota left is reported as a server problem' 'server' $script:UpdateLastVersionFailure
 } finally { Stop-OneShotServer $srv }
+# The download is checked against the digest GitHub publishes for the asset. That digest comes
+# with the asset listing we already fetched, so the check costs no extra request and no extra
+# download. A release without the field is simply not checked -- refusing to update over a
+# missing field would block every older release.
+$digestDir = New-TempDir 'ep-digest'
+$digestFile = Join-Path $digestDir 'pkg.zip'
+[System.IO.File]::WriteAllText($digestFile, 'hello')
+$digestReal = 'sha256:' + (Get-FileHash -Path $digestFile -Algorithm SHA256).Hash.ToLower()
+Assert-Eq 'a matching digest passes' 'ok' (Test-AssetDigest $digestFile $digestReal)
+Assert-Eq 'a wrong digest is caught' 'mismatch' (Test-AssetDigest $digestFile ('sha256:' + ('0' * 64)))
+Assert-Eq 'no digest means no check' 'skip' (Test-AssetDigest $digestFile '')
+Assert-Eq 'a malformed digest is not a pass' 'mismatch' (Test-AssetDigest $digestFile 'sha256:XYZ')
 # The reason for a failed asset lookup must take part in the picking. Otherwise that failure
 # stays invisible and only the direct download counts -- and a 404 there gets reported as
 # "the release does not ship this file", blaming the maintainer for what is really a quota.
