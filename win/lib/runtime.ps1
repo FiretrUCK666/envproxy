@@ -384,8 +384,14 @@ function Run-MonitorLoop {
     $selfExit     = $false
     try {
         $bootState = Get-CurrentState
-        Apply-State $bootState
-        $lastState = $bootState
+        # 端口枚举失败时这一轮是"不知道"：按"没代理"去清理变量，
+        # 是在删一个可能还活着的代理——那正是最不该犯的错。
+        if ($bootState -ne "unknown") {
+            Apply-State $bootState
+            $lastState = $bootState
+        } else {
+            Write-MonitorLog "启动时端口枚举失败 -> 不动环境变量，沿用现状"
+        }
     } catch {
         Write-MonitorLog "启动对齐异常: $($_.Exception.Message)"
     }
@@ -396,6 +402,13 @@ function Run-MonitorLoop {
         if (-not $ScriptPath -or -not (Test-Item $ScriptPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
+
+            if ($state -eq "unknown") {
+                # 这一轮不知道（端口枚举失败）：沿用上一状态，不动环境变量，
+                # 也不计入去抖——把"没读到"当成"没在翻墙"会删掉用户的代理变量。
+                Write-MonitorLog "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+                $state = $lastState
+            }
 
             if ($state -ne $lastState) {
                 # 状态疑似翻转：连续确认 2 轮才动手，杜绝抖动

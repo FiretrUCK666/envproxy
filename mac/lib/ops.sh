@@ -567,6 +567,72 @@ self_test() {
     _selftest_assert_contains "提示：本机问题要说磁盘与权限" "磁盘" "$_ufm_l"
     _selftest_assert_eq "提示：没有一种说法会声称成功" "0" "$(for _k in missing quota server network bad-content local; do update_failure_message "$_k" GitHub; done | grep -c '成功' || true)"
 
+    # ==========================================================================
+    # 端口枚举失败 = 这一轮不知道，不是"没有端口"
+    # ==========================================================================
+    # 读不出来却被当成空表，状态机会判 off -> 把用户的代理环境变量删掉。
+    # 与 Windows 侧同形：枚举失败要传上去，状态机据此沿用上一状态。
+    _st_broken="$_sandbox/brokenbin"
+    mkdir -p "$_st_broken" 2>/dev/null || true
+    printf '#!/bin/sh\nexit 127\n' > "$_st_broken/lsof" 2>/dev/null || true
+    printf '#!/bin/sh\nexit 127\n' > "$_st_broken/netstat" 2>/dev/null || true
+    chmod +x "$_st_broken/lsof" "$_st_broken/netstat" 2>/dev/null || true
+    if [ -x "$_st_broken/lsof" ] && [ -x "$_st_broken/netstat" ]; then
+        _st_oldpath="$PATH"
+        PATH="$_st_broken:$PATH"
+        export PATH
+        _st_ports=$(get_listening_ports)
+        _st_rc=$?
+        _selftest_assert_eq "端口枚举读不出来时返回非 0（不能当成空表）" "1" "$_st_rc"
+        # 状态判定在枚举失败时要沿用上一状态：get_current_state 返回非 0。
+        # 这一步必须在坏掉的 PATH 下做（枚举要真的失败）。
+        CACHED_PORT=""
+        get_current_state
+        _st_state_rc=$?
+        PATH="$_st_oldpath"
+        export PATH
+        _selftest_assert_eq "枚举失败时状态判定返回非 0（上层据此沿用上一状态）" "1" "$_st_state_rc"
+    else
+        echo "  SKIP 造不出坏掉的 lsof/netstat 桩（权限或文件系统不支持）"
+    fi
+
+    # 带开关的一次性命令不能被当成监控：
+    # 判据是脚本路径之后的第一个词，不是最后一个词。
+    _selftest_assert_eq "带开关的一次性命令不是监控: uninstall --purge" "1" "$(is_monitor_args "/bin/bash $SCRIPT_PATH uninstall --purge" && echo 0 || echo 1)"
+    _selftest_assert_eq "带开关的一次性命令不是监控: update --yes" "1" "$(is_monitor_args "/bin/bash $SCRIPT_PATH update --yes" && echo 0 || echo 1)"
+    _selftest_assert_eq "带开关的一次性命令不是监控: install --purge" "1" "$(is_monitor_args "/bin/bash $SCRIPT_PATH install --purge" && echo 0 || echo 1)"
+
+    # ==========================================================================
+    # 资产解析契约：同一批应答，两侧必须得出同一个结论
+    # ==========================================================================
+    # 用例放在 tests/asset-cases.txt（仓库内文件；安装包里没有这一份，
+    # 所以找不到就跳过——自检在安装副本里也要能跑）。
+    # 每一行还打印成 "contract ..."，门禁 10 把两边的这些行互相比一次：
+    # 文本层面的门禁看不出行为漂移，行为层面才看得出来。
+    _st_cases="$SCRIPT_DIR/../tests/asset-cases.txt"
+    if [ -f "$_st_cases" ]; then
+        _st_seen=0
+        while IFS='|' read -r _st_name _st_scope _st_id _st_digest _st_fail _st_body; do
+            case "$_st_name" in ""|'#'*) continue ;; esac
+            get_asset_from_json "$_st_body" "EnvProxy-test.zip"
+            _st_got_id="$ASSET_ID"
+            _st_got_digest="$ASSET_DIGEST"
+            _st_got_fail=""
+            if [ -z "$ASSET_ID" ]; then
+                _st_got_fail=$(asset_failure_from_scope "$ASSET_SCOPE")
+            fi
+            _selftest_assert_eq "资产契约 正文种类: $_st_name" "$_st_scope" "$ASSET_SCOPE"
+            _selftest_assert_eq "资产契约 编号: $_st_name" "$_st_id" "$_st_got_id"
+            _selftest_assert_eq "资产契约 校验值: $_st_name" "$_st_digest" "$_st_got_digest"
+            _selftest_assert_eq "资产契约 失败原因: $_st_name" "$_st_fail" "$_st_got_fail"
+            echo "contract $_st_name $ASSET_SCOPE $_st_got_id $_st_got_digest $_st_got_fail"
+            _st_seen=$((_st_seen + 1))
+        done < "$_st_cases"
+        _selftest_assert_eq "资产契约 用例都跑到了" "17" "$_st_seen"
+    else
+        echo "  SKIP 找不到 tests/asset-cases.txt（仓库内的用例文件）"
+    fi
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"

@@ -625,8 +625,16 @@ jobs:
           }
           # 查资产编号失败的原因必须参与挑选，否则"这条失败的路没走成"会隐形：
           # 直连 404 会被报成"发布方没提供安装包"，而真实原因可能是配额用尽。
-          if ($ps -notmatch 'Failure\s*=\s*"missing"') { Write-Host 'Win 侧查资产编号失败时没有区分"缺包"与"请求失败"'; $fail = 1 }
-          if ($sh -notmatch 'ASSET_FAILURE="missing"') { Write-Host 'Mac 侧查资产编号失败时没有区分"缺包"与"请求失败"'; $fail = 1 }
+          # 查资产编号失败时，"缺包"与"请求失败"必须分开：现在收敛成
+          # "正文种类 -> 失败原因"的映射函数（两侧同名同形），
+          # 缺包=missing、文件在里面但编号取不出来=bad-content、别的=network。
+          # 这里盯结构在不在；映射出来的结论对不对，由门禁 10 的跨端比对兜底。
+          if ($ps -notmatch 'function\s+Get-AssetFailureFromScope') { Write-Host 'Win 侧缺少"正文种类 -> 失败原因"的映射'; $fail = 1 }
+          if ($sh -notmatch 'asset_failure_from_scope\(\)') { Write-Host 'Mac 侧缺少"正文种类 -> 失败原因"的映射'; $fail = 1 }
+          if ($ps -notmatch '"release"\s*\{\s*return\s*"missing"') { Write-Host 'Win 侧的失败原因映射里没有"缺包"这一档'; $fail = 1 }
+          if ($sh -notmatch 'release\)\s*(echo|printf)\s*"missing"') { Write-Host 'Mac 侧的失败原因映射里没有"缺包"这一档'; $fail = 1 }
+          if ($ps -notmatch '"release-bad-id"\s*\{\s*return\s*"bad-content"') { Write-Host 'Win 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
+          if ($sh -notmatch 'release-bad-id\)\s*(echo|printf)\s*"bad-content"') { Write-Host 'Mac 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 
@@ -725,10 +733,37 @@ jobs:
         run: |
           # 静态门禁保"不变形"，这道保"行为对"：纯函数、hook 成对护栏、
           # 归属判定、注入核对回收往返、快照还原。失败返回非零。
-          pwsh -NoProfile -File tests/test-win-pure.ps1
-          if ($LASTEXITCODE -ne 0) { Write-Host 'Win 功能自检失败'; exit 1 }
-          bash mac/envproxy.sh self-test
-          if ($LASTEXITCODE -ne 0) { Write-Host 'Mac 功能自检失败'; exit 1 }
+          # 输出留在内存里就够了：不往仓库目录写临时文件（那会污染工作区，
+          # 也可能被误提交）。要留档就用 CI 的日志。
+          $winOut = pwsh -NoProfile -File tests/test-win-pure.ps1
+          $winRc = $LASTEXITCODE
+          $winOut | Write-Host
+          if ($winRc -ne 0) { Write-Host 'Win 功能自检失败'; exit 1 }
+          $macOut = bash mac/envproxy.sh self-test
+          $macRc = $LASTEXITCODE
+          $macOut | Write-Host
+          if ($macRc -ne 0) { Write-Host 'Mac 功能自检失败'; exit 1 }
+          # 资产解析契约：同一个应答，两边必须给出同一个结论。
+          # 文本层面的门禁看不出这种漂移——曾经就漂过：同一个应答，
+          # 一边继续更新、一边说"这一版没提供安装包"（冤枉维护者）。
+          # 所以要把两边的实际结论互相比一次（用例在 tests/asset-cases.txt）。
+          $winContract = @($winOut | Where-Object { $_ -like 'contract *' })
+          $macContract = @($macOut | Where-Object { $_ -like 'contract *' })
+          if ($winContract.Count -eq 0 -or $macContract.Count -eq 0) {
+            Write-Host '资产契约没有跑到：两侧都应输出 contract 行'; exit 1
+          }
+          if ($winContract.Count -ne $macContract.Count) {
+            Write-Host ("资产契约两侧用例数对不上：win {0} / mac {1}" -f $winContract.Count, $macContract.Count); exit 1
+          }
+          for ($i = 0; $i -lt $winContract.Count; $i++) {
+            if ($winContract[$i] -ne $macContract[$i]) {
+              Write-Host '资产契约两侧结论不一致：'
+              Write-Host ("  win: {0}" -f $winContract[$i])
+              Write-Host ("  mac: {0}" -f $macContract[$i])
+              exit 1
+            }
+          }
+          Write-Host ("资产契约 {0} 条用例，两侧结论一致。" -f $winContract.Count)
           Write-Host '功能自检通过'
 
   powershell51:

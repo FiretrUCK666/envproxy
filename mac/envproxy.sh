@@ -111,6 +111,21 @@ case "$_CMD_NORM" in
         ;;
 esac
 
+# --purge 只在"一键恢复"时才有意义（连日志一起删）。别处给出它，
+# 以前会被静默忽略：用户以为在清日志，工具却照常把监控起来了，还什么也没删。
+if [ "$_PURGE" = "1" ] && [ "$_CMD_NORM" != "uninstall" ]; then
+    echo "--purge 只在卸载时才有意义：它表示连日志一起删。" >&2
+    echo "请用: bash $0 uninstall --purge" >&2
+    exit 2
+fi
+# 多余的位置参数当用法错误：以前 "status extra" 里的 extra 被静默忽略，
+# 调用方以为参数生效了（Windows 侧同一情况报退出码 2）。
+if [ $# -gt 1 ]; then
+    echo "无法识别的参数: $*" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]" >&2
+    exit 2
+fi
+
 case "$_CMD_NORM" in
     install) install_envproxy;;
     stop) stop_monitor; remove_user_env_vars; echo "代理变量已清除，当前恢复直连。";;

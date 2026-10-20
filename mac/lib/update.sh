@@ -143,7 +143,7 @@ fetch_update_text() {
 #   network     连不上（超时、DNS、连接被拒）——开代理或换网络就好
 #   quota       GitHub 接口配额用尽（403/429 且带限流特征）——等一小时会好
 #   server      GitHub 服务端出错（5xx）——等一会儿会好
-#   bad-content 拿回来的不是安装包（200 但内容是 JSON/HTML/损坏的包）
+#   bad-content 拿回来的东西没法用（内容是 JSON/HTML/损坏的包，或这一版里安装包的信息有问题）
 #   missing     这个版本没有提供该文件（404/410）——等不会好，要去 Releases 手动下
 # missing 排在最后是刻意的：它指控的是发布方，只有在没有别的解释时才能这么说。
 UPDATE_FAILURE_KINDS="local network quota server bad-content missing"
@@ -184,7 +184,7 @@ update_failure_message() {
             printf '连不上 %s（超时或连接被拒）。可以打开翻墙软件让请求走代理再试一次，或稍后重试。' "$_ufm_src"
             ;;
         bad-content)
-            printf '从 %s 拿回来的内容不是安装包（可能下载不完整，或被中间网络改写）。请重试一次，或到 Releases 页面手动下载安装包。' "$_ufm_src"
+            printf '从 %s 拿回来的东西没法用（下载的内容不完整、被中间网络改写，或这一版里安装包的信息有问题）。请重试一次，或到 Releases 页面手动下载安装包。' "$_ufm_src"
             ;;
         local)
             printf '本机临时目录不可写，没法下载安装包（与网络和发布都无关）。请检查磁盘空间与临时目录权限，或手动下载安装包覆盖。'
@@ -237,14 +237,17 @@ select_update_failure_kind() {
 # 契约（两侧必须一致，见 check.yml 门禁 6）：
 #   1. 文件名逐字节相等（区分大小写）——GitHub 的资产名大小写敏感。
 #   2. 编号取自 url 字段（…/releases/assets/<编号>）：那是我们真正要 GET 的端点，
-#      权威性高于 id 字段；url 里没有才退回 id 字段。
+#      权威性高于 id 字段；url 里的编号不可用时退回 id 字段（不是直接判失败）。
 #   3. 编号必须是 1..16 位、首位非 0（0、007、二十位数都不该进 URL）。
 #   4. digest 有则必须是 sha256:<64 位十六进制>，没有就留空（老资产没这字段）。
 # 不用 jq：macOS 自带环境没有它，零依赖是安装口号。
 # awk 写法只用 POSIX 语法：macOS 自带的是 BSD awk，不支持 {n} 区间量词。
-# ASSET_SCOPE 说明这段正文是什么：release = 确实是 Release JSON（顶层有 assets 数组），
-# other = 不是（HTML 登录页、错误对象……）。调用方据此区分"这版没提供这个文件"
-# 和"中间层换了内容"——报 missing 是冤枉维护者。
+# ASSET_SCOPE 说明这段正文是什么，三个取值（与 Windows 侧同形）：
+#   other          不是我们要的 Release JSON（HTML 登录页、错误对象……）
+#   release        是 Release JSON，里面没有这个文件
+#   release-bad-id 是 Release JSON，这个文件在里面，但它的编号取不出来
+# 调用方据此区分"这版没提供这个文件"、"这份应答没法用"和"中间层换了内容"——
+# 报 missing 是冤枉维护者。
 ASSET_SCOPE=""
 get_asset_from_json() {
     ASSET_ID=""
@@ -314,6 +317,9 @@ get_asset_from_json() {
                     while (j <= n && substr(doc, j, 1) ~ /[ \t]/) j++
                     if (substr(doc, j, 1) == ":") {
                         key = s
+                        # 顶层有 assets 字段就是发布信息（与 Windows 侧同一判据）：
+                        # 里面没有我们要的文件就是 missing，不在发布信息里才是 network。
+                        if (key == "assets" && depth == 1) sawassets = 1
                     } else {
                         if (inassets && depth == adep + 1) {
                             if (key == "name") aname = s
@@ -344,6 +350,10 @@ get_asset_from_json() {
                             printf "%s|%s", v, d
                             exit
                         }
+                        # 文件在发布里，但编号取不出来：这是单独一种情况，
+                        # 不能混进"没提供"（那个文件是有的，报"没提供"是冤枉维护者）。
+                        printf "|!"
+                        exit
                     }
                     aname=""; aurl=""; aid=""; adg=""
                 }
@@ -352,7 +362,7 @@ get_asset_from_json() {
                 continue
             }
             if (c == "[") {
-                if (key == "assets" && !inassets) { inassets = 1; adep = depth; sawassets = 1 }
+                if (key == "assets" && !inassets) { inassets = 1; adep = depth }
                 key = ""
                 i++
                 continue
@@ -377,6 +387,10 @@ get_asset_from_json() {
         ASSET_SCOPE="release"
         return 0
     fi
+    if [ "$_gaf" = "|!" ]; then
+        ASSET_SCOPE="release-bad-id"
+        return 0
+    fi
     ASSET_SCOPE="release"
     ASSET_ID="${_gaf%%|*}"
     ASSET_DIGEST="${_gaf#*|}"
@@ -397,6 +411,17 @@ _is_gzip() {
 # 这个原因**必须**一起参与挑选：查编号失败时这条下载路就没走成，
 # 如果让它隐形，最后只剩直连那一次的结果——直连 404 就被报成"发布方没提供安装包"，
 # 而真实原因可能是配额用尽或对方 5xx，那是在冤枉维护者。
+# 正文种类 → 失败原因。抽成纯函数是为了让两侧能对同一份应答得出同一个结论
+# （门禁 6 把同一批应答喂给两边，比对的就是这个结果）。
+asset_failure_from_scope() {
+    case "$1" in
+        release) echo "missing" ;;
+        release-bad-id) echo "bad-content" ;;
+        *) echo "network" ;;
+    esac
+    return 0
+}
+
 # 查资产编号这一步失败时的原因（纯函数，自检可测）：$1=状态码 $2=剩余配额。
 # 200 表示请求成功——那时要看包里到底有没有这个文件，那是另一回事。
 asset_query_failure() {
@@ -421,14 +446,9 @@ get_update_asset() {
     [ -z "$ASSET_FAILURE" ] || return 0
     get_asset_from_json "$_ga_json" "$3"
     if [ -z "$ASSET_ID" ]; then
-        if [ "$ASSET_SCOPE" = "release" ]; then
-            # 确实是 Release JSON，里面没有这个文件：这就是"没提供安装包"。
-            ASSET_FAILURE="missing"
-        else
-            # 回的根本不是 Release JSON（HTML 登录页、错误对象……）：中间层换了内容。
-            # 报 missing 是冤枉维护者，还让用户去手动下载——那里同样拿不到。
-            ASSET_FAILURE="network"
-        fi
+        # 正文有内容但拿不到编号：原因由正文种类决定（缺包 / 编号不可用 / 不是发布信息），
+        # 不在这里另写一套判断——两侧共用一张映射表，才不会一边说缺包、一边说连不上。
+        ASSET_FAILURE=$(asset_failure_from_scope "$ASSET_SCOPE")
     fi
     return 0
 }
@@ -469,11 +489,17 @@ ASSET_FAILURE=""
 # 两个都没有就返回空——调用方据此跳过校验，而不是当成校验失败。
 _file_sha256() {
     [ -f "$1" ] || return 0
+    # 两个都试，取第一个真能出结果的。
+    # 只看"在不在"是不够的：shasum 存在但跑不起来（Perl 被删掉的机器上它会留下一个坏壳）时，
+    # 原来会一路返回空——校验被静默跳过，而提示还写着"已下载并校验通过"。
+    _fs_out=""
     if command -v shasum >/dev/null 2>&1; then
-        shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
-    elif command -v openssl >/dev/null 2>&1; then
-        openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}'
+        _fs_out=$(shasum -a 256 "$1" 2>/dev/null | awk '{print $1}')
     fi
+    if [ -z "$_fs_out" ] && command -v openssl >/dev/null 2>&1; then
+        _fs_out=$(openssl dgst -sha256 "$1" 2>/dev/null | awk '{print $NF}')
+    fi
+    printf '%s' "$_fs_out"
 }
 
 # 拿下载到的文件跟 GitHub 发布的资产校验值对一下。
@@ -801,7 +827,17 @@ update_envproxy() {
         echo "这里是源码包（有 .github、无 .git），不是安装包。"
         printf "更新会覆盖程序文件：[U] 当安装包用并清理源码文件 / [D] 自己改代码什么都不动（默认）: "
         _ans=""
-        if read -r _ans < /dev/tty 2>/dev/null; then :; else _ans=""; fi
+        # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
+        # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
+        # 以前两者走同一条路：谎报成"已取消"，而且退出码是 0。
+        # 报错信息也要吃掉：重定向失败发生在 2>/dev/null 生效之前，会原样漏到屏幕上。
+        if exec 3<>/dev/tty 2>/dev/null; then
+            if read -r _ans <&3; then :; else _ans=""; fi
+            exec 3<&- 2>/dev/null || true
+        else
+            printf '%s\n' "没法提问：当前环境没有可交互的控制台，未做任何改动。" >&2
+            return 1
+        fi
         case "$_ans" in
             [Uu]*)
                 echo "继续更新，完成后源码专用文件会被清理（下次不再问）。"
@@ -827,10 +863,20 @@ update_envproxy() {
     fi
     # 非交互环境（没有能提问的终端）：问不到人，就别白下一个包。
     # 以前是先下载再问，问不到人再取消——白烧一次 GitHub 配额和一份安装包。
-    if [ "$_yes" != "1" ] && ! [ -t 0 ] && ! [ -r /dev/tty ]; then
-        echo "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的终端），未做任何改动。"
-        echo "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
-        return 1
+    if [ "$_yes" != "1" ]; then
+        # 判据与真正提问时用的是同一件事：能不能打开控制台。
+        # 以前只看"文件存在"（-r /dev/tty），文件在却打不开时会漏过去，
+        # 于是先下载再发现问不到人——白烧一次配额和一份安装包。
+        _ui_tty=0
+        if exec 3<>/dev/tty 2>/dev/null; then
+            _ui_tty=1
+            exec 3<&- 2>/dev/null || true
+        fi
+        if [ $_ui_tty -eq 0 ]; then
+            echo "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
+            echo "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
+            return 1
+        fi
     fi
     # 目的地校验 + 版本闸门：脚本一旦不在 <根>/mac/ 布局里，推导出的"安装根"就是错的，
     # 后面的删除循环会删用户自己的文件；VERSION 读不到时任何"比较"都是瞎猜。
@@ -1002,7 +1048,17 @@ _ENVPROXY_PKG_
     if [ "$_yes" != "1" ]; then
         printf "已下载并校验通过（%s），现在更新？[y/N]: " "$REMOTE_TAG"
         _ans=""
-        if read -r _ans < /dev/tty 2>/dev/null; then :; else _ans=""; fi
+        # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
+        # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
+        if exec 3<>/dev/tty 2>/dev/null; then
+            if read -r _ans <&3; then :; else _ans=""; fi
+            exec 3<&- 2>/dev/null || true
+        else
+            printf '%s\n' "没法提问：当前环境没有可交互的控制台，未做任何改动。" >&2
+            rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
+            rm -rf "$_exdir" 2>/dev/null || true
+            return 1
+        fi
         case "$_ans" in
             [Yy]*) ;;
             *)

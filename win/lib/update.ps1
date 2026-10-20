@@ -109,7 +109,7 @@ function Get-UpdateFailureMessage([string]$Kind, [string]$SourceName) {
                 "可以打开翻墙软件让请求走代理再试一次，或稍后重试。"
         }
         "bad-content" {
-            return ("从 {0} 拿回来的内容不是安装包（可能下载不完整，或被中间网络改写）。" -f $SourceName) +
+            return ("从 {0} 拿回来的东西没法用（下载的内容不完整、被中间网络改写，或这一版里安装包的信息有问题）。" -f $SourceName) +
                 "请重试一次，或到 Releases 页面手动下载安装包。"
         }
         "local" {
@@ -347,7 +347,16 @@ function Get-TagFromApi([string]$Url) {
         $json = Invoke-UpdateText $Url
         if (-not $json) { return "" }
         $obj = $json | ConvertFrom-Json
-        return (("{0}" -f $obj.tag_name).Trim())
+        $tag = ("{0}" -f $obj.tag_name).Trim()
+        if (-not $tag) {
+            # 200 + 一个能解析、但不是发布信息的 JSON（企业代理/门户劫持、错误对象）：
+            # 原因必须算进去，否则它会从挑选集合里消失，最后报成别的原因——
+            # 同一个应答在 mac 侧报的是"连不上"（中间那层换了内容，该开代理或换网络），
+            # 两边给用户的指示必须一致。
+            $script:UpdateLastVersionFailure = "network"
+            return ""
+        }
+        return $tag
     } catch {
         # 200 但内容不是预期的 JSON：多半是网络中间层换了内容（劫持页、门户页）。
         # 报"连不上"比"服务端出错"贴近——服务端好好的，是中间那层不对，
@@ -460,11 +469,32 @@ function ConvertTo-UrlSegment([string]$Value) {
     try { return [uri]::EscapeDataString($Value) } catch { return "" }
 }
 
-# 这段正文是不是我们要的 Release JSON？结果放在 $script:UpdateAssetScope。
+# 从一个资产对象里取它的编号。规则只有一条，两侧必须一模一样：
+#   1. 编号取自 url（那是我们真正要 GET 的端点），url 里没有编号才看这个资产自己的 id 字段。
+#   2. url 里的编号不可用（0、007、二十位数）时，退回 id 字段——**不是**直接判失败。
+#      同一个应答在两端必须得出同一个编号：一边更新、一边说"没提供安装包"是最坏的结局。
+#   3. 两个来源都取不到可用编号，才算"取不到"。
+function Get-AssetIdFrom($Asset) {
+    $url = "{0}" -f $Asset.url
+    if ($url -match '/releases/assets/([0-9]+)') {
+        # 先存进变量：PowerShell 的 -match 会重写 $Matches，嵌套匹配时
+        # 内层的 $Matches[1] 已经不是外层那个编号了（取出来是空，编号就永远取不到）。
+        $num = $Matches[1]
+        if ($num -match '^[1-9][0-9]{0,15}$') { return $num }
+    }
+    $id = "{0}" -f $Asset.id
+    if ($id -match '^[1-9][0-9]{0,15}$') { return $id }
+    return ""
+}
+
+# 这段正文是什么？结果放在 $script:UpdateAssetScope，三个取值：
+#   other         不是我们要的 Release JSON（HTML 登录页、错误对象……）
+#   release       是 Release JSON，里面没有这个文件
+#   release-bad-id 是 Release JSON，这个文件在里面，但它的编号取不出来
 # 为什么要分清：企业代理/门户劫持 api.github.com 时会回 200 + HTML 登录页，
 # 或者 200 + 一个错误对象。那不是"这一版没提供安装包"——是中间层换了内容。
 # 报 missing 等于冤枉维护者，还让用户白跑一趟 Releases 页面（那里同样拿不到）。
-# 判据：能解析成对象，且顶层有 assets 字段。
+# "文件在里面但编号取不出来"同样不是 missing：那个文件是有的，报"没提供"是冤枉维护者。
 $script:UpdateAssetScope = "other"
 function Get-AssetFromJson([string]$Json, [string]$FileName) {
     $script:UpdateAssetScope = "other"
@@ -473,17 +503,23 @@ function Get-AssetFromJson([string]$Json, [string]$FileName) {
         $rel = $Json | ConvertFrom-Json -ErrorAction Stop
     } catch { return $null }
     if ($null -eq $rel -or $rel -is [array]) { return $null }
-    if ($null -eq $rel.PSObject.Properties["assets"]) { return $null }
+    # 判据是"顶层有没有 assets 字段"，不是"assets 是不是数组"：
+    # ConvertFrom-Json 会把单元素数组解包成元素本身、空数组解包成 null，
+    # 拿它判数组必然和 mac 侧（逐字符扫描，看得见方括号）对不上。
+    # 顶层有 assets 字段就是发布信息：里面没有我们要的文件，那是 missing。
+    $prop = $rel.PSObject.Properties["assets"]
+    if ($null -eq $prop) { return $null }
+    $assets = $prop.Value
     $script:UpdateAssetScope = "release"
     try {
-        foreach ($a in @($rel.assets)) {
+        foreach ($a in @($assets)) {
             if (-not $a) { continue }
             if (("{0}" -f $a.name) -cne $FileName) { continue }
-            $id = ""
-            $url = "{0}" -f $a.url
-            if ($url -match '/releases/assets/([0-9]+)') { $id = $Matches[1] }
-            if (-not $id) { $id = ("{0}" -f $a.id) }
-            if ($id -notmatch '^[1-9][0-9]{0,15}$') { return $null }
+            # 文件在发布里。编号取不出来是一种单独的情况，不能混进"没提供"。
+            $script:UpdateAssetScope = "release-bad-id"
+            $id = Get-AssetIdFrom $a
+            if (-not $id) { return $null }
+            $script:UpdateAssetScope = "release"
             $digest = ""
             $dg = "{0}" -f $a.digest
             # 大小写两侧必须一致（mac 侧按不区分大小写处理）：对方改了大小写就静默不校验，
@@ -493,6 +529,16 @@ function Get-AssetFromJson([string]$Json, [string]$FileName) {
         }
     } catch { }
     return $null
+}
+
+# 正文种类 → 失败原因。抽成纯函数是为了让两侧能对同一份正文得出同一个结论
+# （门禁 6 把同一批应答喂给两边，比对的就是这个结果）。
+function Get-AssetFailureFromScope([string]$Scope) {
+    switch ($Scope) {
+        "release" { return "missing" }
+        "release-bad-id" { return "bad-content" }
+        default { return "network" }
+    }
 }
 
 # 问这一源的 API 要"某个标签下某个文件的资产"。拿不到编号时也把原因带回来，绝不抛。
@@ -508,14 +554,10 @@ function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
     $failure = $script:UpdateLastVersionFailure
     $asset = Get-AssetFromJson $body $FileName
     if ($asset) { return $asset }
-    if ($script:UpdateAssetScope -eq "release") {
-        # 确实是 Release JSON，里面没有这个文件：这就是"没提供安装包"。
-        return @{ Id = ""; Digest = ""; Failure = "missing" }
-    }
     if ($body) {
-        # 回的根本不是 Release JSON（HTML 登录页、错误对象……）：中间层换了内容。
-        # 报 missing 是冤枉维护者，而且会叫用户去手动下载——那里同样拿不到。
-        return @{ Id = ""; Digest = ""; Failure = "network" }
+        # 正文有内容但拿不到编号：原因由正文种类决定（缺包 / 编号不可用 / 不是发布信息），
+        # 不在这里另写一套判断——两侧共用一张映射表，才不会一边说缺包、一边说连不上。
+        return @{ Id = ""; Digest = ""; Failure = (Get-AssetFailureFromScope $script:UpdateAssetScope) }
     }
     return @{ Id = ""; Digest = ""; Failure = $failure }
 }
@@ -534,6 +576,9 @@ function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
 # （mac 侧同样故障是放行的，两端行为必须一致。）
 function Test-AssetDigest([string]$Path, [string]$Digest) {
     if (-not $Digest) { return "skip" }
+    # 路径为空时 Test-Path 在 PowerShell 5.1 上是"参数绑定失败"的终止错误：
+    # 抛出去就坏了"三态"的约定（这里必须返回三态之一，不能抛）。
+    if (-not $Path) { return "skip" }
     if (-not (Test-Path -LiteralPath $Path)) { return "skip" }
     $hash = $null
     try {

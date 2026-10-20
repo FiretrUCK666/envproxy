@@ -42,6 +42,14 @@ param(
     [switch]$Yes,
     [switch]$Purge
 )
+# 多余或打错的参数要报错退出：powershell -File 对不认识的参数名**不会**报绑定错误，
+# 它们只是落进 $args。不拦的话，敲错一个选项就会静默进入监控模式——用户以为在装东西，
+# 工具却在后台常驻起来。退出码 2 = 用法错误（与 mac 侧同一套约定）。
+if ($args.Count -gt 0) {
+    Write-Host ("无法识别的参数：{0}" -f ($args -join ' ')) -ForegroundColor Yellow
+    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu} [-Yes] [-Purge]" -ForegroundColor Yellow
+    exit 2
+}
 # ------------------------------------------------------------------------------
 #  文件结构（入口只做四件事：解析参数、挂操作锁、加载自检、分派）
 #     envproxy.ps1      入口（本文件）
@@ -109,7 +117,7 @@ function Exit-IfOpBusy {
 # -Purge 只在"一键恢复"时才有意义（连日志一起删）。单独给 -Purge 以前会一路落到
 # 监控模式：用户以为在清日志，工具却把监控起来了，还什么也没删。
 if ($Purge -and -not $Uninstall) {
-    Write-Host "-Purge 是"一键恢复"的附加选项：它表示连日志一起删。" -ForegroundColor Yellow
+    Write-Host "-Purge 只在卸载时才有意义：它表示连日志一起删。" -ForegroundColor Yellow
     Write-Host "请用：powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall -Purge" -ForegroundColor Yellow
     exit 2
 }

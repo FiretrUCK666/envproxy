@@ -567,5 +567,67 @@ if ($probeThrew) {
     Assert-Eq 'a port nothing listens on is not reported' '0' ([int](Test-PortListening 1))
 }
 
+# ------------------------------------------------------------------------------
+# [2b] 入口不许默默跑起来：多余或打错的参数要报用法错误（退出码 2）
+# ------------------------------------------------------------------------------
+# powershell -File 对不认识的参数名不报绑定错误，它们只是落进 $args。
+# 不拦的话，敲错一个选项就会静默进入监控模式。
+# 这里用子进程验：点源加载时 $args 是空的，验不到。
+$entryPath = Join-Path $PSScriptRoot '../win/envproxy.ps1'
+foreach ($bad in @('-Foo', '-Installt', 'extra')) {
+    $rc = 0
+    $ps = Start-Process -FilePath (Get-Process -Id $PID).Path -PassThru -NoNewWindow -Wait `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$entryPath`"", $bad)
+    $rc = $ps.ExitCode
+    Assert-Eq ("入口拒绝不认识的参数: " + $bad) 2 $rc
+}
+
+# ------------------------------------------------------------------------------
+# [7c] 端口枚举失败 = 这一轮不知道，不是"没有端口"
+# ------------------------------------------------------------------------------
+# 读不出来却被当成空表，状态机会判 off -> 把用户的代理环境变量删掉。
+# 两侧的判据必须一样：枚举失败要传上去，状态机据此沿用上一状态。
+if ($env:OS -eq 'Windows_NT') {
+    function global:netstat.exe { throw "netstat is not available" }
+    function global:Get-NetTCPConnection { throw "Get-NetTCPConnection is not recognized" }
+    $script:CachedPort = $null
+    $unknownState = Get-CurrentState
+    Assert-Eq '端口枚举失败时状态是"不知道"而不是 off' 'unknown' $unknownState
+    Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
+    Remove-Item function:global:Get-NetTCPConnection -ErrorAction SilentlyContinue
+}
+
+# ------------------------------------------------------------------------------
+# [8c] 资产解析契约：同一批应答，两侧必须得出同一个结论
+# ------------------------------------------------------------------------------
+# 用例放在 tests/asset-cases.txt：名字、正文种类、编号、校验值、失败原因、正文。
+# 这里跑一遍并和文件里写下的期望比对；每一行还打印成 "contract ..."，
+# 门禁 10 再把两边的这些行互相比一次——文本层面的门禁看不出行为漂移，
+# 行为层面才看得出来（曾经就漂过：同一个应答，一边更新、一边说"没提供安装包"）。
+$contractFile = Join-Path $PSScriptRoot 'asset-cases.txt'
+if (Test-Path -LiteralPath $contractFile) {
+    $contractSeen = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($contractFile, [System.Text.Encoding]::UTF8)) {
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        $f = $line -split "\|"
+        if ($f.Count -ne 6) { Assert-Eq ('用例行字段数不对: ' + $f[0]) 6 $f.Count; continue }
+        $cName = $f[0]; $cScope = $f[1]; $cId = $f[2]; $cDigest = $f[3]; $cFail = $f[4]; $cBody = $f[5]
+        $asset = Get-AssetFromJson $cBody 'EnvProxy-test.zip'
+        $gotId = ''; $gotDigest = ''
+        if ($asset) { $gotId = $asset.Id; $gotDigest = $asset.Digest }
+        $gotFail = ''
+        if (-not $asset) { $gotFail = Get-AssetFailureFromScope $script:UpdateAssetScope }
+        Assert-Eq ('资产契约 正文种类: ' + $cName) $cScope $script:UpdateAssetScope
+        Assert-Eq ('资产契约 编号: ' + $cName) $cId $gotId
+        Assert-Eq ('资产契约 校验值: ' + $cName) $cDigest $gotDigest
+        Assert-Eq ('资产契约 失败原因: ' + $cName) $cFail $gotFail
+        Write-Host ("contract {0} {1} {2} {3} {4}" -f $cName, $script:UpdateAssetScope, $gotId, $gotDigest, $gotFail)
+        $contractSeen[$cName] = $true
+    }
+    Assert-Eq '资产契约 用例都跑到了' 17 $contractSeen.Count
+} else {
+    Write-Host '  SKIP 找不到 tests/asset-cases.txt（仓库内的用例文件）'
+}
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

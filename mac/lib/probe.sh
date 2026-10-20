@@ -88,13 +88,30 @@ test_http_proxy_batch() {
     return 1
 }
 
-# 本机监听端口表（排序去重，无状态，可安全用于命令替换）
+# 本机监听端口表（排序去重，无状态）。
+#
+# 返回码有讲究：0 = 读到了（哪怕一个端口都没有），非 0 = 读不出来。
+# 这两种必须分开：读不出来时端口表是空的，而空表会被状态机读成
+# "本机没有代理在监听" -> 判 off -> 把用户的代理环境变量删掉，而全程没有一条日志。
+# Windows 侧是同一件事的另一种写法（那边抛错，交给上层"重试一次 + 记一条枚举失败"）。
+#
+# lsof 退出码 1 = 没有匹配的进程（这是正常结果，端口表就是空的）；
+# 127 = 命令不存在或跑不起来（这才是"读不出来"）。
 get_listening_ports() {
-    _ports=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu)
-    if [ -z "$_ports" ]; then
-        _ports=$(netstat -anvp tcp 2>/dev/null | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu)
+    _glp_out=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null)
+    _glp_rc=$?
+    if [ $_glp_rc -eq 0 ] || [ $_glp_rc -eq 1 ]; then
+        printf '%s' "$_glp_out" | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu
+        return 0
     fi
-    printf '%s' "$_ports"
+    # lsof 读不出来，退到 netstat。netstat 读不出来才算真的读不出来。
+    _glp_out=$(netstat -anvp tcp 2>/dev/null)
+    _glp_rc=$?
+    if [ $_glp_rc -ne 0 ]; then
+        return 1
+    fi
+    printf '%s' "$_glp_out" | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu
+    return 0
 }
 
 # 可疑进程端口表（排序去重，无状态，可安全用于命令替换）。
@@ -139,7 +156,13 @@ get_suspect_ports() {
 find_candidate_ports() {
     _full="$1"
     _cands=""
-    _ports=$(get_listening_ports || true)
+    # 端口枚举读不出来时直接失败返回：调用方据此知道"这一轮不知道"，
+    # 而不是拿到一张空表当成"本机没有端口在监听"。
+    _ports=$(get_listening_ports)
+    _rc=$?
+    if [ $_rc -ne 0 ]; then
+        return 1
+    fi
     # 来源 1（快路径）：已知端口按表顺序，逐个过门
     for _kp in $KNOWN_PORTS; do
         if printf '%s\n' "$_ports" | grep -qx "$_kp"; then
@@ -331,7 +354,14 @@ get_current_state() {
             return 0
         fi
         sleep 2
-        _cands=$(find_candidate_ports 1 || true)
+        _cands=$(find_candidate_ports 1)
+        _rc=$?
+        if [ $_rc -ne 0 ]; then
+            # 端口枚举失败：这一轮不知道。不判 off——判 off 会删掉用户的代理变量，
+            # 而真实情况可能只是这一次没读到。返回非 0，交给主循环"沿用上一状态"。
+            log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+            return 1
+        fi
         LAST_SEEN_SET="$_cands"
         confirm_candidate_port "$_cands" ""
         if [ -n "$CONFIRM_HIT" ]; then
@@ -346,7 +376,13 @@ get_current_state() {
         return 0
     fi
     if [ $((ROUND % 10)) -eq 0 ]; then _full=1; else _full=0; fi
-    _cands=$(find_candidate_ports "$_full" || true)
+    _cands=$(find_candidate_ports "$_full")
+    _rc=$?
+    if [ $_rc -ne 0 ]; then
+        # 端口枚举失败：这一轮不知道。不判 off（理由同上）。
+        log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+        return 1
+    fi
     if [ "$_cands" != "$LAST_SEEN_SET" ]; then
         # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。
         # 上次验活的仍在就认回它（缓存结论，零新增探测）；新面孔当场验 → 秒级收敛。

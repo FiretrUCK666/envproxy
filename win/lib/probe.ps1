@@ -223,8 +223,10 @@ function Test-HttpProxyBatch([int[]]$Ports) {
 function Find-CandidatePorts([bool]$FullScan = $true) {
     $ordered = @()
     # 端口枚举失败 ≠ 本机没有端口：失败的后果是候选集为空 → 调用方两轮后判 off 并删变量。
-    # 所以这里先做一次即时重试，仍失败就留一条日志（可诊断），再按原行为继续——
+    # 所以这里先做一次即时重试；仍失败就记下"这一轮不知道"（$script:PortEnumerationFailed），
+    # 由状态机据此沿用上一状态、不动用户的环境变量。
     # 偶发抖动因此不会翻转状态，而"真的枚举不了"这种系统性问题会在日志里现形。
+    # （mac 侧同形：那边枚举失败时 get_listening_ports 返回非 0，一路传到状态机。）
     $listeners = @()
     $enumerated = $false
     for ($attempt = 0; $attempt -lt 2 -and -not $enumerated; $attempt++) {
@@ -235,7 +237,8 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
             if ($attempt -eq 0) { Start-Sleep -Milliseconds 300 }
         }
     }
-    if (-not $enumerated) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮按无端口处理" } catch {} }
+    $script:PortEnumerationFailed = (-not $enumerated)
+    if (-not $enumerated) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮沿用上一状态，不动环境变量" } catch {} }
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
 
@@ -500,6 +503,9 @@ $script:LastSeenSet = ""
 $script:LastAlivePort = $null
 $script:Round = 0
 
+# 端口枚举这一轮是否失败（true = 不知道，不是不在翻墙）。
+# 由 Find-CandidatePorts 写，由 Get-CurrentState 读。
+$script:PortEnumerationFailed = $false
 function Get-CurrentState {
     $script:Round++
     $port = $script:CachedPort
@@ -522,6 +528,7 @@ function Get-CurrentState {
         # 端口停止：可能是"断开→改端口→重连/换软件"的过渡期，先睡 2 秒跳过
         Start-Sleep -Seconds 2
         $cands = Find-CandidatePorts -FullScan:$true
+        if ($script:PortEnumerationFailed) { return "unknown" }
         $script:LastSeenSet = ($cands -join ",")
         $hit = Confirm-CandidatePort $cands $null   # 旧首选已停，直接走全集
         if ($hit) {
@@ -537,6 +544,9 @@ function Get-CurrentState {
     # 无缓存（off 状态）：轻量候选集；每 10 轮补一次全端口批量尾巴
     $fullScan = (($script:Round % 10) -eq 0)
     $cands = Find-CandidatePorts -FullScan:$fullScan
+    # 端口枚举失败 = 这一轮不知道，不是不在翻墙。判 off 会删掉用户的代理变量，
+    # 而真实情况可能只是这一次没读到。交给主循环"沿用上一状态"。
+    if ($script:PortEnumerationFailed) { return "unknown" }
     $sig = ($cands -join ",")
     if ($sig -ne $script:LastSeenSet) {
         # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。

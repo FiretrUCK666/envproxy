@@ -214,6 +214,10 @@ proxy_vars_present() {
 
 # 幂等：整套变量都已就位就什么都不做（只看单项会让"地址对、别的漂移"的半代理状态无人纠正）
 apply_state() {
+    # "unknown" = 这一轮不知道（端口枚举失败），不是"不在翻墙"。绝不能拿它写变量。
+    case "${1:-}" in
+        ""|unknown) return 0 ;;
+    esac
     _state="$1"
     if [ "$_state" = "off" ]; then
         if proxy_vars_present; then

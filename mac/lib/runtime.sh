@@ -313,18 +313,23 @@ remove_shell_hooks() {
 # ------------------------------------------------------------------------------
 # 判据：这个进程是"监控"还是"一次性命令"。
 # 监控的命令行是"解释器 + 脚本路径"，后面没有子命令；
-# 一次性命令的命令行是"解释器 + 脚本路径 + 子命令"，子命令在最后一个词。
+# 一次性命令的命令行是"解释器 + 脚本路径 + 子命令 [开关]"，子命令是**脚本路径之后的第一个词**。
 # 判据必须是**参数位**，不能是"命令行里有没有 install/stop 这些字"——
 # 装在名字带 install 的目录里（Downloads/install/…）的监控会被误判成一次性命令：
 # 于是"监控没在跑"→ 又起一个，停的时候也停不掉。
+#
+# 取第一个词而不是最后一个：子命令后面可以跟开关（uninstall --purge / update --yes），
+# 取最后一个词会把带开关的一次性命令当成监控。
 # 纯函数，自检可测（不联网、不起进程）。
 is_monitor_args() {
     case "$1" in
         *envproxy.sh*) ;;
         *) return 1;;
     esac
-    _ima_last="${1##* }"
-    case "$_ima_last" in
+    # 去掉脚本路径本身，剩下的第一个词才是子命令。
+    _ima_rest="${1#*envproxy.sh}"
+    _ima_arg=$(printf '%s' "$_ima_rest" | sed -E 's/^[[:space:]]+//; s/[[:space:]].*$//')
+    case "$_ima_arg" in
         install|stop|uninstall|status|purge|update|menu|self-test) return 1;;
     esac
     return 0
@@ -500,8 +505,13 @@ run_monitor_loop() {
     log_msg "==== 监控启动 ===="
 
     CURRENT_STATE="off"
-    get_current_state || true
-    apply_state "$CURRENT_STATE" || true
+    # 启动对齐：只有真的判出状态才动手。枚举失败时这一轮是"不知道"，
+    # 按"没代理"去清理变量是在删一个可能还活着的代理——那正是最不该犯的错。
+    if get_current_state; then
+        apply_state "$CURRENT_STATE" || true
+    else
+        log_msg "启动时端口枚举失败 -> 不动环境变量，沿用现状"
+    fi
     _last="$CURRENT_STATE"
     _pending=""
     _pending_n=0

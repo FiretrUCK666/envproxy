@@ -1,0 +1,32 @@
+# 资产解析契约用例（两侧必须得出同一个结论）
+#
+# 一行一份应答正文，字段用 | 分隔，一共 6 个：
+#   名字|正文种类|编号|校验值|失败原因|正文
+# 用 | 而不是 TAB：bash 的 IFS 里 TAB 属于空白字符，连续的 TAB 会把空字段并掉，
+# 两侧就��到的字段数不一样（PowerShell 切 TAB 会保留空字段）。
+#
+# 两边的自检都读这个文件：各自跑一遍，把实际结果和这里写下的期望比对。
+# 门禁 10 再把两边的实际输出互相比一次——同一个应答，两边必须给出同一个结论。
+#
+# 正文里用到的文件名固定是 EnvProxy-test.zip（两边查的是同一个名字）。
+# 正文种类：other（不是发布信息）/ release（是发布信息但没有这个文件）/
+#           release-bad-id（文件在里面，编号取不出来）。
+# 失败原因：空 = 可用；否则是 local/network/quota/server/bad-content/missing 之一。
+
+release-with-file|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip"}]}
+release-without-file|release|||missing|{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"other.zip"}]}
+assets-empty|release|||missing|{"assets":[]}
+assets-null|release|||missing|{"assets":null}
+assets-not-array|release|||missing|{"assets":{"x":1}}
+error-object|other|||network|{"message":"Bad credentials","documentation_url":"https://docs.github.com/rest"}
+html-page|other|||network|<html><head><title>Sign in</title></head><body>portal</body></html>
+id-unusable|release-bad-id|||bad-content|{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/0","id":0,"name":"EnvProxy-test.zip"}]}
+id-too-long|release-bad-id|||bad-content|{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/12345678901234567890","id":12345678901234567890,"name":"EnvProxy-test.zip"}]}
+bad-url-good-field|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/0","id":657756050,"name":"EnvProxy-test.zip"}]}
+no-url|release|657756050|||{"assets":[{"id":657756050,"name":"EnvProxy-test.zip"}]}
+name-case-differs|release|||missing|{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"envproxy-test.zip"}]}
+digest-lower|release|657756050|sha256:1731ce10fde048900c7b3a793d81cba5ec8411d6e1fe82930b3c34bc82cfb4d5||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":"sha256:1731ce10fde048900c7b3a793d81cba5ec8411d6e1fe82930b3c34bc82cfb4d5"}]}
+digest-upper|release|657756050|sha256:1731ce10fde048900c7b3a793d81cba5ec8411d6e1fe82930b3c34bc82cfb4d5||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":"sha256:1731CE10FDE048900C7B3A793D81CBA5EC8411D6E1FE82930B3C34BC82CFB4D5"}]}
+digest-null|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":null}]}
+digest-bad-shape|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":"sha256:XYZ"}]}
+uploader-id-not-used|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","uploader":{"id":999,"login":"someone"}}]}
