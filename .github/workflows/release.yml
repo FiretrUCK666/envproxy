@@ -146,6 +146,15 @@ jobs:
           # gh release view 的 --json 字段集随版本变化（如 isLatest 老版本没有），只用最稳的 assets；
           # "是否最新"改从 releases/latest 反查：重建旧标签时直链仍指新版，此时必须拒绝。
           JSON="$(gh release view "$TAG" --json assets)" || { echo "读取 Release 失败：$TAG"; exit 1; }
+          # 只许有这两个资产：历史遗留的旧名字（不分平台的 EnvProxy.zip / .tar.gz）会一直挂在
+          # Release 上，用户按旧链接或顺手点一个就会下到不含本平台入口的包。
+          # "我只上传的对不对"不够，还要问"有没有多余东西"。
+          EXTRA="$(printf '%s' "$JSON" | jq -r '.assets[].name' | grep -vxE 'EnvProxy-win\.zip|EnvProxy-mac\.tar\.gz' || true)"
+          if [ -n "$EXTRA" ]; then
+            echo "Release 里有清单外的资产（会让用户下错包，删掉后重跑本步）："
+            echo "$EXTRA" | sed 's/^/  /'
+            exit 1
+          fi
           for want in EnvProxy-win.zip EnvProxy-mac.tar.gz; do
             SIZE="$(printf '%s' "$JSON" | jq -r --arg w "$want" '.assets[] | select(.name==$w) | .size // empty')"
             if [ -z "$SIZE" ]; then
