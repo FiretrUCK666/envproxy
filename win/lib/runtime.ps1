@@ -112,7 +112,10 @@ if (-not $target -or -not (Test-Path -LiteralPath $target)) {
     exit
 }
 
-New-Item -Path $reg -Force -ErrorAction SilentlyContinue | Out-Null
+# 注册表上的 New-Item -Force 不是"已存在就跳过"，而是**清空重建**：
+# 连带删掉里面的 Backup 快照，那是卸载时还原使用者原值的唯一依据。
+# 所以只在键不存在时才建。
+if (-not (Test-Path -LiteralPath $reg)) { New-Item -Path $reg -Force -ErrorAction SilentlyContinue | Out-Null }
 Set-ItemProperty -Path $reg -Name "ScriptPath" -Value $target -ErrorAction SilentlyContinue
 
 # 监控进程识别判据：与核心脚本里的 $MonitorCmdLinePattern 保持同一语义。
@@ -148,7 +151,12 @@ function Remove-AutoRun {
 # 记录"脚本当前路径"（监控启动时写入；定位器靠它快速找到脚本）
 # 记的必须是入口脚本：定位器会直接拿这个值去 -File 启动，记成库文件等于记了个跑不起来的文件。
 function Update-ScriptPathRecord {
-    New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null
+    # 只在键不存在时才建。注册表上的 New-Item -Force 会把这个键**清空重建**，
+    # 连带删掉 Backup 快照——监控每次启动都调本函数，快照会在装上后一两秒内就没了，
+    # 卸载时便无值可还原，使用者手设的代理配置凭空消失。
+    if (-not (Test-RegKey $ScriptPathRegKey)) {
+        New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null
+    }
     Set-ItemProperty -Path $ScriptPathRegKey -Name "ScriptPath" -Value $ScriptPath -ErrorAction SilentlyContinue
 }
 
@@ -279,7 +287,24 @@ function Start-Monitor([bool]$Force = $false) {
         Write-Host "监控进程已启动。" -ForegroundColor Green
         return $true
     }
-    Write-Host "监控进程未能确认运行（另一个副本的监控可能占着单实例锁）。" -ForegroundColor Yellow
+    # 起不来要分清是"另一个副本占着锁"还是"根本没起来"：前者该去别处收摊，后者该查杀软与日志。
+    # 说清楚另一份在哪，使用者才知道该进哪个文件夹——只说"可能被占着"，等于把排查推回去。
+    $other = $null
+    try {
+        $other = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match $MonitorCmdLinePattern } |
+            Select-Object -First 1
+    } catch {}
+    if ($other) {
+        $otherPath = ""
+        if ($other.CommandLine -match '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$') { $otherPath = $Matches[1] }
+        $otherDir = if ($otherPath) { Split-Path -Parent (Split-Path -Parent $otherPath) } else { "" }
+        Write-Host ("监控进程未能确认运行：另一个副本的监控正占着单实例锁（{0}）。" -f $(if ($otherDir) { $otherDir } else { $otherPath })) -ForegroundColor Yellow
+        Write-Host "      还用那份就继续用它；不用了，进上面那个文件夹打开菜单选 一键恢复，再回到这里选 安装。" -ForegroundColor Yellow
+    } else {
+        Write-Host "监控进程未能确认运行：这次没看到别的副本，多半是启动被拦或启动过程出错。" -ForegroundColor Yellow
+        Write-Host "      再选一次 安装 / 修复；仍然不行就看 查看状态 和 monitor.log 最近几行。" -ForegroundColor Yellow
+    }
     return $false
 }
 
@@ -289,7 +314,10 @@ function Stop-Monitor {
     # 从目标监控的命令行动态解析它的脚本位置 → 把停止标志写到"它自己"的 monitor 目录。
     # 处理文件夹被移动/复制后新旧位置不一致的场景：让旧位置的监控优雅退出，而非强杀。
     $targetDir = $MonitorDir
-    if ($w.CommandLine -match '-File\s+"([^"]*envproxy\.ps1)"') {
+    # 引号可有可无：引号是启动方式决定的，不是身份的一部分（与 $MonitorCmdLinePattern 同一条道理）。
+    # 要求带引号时，手工起的监控拿不到它自己的目录：停止标志写进了"我们"的 monitor 目录，
+    # 优雅停止退化成强杀，还留下一个谁也不会消费的 stop.flag。
+    if ($w.CommandLine -match '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$') {
         $targetDir = Join-Path (Split-Path -Parent $Matches[1]) "monitor"
     }
     $targetFlag = Join-Path $targetDir "stop.flag"

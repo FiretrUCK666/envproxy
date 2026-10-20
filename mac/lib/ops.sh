@@ -114,6 +114,22 @@ self_test() {
     if [ -f "$PREV_ENV" ]; then _s6=1; else _s6=0; fi
     _selftest_assert_eq "还原后快照删除" "0" "$_s6"
 
+    echo "[4b] 快照归属判定"
+    # "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
+    # 首次安装时把使用者的手设变量当成我们的跳过，卸载时会被删掉又无从还原。
+    if snapshot_skip_value HTTP_PROXY 'http://127.0.0.1:7890' 1; then _sk1=1; else _sk1=0; fi
+    _selftest_assert_eq "首次安装：本机地址要快照" "0" "$_sk1"
+    if snapshot_skip_value NODE_USE_ENV_PROXY 1 1; then _sk2=1; else _sk2=0; fi
+    _selftest_assert_eq "首次安装：NODE_USE_ENV_PROXY=1 要快照" "0" "$_sk2"
+    if snapshot_skip_value https_proxy 'http://127.0.0.1:7890' 0; then _sk3=1; else _sk3=0; fi
+    _selftest_assert_eq "重装：本机地址是我们上次写的，跳过" "1" "$_sk3"
+    if snapshot_skip_value NODE_USE_ENV_PROXY 1 0; then _sk4=1; else _sk4=0; fi
+    _selftest_assert_eq "重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过" "1" "$_sk4"
+    if snapshot_skip_value HTTP_PROXY 'http://10.0.0.1:8080' 0; then _sk5=1; else _sk5=0; fi
+    _selftest_assert_eq "别人的代理地址从来不跳过" "0" "$_sk5"
+    if snapshot_skip_value HTTP_PROXY '' 0; then _sk6=1; else _sk6=0; fi
+    _selftest_assert_eq "空值不跳过" "0" "$_sk6"
+
     echo "[5] 源码包判据与清理"
     _fakeroot="$_sandbox/fakeroot"
     mkdir -p "$_fakeroot/.github" "$_fakeroot/tests" 2>/dev/null || true
@@ -714,8 +730,11 @@ self_test() {
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
+    # 首次安装的判据要在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
+    # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
+    if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
-    snapshot_prev_env || true
+    snapshot_prev_env "$_first" || true
     if set_autorun; then
         echo "[1/3] 开机自启动：已写入（LaunchAgent + 固定定位器）"
     else
@@ -730,8 +749,7 @@ install_envproxy() {
     if start_monitor 1; then
         echo "[3/3] 监控进程：已启动"
     else
-        echo "[3/3] 监控进程：未能确认运行，请用菜单"查看状态"核对"
-        echo "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。"
+        echo "[3/3] 监控进程：未能确认运行，原因见上面那两行"
     fi
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
     # 以前不管成没成都会按预设的 off 去应用，等于把"读不出来"当成"代理没了"。

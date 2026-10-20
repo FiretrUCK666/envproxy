@@ -20,17 +20,19 @@ function Install-EnvProxy {
         Write-Host "[1/3] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
         Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
+    # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
+    # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
+    $firstInstall = -not ((Get-ItemProperty $ScriptPathRegKey -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
     Update-ScriptPathRecord
     # 先快照用户原值，再动任何东西：监控一启动就会在几秒内自愈、把代理变量写进去，
     # 那时再快照，存下的就是"我们写下的值"而不是用户原值，卸载还原会留下我们的条目。
     # （快照只记一次；已经存在时这里是无副作用的空操作。）
-    Snapshot-PrevEnv
+    Snapshot-PrevEnv -FirstInstall:$firstInstall
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     if (Start-Monitor -Force:$true) {
         Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
     } else {
-        Write-Host "[2/3] 监控进程：未能确认运行，请打开菜单选 查看状态 核对。" -ForegroundColor Yellow
-        Write-Host "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。" -ForegroundColor Yellow
+        Write-Host "[2/3] 监控进程：未能确认运行，原因见下面那两行。" -ForegroundColor Yellow
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
@@ -119,7 +121,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
     if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
     if (Test-Item $LauncherDir) { $dirty += "定位器目录仍在" }
-    if (Test-Item $ScriptPathRegKey) { $dirty += "路径记录仍在" }
+    if (Test-RegKey $ScriptPathRegKey) { $dirty += "路径记录仍在" }
     if ((Test-Item $PidFile) -or (Test-Item $StopFlag)) { $dirty += "监控运行时文件仍在" }
     # 变量复检不用整表判据：有快照的名字必须与快照一致（用户原值含重合项也算干净），
     # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。

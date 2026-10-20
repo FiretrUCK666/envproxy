@@ -98,16 +98,34 @@ sync_user_env_vars() {
     return 0
 }
 
+# 快照时这个值要不要当成"我们写的"跳过（纯函数，不碰任何状态，可单测）。
+# 用法：snapshot_skip_value 变量名 变量值 是否首次安装（1 = 是）
+# "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
+# 首次安装时机器上还没有我们的任何东西：此刻本机地址的代理变量、
+# 以及 NODE_USE_ENV_PROXY=1，都是使用者自己的配置。把它们当我们的跳过，
+# 卸载时会被删掉又无从还原——用了几年的手设配置就这么凭空没了。
+snapshot_skip_value() {
+    [ -n "$2" ] || return 1
+    [ "$3" = "1" ] && return 1
+    case "$1" in
+        NODE_USE_ENV_PROXY) [ "$2" = "1" ] && return 0 ;;
+        HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|ALL_PROXY|all_proxy)
+            case "$2" in http://127.0.0.1:*) return 0 ;; esac ;;
+    esac
+    return 1
+}
+
 # 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
-# 快照时属于我们自己的值视为空（升级路径下安装时代理正开着，不能把刚写的值当成用户的）。
+# 重装/升级时代理正开着，我们上次写下的值不能当成使用者的（见 snapshot_skip_value）。
 snapshot_prev_env() {
+    _sn_first="${1:-0}"
     [ -f "$PREV_ENV" ] && return 0
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     _sntmp="$PREV_ENV.tmp.$$"
     {
         for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
             _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
-            is_owned_proxy_value "$_cur" 2>/dev/null && _cur=""
+            snapshot_skip_value "$_v" "$_cur" "$_sn_first" && _cur=""
             case "$_cur" in *"
 "*) _cur="";; esac
             printf '%s\t%s\n' "$_v" "$_cur"
@@ -119,7 +137,7 @@ snapshot_prev_env() {
             printf '%s\t%s\n' "$_v" "$_cur"
         done
         _cur=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
-        [ "$_cur" = "1" ] && _cur=""
+        snapshot_skip_value NODE_USE_ENV_PROXY "$_cur" "$_sn_first" && _cur=""
         printf '%s\t%s\n' "NODE_USE_ENV_PROXY" "$_cur"
     } > "$_sntmp" 2>/dev/null && mv "$_sntmp" "$PREV_ENV" 2>/dev/null || rm -f "$_sntmp" 2>/dev/null || true
     # 快照里是用户**原来**的代理地址，可能带账号密码（http://user:pass@host:port）。

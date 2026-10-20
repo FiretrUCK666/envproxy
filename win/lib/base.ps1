@@ -16,6 +16,13 @@ function Test-Item([string]$Path) {
     if (-not $Path) { return $false }
     try { return [bool]([System.IO.File]::Exists($Path) -or [System.IO.Directory]::Exists($Path)) } catch { return $false }
 }
+# 注册表键是否存在。**不能用 Test-Item 判注册表**：它问的是文件系统，
+# 对 HKCU:\ 这类路径永远返回假。照着它去判断"键在不在"，已存在的键会被当成不存在，
+# 于是下一步的 New-Item -Force 把键清空重建——连带删掉里面的快照数据。
+function Test-RegKey([string]$Path) {
+    if (-not $Path) { return $false }
+    try { return [bool](Test-Path -LiteralPath $Path) } catch { return $false }
+}
 function Read-Text([string]$Path) {
     # 读文本：显式 UTF-8，绝不交给系统代码页去猜（中文 Windows 上会读成乱码）
     return [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)

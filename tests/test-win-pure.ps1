@@ -750,5 +750,26 @@ Assert-Eq '监控判据认得不带引号的命令行' $true ('powershell.exe -N
 Assert-Eq '监控判据认不得带子命令的进程' $false ('powershell.exe -File "D:\EnvProxy\win\envproxy.ps1" -Status' -match $MonitorCmdLinePattern)
 Assert-Eq '监控判据认不得命令行中间提到脚本的进程' $false ('powershell.exe -Command "Get-Content D:\EnvProxy\win\envproxy.ps1"' -match $MonitorCmdLinePattern)
 
+# ------------------------------------------------------------------------------
+# [10] 快照归属判定：首次安装时，本机地址的代理变量是使用者自己的
+# ------------------------------------------------------------------------------
+# "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
+# 首次安装时把使用者的手设变量当成我们的跳过，卸载时会被删掉又无从还原。
+Assert-Eq '首次安装：本机地址的代理变量要快照' $false (Test-SnapshotSkip 'HTTP_PROXY' 'http://127.0.0.1:7890' $true)
+Assert-Eq '首次安装：NODE_USE_ENV_PROXY=1 要快照' $false (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $true)
+Assert-Eq '重装：本机地址是我们上次写的，跳过' $true (Test-SnapshotSkip 'HTTPS_PROXY' 'http://127.0.0.1:7890' $false)
+Assert-Eq '重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过' $true (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $false)
+Assert-Eq '别人的代理地址从来不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' 'http://10.0.0.1:8080' $false)
+Assert-Eq '空值不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' '' $false)
+
+# ------------------------------------------------------------------------------
+# [11] 注册表判断：文件系统那套对 HKCU:\ 永远说"不存在"
+# ------------------------------------------------------------------------------
+# 照着 Test-Item 判"键在不在"，已存在的键会被当成不存在，下一步 New-Item -Force 就把键
+# 清空重建——连带删掉里面的用户原值快照。所以注册表一律用 Test-RegKey。
+Assert-Eq '注册表判断：已存在的键判为存在' $true (Test-RegKey 'HKCU:\Software')
+Assert-Eq '注册表判断：不存在的键判为不存在' $false (Test-RegKey 'HKCU:\Software\EnvProxyNoSuchKey')
+Assert-Eq '文件系统判断对注册表路径返回假（所以注册表要用 Test-RegKey）' $false (Test-Item 'HKCU:\Software')
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

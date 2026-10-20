@@ -114,15 +114,30 @@ function Test-ProxyVarsPresent {
     return $false
 }
 
+# 快照时这个值要不要当成"我们写的"跳过（纯函数，不碰注册表，可单测）。
+# "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
+# 首次安装时机器上还没有我们的任何东西：此刻本机地址的代理变量、
+# 以及 NODE_USE_ENV_PROXY=1，都是使用者自己的配置。把它们当我们的跳过，
+# 卸载时会被删掉又无从还原——用了几年的手设配置就这么凭空没了。
+function Test-SnapshotSkip([string]$Name, [string]$Value, [bool]$FirstInstall) {
+    if (-not $Value) { return $false }
+    if ($FirstInstall) { return $false }
+    if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
+    if ($Name -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) { return ($Value -like "http://127.0.0.1:*") }
+    return $false
+}
+
 # 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
-# 属于我们自己的值视为无（升级路径下安装时代理正开着，不能把刚写的值当成用户的）。
+# 重装/升级时代理正开着，我们上次写下的值不能当成使用者的（见 Test-SnapshotSkip）。
 # 注意：不用 Volatile Environment 做"会话级"优化——它是未文档化机制，语义不保证；持久化即 HKCU 本体。
 # 类型也要留底：原值若是 REG_EXPAND_SZ（含 %引用%），按 REG_SZ 写回会提前展开、腐化用户配置。
 # 所以读未展开值、存类型，还原时按原类型写回。
-function Snapshot-PrevEnv {
+function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
     try {
         if (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue) { return }
-        New-Item -Path $PrevEnvRegKey -Force -ErrorAction Stop | Out-Null
+        # 父键按需建；子键不带 -Force——注册表上的 -Force 是"清空重建"，不是"已存在就跳过"。
+        if (-not (Test-RegKey $ScriptPathRegKey)) { New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
+        New-Item -Path $PrevEnvRegKey -ErrorAction Stop | Out-Null
         $envKey = Get-Item -LiteralPath "HKCU:\Environment" -ErrorAction SilentlyContinue
         foreach ($n in $ProxyVarNames) {
             $raw = $null
@@ -134,8 +149,7 @@ function Snapshot-PrevEnv {
                 } catch {}
             }
             if ($null -eq $raw) { continue }
-            if ($n -eq "NODE_USE_ENV_PROXY" -and $raw -eq "1") { continue }
-            if (($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) -and ($raw -like "http://127.0.0.1:*")) { continue }
+            if (Test-SnapshotSkip $n $raw $FirstInstall) { continue }
             Set-ItemProperty -Path $PrevEnvRegKey -Name $n -Value $raw -ErrorAction SilentlyContinue
             Set-ItemProperty -Path $PrevEnvRegKey -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction SilentlyContinue
         }
