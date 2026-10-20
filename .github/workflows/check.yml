@@ -244,7 +244,9 @@ jobs:
           $ign = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
           # git 输出中文文件名时是否转义受本机 core.quotepath 影响（CI 默认转义成本地看不懂的八进制），
           # 在这里写死关掉：门禁要的是确定性的 UTF-8 名单，不是本机配置的样子。
-          $want = @(git -c core.quotepath=false ls-files | Where-Object {
+          # 两侧取同一棵树：包用 HEAD 的归档，仓库侧也用 HEAD 的文件清单
+          # （用索引的话，本地"已暂存未提交"的新文件会让两边对不上——那是本地状态差异，不是包有问题）。
+          $want = @(git -c core.quotepath=false ls-tree -r --name-only HEAD | Where-Object {
             $p = $_; $hit = $false
             foreach ($g in $ign) {
               if ($g.EndsWith('/')) { if ($p.StartsWith($g)) { $hit = $true; break } }

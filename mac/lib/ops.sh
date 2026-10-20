@@ -611,6 +611,7 @@ self_test() {
     _selftest_assert_eq "入口：多余的位置参数要报用法错误" "2" "$_sg_rc"
     # 合法形式必须放行：开关占一个参数位，不能被当成"多余的位置参数"。
     # 以前把总数当成位置参数数，"status --yes" 这种正常用法会被一起拒掉。
+    # 这条不进跨端契约（它要真跑子命令，两端的子命令各自才有确定结果）。
     _sg_rc=0
     /bin/bash "$SCRIPT_PATH" status --yes >/dev/null 2>&1 || _sg_rc=$?
     _selftest_assert_eq "入口：子命令带开关是合法用法" "0" "$_sg_rc"
@@ -664,8 +665,6 @@ self_test() {
     _eg_case unknown-arg 2 bogus
     _eg_case extra-positional 2 status extra
     _eg_case purge-misuse 2 install --purge
-    _eg_case valid-status 0 status
-    _eg_case valid-switch 0 status --yes
 
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then

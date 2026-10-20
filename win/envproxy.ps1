@@ -116,6 +116,8 @@ function Exit-IfOpBusy {
 }
 # -Purge 只在"一键恢复"时才有意义（连日志一起删）。单独给 -Purge 以前会一路落到
 # 监控模式：用户以为在清日志，工具却把监控起来了，还什么也没删。
+# 用法错误要在拿操作锁**之前**判：用法错误既不改文件也不删变量，不该占着锁，
+# 也不该因为"另一个安装正在进行"而报成退出码 1（那是动作冲突，不是用法错误）。
 if ($Purge -and -not $Uninstall) {
     Write-Host "-Purge 只在卸载时才有意义：它表示连日志一起删。" -ForegroundColor Yellow
     Write-Host "请用：powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall -Purge" -ForegroundColor Yellow

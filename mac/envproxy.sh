@@ -96,21 +96,8 @@ fi
 # shellcheck disable=SC2001
 _CMD_NORM=$(printf '%s' "$_CMD" | sed 's/^--*//; s/^-//' | tr '[:upper:]' '[:lower:]')
 
-case "$_CMD_NORM" in
-    install|update|stop|uninstall)
-        # 操作锁：这四个动作都会改文件或删变量，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
-        # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
-        # 拿锁用 ln 而不是 mkdir（理由见 runtime 层的 acquire_op_lock）：
-        # mkdir 成功到"把 pid 写进去"之间有个空窗，那个空窗里另一个进程
-        # 读到空的 pid，会把锁当成陈旧的接管掉——两个安装同时跑就互相覆盖文件。
-        mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-        OP_LOCK="$MONITOR_DIR/.op.lock"
-        acquire_op_lock "$OP_LOCK" || exit 1
-        # shellcheck disable=SC2064
-        trap 'rm -f "$OP_LOCK" 2>/dev/null || true' EXIT
-        ;;
-esac
-
+# 用法错误要在拿操作锁**之前**判：用法错误既不改文件也不删变量，不该占着锁，
+# 也不该因为"另一个安装正在进行"而报成退出码 1（那是动作冲突，不是用法错误）。
 # --purge 只在"一键恢复"时才有意义（连日志一起删）。别处给出它，
 # 以前会被静默忽略：用户以为在清日志，工具却照常把监控起来了，还什么也没删。
 if [ "$_PURGE" = "1" ] && [ "$_CMD_NORM" != "uninstall" ]; then
@@ -134,6 +121,23 @@ if [ $_pos -gt 1 ]; then
     echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]" >&2
     exit 2
 fi
+
+
+case "$_CMD_NORM" in
+    install|update|stop|uninstall)
+        # 操作锁：这四个动作都会改文件或删变量，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
+        # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
+        # 拿锁用 ln 而不是 mkdir（理由见 runtime 层的 acquire_op_lock）：
+        # mkdir 成功到"把 pid 写进去"之间有个空窗，那个空窗里另一个进程
+        # 读到空的 pid，会把锁当成陈旧的接管掉——两个安装同时跑就互相覆盖文件。
+        mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+        OP_LOCK="$MONITOR_DIR/.op.lock"
+        acquire_op_lock "$OP_LOCK" || exit 1
+        # shellcheck disable=SC2064
+        trap 'rm -f "$OP_LOCK" 2>/dev/null || true' EXIT
+        ;;
+esac
+
 
 case "$_CMD_NORM" in
     install) install_envproxy;;

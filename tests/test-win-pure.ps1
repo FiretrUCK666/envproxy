@@ -575,10 +575,16 @@ if ($probeThrew) {
 # 这里用子进程验：点源加载时 $args 是空的，验不到。
 $entryPath = Join-Path $PSScriptRoot '../win/envproxy.ps1'
 function Invoke-EntryChild([string[]]$EntryArgs) {
+    $exe = (Get-Process -Id $PID).Path
+    if ($env:OS -ne 'Windows_NT') {
+        # Linux 上 Start-Process 不支持重定向参数，直接调用取退出码。
+        & $exe '-NoProfile' '-ExecutionPolicy' 'Bypass' '-File' $entryPath @EntryArgs 2>$null | Out-Null
+        return $LASTEXITCODE
+    }
     $outFile = Join-Path $env:TEMP ("ep-entry-out-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
     $errFile = Join-Path $env:TEMP ("ep-entry-err-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
     try {
-        $ps = Start-Process -FilePath (Get-Process -Id $PID).Path -PassThru -NoNewWindow -Wait `
+        $ps = Start-Process -FilePath $exe -PassThru -NoNewWindow -Wait `
             -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$entryPath`"") + $EntryArgs) `
             -RedirectStandardOutput $outFile -RedirectStandardError $errFile
         return $ps.ExitCode
@@ -586,28 +592,33 @@ function Invoke-EntryChild([string[]]$EntryArgs) {
         Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
     }
 }
-foreach ($bad in @('-Foo', '-Installt', 'extra')) {
+# 打错的参数名也要拒（不只是不认识的）：它是入口守卫最典型的用途。
+foreach ($bad in @('-Installt')) {
     $rc = Invoke-EntryChild @($bad)
-    Assert-Eq ("入口拒绝不认识的参数: " + $bad) 2 $rc
+    Assert-Eq ("入口拒绝打错的参数: " + $bad) 2 $rc
 }
 
 # ------------------------------------------------------------------------------
 # [2c] 入口的参数与退出码：两侧同一套，门禁 10 把两边的这些行互相比一次
 # ------------------------------------------------------------------------------
-# 用例都不碰用户文件：状态只读；非法参数在动手之前就被拦下。
-# "valid-switch" 这条尤其重要：开关占一个参数位，不能被当成"多余的位置参数"，
-# 否则"带开关的正常用法"会被一起拒掉。
+# 只放平台无关的用例：三种误用都在动手之前被拦下，两端跑出来的退出码必然相同。
+# "合法用法必须放行"是另一回事（见下面那条本地断言）：它要真跑子命令，
+# 而 Windows 的状态显示依赖注册表、只在 Windows 上有确定结果，所以不进跨端契约。
 $entryCases = @(
     @{ Name = 'unknown-arg';      Args = @('-Foo');              Want = 2 },
     @{ Name = 'extra-positional'; Args = @('extra');             Want = 2 },
-    @{ Name = 'purge-misuse';     Args = @('-Install', '-Purge'); Want = 2 },
-    @{ Name = 'valid-status';     Args = @('-Status');           Want = 0 },
-    @{ Name = 'valid-switch';     Args = @('-Status', '-Yes');    Want = 0 }
+    @{ Name = 'purge-misuse';     Args = @('-Install', '-Purge'); Want = 2 }
 )
 foreach ($c in $entryCases) {
     $rc = Invoke-EntryChild $c.Args
     Assert-Eq ("入口退出码: " + $c.Name) $c.Want $rc
     Write-Host ("entry {0} {1}" -f $c.Name, $rc)
+}
+# 开关占一个参数位，不能被当成"多余的位置参数"——否则"带开关的正常用法"会被一起拒掉。
+# 这条要在 Windows 上验：状态显示读注册表，其他平台没有确定结果。
+if ($env:OS -eq 'Windows_NT') {
+    $rc = Invoke-EntryChild @('-Status', '-Yes')
+    Assert-Eq '入口：子命令带开关是合法用法' 0 $rc
 }
 
 # ------------------------------------------------------------------------------
