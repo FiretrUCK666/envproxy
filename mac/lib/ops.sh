@@ -589,9 +589,14 @@ self_test() {
         CACHED_PORT=""
         get_current_state
         _st_state_rc=$?
+        # 状态对齐在枚举失败时也必须什么都不做：调用方拿到"不知道"，
+        # 就不能按"没代理"去删用户的代理变量。
+        _st_align_rc=0
+        align_state_once >/dev/null 2>&1 || _st_align_rc=$?
         PATH="$_st_oldpath"
         export PATH
         _selftest_assert_eq "枚举失败时状态判定返回非 0（上层据此沿用上一状态）" "1" "$_st_state_rc"
+        _selftest_assert_eq "枚举失败时状态对齐不做任何改动" "1" "$_st_align_rc"
     else
         echo "  SKIP 造不出坏掉的 lsof/netstat 桩（权限或文件系统不支持）"
     fi
@@ -604,6 +609,11 @@ self_test() {
     _sg_rc=0
     /bin/bash "$SCRIPT_PATH" status extra >/dev/null 2>&1 || _sg_rc=$?
     _selftest_assert_eq "入口：多余的位置参数要报用法错误" "2" "$_sg_rc"
+    # 合法形式必须放行：开关占一个参数位，不能被当成"多余的位置参数"。
+    # 以前把总数当成位置参数数，"status --yes" 这种正常用法会被一起拒掉。
+    _sg_rc=0
+    /bin/bash "$SCRIPT_PATH" status --yes >/dev/null 2>&1 || _sg_rc=$?
+    _selftest_assert_eq "入口：子命令带开关是合法用法" "0" "$_sg_rc"
 
     # 带开关的一次性命令不能被当成监控：
     # 判据是脚本路径之后的第一个词，不是最后一个词。
@@ -637,10 +647,25 @@ self_test() {
             echo "contract $_st_name $ASSET_SCOPE $_st_got_id $_st_got_digest $_st_got_fail"
             _st_seen=$((_st_seen + 1))
         done < "$_st_cases"
-        _selftest_assert_eq "资产契约 用例都跑到了" "17" "$_st_seen"
+        _selftest_assert_eq "资产契约 用例都跑到了" "20" "$_st_seen"
     else
         echo "  SKIP 找不到 tests/asset-cases.txt（仓库内的用例文件）"
     fi
+
+    # 入口的参数与退出码：两侧同一套，门禁 10 把两边的这些行互相比一次。
+    # 用例都不碰用户文件：状态只读；非法参数在动手之前就被拦下。
+    _eg_case() {
+        _eg_name="$1"; _eg_want="$2"; shift 2
+        _eg_rc=0
+        /bin/bash "$SCRIPT_PATH" "$@" >/dev/null 2>&1 || _eg_rc=$?
+        _selftest_assert_eq "入口退出码: $_eg_name" "$_eg_want" "$_eg_rc"
+        echo "entry $_eg_name $_eg_rc"
+    }
+    _eg_case unknown-arg 2 bogus
+    _eg_case extra-positional 2 status extra
+    _eg_case purge-misuse 2 install --purge
+    _eg_case valid-status 0 status
+    _eg_case valid-switch 0 status --yes
 
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
@@ -679,9 +704,9 @@ install_envproxy() {
         echo "[3/3] 监控进程：未能确认运行，请用菜单"查看状态"核对"
         echo "      一台电脑只留一份安装；另一个副本的监控在跑时会占住单实例锁。"
     fi
-    CURRENT_STATE="off"
-    get_current_state || true
-    apply_state "$CURRENT_STATE" || true
+    # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
+    # 以前不管成没成都会按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
+    align_state_once || true
     sleep 1
     echo ""
     show_status
@@ -770,11 +795,19 @@ show_status() {
     else
         if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
     fi
-    _port=$(get_active_proxy_port 1 2>/dev/null || true)
-    if [ -n "$_port" ]; then
-        echo "翻墙代理 : 已开启（本地端口 $_port 监听中）"
+    # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
+    _lp=""
+    _lp_rc=0
+    _lp=$(get_listening_ports 2>/dev/null) || _lp_rc=$?
+    if [ "$_lp_rc" -ne 0 ]; then
+        echo "翻墙代理 : 读不出来（端口枚举失败，这一轮不知道有没有代理在运行）"
     else
-        echo "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+        _port=$(get_active_proxy_port 1 2>/dev/null || true)
+        if [ -n "$_port" ]; then
+            echo "翻墙代理 : 已开启（本地端口 $_port 监听中）"
+        else
+            echo "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+        fi
     fi
     _cur=$(get_current_proxy_port 2>/dev/null || true)
     if [ -n "$_cur" ]; then echo "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else echo "代理变量 : 无（直连状态）"; fi

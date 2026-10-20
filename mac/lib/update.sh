@@ -278,6 +278,11 @@ get_asset_from_json() {
         n = length(doc)
         i = 1
         depth = 0
+        # 顶层必须是对象：数组开头的应答不是发布信息（与 Windows 侧同一判据）。
+        # 少了这一步，数组元素的 assets 会被当成顶层字段——而单元素数组在
+        # Windows 侧会被 ConvertFrom-Json 解包，元素个数一变两侧结论就变。
+        while (i <= n && substr(doc, i, 1) ~ /[ \t]/) i++
+        if (substr(doc, i, 1) != "{") { exit }
         instr = 0
         esc = 0
         s = ""
@@ -362,7 +367,9 @@ get_asset_from_json() {
                 continue
             }
             if (c == "[") {
-                if (key == "assets" && !inassets) { inassets = 1; adep = depth }
+                # assets 数组必须在顶层（depth == 1）：嵌在别的字段里的 assets
+                # 不是发布信息，否则同一份应答两侧会得出相反的结论。
+                if (key == "assets" && depth == 1 && !inassets) { inassets = 1; adep = depth }
                 key = ""
                 i++
                 continue
@@ -831,11 +838,15 @@ update_envproxy() {
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
         # 以前两者走同一条路：谎报成"已取消"，而且退出码是 0。
         # 报错信息也要吃掉：重定向失败发生在 2>/dev/null 生效之前，会原样漏到屏幕上。
+        _ans_ok=1
         if exec 3<>/dev/tty 2>/dev/null; then
-            if read -r _ans <&3; then :; else _ans=""; fi
+            read -r _ans <&3 || _ans_ok=0
             exec 3<&- 2>/dev/null || true
         else
-            printf '%s\n' "没法提问：当前环境没有可交互的控制台，未做任何改动。" >&2
+            _ans_ok=0
+        fi
+        if [ "$_ans_ok" != "1" ]; then
+            printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             return 1
         fi
         case "$_ans" in
@@ -1050,11 +1061,15 @@ _ENVPROXY_PKG_
         _ans=""
         # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
+        _ans_ok=1
         if exec 3<>/dev/tty 2>/dev/null; then
-            if read -r _ans <&3; then :; else _ans=""; fi
+            read -r _ans <&3 || _ans_ok=0
             exec 3<&- 2>/dev/null || true
         else
-            printf '%s\n' "没法提问：当前环境没有可交互的控制台，未做任何改动。" >&2
+            _ans_ok=0
+        fi
+        if [ "$_ans_ok" != "1" ]; then
+            printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
             rm -rf "$_exdir" 2>/dev/null || true
             return 1

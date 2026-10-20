@@ -764,6 +764,26 @@ jobs:
             }
           }
           Write-Host ("资产契约 {0} 条用例，两侧结论一致。" -f $winContract.Count)
+          # 入口的参数与退出码同样是行为契约：两侧必须给出同一个退出码。
+          # 曾经只比资产解析，入口守卫的漂移就没人看得见——
+          # 而"合法用法被当成用法错误拒掉"正是这一类。
+          $winEntry = @($winOut | Where-Object { $_ -like 'entry *' })
+          $macEntry = @($macOut | Where-Object { $_ -like 'entry *' })
+          if ($winEntry.Count -eq 0 -or $macEntry.Count -eq 0) {
+            Write-Host '入口契约没有跑到：两侧都应输出 entry 行'; exit 1
+          }
+          if ($winEntry.Count -ne $macEntry.Count) {
+            Write-Host ("入口契约两侧用例数对不上：win {0} / mac {1}" -f $winEntry.Count, $macEntry.Count); exit 1
+          }
+          for ($i = 0; $i -lt $winEntry.Count; $i++) {
+            if ($winEntry[$i] -ne $macEntry[$i]) {
+              Write-Host '入口契约两侧结论不一致：'
+              Write-Host ("  win: {0}" -f $winEntry[$i])
+              Write-Host ("  mac: {0}" -f $macEntry[$i])
+              exit 1
+            }
+          }
+          Write-Host ("入口契约 {0} 条用例，两侧退出码一致。" -f $winEntry.Count)
           Write-Host '功能自检通过'
 
   powershell51:

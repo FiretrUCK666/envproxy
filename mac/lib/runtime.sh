@@ -308,6 +308,19 @@ remove_shell_hooks() {
     done
 }
 
+# 状态对齐：判出状态才动手，判不出就什么都不做。
+# 端口枚举失败时这一轮是“不知道”，按“没代理”去清理变量是在删一个可能还活着的代理——
+# 那正是最不该犯的错。返回 0 = 判出了状态，1 = 不知道。
+align_state_once() {
+    CURRENT_STATE="off"
+    if ! get_current_state; then
+        log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+        return 1
+    fi
+    apply_state "$CURRENT_STATE" || true
+    return 0
+}
+
 # ------------------------------------------------------------------------------
 # 7. 监控进程管理（PID 文件 + 命令行校验 + 优雅停止）
 # ------------------------------------------------------------------------------
@@ -504,15 +517,16 @@ run_monitor_loop() {
     update_path_record
     log_msg "==== 监控启动 ===="
 
-    CURRENT_STATE="off"
-    # 启动对齐：只有真的判出状态才动手。枚举失败时这一轮是"不知道"，
-    # 按"没代理"去清理变量是在删一个可能还活着的代理——那正是最不该犯的错。
-    if get_current_state; then
-        apply_state "$CURRENT_STATE" || true
+    # 状态对齐：判出状态才动手；判不出（端口枚举失败）就是"不知道"，沿用现状。
+    # 判出状态 -> 返回 0，状态在 CURRENT_STATE 里；判不出 -> 返回 1，什么都不动。
+    if align_state_once; then
+        _last="$CURRENT_STATE"
     else
-        log_msg "启动时端口枚举失败 -> 不动环境变量，沿用现状"
+        # 状态是"不知道"：不能拿预设的 off 当"上一状态"。
+        # 否则 30 轮后的自愈块会以为"我们处于 off 态、有残留"，把用户的代理变量删掉
+        # ——那正是这一版要杜绝的事。留空 = 没有上一状态，两个分支都不会进。
+        _last=""
     fi
-    _last="$CURRENT_STATE"
     _pending=""
     _pending_n=0
     _repair=0

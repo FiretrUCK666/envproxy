@@ -118,9 +118,18 @@ if [ "$_PURGE" = "1" ] && [ "$_CMD_NORM" != "uninstall" ]; then
     echo "请用: bash $0 uninstall --purge" >&2
     exit 2
 fi
-# 多余的位置参数当用法错误：以前 "status extra" 里的 extra 被静默忽略，
+# 多余的**位置参数**当用法错误：以前 "status extra" 里的 extra 被静默忽略，
 # 调用方以为参数生效了（Windows 侧同一情况报退出码 2）。
-if [ $# -gt 1 ]; then
+# 只数位置参数：--purge / --yes 是开关，本来就占一个参数位。
+# 把它们也算进去的话，"uninstall --purge"、"update --yes" 这些合法用法会被一起拒掉。
+_pos=0
+for _a in "$@"; do
+    case "$_a" in
+        --purge|--Purge|-Purge|-purge|--yes|--Yes|-Yes|-yes) continue ;;
+    esac
+    _pos=$((_pos + 1))
+done
+if [ $_pos -gt 1 ]; then
     echo "无法识别的参数: $*" >&2
     echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]" >&2
     exit 2

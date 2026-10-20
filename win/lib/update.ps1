@@ -499,6 +499,11 @@ $script:UpdateAssetScope = "other"
 function Get-AssetFromJson([string]$Json, [string]$FileName) {
     $script:UpdateAssetScope = "other"
     if (-not $Json -or -not $FileName) { return $null }
+    # 顶层必须是对象：数组开头的应答不是发布信息。
+    # 光看解析结果分不出来——ConvertFrom-Json 会把单元素数组解包成元素本身，
+    # 于是"顶层是一个元素"和"顶层是一个对象"长得一样，元素个数一变结论就变。
+    $trimmed = $Json.TrimStart()
+    if (-not $trimmed.StartsWith("{")) { return $null }
     try {
         $rel = $Json | ConvertFrom-Json -ErrorAction Stop
     } catch { return $null }
@@ -928,8 +933,16 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         # 先把这一版改了什么给用户看，再问要不要装
         Show-ReleaseNotes $extractDir $pkg.Tag
         if (-not $AutoYes) {
+            # 读不到回答（控制台没了、没权限）与"用户答否"是两件事：
+            # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
             $answer = ""
-            try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $pkg.Tag) } catch { $answer = "" }
+            $readOk = $true
+            try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $pkg.Tag) } catch { $readOk = $false }
+            if (-not $readOk) {
+                Write-Host "没法提问：读不到你的回答，未做任何改动。" -ForegroundColor Yellow
+                $script:UpdateExitCode = 1
+                return
+            }
             if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
         }
         # 停监控 → 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位）→ 用安装根新脚本收尾

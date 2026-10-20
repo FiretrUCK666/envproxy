@@ -3,7 +3,7 @@
 # 一行一份应答正文，字段用 | 分隔，一共 6 个：
 #   名字|正文种类|编号|校验值|失败原因|正文
 # 用 | 而不是 TAB：bash 的 IFS 里 TAB 属于空白字符，连续的 TAB 会把空字段并掉，
-# 两侧就��到的字段数不一样（PowerShell 切 TAB 会保留空字段）。
+# 两侧读到的字段数就不一样（PowerShell 切 TAB 会保留空字段）。
 #
 # 两边的自检都读这个文件：各自跑一遍，把实际结果和这里写下的期望比对。
 # 门禁 10 再把两边的实际输出互相比一次——同一个应答，两边必须给出同一个结论。
@@ -30,3 +30,6 @@ digest-upper|release|657756050|sha256:1731ce10fde048900c7b3a793d81cba5ec8411d6e1
 digest-null|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":null}]}
 digest-bad-shape|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","digest":"sha256:XYZ"}]}
 uploader-id-not-used|release|657756050|||{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip","uploader":{"id":999,"login":"someone"}}]}
+nested-assets|other|||network|{"foo":{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip"}]}}
+top-level-array-1|other|||network|[{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip"}]}]
+top-level-array-2|other|||network|[{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/657756050","id":657756050,"name":"EnvProxy-test.zip"}]},{"assets":[]}]

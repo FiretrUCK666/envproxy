@@ -155,6 +155,9 @@ function Show-Status {
     $port = Get-ActiveProxyPort -FullScan:$false
     if ($port) {
         Write-Host ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $port) -ForegroundColor Green
+    } elseif ($script:PortEnumerationFailed) {
+        # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
+        Write-Host "翻墙代理 : 读不出来（端口枚举失败，这一轮不知道有没有代理在运行）" -ForegroundColor Yellow
     } else {
         Write-Host "翻墙代理 : 未检测到（当前无翻墙代理在运行）" -ForegroundColor Yellow
     }

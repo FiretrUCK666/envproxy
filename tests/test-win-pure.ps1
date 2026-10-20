@@ -574,12 +574,40 @@ if ($probeThrew) {
 # 不拦的话，敲错一个选项就会静默进入监控模式。
 # 这里用子进程验：点源加载时 $args 是空的，验不到。
 $entryPath = Join-Path $PSScriptRoot '../win/envproxy.ps1'
+function Invoke-EntryChild([string[]]$EntryArgs) {
+    $outFile = Join-Path $env:TEMP ("ep-entry-out-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
+    $errFile = Join-Path $env:TEMP ("ep-entry-err-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
+    try {
+        $ps = Start-Process -FilePath (Get-Process -Id $PID).Path -PassThru -NoNewWindow -Wait `
+            -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$entryPath`"") + $EntryArgs) `
+            -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+        return $ps.ExitCode
+    } finally {
+        Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
+    }
+}
 foreach ($bad in @('-Foo', '-Installt', 'extra')) {
-    $rc = 0
-    $ps = Start-Process -FilePath (Get-Process -Id $PID).Path -PassThru -NoNewWindow -Wait `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$entryPath`"", $bad)
-    $rc = $ps.ExitCode
+    $rc = Invoke-EntryChild @($bad)
     Assert-Eq ("入口拒绝不认识的参数: " + $bad) 2 $rc
+}
+
+# ------------------------------------------------------------------------------
+# [2c] 入口的参数与退出码：两侧同一套，门禁 10 把两边的这些行互相比一次
+# ------------------------------------------------------------------------------
+# 用例都不碰用户文件：状态只读；非法参数在动手之前就被拦下。
+# "valid-switch" 这条尤其重要：开关占一个参数位，不能被当成"多余的位置参数"，
+# 否则"带开关的正常用法"会被一起拒掉。
+$entryCases = @(
+    @{ Name = 'unknown-arg';      Args = @('-Foo');              Want = 2 },
+    @{ Name = 'extra-positional'; Args = @('extra');             Want = 2 },
+    @{ Name = 'purge-misuse';     Args = @('-Install', '-Purge'); Want = 2 },
+    @{ Name = 'valid-status';     Args = @('-Status');           Want = 0 },
+    @{ Name = 'valid-switch';     Args = @('-Status', '-Yes');    Want = 0 }
+)
+foreach ($c in $entryCases) {
+    $rc = Invoke-EntryChild $c.Args
+    Assert-Eq ("入口退出码: " + $c.Name) $c.Want $rc
+    Write-Host ("entry {0} {1}" -f $c.Name, $rc)
 }
 
 # ------------------------------------------------------------------------------
@@ -624,7 +652,7 @@ if (Test-Path -LiteralPath $contractFile) {
         Write-Host ("contract {0} {1} {2} {3} {4}" -f $cName, $script:UpdateAssetScope, $gotId, $gotDigest, $gotFail)
         $contractSeen[$cName] = $true
     }
-    Assert-Eq '资产契约 用例都跑到了' 17 $contractSeen.Count
+    Assert-Eq '资产契约 用例都跑到了' 20 $contractSeen.Count
 } else {
     Write-Host '  SKIP 找不到 tests/asset-cases.txt（仓库内的用例文件）'
 }
