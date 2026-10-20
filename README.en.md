@@ -102,8 +102,6 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, choose **`5 Check for updates`** in the menu and see the next section for the details.
-
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
 > If the first double-click is blocked on a package downloaded from the web: right-click the file, Properties, Unblock (or run `Unblock-File` once) — do not change the execution policy.
@@ -112,7 +110,7 @@ If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the
 
 Choose **`5 Check for updates`** in the menu: it shows the new version and what the release changed, and installs only after you agree.
 
-- **No VPN needed for this**: it talks to GitHub directly, which works on most networks; if it ever says it cannot connect, toggle your proxy app once and retry.
+- **No VPN needed for this**: most networks work as they are. If it ever says it cannot connect, toggle your proxy app once and retry.
 - **Checked before install**: the download is compared against the checksum GitHub publishes, and a mismatch is refused — a broken install is worse than no install.
 - **Only program files are touched**: your own files, the log and the run markers in `monitor\` stay as they are, and the monitor restarts on the new code afterwards.
 - **Failures say why**: cannot connect, rate limited, GitHub trouble, a bad package — each with its own next step, so nothing is left to guess.
