@@ -14,7 +14,10 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
     $wantEntry = if ($Platform -eq "mac") { "mac\envproxy.sh" } else { "win\envproxy.ps1" }
     if (-not (Test-Item (Join-Path $Root $wantEntry))) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f $wantEntry) }
-    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 定位器(mac) + 入口自己声明的每个库"，
+    # 菜单壳也必须在：它是使用者唯一能双击的东西，缺了等于装完没法打开。
+    $wantShell = if ($Platform -eq "mac") { "mac\打开菜单.command" } else { "win\打开菜单.cmd" }
+    if (-not (Test-Item (Join-Path $Root $wantShell))) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f $wantShell) }
+    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 根下模板 + 入口自己声明的每个库"，
     # 缺一个或多一个都拒收。只查"入口在不在"是不够的——一个只剩 VERSION + 入口的包能过那一关，
     # 而覆盖时"作用域内、新包没有的文件按清单删除"会把所有库当成旧版残留删掉：
     # 安装区被清空、VERSION 却被抬高，之后更新入口还会拒绝回退，用户卡在坏状态里。
@@ -31,9 +34,13 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
     if (-not $declared.Count) { throw "校验失败（包内入口声明的库清单是空的），未做任何改动。" }
     $allowed = @()
     $allowed += "$platDir/$entryName"
-    if ($Platform -eq "mac") { $allowed += @("mac/打开菜单.command", "mac/locator.sh") }
-    else { $allowed += "win/打开菜单.cmd" }
     foreach ($l in $declared) { $allowed += "$platDir/lib/$l$libExt" }
+    # 根下（lib/ 之外）的脚本一律允许：菜单壳、以及被复制到固定位置的模板（定位器、shell 集成脚本）。
+    # 这些不是库、不由入口加载，所以不进库清单——但它们是合法包内容。
+    # 这里刻意不逐个点名：点名就意味着"新增一个模板要记得改两处校验"，
+    # 而那正是漏掉 prompt-sync.sh、让所有更新被自己拒收的原因。
+    # 形态由 CI 门禁 1 约束，非脚本文件仍然落在下面被拒。
+    $rootScriptExt = @("$libExt", ".command", ".cmd")
     # 相对路径要么按传入的 Root 剥、要么按它的长名剥：Windows 上同一个目录可能以 8.3 短名
     # （FIRETR~1）出现，而 Get-ChildItem 回的是长名——只按一种剥会算出空名单，
     # 于是"包内缺少所有文件"，把好包也拒了。
@@ -47,7 +54,18 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
             else { $p.Substring([Math]::Min($rootTrim.Length, $p.Length)) }
         } | ForEach-Object { $_.TrimStart('\', '/').Replace('\', '/') })
     $missing = @($allowed | Where-Object { $actual -notcontains $_ })
-    $extra = @($actual | Where-Object { $allowed -notcontains $_ })
+    # 多出来的文件：lib/ 下的一律拒（清单外的库覆盖时会被当残留删掉）；
+    # 平台目录**直属**的脚本放行（菜单壳与各种模板，见 $rootScriptExt 的说明）；其余一律拒。
+    # 必须判"直属"：只比扩展名会连 payload\evil.ps1 这种任意深度的子目录脚本一起放行，
+    # 那等于给投毒包开了一扇后门。
+    $extra = @($actual | Where-Object {
+        if ($allowed -contains $_) { return $false }
+        if ($_ -like "$platDir/lib/*") { return $true }
+        $rel = $_ -replace ("^" + [regex]::Escape($platDir) + "/"), ""
+        if ($rel -like "*/*") { return $true }
+        $ext = [System.IO.Path]::GetExtension($_)
+        return -not ($rootScriptExt -contains $ext)
+    })
     if ($missing.Count) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f ($missing -join ', ')) }
     if ($extra.Count) { throw ("校验失败（安装包里有清单外的文件：{0}），未做任何改动。" -f ($extra -join ', ')) }
     $scripts = @(Get-ChildItem -LiteralPath $Root -Recurse -File -Force -ErrorAction SilentlyContinue |
@@ -197,7 +215,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             Copy-FileAtomic (Join-Path $SrcRoot 'VERSION') (Join-Path $ProjectRoot 'VERSION')
         }
         # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
-        # 两种命名都扫：新版是 *.envproxy-new*，旧版 Write-Text 留下的是 *.tmp<数字>。
+        # 两种命名都扫：Copy-FileAtomic 产生 *.envproxy-new*，Write-Text 产生 *.tmp<数字>。
         Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -like '*.tmp[0-9]*' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }

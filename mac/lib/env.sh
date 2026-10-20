@@ -3,6 +3,11 @@
 #  双路同进同退；只回收本工具写下的本机地址。
 # ------------------------------------------------------------------------------
 PROXY_ENV="$ENVPROXY_HOME/proxy.env"
+# 我们写下的那套值（变量名 TAB 值），只由 on 态写入，**永远不会被 off 哨兵覆盖**。
+# 为什么单独存：off 哨兵要写成"值仍等于我们写下的那个才清"，而那个值不能从 proxy.env 里
+# 反推——哨兵本身已经把 export 行替换掉了。从被覆盖的文件里反推，第二次进 off 就再也
+# 推不出守卫值，已开着的窗口从此清不掉（实测会退化成只有 # off + true 的空哨兵）。
+OWNED_ENV="$ENVPROXY_HOME/owned.env"
 PREV_ENV="$ENVPROXY_HOME/prev.env"
 
 # 读已存在的 NO_PROXY（终端路取自 proxy.env，GUI 路取自 launchctl）。
@@ -49,6 +54,20 @@ set_user_env_vars() {
         printf 'export no_proxy=%s\n' "$_npq"
         printf 'export NODE_USE_ENV_PROXY="1"\n'
     } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+    # 把"我们写下的值"另存一份：off 哨兵要据此写守卫，而 proxy.env 那时已经被替换成哨兵了。
+    # 这份文件与 on 态同生，永不参与 on/off 切换——它记的是"我们拥有哪些值"，不是"当前状态"。
+    # 必须把**整张变量表**都记下来：少记一个，那个变量在 off/固定直连时就永远清不掉，
+    # 用户会看到"以为直连了、curl 还在走代理"。名单从 PROXY_VAR_NAMES 遍历，不手写。
+    _otmp="$OWNED_ENV.tmp.$$"
+    {
+        for _v in $PROXY_VAR_NAMES; do
+            case "$_v" in
+                NO_PROXY|no_proxy) printf '%s\t%s\n' "$_v" "$_npq" ;;
+                NODE_USE_ENV_PROXY) printf '%s\t%s\n' "$_v" "1" ;;
+                *) printf '%s\t%s\n' "$_v" "$_http" ;;
+            esac
+        done
+    } > "$_otmp" 2>/dev/null && mv "$_otmp" "$OWNED_ENV" 2>/dev/null || rm -f "$_otmp" 2>/dev/null || true
     launchctl setenv HTTP_PROXY "$_http" 2>/dev/null || true
     launchctl setenv http_proxy "$_http" 2>/dev/null || true
     launchctl setenv HTTPS_PROXY "$_http" 2>/dev/null || true
@@ -73,13 +92,31 @@ set_user_env_vars() {
 # 判断权全在 monitor 侧（它有完整的归属判据与快照），hook 侧只"照做"，不猜。
 write_off_sentinel() {
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
-    # 端口从**现有文件**里读：它就是我们上一次写下的值，也就是"守卫要认的那个值"。
-    _op=$(sed -n 's/^export HTTP_PROXY="http:\/\/127\.0\.0\.1:\([0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    # 守卫值来自 owned.env（on 态写下的那份），**不从 proxy.env 反推**：
+    # 第二次进 off 时 proxy.env 已经是哨兵、没有 export 行，反推必然为空，
+    # 守卫段就会整段消失，已开着的窗口从此再也清不掉。
+    # 兼容旧安装：早期版本没有 owned.env，退回到从 proxy.env 里读一次。
+    _oh=""
+    if [ -f "$OWNED_ENV" ]; then
+        _oh=$(awk -F'\t' '$1 == "HTTP_PROXY" { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+    fi
+    if [ -z "$_oh" ]; then
+        _op=$(sed -n 's/^export HTTP_PROXY="http:\/\/127\.0\.0\.1:\([0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+        [ -n "$_op" ] && _oh="http://127.0.0.1:$_op"
+    fi
+    _onp=""
+    if [ -f "$OWNED_ENV" ]; then
+        _onp=$(awk -F'\t' '$1 == "NO_PROXY" { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+    fi
+    if [ -z "$_onp" ]; then
+        _onp=$(sed -n 's/^export NO_PROXY=//p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    fi
     _tmp="$PROXY_ENV.tmp.$$"
     {
         printf '# envproxy-state: off\n'
-        if [ -n "$_op" ]; then
-            _oh="http://127.0.0.1:$_op"
+        # NODE_USE_ENV_PROXY 与端口无关，永远要清——不能因为它落在端口分支里而被漏掉。
+        printf '[ "${NODE_USE_ENV_PROXY-}" = "1" ] && unset NODE_USE_ENV_PROXY\n'
+        if [ -n "$_oh" ]; then
             # 一律写成 ${VAR-}：使用者可能开着 set -u / setopt nounset，
             # 裸写 $VAR 在变量未定义时会直接报 "unbound variable"，
             # 而这段是在他们的 shell 提示符里执行的——报错会打断他们的输入。
@@ -88,12 +125,10 @@ write_off_sentinel() {
             done
             # NO_PROXY / no_proxy 是我们与使用者条目合并出来的，不按整值认领（会误删他的条目），
             # 只在它正好等于"默认项 + 我们那几项"时才清；判不了就不清，宁可留着让下次 on 覆盖。
-            _onp=$(sed -n 's/^export NO_PROXY=//p' "$PROXY_ENV" 2>/dev/null | head -n 1)
             if [ -n "$_onp" ]; then
                 printf '[ "${NO_PROXY-}" = %s ] && unset NO_PROXY\n' "$_onp"
                 printf '[ "${no_proxy-}" = %s ] && unset no_proxy\n' "$_onp"
             fi
-            printf '[ "${NODE_USE_ENV_PROXY-}" = "1" ] && unset NODE_USE_ENV_PROXY\n'
         fi
         # 末行恒真：source 这个文件必须返回 0。zsh 的 hook 里一旦返回非零，
         # 后面的 precmd 钩子（主题、补全等）会全部不执行。
@@ -131,6 +166,16 @@ env_vars_in_sync() {
         [ "$(launchctl getenv all_proxy 2>/dev/null)" = "$_http" ] || return 1
         [ "$(launchctl getenv no_proxy 2>/dev/null)" = "$_np" ] || return 1
     fi
+    # 第三条腿：owned.env 记着"我们写下的值"，终端同步与 off 哨兵全靠它判归属。
+    # 它丢了就等于归属判据消失——ENVPROXY_TERM=off 会静默失效、off 哨兵写不出守卫。
+    # 而它不在这个判据里的话，sync 会以为"齐了"直接返回，永远不重建（30 轮自愈也修不了，
+    # 因为自愈走的正是这个函数）。所以必须把它当成"齐不齐"的一部分。
+    if [ ! -f "$OWNED_ENV" ]; then return 1; fi
+    grep -q '^HTTP_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
+    grep -q '^HTTPS_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
+    grep -q '^ALL_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
+    grep -q '^NO_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
+    grep -q '^NODE_USE_ENV_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
     return 0
 }
 

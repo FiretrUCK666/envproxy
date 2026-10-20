@@ -5,6 +5,17 @@
 #  为什么需要它：环境变量只在进程启动那一刻从父进程复制，已经开着的窗口拿不到新值。
 #  唯一可靠的时机是"每次回到提示符、准备执行下一条命令之前"。
 #
+#  DIVERGE(Mac): 机制与 Windows 侧必然不同，三处：
+#    1) 挂载点——本侧用官方钩子（zsh 的 precmd、bash 的 PROMPT_COMMAND），
+#       在 rc 文件里 source 本脚本即可；Win 侧要改写 $PROFILE 并包住 prompt 函数
+#       （PowerShell 没有等价的官方钩子）。
+#    2) 状态来源——本侧读 ~/.envproxy/proxy.env 与 owned.env 两个文件；
+#       Win 侧每次实时查注册表（HKCU\Environment 与 Software\EnvProxy\Owned）。
+#    3) 落点数量——本侧写 4 个 rc（.zshenv/.zshrc/存在的 .bash_profile/.bashrc）；
+#       Win 写 5.1 与 7 两个版本的 profile。
+#    共同点（行为契约，两侧必须一致）：只对安装之后新启动的 shell 生效；只清"值仍等于
+#    我们写下的那个"；钩子永不输出、永不返回非零。
+#
 #  ------------------------------------------------------------------------------
 #  三条设计原则（决定了它不会和使用者打架）
 #  ------------------------------------------------------------------------------
@@ -21,7 +32,7 @@
 #  3) 热路径不启动任何外部进程。
 #     只用 shell 内建（case / [ / read / export / unset），实测单次约 0.3 毫秒。
 #     不用 launchctl getenv、不用 sed/grep——那些每次要 fork 一个进程，
-#     8 次就够让人感觉到每次回车都卡（实测差 100 倍以上）。
+#     9 次就够让人感觉到每次回车都卡（实测差 100 倍以上）。
 #
 #  钩子里一旦报错，后面所有钩子都不执行（连使用者的主题提示符都会崩），
 #  所以本文件：永不输出、永不返回非零、所有外部不确定性都吞掉。
@@ -38,28 +49,59 @@ if [ -z "${_ENVPROXY_SYNC_READY-}" ]; then
     }
 
     # 只清"我们写下的那些值"。判据是确切相等，不是形状相似。
-    # 记录来源：proxy.env 里 on 态那几行 export（monitor 写的就是我们要认的值）。
+    # 权威来源是 owned.env（monitor 在 on 态写下的那份）：每行「变量名 TAB 我们写的值」。
+    # 不从 proxy.env 的 export 行反推——那样要处理双引号/单引号/空值三种形态，
+    # 而 off 态时 proxy.env 里根本没有 export 行（已经是哨兵），一条都解析不出来。
     _envproxy_clear_ours() {
-        _ep_f="$(_envproxy_home)/proxy.env"
-        [ -r "$_ep_f" ] || return 0
+        _ep_home="$(_envproxy_home)"
+        # 当前文件若是 off 哨兵，就先执行它——它自带"值仍等于我们写的才清"的守卫，
+        # 是 monitor 的正式清除路径。这一步不能无条件做：on 态文件会把使用者自己的
+        # 值覆盖成我们的，然后再"清掉我们的"，等于把他的设置抹了（实测就是这样丢的）。
+        # 判据只看首行的状态标记，不执行 on 态文件。
+        _ep_state=""
+        if [ -r "$_ep_home/proxy.env" ]; then
+            IFS= read -r _ep_head < "$_ep_home/proxy.env" 2>/dev/null || _ep_head=""
+            case "$_ep_head" in
+                '# envproxy-state: off'*)
+                    _ep_state=off
+                    . "$_ep_home/proxy.env"
+                    ;;
+            esac
+        fi
+        _ep_f="$_ep_home/owned.env"
+        [ -r "$_ep_f" ] || { unset _ep_home _ep_f _ep_state _ep_head 2>/dev/null || true; return 0; }
         _ep_line=""
         while IFS= read -r _ep_line; do
             case "$_ep_line" in
-                'export '*=*)
-                    _ep_name="${_ep_line#export }"; _ep_name="${_ep_name%%=*}"
-                    _ep_want="${_ep_line#*=}"
-                    # 去掉两侧的双引号（monitor 写的是 export X="Y"）
+                *"	"*)
+                    _ep_name="${_ep_line%%	*}"
+                    _ep_want="${_ep_line#*	}"
+                    # 变量名必须先过白名单再进 eval：这是唯一一处把文件内容拼进命令的地方。
+                    # 不做校验的话，owned.env 被写坏（或被人恶意改写）就能执行任意命令——
+                    # 实测变量名写成 x[$(touch /tmp/x)] 会真的执行。
+                    # 更常见的后果是静默失效：名字带空格会让 eval 报错、本轮 while 中断，
+                    # 后面的变量一条都不处理，用户以为固定直连了却还挂着代理。
+                    case "$_ep_name" in
+                        ''|*[!A-Za-z0-9_]*) continue ;;
+                    esac
+                    case "$_ep_name" in
+                        [0-9]*) continue ;;
+                    esac
+                    # 值可能被单引号包裹（NO_PROXY 那种合并值走 shell_escape_sq）
                     case "$_ep_want" in
+                        \'*\') _ep_want="${_ep_want#\'}"; _ep_want="${_ep_want%\'}" ;;
                         \"*\") _ep_want="${_ep_want#\"}"; _ep_want="${_ep_want%\"}" ;;
                     esac
                     eval "_ep_cur=\"\${$_ep_name-}\""
-                    if [ -n "$_ep_want" ] && [ "$_ep_cur" = "$_ep_want" ]; then
-                        unset "$_ep_name"
+                    # 只认"仍然等于我们写下的那个"。空值也走这条路：留一个 VAR="" 的
+                    # 空变量同样是残留（proxy_vars_present 不认为它是脏的，会永久留着）。
+                    if [ "$_ep_cur" = "$_ep_want" ]; then
+                        unset "$_ep_name" 2>/dev/null || true
                     fi
                     ;;
             esac
         done < "$_ep_f"
-        unset _ep_f _ep_line _ep_name _ep_want _ep_cur 2>/dev/null || true
+        unset _ep_home _ep_f _ep_state _ep_head _ep_line _ep_name _ep_want _ep_cur 2>/dev/null || true
         return 0
     }
 

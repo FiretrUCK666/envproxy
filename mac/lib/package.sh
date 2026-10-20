@@ -15,7 +15,13 @@ verify_package() {
     # 于是加库、改名、挪位置都不用改这里——与 CI 门禁 3 是同一条规则，两处不会漂移。
     if [ "$_vplat" = "win" ]; then _ventry="win/envproxy.ps1"; else _ventry="mac/envproxy.sh"; fi
     [ -f "$_vroot/$_ventry" ] || return 1
-    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 定位器(mac) + 入口自己声明的每个库"，
+    # 菜单壳也必须在：它是使用者唯一能双击的东西，缺了等于装完没法打开。
+    if [ "$_vplat" = "win" ]; then
+        [ -f "$_vroot/win/打开菜单.cmd" ] || return 1
+    else
+        [ -f "$_vroot/mac/打开菜单.command" ] || return 1
+    fi
+    # 内容集校验：本平台目录里只能有"入口 + 菜单壳 + 根下模板 + 入口自己声明的每个库"，
     # 缺一个或多一个都拒收。只查"入口在不在"是不够的——一个只剩 VERSION + 入口的包能过那一关，
     # 而覆盖时"作用域内、新包没有的文件按清单删除"会把所有库当成旧版残留删掉：
     # 安装区被清空、VERSION 却被抬高，之后更新入口还会拒绝回退，用户卡在坏状态里。
@@ -35,11 +41,21 @@ verify_package() {
         [ -n "$_vf" ] || continue
         _vr=${_vf#"$_vroot"/}
         case "$_vr" in
+            # 本平台入口：必须恰好是它。
             "$_vplat_dir/$_ventry_name") ;;
-            "$_vplat_dir/打开菜单.command"|"$_vplat_dir/locator.sh"|"$_vplat_dir/打开菜单.cmd") ;;
+            # lib/ 下的每个文件都必须出现在入口声明的库清单里——加库漏改入口、塞进清单外的
+            # 库都要拦住（否则覆盖时"新包没有的按清单删"会把它们当旧版残留清掉）。
             "$_vplat_dir/lib/"*"$_vlib_ext")
                 _vbase=$(basename "$_vr" "$_vlib_ext")
                 case " $_vdecl " in *" $_vbase "*) ;; *) return 1 ;; esac ;;
+            # 本平台目录**直属**的其余脚本：菜单壳、以及被复制到固定位置的模板
+            # （定位器、shell 集成脚本）。这些不是库、不由入口加载，所以不进 CORE_LIBS。
+            # 不逐个点名：点名意味着"新增一个模板要改两处校验"，漏掉 prompt-sync.sh 就是这么来的。
+            # 但**只认直属**：写成 "$_vplat_dir/"*"$_vlib_ext" 会连 mac/payload/evil.sh
+            # 这种任意深度的子目录脚本一起放行——那等于给投毒包开了一扇后门。
+            # 判据是"路径里不含额外的 /"，不是靠通配符。
+            "$_vplat_dir/"*"$_vlib_ext"|"$_vplat_dir/"*.command|"$_vplat_dir/"*.cmd)
+                case "${_vr#"$_vplat_dir/"}" in */*) return 1 ;; esac ;;
             *) return 1 ;;
         esac
     done <<_VPKG_

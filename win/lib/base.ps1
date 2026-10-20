@@ -83,7 +83,7 @@ function Test-IsElevated {
 function Get-MutexName([string]$Base) {
     # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
     # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。
-    # 拿不到 SID 就回落到无后缀（行为与过去一致），绝不因此罢工。
+    # 拿不到 SID 就回落到无后缀，绝不因此罢工。
     # 放在 base：入口的安装/更新锁与库里的写变量锁都用它，库不许回头依赖入口。
     try {
         $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -175,7 +175,7 @@ function Get-UsageError {
         return ("无法识别的参数：{0}" -f ($parts -join ' '))
     }
     # 开关必须跟着它的命令：-Purge 只配 -Uninstall，-Yes 只配 -Update。
-    # 单独给以前会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
+    # 单独给会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
     if ("purge" -in $Switches -and $Command -ne "uninstall") {
         return "-Purge 只在卸载时才有意义：它表示连日志一起删。请用 -Uninstall -Purge。"
     }

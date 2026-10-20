@@ -42,6 +42,25 @@ function Sync-UserEnvVars([string]$Port) {
     foreach ($n in $desired.Keys) {
         if ([Environment]::GetEnvironmentVariable($n, "User") -ne $desired[$n]) { $changed = $true; break }
     }
+    # 归属记录**先写**，再判断要不要改环境变量。
+    # 这两件事必须解耦：升级安装时代理正开着、端口没变，"值已齐全"于是提前 return，
+    # 归属记录就永远建不起来——之后代理一关，已开着的窗口拿不到归属判据，一直清不掉。
+    # 它的语义是"我们现在拥有哪些值"，只要 on 态成立就该有，与"这次要不要写"无关。
+    # 必须用 OpenSubKey(...,$true) 以**可写**方式打开：Get-Item 拿到的是只读键，
+    # SetValue 会抛 "Cannot write to the registry key"。这个异常会被 catch 吞掉，
+    # 于是键建出来了、内容却是空的——钩子的归属判据等于不存在。
+    try {
+        if (-not (Test-RegKey $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction Stop | Out-Null }
+        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+        if ($null -ne $ok) {
+            # 重新持有这些值 = 撤回"已归还"标记。不删的话，off 时打的标记会一直留着，
+            # 此后钩子永远认为"这些值已经不是我们的"，on 态反而不会跟随。
+            foreach ($n in $desired.Keys) {
+                $ok.SetValue($n, [string]$desired[$n], [Microsoft.Win32.RegistryValueKind]::String)
+            }
+            $ok.Close()
+        }
+    } catch {}
     if (-not $changed) { return $false }
     foreach ($n in $desired.Keys) {
         [Environment]::SetEnvironmentVariable($n, $desired[$n], "User")
@@ -98,6 +117,12 @@ function Remove-UserEnvVars {
         }
         [Environment]::SetEnvironmentVariable($n, $null, "User")
     }
+    # 归属记录在这里**不动**：它记的是"我们写下过哪些值"，不是"我们现在是否持有"。
+    # 为什么不能在这里清：off 之后，已经开着的窗口里还挂着我们注入的值，钩子唯一的判据
+    # 就是这份记录——清掉它，off 就清不掉已开窗口，终端同步这条主功能直接失效。
+    # 代价是一个很窄的边界：off 之后使用者又手设成**一模一样**的值（同端口、同写法），
+    # 钩子会把它当成我们写的而清掉。Mac 侧的 off 哨兵是同一语义（按"值相等"守卫），
+    # 双端一致。真正需要保护的是公司代理、别的端口这类**不同**的值——那些永不受影响。
 }
 
 # --- 归属判定分三层，每层只回答一个问题 ------------------------------------------

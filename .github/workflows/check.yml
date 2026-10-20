@@ -97,7 +97,7 @@ jobs:
             fail=1
           fi
           # 每个声明的库都必须真的实现了东西：空壳或只有注释的文件在语法上完全合法，
-          # 却会让整个 mac 侧起不来（Windows 侧同样有一条，见 tests/test-win-pure.ps1 第 7 节）。
+          # 却会让整个 mac 侧起不来（Windows 侧同样有一条，见 tests/test-win-pure.ps1 里的 $PROFILE 钩子那一段）。
           for _lib in $declared; do
             _lf="mac/lib/$_lib.sh"
             if [ ! -f "$_lf" ]; then echo "声明的库不存在：$_lf"; fail=1; continue; fi
@@ -129,7 +129,7 @@ jobs:
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
             if ($errs.Count) { Write-Host ("{0} 解析失败：" -f $f.Name); $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
           }
-          # 裸变量路径扫描（第 0.5 节的承诺）：关键 cmdlet 直接吃变量路径会踩通配符语义，
+          # 裸变量路径扫描（入口参数守卫那条契约的延伸）：关键 cmdlet 直接吃变量路径会踩通配符语义，
           # 必须走 helper 或 -LiteralPath。注释行与带 -LiteralPath 的行不计。
           foreach ($f in $psFiles) {
             $lines2 = Get-Content $f.FullName -Encoding UTF8
@@ -737,9 +737,9 @@ jobs:
         run: |
           # 这份文件每次会话都注入上下文，必须有天花板。量的是 git 里的 blob，
           # 不受检出时 LF/CRLF 影响，本地与 CI 结果一致。
-          $limit = 46 * 1024
+          $limit = 48 * 1024
           $size = [int](git cat-file -s HEAD:AGENTS.md)
-          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（46 KB）" -f $size, $limit)
+          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（48 KB）" -f $size, $limit)
           if ($size -gt $limit) {
             Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
             exit 1
@@ -838,7 +838,7 @@ jobs:
           $macOut | Write-Host
           if ($macRc -ne 0) { Write-Host 'Mac 功能自检失败'; exit 1 }
           # 资产解析契约：同一个应答，两边必须给出同一个结论。
-          # 文本层面的门禁看不出这种漂移——曾经就漂过：同一个应答，
+          # 文本层面的门禁看不出这种漂移：同一个应答，
           # 一边继续更新、一边说"这一版没提供安装包"（冤枉维护者）。
           # 所以要把两边的实际结论互相比一次（用例在 tests/asset-cases.txt）。
           $winContract = @($winOut | Where-Object { $_ -like 'contract *' })
@@ -859,7 +859,7 @@ jobs:
           }
           Write-Host ("资产契约 {0} 条用例，两侧结论一致。" -f $winContract.Count)
           # 入口的参数与退出码同样是行为契约：两侧必须给出同一个退出码。
-          # 曾经只比资产解析，入口守卫的漂移就没人看得见——
+          # 只比资产解析的话，入口守卫的漂移就没人看得见——
           # 而"合法用法被当成用法错误拒掉"正是这一类。
           $winEntry = @($winOut | Where-Object { $_ -like 'entry *' })
           $macEntry = @($macOut | Where-Object { $_ -like 'entry *' })

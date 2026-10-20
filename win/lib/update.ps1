@@ -46,7 +46,7 @@ $UpdateSourceTable = @(
 # ------------------------------------------------------------------------------
 # 失败原因分类：把"为什么不行"从一堆布尔量变成一个明确的值
 # ------------------------------------------------------------------------------
-# 以前所有失败都塌缩成同一个 "fail"，于是提示只能笼统说"下载失败"——用户分不清
+# 失败必须分类：塌缩成同一个 "fail" 时提示只能笼统说"下载失败"，用户分不清
 # 是发布漏了包（等也没用）、GitHub 限流（一小时后会好）、还是自己网络不通（开代理就好）。
 # 这三种情况要做的动作完全不同，混成一句话等于把判断责任推给使用者。
 # 原因词表（两侧必须一致，见 check.yml 门禁 6）。**表的顺序就是报告优先级**：
@@ -147,7 +147,7 @@ function Test-DevCopy {
 }
 
 # 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
-# 现在网页上下载的包已不再含这些文件，见 README 故障排查）。
+# 现在网页上下载的包已不再含这些文件，见 README 第 4 节）。
 # 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
 # 传参则判指定目录（自检用），不传判安装根。
 function Test-SourceCopy {
@@ -915,7 +915,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
     }
     # 非交互环境（没有能提问的控制台）：问不到人，就别白下一个包。
-    # 以前是先下载再问，问不到人再取消——白烧一次 GitHub 配额和一份安装包。
+    # 先问再下载：反过来会白烧一次 GitHub 配额和一份安装包。
     if (-not $AutoYes -and -not (Test-Interactive)) {
         Write-Host ("发现新版本 {0}，但当前环境没法提问（没有可交互的控制台），未做任何改动。" -f $remote.Tag) -ForegroundColor Yellow
         Write-Host "要更新请在能交互的终端里运行，或加 -Yes 跳过确认。" -ForegroundColor Yellow
@@ -948,7 +948,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             }
         }
         # 一句话说清"为什么没成、接下来怎么办"：由真实失败原因决定，
-        # 不再各说各的（以前这里一句"下载失败或校验没过"会和上面"没有提供安装包"自相矛盾）。
+        # 两句口径必须一致：这里说"下载失败或校验没过"会与上面"没有提供安装包"自相矛盾。
         if (-not $pkg) {
             $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds)
             Write-Host ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name)) -ForegroundColor Yellow

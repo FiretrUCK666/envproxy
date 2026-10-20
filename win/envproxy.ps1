@@ -10,6 +10,7 @@
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status              查看状态
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update              检查更新（问过才装）
 #     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Update -Yes         检查更新并跳过确认（供脚本调用）
+#     powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Help                打印帮助（忘了怎么用时看）
 #     无参数（由开机自启调用）                                                   进入监控模式
 #
 #  运行环境：Windows 10/11 自带 PowerShell 5.1。不需要 Node/Python/管理员。
@@ -27,7 +28,7 @@
 #     - 翻墙软件断开/重连/退出/重启/换端口/换软件 → 监控自动跟随，无需任何操作
 #     - 退出翻墙软件后约 5 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，约 15–50 秒
 #       （平时 15 秒探一次，发现失败后加密到 5 秒一次，连续失败满 10 秒、至少 3 次才判"断"）
-#     - 断开后连回来约 3 秒恢复代理变量（一次成功即认，且刚下完结论时保持加密观察）
+#     - 断开后连回来约 10 到 25 秒恢复代理变量（一次成功即认，且刚下完结论时保持加密观察）
 #     - 整个文件夹移动 → 无需任何操作（监控自退 + 定位器开机自动重新定位；
 #       自动搜索只覆盖"用户目录 + 其他磁盘根"，搬到范围外时打开菜单选"安装 / 修复"接管）
 #     - 无常驻依赖、不改系统代理、不需要管理员
@@ -40,6 +41,7 @@ param(
     [switch]$Status,
     [switch]$Update,
     [switch]$Menu,
+    [switch]$Help,
     [switch]$Yes,
     [switch]$Purge
 )
@@ -121,9 +123,41 @@ if ($Stop)      { $usageCommands += "stop" }
 if ($Status)    { $usageCommands += "status" }
 if ($Update)    { $usageCommands += "update" }
 if ($Menu)      { $usageCommands += "menu" }
+if ($Help)      { $usageCommands += "help" }
 $usageSwitches = @()
 if ($Purge) { $usageSwitches += "purge" }
 if ($Yes)   { $usageSwitches += "yes" }
+# 前缀缩写护栏：PowerShell 的参数绑定**接受唯一前缀**，于是
+#   -Un      -> -Uninstall   少打几个字母就真的卸载
+#   -Instal  -> -Install     少打一个字母就真的安装
+# 而 $args 是空的，Get-UsageError 完全看不见——它会静默执行破坏性动作。
+# 这里回读原始命令行，逐个确认每个 -开关 都**精确**等于已声明的名字。
+$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Yes','Purge')
+$rawLine = ""
+try { $rawLine = [string]$MyInvocation.Line } catch {}
+if ([string]::IsNullOrWhiteSpace($rawLine)) {
+    try { $rawLine = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).CommandLine } catch {}
+}
+if (-not [string]::IsNullOrWhiteSpace($rawLine)) {
+    # 只看 -File <脚本> 之后的那一段：前面是 powershell.exe 自己的参数
+    # （-NoProfile、-ExecutionPolicy 等），不该拿我们的开关表去校验它们。
+    $scriptArgs = $rawLine
+    if ($rawLine -match '(?i)-File\s+("[^"]+"|\S+)(.*)$') {
+        $scriptArgs = $Matches[2]
+    } elseif ($rawLine -match '(?i)-Command\b') {
+        # -Command 形态：参数已经是代码的一部分，不做原文校验（避免误判）。
+        $scriptArgs = ""
+    }
+    foreach ($m in [regex]::Matches($scriptArgs, '(?i)(?<=^|\s)--?([A-Za-z][A-Za-z0-9]*)')) {
+        $typed = $m.Groups[1].Value
+        if (-not ($knownSwitches | Where-Object { $_ -eq $typed })) {
+            Write-Host ("无法识别的开关：-" + $typed) -ForegroundColor Yellow
+            Write-Host ("可用开关：" + (($knownSwitches | ForEach-Object { "-" + $_ }) -join ' ')) -ForegroundColor Yellow
+            Write-Host "参数必须写全，不支持缩写（少打几个字母会被当成另一个动作）。" -ForegroundColor Yellow
+            exit 2
+        }
+    }
+}
 # 命令给了两个以上也算用法错误（mac 侧表现为多余的位置参数）。
 $usageCommand = ""
 if ($usageCommands.Count -eq 1) { $usageCommand = $usageCommands[0] }
@@ -131,7 +165,7 @@ $usageError = Get-UsageError -Command $usageCommand -CommandCount $usageCommands
                             -Switches $usageSwitches -Extra @($args)
 if ($usageError) {
     Write-Host $usageError -ForegroundColor Yellow
-    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu} [-Yes] [-Purge]" -ForegroundColor Yellow
+    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help} [-Yes] [-Purge]" -ForegroundColor Yellow
     exit 2
 }
 if ($Update) {
@@ -157,6 +191,10 @@ if ($Stop) {
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
     Apply-State "off"
     Write-Host "代理变量已清除，当前恢复直连。" -ForegroundColor Cyan
+    # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
+    # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
+    # 与其让人以为"工具坏了"，不如说清楚。
+    Write-Host "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。" -ForegroundColor DarkGray
     return
 }
 if ($Status) {
@@ -165,6 +203,10 @@ if ($Status) {
 }
 if ($Menu) {
     Show-Menu
+    return
+}
+if ($Help) {
+    Show-Help
     return
 }
 # 无参数 = 监控模式（由开机自启调用）。

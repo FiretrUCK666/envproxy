@@ -1,12 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="450" viewBox="0 0 1200 450" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-  <title id="buttonsTitle">菜单每个选项动什么</title>
-  <desc id="buttonsDesc">五行五列的对照表。行是菜单里的五个选项，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定。安装只校正环境变量；停止清掉监控与变量、留下自启与定位器；一键恢复全清、只留日志；查看状态与检查更新都是只读。</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <title id="buttonsTitle">菜单每个选项影响什么</title>
+  <desc id="buttonsDesc">六行五列的对照表。行是菜单里的六个选项：安装修复、查看状态、停止监控、一键恢复、检查更新、帮助。列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定。安装会校正环境变量；停止清掉监控与环境变量、留下自启与定位器；一键恢复全部清除、只留日志；查看状态、检查更新、帮助三项都不改动任何东西。</desc>
 
-  <rect width="1200" height="450" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="448.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="490" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="488.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项动什么</text>
+    <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项影响什么</text>
     <text x="56" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
     <text x="84" y="126" font-size="20" fill="#94A6BE">保留</text>
     <text x="164" y="126" font-size="26" font-weight="700" fill="#94A6BE">—</text>
@@ -18,8 +18,8 @@
   </g>
 
   <g id="grid" fill="none" stroke-width="1.5">
-    <path d="M200 156V394M380 156V394M560 156V394M740 156V394M920 156V394M1100 156V394" stroke="#2A3B58"/>
-    <path d="M56 156H1144M56 394H1144M56 234H1144M56 274H1144M56 314H1144M56 354H1144" stroke="#2A3B58"/>
+    <path d="M200 156V434M380 156V434M560 156V434M740 156V434M920 156V434M1100 156V434" stroke="#2A3B58"/>
+    <path d="M56 156H1144M56 314H1144M56 434H1144" stroke="#2A3B58"/>
     <path d="M56 194H1144" stroke="#33486B"/>
   </g>
 
@@ -37,6 +37,11 @@
     <text x="56" y="302">3 停止监控</text>
     <text x="56" y="342">4 一键恢复</text>
     <text x="56" y="382">5 检查更新</text>
+    <text x="56" y="422">6 帮助</text>
+  </g>
+
+  <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
+    <path d="M56 234H1144M56 274H1144M56 354H1144M56 394H1144"/>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
@@ -74,5 +79,10 @@
     <circle cx="650" cy="374" r="4"/>
     <circle cx="830" cy="374" r="4"/>
     <circle cx="1010" cy="374" r="4"/>
+    <circle cx="290" cy="414" r="4"/>
+    <circle cx="470" cy="414" r="4"/>
+    <circle cx="650" cy="414" r="4"/>
+    <circle cx="830" cy="414" r="4"/>
+    <circle cx="1010" cy="414" r="4"/>
   </g>
 </svg>

@@ -8,7 +8,8 @@
 #     bash envproxy.sh stop        停止监控
 #     bash envproxy.sh uninstall   一键恢复（加 --purge 彻底删除日志，不询问）
 #     bash envproxy.sh status      查看状态
-#     bash envproxy.sh update      检查更新（一键升级，问过才装；加 --yes 跳过确认）
+#     bash envproxy.sh update       检查更新（一键升级，问过才装；加 --yes 跳过确认）
+#     bash envproxy.sh help         打印帮助（忘了怎么用时看）
 #     无参数（由 LaunchAgent 调用 locator.sh 间接触发）进入监控模式
 #
 #  运行环境：macOS 12+ 自带 /bin/bash、curl、lsof、netstat、nc、ps、awk、sed、
@@ -20,7 +21,7 @@
 #     - 翻墙软件断开/重连/退出/重启/换端口/换软件 → 监控自动跟随，无需任何操作
 #     - 退出翻墙软件后约 5 秒删除代理变量；"断开连接"（内核仍活着）以流量真相判定，约 15–50 秒
 #       （平时 15 秒探一次，发现失败后加密到 5 秒一次，连续失败满 10 秒、至少 3 次才判"断"）
-#     - 断开后连回来约 3 秒恢复代理变量（一次成功即认，且刚下完结论时保持加密观察）
+#     - 断开后连回来约 10 到 25 秒恢复代理变量（一次成功即认，且刚下完结论时保持加密观察）
 #     - 停止监控就是真的停止（自启动只在登录时拉起一次，不会把停掉的监控再拉回来）
 #     - 整个文件夹移动 → 监控自退 + 下次登录定位器自动重新定位（可搜索范围同 Windows）
 #
@@ -130,7 +131,7 @@ _usage_err=$(usage_error)
 _usage_rc=$?
 if [ $_usage_rc -ne 0 ]; then
     echo "$_usage_err" >&2
-    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test} [--purge] [--yes]" >&2
     exit 2
 fi
 
@@ -153,15 +154,22 @@ esac
 
 case "$_CMD_NORM" in
     install) install_envproxy;;
-    stop) stop_monitor; remove_user_env_vars; echo "代理变量已清除，当前恢复直连。";;
+    # stop 也要走哨兵模式：purge 会把 proxy.env 整个删掉，已开着的窗口下次回到提示符时
+    # 读不到文件，就永远停在上一次的代理值上（契约：off 态写守卫式 unset，不删文件）。
+    stop) stop_monitor; remove_user_env_vars sentinel; echo "代理变量已清除，当前恢复直连。"
+          # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
+          # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
+          # 与其让人以为"工具坏了"，不如说清楚。
+          echo "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。";;
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
     # 退出码要如实反映结果（计划任务、脚本靠它判断更新成功没有）。
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
+    help) show_help;;
     self-test) self_test;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 2;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test} [--purge] [--yes]"; exit 2;;
 esac
 fi

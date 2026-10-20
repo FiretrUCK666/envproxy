@@ -55,10 +55,48 @@ self_test() {
     ENVPROXY_HOME="$_sandbox/.envproxy"
     PROXY_ENV="$ENVPROXY_HOME/proxy.env"
     PREV_ENV="$ENVPROXY_HOME/prev.env"
+    # owned.env 必须一并改道：它记的是"我们写下的值"，真实路径在 ~/.envproxy。
+    # 漏了这一个，自检里的 set_user_env_vars 会往使用者的真实目录写字。
+    OWNED_ENV="$ENVPROXY_HOME/owned.env"
     MONITOR_DIR="$ENVPROXY_HOME/monitor"
     LOG_FILE="$MONITOR_DIR/monitor.log"
     export HOME ENVPROXY_HOME
     mkdir -p "$ENVPROXY_HOME" "$MONITOR_DIR" 2>/dev/null || true
+    # launchctl 必须桩掉：HOME / ENVPROXY_HOME 只能改道文件，管不到 launchctl——
+    # 它是系统级的，`launchctl setenv` 写的是当前登录会话的真实环境。
+    # 下面 [3] 段会跑 set_user_env_vars / remove_user_env_vars，若不桩掉，
+    # 使用者敲一次 `envproxy.sh self-test` 就会把自己的公司代理变量清空且不还原。
+    # 桩成"只记不写"：自检仍然验证调用顺序与参数，但一个字节都不落到真实环境。
+    # getenv 要模拟"已经写进去了"：否则自检里 set 之后立刻 get 拿到空串，
+    # env_vars_in_sync 会判"不齐"，断言失败——那是桩的假象，不是代码的错。
+    _selftest_launchctl_log="$ENVPROXY_HOME/launchctl.log"
+    _selftest_launchctl_env="$ENVPROXY_HOME/launchctl.env"
+    : > "$_selftest_launchctl_env" 2>/dev/null || true
+    launchctl() {
+        case "${1:-}" in
+            setenv)
+                # 同一个名字后写的覆盖先写的（与真实 launchctl 一致）
+                if [ -f "$_selftest_launchctl_env" ]; then
+                    grep -v "^${2}	" "$_selftest_launchctl_env" > "$_selftest_launchctl_env.t" 2>/dev/null || true
+                    mv "$_selftest_launchctl_env.t" "$_selftest_launchctl_env" 2>/dev/null || true
+                fi
+                printf '%s\t%s\n' "${2:-}" "${3:-}" >> "$_selftest_launchctl_env" 2>/dev/null || true
+                printf 'setenv %s\n' "${2:-}" >> "$_selftest_launchctl_log" 2>/dev/null || true
+                ;;
+            unsetenv)
+                if [ -f "$_selftest_launchctl_env" ]; then
+                    grep -v "^${2}	" "$_selftest_launchctl_env" > "$_selftest_launchctl_env.t" 2>/dev/null || true
+                    mv "$_selftest_launchctl_env.t" "$_selftest_launchctl_env" 2>/dev/null || true
+                fi
+                printf 'unsetenv %s\n' "${2:-}" >> "$_selftest_launchctl_log" 2>/dev/null || true
+                ;;
+            getenv)
+                awk -F'\t' -v k="${2:-}" '$1 == k { print $2; exit }' "$_selftest_launchctl_env" 2>/dev/null || true
+                ;;
+            *) return 0 ;;
+        esac
+        return 0
+    }
 
     echo "[1] hook 成对护栏"
     printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' 'OLD-HOOK' '# <<< EnvProxy <<<' 'alias ll="ls"' > "$HOME/.zshenv"
@@ -86,8 +124,23 @@ self_test() {
     [ -r "$_ps_file" ] || _ps_file="$SCRIPT_DIR/prompt-sync.sh"
     if [ -r "$_ps_file" ]; then
         _ps_env="$ENVPROXY_HOME/proxy.env"
+        _ps_owned="$ENVPROXY_HOME/owned.env"
         _ps_bak=""
         [ -f "$_ps_env" ] && _ps_bak="$_ps_bak $(cat "$_ps_env" 2>/dev/null)" || true
+        # owned.env 记着"我们写下的值"，接管开关与 off 哨兵都靠它。
+        # 内容必须由**真实写入端**生成，不能手写：手写的话，写入端漏记某个变量
+        # 这件事永远不会被这些断言发现（测试造的比生产多，绿得毫无意义）。
+        # 真实链路：set_user_env_vars 写 on 态 + owned.env，这里把它跑一遍。
+        _ps_saved_env_path="$PROXY_ENV"; _ps_saved_owned_path="$OWNED_ENV"
+        PROXY_ENV="$_ps_env"; OWNED_ENV="$_ps_owned"
+        set_user_env_vars 7078 >/dev/null 2>&1 || true
+        PROXY_ENV="$_ps_saved_env_path"; OWNED_ENV="$_ps_saved_owned_path"
+        # 断言"owned.env 覆盖了整张变量表"——漏一个就等于那个变量永远清不掉。
+        _ps_owned_missing=""
+        for _ps_v in $PROXY_VAR_NAMES; do
+            grep -q "^$_ps_v	" "$_ps_owned" 2>/dev/null || _ps_owned_missing="$_ps_owned_missing $_ps_v"
+        done
+        _selftest_assert_eq "owned.env 覆盖整张变量表（漏一个就清不掉）" "" "$_ps_owned_missing"
         # on 态文件
         printf '%s\n' '# envproxy-state: on 7078' \
             'export HTTP_PROXY="http://127.0.0.1:7078"' \
@@ -176,16 +229,34 @@ self_test() {
         if install_prompt_sync; then _ps_cp1=1; else _ps_cp1=0; fi
         _selftest_assert_eq "固定位置副本已就位" "1" "$_ps_cp1"
         _selftest_assert_eq "副本与模板内容一致" "same" "$(cmp -s "$_ps_file" "$ENVPROXY_HOME/prompt-sync.sh" && echo same || echo diff)"
-        # 幂等：再装一次不重写（内容相同就直接返回）
-        _ps_mt=$(ls -l --time-style=+%s "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null | awk '{print $6}')
+        # 幂等：再装一次不重写（内容相同就直接返回）。
+        # mtime 的取法要能同时应付 BSD（macOS）与 GNU（Linux 容器）。
+        # 不能用 ls -l --time-style（GNU 专有，macOS 上静默失败 → 断言退化成"空 == 空"）；
+        # 也不能 stat -f %m（GNU stat 的 -f 是"显示文件系统"，它不报错、而是输出一大段
+        # 文件系统信息后又失败返回非零，于是 || 不会走到后备分支，变量里是一堆废话）。
+        # 所以先判断 stat 是哪一个：GNU 认 --version，BSD 不认。
+        _mt_of() {
+            if stat --version >/dev/null 2>&1; then
+                stat -c %Y "$1" 2>/dev/null
+            else
+                stat -f %m "$1" 2>/dev/null
+            fi
+        }
+        _ps_mt=$(_mt_of "$ENVPROXY_HOME/prompt-sync.sh")
         install_prompt_sync >/dev/null 2>&1 || true
-        _ps_mt2=$(ls -l --time-style=+%s "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null | awk '{print $6}')
+        _ps_mt2=$(_mt_of "$ENVPROXY_HOME/prompt-sync.sh")
+        # 先确认取到的是"一串数字"，否则这条断言是空转（两个空/两堆废话也能相等）。
+        case "$_ps_mt" in
+            ''|*[!0-9]*) _selftest_assert_eq "取得到副本的 mtime（断言不是空转）" "数字" "$_ps_mt" ;;
+            *) _selftest_assert_eq "取得到副本的 mtime（断言不是空转）" "数字" "数字" ;;
+        esac
         _selftest_assert_eq "内容一致时不重写副本" "$_ps_mt" "$_ps_mt2"
         # 模板变了要更新（模拟升级：改一个字节）
         printf '\n# changed\n' >> "$ENVPROXY_HOME/prompt-sync.sh"
         install_prompt_sync >/dev/null 2>&1 || true
         _selftest_assert_eq "内容不一致时更新副本" "same" "$(cmp -s "$_ps_file" "$ENVPROXY_HOME/prompt-sync.sh" && echo same || echo diff)"
         rm -f "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null || true
+        rm -f "$_ps_owned" 2>/dev/null || true
     else
         echo "  SKIP 终端同步（找不到 prompt-sync.sh）"
     fi
@@ -204,17 +275,24 @@ self_test() {
     if [ -n "$_s1_bak" ]; then
         _s1_old_prev="$PREV_ENV"
         PREV_ENV="$_s1_bak"
-        { printf "NO_PROXY='localhost'\n"; printf "HTTP_PROXY='http://127.0.0.1:8080'\n"; } > "$PREV_ENV"
+        # 必须按**真实格式**造快照：写入端是 snapshot_prev_env 的「变量名 TAB 值」，
+        # 值用 shell_escape_sq 的结果（可能带单引号）。手搓成 "NAME='value'" 的写法会
+        # 与真实格式不一致，于是解析端的格式错误被照成"全绿"——两道保护实际都没生效。
+        { printf 'NO_PROXY\t%s\n' "'localhost'"; printf 'HTTP_PROXY\t%s\n' "'http://127.0.0.1:8080'"; } > "$PREV_ENV"
         if is_owned_proxy_value "http://127.0.0.1:8080"; then _s1a=1; else _s1a=0; fi
         if is_owned_proxy_value "http://127.0.0.1:7897"; then _s1b=1; else _s1b=0; fi
         if no_proxy_entry_in_snapshot "localhost"; then _s1c=1; else _s1c=0; fi
         if no_proxy_entry_in_snapshot "127.0.0.1"; then _s1d=1; else _s1d=0; fi
+        # 不带单引号的裸值也要认（快照里 NO_PROXY 有可能没被转义）。
+        { printf 'NO_PROXY\tlocalhost,corp.example\n'; } > "$PREV_ENV"
+        if no_proxy_entry_in_snapshot "corp.example"; then _s1e=1; else _s1e=0; fi
         rm -f "$PREV_ENV" 2>/dev/null || true
         PREV_ENV="$_s1_old_prev"
         _selftest_assert_eq "快照里有的本机代理地址判为使用者的" "0" "$_s1a"
         _selftest_assert_eq "快照里没有的本机代理地址仍归我们回收" "1" "$_s1b"
         _selftest_assert_eq "快照里有的 NO_PROXY 项判为使用者的" "1" "$_s1c"
         _selftest_assert_eq "快照里没有的默认项仍归我们回收" "0" "$_s1d"
+        _selftest_assert_eq "快照里裸写的 NO_PROXY 条目也认得" "1" "$_s1e"
     else
         echo "  SKIP 快照归属判定（建不出临时文件）"
     fi
@@ -405,7 +483,7 @@ self_test() {
     if is_monitor_args "/usr/bin/sleep 100"; then _r5=0; else _r5=1; fi
     _selftest_assert_eq "别的进程不算监控" "1" "$_r5"
 
-    # 操作锁：拿锁必须原子的。以前用 mkdir 拿锁、再把 pid 写进去——
+    # 操作锁：拿锁必须原子的。分两步（先 mkdir 再写 pid）会留一个空窗——
     # 中间那个空窗里另一个进程读到空的 pid，会把锁当成陈旧的接管掉，
     # 两个安装同时跑就互相覆盖文件。现在用 ln：锁一出现就是完整的。
     _rlock="$_sandbox/.op.lock.test"
@@ -428,7 +506,7 @@ self_test() {
     _selftest_assert_eq "锁里写的是持有者的 pid" "$$" "$_r10"
     rm -f "$_rlock2" 2>/dev/null || true
 
-    # hook 改写必须原子：以前是就地截断重写，中途失败或被杀，
+    # hook 改写必须原子：就地截断重写一旦中途失败或被杀，
     # 用户的 .zshrc 就停在半截上，shell 一开就报错。
     _rcf="$_sandbox/rc-test"
     _rcsrc="$_sandbox/rc-src"
@@ -544,6 +622,19 @@ self_test() {
     # 菜单列出的每个子命令都必须能在入口分派里找到（壳调回来的路不断）。
     if [ "$(type -t show_menu 2>/dev/null || true)" = "function" ]; then _l4=1; else _l4=0; fi
     _selftest_assert_eq "show_menu 已定义" "1" "$_l4"
+    # 帮助：函数必须存在、入口分派里必须有 help 子命令、内容必须真的讲清三件事。
+    # 只断言"存在"是不够的——帮助文本被改成一句废话也照样"存在"，那就不帮任何人了。
+    if [ "$(type -t show_help 2>/dev/null || true)" = "function" ]; then _lh=1; else _lh=0; fi
+    _selftest_assert_eq "show_help 已定义" "1" "$_lh"
+    if grep -qE '^[[:space:]]*help\)' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _lhh=1; else _lhh=0; fi
+    _selftest_assert_eq "help 在入口分派里存在" "1" "$_lhh"
+    _ht=$(show_help 2>/dev/null || true)
+    case "$_ht" in *回车*) _lh1=1;; *) _lh1=0;; esac
+    _selftest_assert_eq "帮助讲了'回车'这个时机" "1" "$_lh1"
+    case "$_ht" in *"安装 / 修复"*) _lh2=1;; *) _lh2=0;; esac
+    _selftest_assert_eq "帮助讲了'安装 / 修复'这条万能修复" "1" "$_lh2"
+    case "$_ht" in *ENVPROXY_TERM*) _lh3=1;; *) _lh3=0;; esac
+    _selftest_assert_eq "帮助给了逐窗口接管的命令" "1" "$_lh3"
     if grep -qE '^[[:space:]]*menu\)' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _l5=1; else _l5=0; fi
     _selftest_assert_eq "menu 在入口分派里存在" "1" "$_l5"
     for _ms in install status stop uninstall update; do
@@ -931,7 +1022,7 @@ install_envproxy() {
         echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
     if insert_shell_hooks; then
-        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 暂不支持，见故障排查）"
+        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 暂不支持，见 README 第 4 节）"
     else
         echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
     fi
@@ -942,14 +1033,16 @@ install_envproxy() {
         echo "[3/3] 监控进程：未能确认运行，原因见上面那两行"
     fi
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
-    # 以前不管成没成都会按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
+    # 不管成没成就按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
     align_state_once || true
     sleep 1
     echo ""
     show_status
     echo ""
-    echo "提示：之后【新打开】的终端/程序自动获得代理；"
-    echo "      已经开着的旧窗口不会自动变化，重开一个即可。"
+    echo "提示：之后新开的终端/程序自动获得代理；"
+    echo "      已经开着的窗口敲一下回车就会跟上，退出翻墙软件后同样。"
+    echo "      想让某个窗口固定直连：在它里面执行 export ENVPROXY_TERM=off"
+    echo "      （恢复自动：unset ENVPROXY_TERM）。"
 }
 
 uninstall_envproxy() {
@@ -989,6 +1082,8 @@ uninstall_envproxy() {
     # 一律清掉，"恢复到安装前的状态"才成立。唯一的黑匣子是 monitor/monitor.log，
     # 它的去留由上面那次询问决定。
     rm -f "$ENVPROXY_HOME/monitor.stdout.log" "$ENVPROXY_HOME/monitor.stderr.log" 2>/dev/null || true
+    # owned.env 记的是"我们写下的值"，卸载后没有意义；留着会让下面那句 rmdir 判不出空目录。
+    rm -f "$OWNED_ENV" "$PROXY_ENV" 2>/dev/null || true
     # 非 purge 也只保留项目内日志：固定目录空了就删，不留空壳
     if [ -d "$ENVPROXY_HOME" ] && [ -z "$(ls -A "$ENVPROXY_HOME" 2>/dev/null)" ]; then
         rmdir "$ENVPROXY_HOME" 2>/dev/null || true
@@ -1115,11 +1210,57 @@ show_status() {
 # 菜单（唯一双击入口"打开菜单"背后：编号→现有子命令，不新增行为）
 # 菜单只做三件事：打印、读编号、起子进程跑对应子命令后回到菜单。
 # 每个动作都走一遍入口子命令的完整路径（含操作锁）：菜单自己不拿锁，
-# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。五个动作与入口子命令一一对应。
+# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。每个选项与入口子命令一一对应。
 # 非交互环境（stdin 不是终端）直接退出并提示，不死循环。
+# 帮助：纯打印，不改任何状态。给"忘了怎么用"的时候看。
+# 内容与 Windows 侧 Show-Help 同形（两端同文案，只换命令写法），自检会查关键词。
+show_help() {
+    _hv=$(get_local_version 2>/dev/null || true)
+    [ -z "$_hv" ] && _hv="未知"
+    cat <<HELP
+================ EnvProxy 帮助 ================
+
+它做什么
+  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；
+  一关，它们自动恢复直连。你不用记住任何开关。
+
+装完会发生什么
+  1. 新开的窗口：自动就是对的，什么都不用做。
+  2. 已经开着的旧窗口：敲一下回车（或随便跑条命令）就跟上。
+  3. 装之前就开着的窗口：重开一次，或执行一次加载命令。
+
+三件最常问的事
+  1. 觉得不对劲 -> 选 1（安装 / 修复）。它是万能修复，装它不会丢你的设置。
+  2. 终端还是不能翻墙 -> 那个窗口大概是装之前开的。重开一个最快。
+  3. 只想让某个窗口直连 -> 在那个窗口里执行：
+         export ENVPROXY_TERM=off          （恢复自动：unset ENVPROXY_TERM）
+     想在那个窗口用公司代理，先执行上面这条，再 export HTTPS_PROXY=http://地址:端口
+
+为什么有时候要等一下
+  操作系统规定：一个窗口里的设置，只在它启动那一刻定一次。
+  所以旧窗口要靠"回到提示符"这个时机去更新——你敲命令本来就会经过它。
+
+常用命令（在终端里执行）
+  export ENVPROXY_TERM=off            这个窗口固定直连
+  unset ENVPROXY_TERM                 恢复跟着翻墙软件走
+  export HTTPS_PROXY=http://地址:端口   这个窗口用你指定的代理
+  echo \$HTTPS_PROXY                   看现在到底有没有走代理
+  curl --noproxy '*' 网址              临时绕过代理跑一条命令
+  . ~/.envproxy/prompt-sync.sh        让这个旧窗口立刻跟上
+
+菜单其它选项
+  [2] 查看状态   [3] 停止监控（临时，下次登录回来）   [4] 一键恢复（彻底卸载）
+  [5] 检查更新
+
+本机版本 v$_hv
+完整说明见项目里的 README。
+HELP
+    return 0
+}
+
 show_menu() {
     if [ ! -t 0 ]; then
-        echo "菜单需要双击 打开菜单.command 使用，管道调用请直接用 install/status/stop/uninstall/update 子命令。"
+        echo "菜单需要双击 打开菜单.command 使用，管道调用请直接用 install/status/stop/uninstall/update/help 子命令。"
         return 1
     fi
     while true; do
@@ -1136,6 +1277,7 @@ show_menu() {
         echo "  [3] 停止监控（停掉并恢复直连，下次登录回来）"
         echo "  [4] 一键恢复（彻底卸载，回到没装之前）"
         echo "  [5] 检查更新（有新版先说明，同意才装）"
+        echo "  [6] 帮助（忘了怎么用就点它）"
         echo "  [0] 退出"
         printf "选一个（回车=查看状态）："
         if ! IFS= read -r _choice; then
@@ -1152,6 +1294,7 @@ show_menu() {
             3) _msub="stop";;
             4) _msub="uninstall";;
             5) _msub="update";;
+            6) show_help; continue;;
             0) return 0;;
             *) echo "没有这个编号，重输一个。"; continue;;
         esac

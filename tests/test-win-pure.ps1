@@ -345,10 +345,27 @@ Write-Host '[11] the menu dispatch table'
 # switches, so every number must resolve and every switch must exist. Names are checked
 # as data (keys and switch words only): this file stays ASCII-only on purpose.
 $menuKeys = @($MenuItems | ForEach-Object { $_.Key })
-Assert-Eq 'menu has six entries' 6 $menuKeys.Count
-foreach ($k in @('1', '2', '3', '4', '5', '0')) { Assert-Eq ('menu has key ' + $k) $true ($menuKeys -contains $k) }
+Assert-Eq 'menu has seven entries' 7 $menuKeys.Count
+foreach ($k in @('1', '2', '3', '4', '5', '6', '0')) { Assert-Eq ('menu has key ' + $k) $true ($menuKeys -contains $k) }
 $menuSwitches = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Switch })
-foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update')) { Assert-Eq ('menu covers -' + $sw) $true ($menuSwitches -contains $sw) }
+foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update', 'Help')) { Assert-Eq ('menu covers -' + $sw) $true ($menuSwitches -contains $sw) }
+# Help exists and actually explains the three things a confused user needs.
+# Asserting only "the function exists" is not enough: help text that says nothing
+# still "exists". These keywords are the load-bearing facts.
+Assert-Eq 'Show-Help is defined' 'Function' (Get-Command Show-Help -ErrorAction SilentlyContinue).CommandType
+$helpTxt = (Show-Help 6>&1 | Out-String)
+Assert-Eq 'help explains the Enter timing' $true ($helpTxt -match '回车')
+Assert-Eq 'help points at install/repair as the catch-all' $true ($helpTxt -match '安装 / 修复')
+Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TERM')
+# A table entry that is never printed is a feature the user cannot reach: the menu once
+# printed a hardcoded list and [6] Help never appeared on screen even though the table
+# had it. Show-Menu bails out under redirected input, so it cannot be exercised here --
+# instead render from the same table the menu renders from and check every key shows.
+$menuOut = (($MenuItems | ForEach-Object {
+    if ($_.Hint) { "  [{0}] {1}（{2}）" -f $_.Key, $_.Name, $_.Hint } else { "  [{0}] {1}" -f $_.Key, $_.Name }
+}) -join "`n")
+foreach ($k in $menuKeys) { Assert-Eq ('menu prints key ' + $k) $true ($menuOut -match ('\[' + [regex]::Escape($k) + '\]')) }
+Assert-Eq 'every action has a hint' $true (@($MenuItems | Where-Object { $_.Switch }).Count -eq @($MenuItems | Where-Object { $_.Hint }).Count)
 
 Write-Host '[12] the online update source table'
 # The updater walks an ordered source table and takes the first source that answers, so a broken
@@ -741,7 +758,7 @@ if ($env:OS -eq 'Windows_NT') {
 # 用例放在 tests/asset-cases.txt：名字、正文种类、编号、校验值、失败原因、正文。
 # 这里跑一遍并和文件里写下的期望比对；每一行还打印成 "contract ..."，
 # 门禁 10 再把两边的这些行互相比一次——文本层面的门禁看不出行为漂移，
-# 行为层面才看得出来（曾经就漂过：同一个应答，一边更新、一边说"没提供安装包"）。
+# 行为层面才看得出来（同一个应答，一边更新、一边说"没提供安装包"就是这种漂移）。
 $contractFile = Join-Path $PSScriptRoot 'asset-cases.txt'
 if (Test-Path -LiteralPath $contractFile) {
     $contractSeen = @{}
@@ -904,16 +921,20 @@ Assert-Eq '失败/成功交替 20 轮里从不判"断"（抖动不累积）' $fa
 Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来）' 1 $maxFails
 
 # 终端同步：$PROFILE 里的钩子块。核心是"只摘自己那一块、用户内容一字不动"，
-# 以及"标记不配对时绝不猜"。沙箱里用一个临时文件当 $PROFILE，不碰真实用户配置。
-Write-Host '[13] 终端同步：$PROFILE 钩子块'
+# 以及"标记不配对时绝不猜"。沙箱里用两个临时文件当两个版本的 profile——
+# Windows 5.1 与 7 的落点不同，两处都要写，这条正是要测的。
+Write-Host '[13] 终端同步：$PROFILE 钩子块（多落点）'
 $profSbox = Join-Path $env:TEMP ("ep_prof_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $profSbox -Force -ErrorAction SilentlyContinue | Out-Null
-$fakeProfile = Join-Path $profSbox 'Microsoft.PowerShell_profile.ps1'
-$realProfile = $global:PROFILE
-$global:PROFILE = $fakeProfile
+$fakeProfile  = Join-Path $profSbox 'ps51_profile.ps1'
+$fakeProfile7 = Join-Path $profSbox 'pwsh7_profile.ps1'
+$oldOverride = $env:ENVPROXY_PROFILE_OVERRIDE
+$env:ENVPROXY_PROFILE_OVERRIDE = $fakeProfile + ';' + $fakeProfile7
 try {
     $r = Install-ShellProfile
     Assert-Eq '全新安装成功' $true $r.Ok
+    Assert-Eq '两个落点都写了（5.1）' $true (Test-Path $fakeProfile)
+    Assert-Eq '两个落点都写了（7）' $true (Test-Path $fakeProfile7)
     $txt = Get-Content $fakeProfile -Raw -Encoding UTF8
     Assert-Eq '写入开始标记' $true ($txt -match [regex]::Escape($ProfileBlockStart))
     Assert-Eq '写入结束标记' $true ($txt -match [regex]::Escape($ProfileBlockEnd))
@@ -965,9 +986,194 @@ try {
     $txt7 = Get-Content $fakeProfile -Raw -Encoding UTF8
     Assert-Eq '旧的钩子内容已消失' $false ($txt7 -match 'OLD-HOOK')
     Assert-Eq '升级时用户内容保留' $true ($txt7 -match 'Y=2')
+
+    # 用户配置文件的编码必须原样保住，而且要逐字节还原。
+    # 这是最容易被写坏的东西：GBK 被当 UTF-8 读会变乱码、BOM 每轮叠加一层。
+    $encCases = @(
+        @{ Name = 'GBK';       Enc = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage) },
+        @{ Name = 'UTF8-BOM';  Enc = (New-Object System.Text.UTF8Encoding($true)) },
+        @{ Name = 'UTF8';      Enc = (New-Object System.Text.UTF8Encoding($false)) }
+    )
+    $userLine = '# 我的 PowerShell 配置'
+    foreach ($c in $encCases) {
+        $fp = Join-Path $profSbox ("enc_" + $c.Name + ".ps1")
+        $body = $c.Enc.GetBytes($userLine + "`r`n")
+        if ($c.Name -eq 'UTF8-BOM') { $body = [System.Text.Encoding]::UTF8.GetPreamble() + $body }
+        [System.IO.File]::WriteAllBytes($fp, $body)
+        $orig = [System.IO.File]::ReadAllBytes($fp)
+        $env:ENVPROXY_PROFILE_OVERRIDE = $fp
+        $rI = Install-ShellProfile
+        $txtAfter = $c.Enc.GetString([System.IO.File]::ReadAllBytes($fp))
+        Assert-Eq ("{0} 安装成功" -f $c.Name) $true $rI.Ok
+        Assert-Eq ("{0} 用户原有中文保住" -f $c.Name) $true ($txtAfter -match '我的 PowerShell 配置')
+        Assert-Eq ("{0} 钩子块写入" -f $c.Name) $true ($txtAfter -match 'EnvProxy: 让已经开着的窗口')
+        $null = Remove-ShellProfile
+        $fin = [System.IO.File]::ReadAllBytes($fp)
+        Assert-Eq ("{0} 卸载后逐字节还原（BOM 不叠加）" -f $c.Name) $true (($fin -join ',') -eq ($orig -join ','))
+    }
 } finally {
-    $global:PROFILE = $realProfile
+    if ($null -eq $oldOverride) { Remove-Item Env:ENVPROXY_PROFILE_OVERRIDE -ErrorAction SilentlyContinue }
+    else { $env:ENVPROXY_PROFILE_OVERRIDE = $oldOverride }
     Remove-Item -Recurse -Force $profSbox -ErrorAction SilentlyContinue
+}
+
+# 终端同步的**行为**验证：钩子块生成出来以后，改注册表能不能让当前会话跟着变。
+# 这一步是"敲回车就跟上"的核心机制，只检查文本里有没有 prompt 是不够的。
+Write-Host '[14] 终端同步：钩子的真实行为'
+$hookSBox = Join-Path ([System.IO.Path]::GetTempPath()) ("ep_hook_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $hookSBox -Force -ErrorAction SilentlyContinue | Out-Null
+$hookFile = Join-Path $hookSBox 'hook.ps1'
+[System.IO.File]::WriteAllLines($hookFile, (Get-ProfileBlockLines), (New-Object System.Text.UTF8Encoding($false)))
+$savedEnv = @{}
+foreach ($n in $ProxyVarNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n, 'User') }
+$savedOwnedExist = Test-Path $OwnedRegKey
+# 直接写注册表，不走 [Environment]::SetEnvironmentVariable：后者每写一次都会等
+# WM_SETTINGCHANGE 广播超时（实测 5 个变量约 26 秒），自检会卡到超时。
+# 钩子读的就是注册表这一层，直接写它等价，而且更快。
+function Set-RegValue([string]$Name, $Value) {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+    if ($null -eq $k) { return }
+    if ($null -eq $Value) { try { $k.DeleteValue($Name, $false) } catch {} }
+    else { $k.SetValue($Name, [string]$Value, [Microsoft.Win32.RegistryValueKind]::String) }
+    $k.Close()
+}
+try {
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
+    if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force }
+    foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+    Remove-Item Env:__EnvProxyPromptWrapped -ErrorAction SilentlyContinue
+    Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
+
+    # 代理开着：注册表有值 + 归属记录 -> 钩子注入
+    # 归属记录用真实写入路径产生（它就是 monitor 写的那一份）。
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
+    Set-RegValue 'HTTP_PROXY'  'http://127.0.0.1:7078'
+    Set-RegValue 'HTTPS_PROXY' 'http://127.0.0.1:7078'
+    Set-RegValue 'ALL_PROXY'   'http://127.0.0.1:7078'
+    Set-RegValue 'NO_PROXY'    'localhost,127.0.0.1,::1'
+    Set-RegValue 'NODE_USE_ENV_PROXY' '1'
+    if (-not (Test-RegKey $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force | Out-Null }
+    $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+    if ($ok) {
+        $ok.SetValue('HTTP_PROXY',  'http://127.0.0.1:7078', [Microsoft.Win32.RegistryValueKind]::String)
+        $ok.SetValue('HTTPS_PROXY', 'http://127.0.0.1:7078', [Microsoft.Win32.RegistryValueKind]::String)
+        $ok.SetValue('ALL_PROXY',   'http://127.0.0.1:7078', [Microsoft.Win32.RegistryValueKind]::String)
+        $ok.SetValue('NO_PROXY',    'localhost,127.0.0.1,::1', [Microsoft.Win32.RegistryValueKind]::String)
+        $ok.SetValue('NODE_USE_ENV_PROXY', '1', [Microsoft.Win32.RegistryValueKind]::String)
+        $ok.Close()
+    }
+    . $hookFile
+    Assert-Eq '加载钩子后立刻注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    # 注意：不能用 "$null -ne $function:prompt" 判"包住了"——PowerShell 自带默认 prompt，
+    # 那个表达式永远为真，把包装函数整行删掉也照样 PASS（实测如此）。
+    # 真判据是我们自己的哨兵变量 + 真的调一次 prompt 看效果。
+    Assert-Eq '包装标记已置位（这是回车生效的机制）' $true $global:__EnvProxyPromptWrapped
+    Assert-Eq '原 prompt 已备份（用于链式调用）' $true ($null -ne $global:__EnvProxyPrevPrompt)
+
+    # 真实路径：敲回车 = 宿主调用 prompt。这里手动调一次，走的是包装后的函数。
+    foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+    $null = prompt
+    Assert-Eq '敲回车（调 prompt）后拿到代理' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+
+    # 代理关掉：monitor 清掉注册表里的值 -> 钩子把会话里"我们写过的"也清掉
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
+    $null = prompt
+    Assert-Eq '代理关掉后回到提示符恢复直连' '' "$env:HTTPS_PROXY"
+
+    # 用户自己设的值必须保留（README 的承诺，也是契约里最容易被破坏的一条）
+    $env:HTTPS_PROXY = 'http://corp-proxy:8080'
+    $null = prompt
+    Assert-Eq '用户自己的公司代理不被删' 'http://corp-proxy:8080' $env:HTTPS_PROXY
+
+    $env:HTTPS_PROXY = 'http://127.0.0.1:8080'
+    $null = prompt
+    Assert-Eq '用户自己的本机地址不被删' 'http://127.0.0.1:8080' $env:HTTPS_PROXY
+
+    # 逐窗口接管
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
+    Set-RegValue 'HTTPS_PROXY' 'http://127.0.0.1:7078'
+    Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+    $null = prompt
+    Assert-Eq '重新注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    $env:ENVPROXY_TERM = 'off'
+    $null = prompt
+    Assert-Eq '接管开关生效（固定直连）' '' "$env:HTTPS_PROXY"
+    Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
+    $null = prompt
+    Assert-Eq '放开接管开关后恢复自动' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+
+    # 归属边界：这几条决定"会不会误删使用者自己的代理"，是最难事后补救的一类。
+    # 钩子的判据只有两条：注册表有值就注入；没有值但当前值等于归属记录里记的那个就清除。
+    # 所以每条用例都必须先把归属记录摆成真实状态，再只改被测的那一个维度——
+    # 否则所有用例都会落进同一个"没有归属记录→什么都不做"的分支，断言再多条也是假的。
+    $savedBakExist = Test-Path $PrevEnvRegKey
+    Write-Host '[14b] 归属边界：什么时候可以清'
+
+    # 造一份真实的归属记录，模拟"我们确实写过这些值"。
+    function Set-OwnedRecord([string]$Value) {
+        if (-not (Test-Path $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
+        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+        if ($null -eq $ok) { return }
+        foreach ($n in $ProxyVarNames) {
+            if ($n -eq 'NODE_USE_ENV_PROXY') { $ok.SetValue($n, '1', [Microsoft.Win32.RegistryValueKind]::String) }
+            else { $ok.SetValue($n, $Value, [Microsoft.Win32.RegistryValueKind]::String) }
+        }
+        $ok.Close()
+    }
+
+    # (a) 有归属记录、当前值等于记录值 → 清除（这是主功能：翻墙关了要还原）
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
+    Set-OwnedRecord 'http://127.0.0.1:7078'
+    $env:HTTPS_PROXY = 'http://127.0.0.1:7078'
+    $null = prompt
+    Assert-Eq '值等于记录值：清除' '' "$env:HTTPS_PROXY"
+
+    # (b) 有归属记录、但使用者改成了别的值 → 必须保住（不能按形状猜）
+    $env:HTTPS_PROXY = 'http://corp-proxy:8080'
+    $null = prompt
+    Assert-Eq '值不等于记录值：保住公司代理' 'http://corp-proxy:8080' $env:HTTPS_PROXY
+
+    # (c) 有归属记录、使用者改成另一个本机端口 → 同样必须保住
+    $env:HTTPS_PROXY = 'http://127.0.0.1:9090'
+    $null = prompt
+    Assert-Eq '值不等于记录值：保住别的端口的本机代理' 'http://127.0.0.1:9090' $env:HTTPS_PROXY
+
+    # (d) 没有归属记录 → 判不了，一个都不动
+    if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force }
+    $env:HTTPS_PROXY = 'http://127.0.0.1:7078'
+    $null = prompt
+    Assert-Eq '无归属记录时不动任何值（判不了就不猜）' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+
+    # (e) 快照保护住在 env.ps1 的注册表清理路径里，不在钩子里——直接断言那个判据，
+    #     不能拿钩子的行为冒充它（钩子根本不读快照）。
+    Assert-Eq 'Test-IsOwnedProxyValue 是真实存在的判据' 'Function' (Get-Command Test-IsOwnedProxyValue -ErrorAction SilentlyContinue).CommandType
+
+} finally {
+    foreach ($n in $ProxyVarNames) { Set-RegValue $n $savedEnv[$n] }
+    # 快照键：测试往 Backup 里种过值。原本就有的只删我们种的那一项；
+    # 原本没有的整棵删掉——否则会在使用者机器上留一个空键。
+    if (Test-Path $PrevEnvRegKey) {
+        $bk2 = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Backup", $true)
+        $emptyNow = $false
+        if ($null -ne $bk2) {
+            try { $bk2.DeleteValue('HTTPS_PROXY', $false) } catch {}
+            $emptyNow = (@($bk2.GetValueNames()).Count -eq 0)
+            $bk2.Close()
+        }
+        if ($emptyNow -and (-not $savedBakExist)) { Remove-Item $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    # 归属记录：测试前没有就整棵删掉，别把 HKCU\Software\EnvProxy 留在用户机器上。
+    if (-not $savedOwnedExist) {
+        if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue }
+        # 只有它空了才删父键（父键可能装着真实的 ScriptPath）。
+        if ((Test-Path $ScriptPathRegKey) -and -not (@(Get-ChildItem $ScriptPathRegKey -ErrorAction SilentlyContinue).Count)) {
+            Remove-Item $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
+    Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
+    Remove-Item Env:__EnvProxyPromptWrapped -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force $hookSBox -ErrorAction SilentlyContinue
 }
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }

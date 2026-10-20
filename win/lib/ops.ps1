@@ -267,16 +267,66 @@ function Show-Status {
 # ------------------------------------------------------------------------------
 # 菜单只做三件事：打印、读编号、起子进程跑对应开关后回到菜单。
 # 每个动作都走一遍入口开关的完整路径（含操作锁）：菜单自己不拿锁、不碰变量不碰文件，
-# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。五个动作与入口开关一一对应。
+# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。
+# **打印与分派共用下面这张 $MenuItems**：加一项就自动出现在菜单里，不会再出现
+# "表里加了、打印忘了"这种功能明明做了、用户却看不见的缺口。
 # 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
 $MenuItems = @(
-    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install" },
-    @{ Key = "2"; Name = "查看状态";   Switch = "Status" },
-    @{ Key = "3"; Name = "停止监控";   Switch = "Stop" },
-    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall" },
-    @{ Key = "5"; Name = "检查更新";   Switch = "Update" },
+    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Hint = "首次安装；觉得不对劲就点它" },
+    @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Hint = "监控、翻墙、变量、版本" },
+    @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Hint = "停掉并恢复直连，下次开机回来" },
+    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Hint = "彻底卸载，回到没装之前" },
+    @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Hint = "有新版先说明，同意才装" },
+    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Hint = "忘了怎么用就点它" },
     @{ Key = "0"; Name = "退出";       Switch = "" }
 )
+function Show-Help {
+    $ver = Get-LocalVersion
+    if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "未知" }
+    $lines = @(
+        "================ EnvProxy 帮助 ================",
+        "",
+        "它做什么",
+        "  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；",
+        "  一关，它们自动恢复直连。你不用记住任何开关。",
+        "",
+        "装完会发生什么",
+        "  1. 新开的窗口：自动就是对的，什么都不用做。",
+        "  2. 已经开着的旧窗口：敲一下回车（或随便跑条命令）就跟上。",
+        "  3. 装之前就开着的窗口：重开一次，或执行一次加载命令。",
+        "",
+        "三件最常问的事",
+        "  1. 觉得不对劲 -> 选 1（安装 / 修复）。它是万能修复，装它不会丢你的设置。",
+        "  2. 终端还是不能翻墙 -> 那个窗口大概是装之前开的。重开一个最快。",
+        "  3. 只想让某个窗口直连 -> 在那个窗口里执行：",
+        "         `$env:ENVPROXY_TERM = 'off'          （恢复自动：Remove-Item Env:ENVPROXY_TERM）",
+        "     想在那个窗口用公司代理，先执行上面这条，再 `$env:HTTPS_PROXY = 'http://地址:端口'",
+        "",
+        "为什么有时候要等一下",
+        "  操作系统规定：一个窗口里的设置，只在它启动那一刻定一次。",
+        "  所以旧窗口要靠'回到提示符'这个时机去更新——你敲命令本来就会经过它。",
+        "",
+        "常用命令（在终端里执行）",
+        "  `$env:ENVPROXY_TERM = 'off'                 这个窗口固定直连",
+        "  Remove-Item Env:ENVPROXY_TERM              恢复跟着翻墙软件走",
+        "  `$env:HTTPS_PROXY = 'http://地址:端口'        这个窗口用你指定的代理",
+        "  `$env:HTTPS_PROXY                            看现在到底有没有走代理",
+        "  curl.exe --noproxy ""*"" 网址                 临时绕过代理跑一条命令",
+        "  . `$PROFILE                                   让这个旧窗口立刻跟上",
+        "",
+        "为什么这里写 curl.exe 而不是 curl",
+        "  PowerShell 把 curl 认成了 Invoke-WebRequest 的别名，直接敲 curl 会报参数错误。",
+        "",
+        "菜单其它选项",
+        "  [2] 查看状态   [3] 停止监控（临时，下次登录回来）   [4] 一键恢复（彻底卸载）",
+        "  [5] 检查更新",
+        "",
+        "本机版本 v$ver",
+        "完整说明见项目里的 README。"
+    )
+    foreach ($l in $lines) { Write-Host $l }
+}
+
 function Show-Menu {
     # 非交互 stdin（管道/重定向）直接退出不进循环：菜单是给人点的，自动化请用开关。
     # 否则管道到 EOF 时 Read-Host 读空会被当成回车，一遍遍重复默认动作停不下来。
@@ -295,16 +345,19 @@ function Show-Menu {
         $verText = Get-LocalVersion
         if (-not $verText) { $verText = "未知" }
         Write-Host ("当前：监控{0}，本地版本 v{1}（详情选 2 查看状态）" -f $monText, $verText) -ForegroundColor DarkGray
-        Write-Host "  [1] 安装 / 修复（首次安装；觉得不对劲就点它）" -ForegroundColor Green
-        Write-Host "  [2] 查看状态（监控、翻墙、变量、版本）" -ForegroundColor Green
-        Write-Host "  [3] 停止监控（停掉并恢复直连，下次开机回来）" -ForegroundColor Green
-        Write-Host "  [4] 一键恢复（彻底卸载，回到没装之前）" -ForegroundColor Green
-        Write-Host "  [5] 检查更新（有新版先说明，同意才装）" -ForegroundColor Green
-        Write-Host "  [0] 退出" -ForegroundColor DarkGray
+        # 逐项打印 $MenuItems：表是唯一权威，改表即改菜单。
+        foreach ($mi in $MenuItems) {
+            $color = if ($mi.Switch) { "Green" } else { "DarkGray" }
+            if ($mi.Hint) {
+                Write-Host ("  [{0}] {1}（{2}）" -f $mi.Key, $mi.Name, $mi.Hint) -ForegroundColor $color
+            } else {
+                Write-Host ("  [{0}] {1}" -f $mi.Key, $mi.Name) -ForegroundColor $color
+            }
+        }
         try {
             $choice = Read-Host "选一个（回车=查看状态）"
         } catch {
-            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update 开关。" -ForegroundColor Yellow
+            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。" -ForegroundColor Yellow
             return
         }
         if (-not $choice) { $choice = "2" }

@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-  <title id="limitsTitle">Five limits: read first</title>
-  <desc id="limitsDesc">Five numbered technical limits. Pure TUN mode gets nothing written, which is correct behaviour; disconnected is not the same as quitting, traffic decides; moving outside the search range needs one manual install to take over; previously hand-set user proxy variables are snapshotted first and restored on uninstall; security software may treat it as suspicious and block the scripts, so allow it or whitelist it.</desc>
+  <title id="limitsTitle">Five technical limits</title>
+  <desc id="limitsDesc">Five numbered technical limits, describing five things it does not do. First, pure TUN mode is not handled: it listens on no local port, so there is no port to judge, and all traffic already goes through it in that mode. Second, system proxy settings are not modified, because that would affect browsers and other programs; only user-level environment variables are written. Third, already-running programs are not changed, because a program reads the environment variables once at startup, so windows already open need one Enter press. Fourth, tools that need their own proxy configuration are out of scope, because they do not read these variables. Fifth, no interface is provided, because zero dependencies is the install premise.</desc>
 
   <rect width="1200" height="470" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="468.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Five limits: read first</text>
+    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Five technical limits: what it does not do</text>
   </g>
 
   <g id="rules" stroke="#2A3B58" stroke-width="1.5">
@@ -30,10 +30,19 @@
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
-    <text x="120" y="147" dy="0.35em">Pure TUN gets nothing: correct, leave it alone</text>
-    <text x="120" y="217" dy="0.35em">Disconnected is not quit: traffic decides</text>
-    <text x="120" y="287" dy="0.35em">Moved out of range: install once by hand</text>
-    <text x="120" y="357" dy="0.35em">Hand-set variables are snapshotted, restored on uninstall</text>
-    <text x="120" y="427" dy="0.35em">Security software may block the scripts: allow or whitelist</text>
+    <text x="120" y="140">Pure TUN mode is not handled</text>
+    <text x="120" y="166" font-size="16" fill="#94A6BE">It listens on no local port, so there is no port to judge; all traffic already goes through it.</text>
+
+    <text x="120" y="210">System proxy settings are not modified</text>
+    <text x="120" y="236" font-size="16" fill="#94A6BE">That would affect browsers and other programs. Only user-level variables are written.</text>
+
+    <text x="120" y="280">Already-running programs are not changed</text>
+    <text x="120" y="306" font-size="16" fill="#94A6BE">Variables are read once at startup, so windows already open need one Enter press.</text>
+
+    <text x="120" y="350">Tools needing their own proxy config are out of scope</text>
+    <text x="120" y="376" font-size="16" fill="#94A6BE">They do not read these variables. Maven, Gradle and Docker need separate setup.</text>
+
+    <text x="120" y="420">No interface is provided</text>
+    <text x="120" y="446" font-size="16" fill="#94A6BE">Zero dependencies is the install premise. Only a menu: no tray icon.</text>
   </g>
 </svg>

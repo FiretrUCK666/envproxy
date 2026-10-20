@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="qsTitle qsDesc">
+  <title id="qsTitle">三件事：装完之后要做的事</title>
+  <desc id="qsDesc">三张并排卡片，说明装完之后会遇到的情况。第一张：装完之后打开的窗口，启动时读到的就是当前状态，什么都不用做。第二张：装完之后打开、后来代理又变了的窗口，按一次回车或随便运行一条命令就会重新读取。第三张：装之前就打开的窗口，安装时同步脚本没有加载进去，需要重新打开一次或手动加载。</desc>
+
+  <rect width="1200" height="430" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="428.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+
+  <g id="heading">
+    <text x="56" y="72" font-size="32" font-weight="700" fill="#E9EFF8">装完之后要做的事，只有这三条</text>
+  </g>
+
+  <g id="cards" fill="none" stroke="#2A3B58" stroke-width="1.5">
+    <rect x="56" y="108" width="336" height="270" rx="14" fill="#16243A"/>
+    <rect x="432" y="108" width="336" height="270" rx="14" fill="#16243A"/>
+    <rect x="808" y="108" width="336" height="270" rx="14" fill="#16243A"/>
+  </g>
+
+  <g id="card1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+    <circle cx="96" cy="156" r="18" fill="#34D399" opacity="0.16"/>
+    <text x="96" y="163" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">1</text>
+    <text x="132" y="163" font-size="21" font-weight="700" fill="#E9EFF8">装完之后开的窗口</text>
+    <text x="88" y="212" font-size="19" fill="#C7D3E3">什么都不用做。</text>
+    <text x="88" y="242" font-size="19" fill="#C7D3E3">它启动时读到的</text>
+    <text x="88" y="272" font-size="19" fill="#C7D3E3">就是当前状态。</text>
+    <text x="88" y="326" font-size="17" fill="#94A6BE">翻墙开着或关着，都一样。</text>
+    <text x="88" y="352" font-size="17" fill="#38BDF8">AI 工具启动的终端也算这类。</text>
+  </g>
+
+  <g id="card2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+    <circle cx="472" cy="156" r="18" fill="#38BDF8" opacity="0.16"/>
+    <text x="472" y="163" font-size="20" font-weight="700" fill="#38BDF8" text-anchor="middle">2</text>
+    <text x="508" y="163" font-size="21" font-weight="700" fill="#E9EFF8">开着，后来代理变了</text>
+    <text x="464" y="212" font-size="19" fill="#C7D3E3">按一次回车。</text>
+    <text x="464" y="242" font-size="19" fill="#C7D3E3">运行任意一条命令也行，</text>
+    <text x="464" y="272" font-size="19" fill="#C7D3E3">它执行完会重新读一次。</text>
+    <text x="464" y="326" font-size="17" fill="#94A6BE">不想按回车就重开一个窗口，</text>
+    <text x="464" y="352" font-size="17" fill="#38BDF8">新窗口读到的就是当前值。</text>
+  </g>
+
+  <g id="card3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+    <circle cx="848" cy="156" r="18" fill="#94A6BE" opacity="0.16"/>
+    <text x="848" y="163" font-size="20" font-weight="700" fill="#94A6BE" text-anchor="middle">3</text>
+    <text x="884" y="163" font-size="21" font-weight="700" fill="#E9EFF8">装之前就开着的窗口</text>
+    <text x="840" y="212" font-size="19" fill="#C7D3E3">重新打开一次。</text>
+    <text x="840" y="242" font-size="19" fill="#C7D3E3">安装时同步脚本</text>
+    <text x="840" y="272" font-size="19" fill="#C7D3E3">没有加载进这个窗口。</text>
+    <text x="840" y="326" font-size="17" fill="#94A6BE">不想重开就执行一次加载命令，</text>
+    <text x="840" y="352" font-size="17" fill="#38BDF8">命令在第 3.5 节。</text>
+  </g>
+</svg>

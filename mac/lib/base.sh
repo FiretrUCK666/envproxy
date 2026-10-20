@@ -23,6 +23,20 @@ DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
 # + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
 OWNED_HTTP_PREFIX="http://127.0.0.1:"
 
+# ------------------------------------------------------------------------------
+# 变量名的**唯一权威处**（与 Win 侧 $ProxyVarNames 同地位）。
+# 为什么要表：名字手抄在各处就会漂移——漏一个变量的后果是"清不干净"，
+# 而它只在特定操作下才暴露（用户以为固定直连了，curl 却还在走代理）。
+# 新增/改名变量时**只改这里**，写入、核对、回收、归属记录都遍历它。
+# DIVERGE(Mac): 9 个——5 个规范拼写 + 4 个小写拼写。macOS 的变量名真大小写敏感，
+#   有的工具只认小写；Windows 命名空间大小写不敏感，写小写只会互相覆盖，故那边只有 5 个。
+# 顺序即写入顺序：大写在前、小写紧随其后，NO_PROXY 归到中间那一组之后。
+PROXY_VAR_NAMES="HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy NODE_USE_ENV_PROXY"
+# 走代理地址的那 6 个（不含 NO_PROXY / NODE_USE_ENV_PROXY：它们的值不是代理地址）
+PROXY_ADDR_VAR_NAMES="HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy"
+# NO_PROXY 的两个拼写（值是例外清单，回收规则与地址变量不同）
+NO_PROXY_VAR_NAMES="NO_PROXY no_proxy"
+
 # NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。
 # 环境变量是共享资源——用户自己加的例外（公司内网等）与别的工具写下的例外都必须留着，
 # 本工具只负责"本机地址一定直连"这一件事。
@@ -72,9 +86,18 @@ is_default_no_proxy_entry() {
 # 安装快照（prev.env）里本来就记着这一项吗？记着 = 使用者自己的，我们永远不许动。
 # 光看"形状像不像我们的"不够：用户自己也完全可能写 NO_PROXY=localhost，
 # 或者用 mitmproxy 挂 http://127.0.0.1:8080。只看形状会在 off 态把它定时删掉。
+# 快照格式是「变量名 TAB 值」（见 env.sh 的 snapshot_prev_env），不是 NAME=value——
+# 按 = 解析会一行都匹配不上，于是保护全部落空（用户自己的条目会被当默认项剥掉）。
+_snapshot_value_of() {
+    # $1 = 变量名；输出该变量在快照里记下的值（去掉外层单引号）。没有则输出空。
+    [ -f "$PREV_ENV" ] || return 0
+    awk -F'\t' -v k="$1" '$1 == k { print $2; exit }' "$PREV_ENV" 2>/dev/null |
+        sed "s/^'\(.*\)'$/\1/"
+}
+
 no_proxy_entry_in_snapshot() {
     [ -f "$PREV_ENV" ] || return 1
-    _nes=$(awk -F= '/^NO_PROXY=/ { sub(/^NO_PROXY=/, ""); gsub(/^'"'"'|'"'"'$/, ""); print; exit }' "$PREV_ENV" 2>/dev/null)
+    _nes=$(_snapshot_value_of NO_PROXY)
     [ -n "$_nes" ] || return 1
     _nes_me=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
     _nes_list=$(printf '%s' "$_nes" | tr -d ' ' | tr 'A-Z' 'a-z')
@@ -89,9 +112,14 @@ no_proxy_entry_in_snapshot() {
 is_owned_proxy_value() {
     case "$1" in "$OWNED_HTTP_PREFIX"*) ;; *) return 1;; esac
     # 快照里存的是单引号转义后的值（见 shell_escape_sq），所以两种写法都要认。
+    # 逐变量比对，而不是"整份文件里 grep 一下"：后者会把 NO_PROXY 里恰好含同一串
+    # 文本的情况也算进来，而且依赖分隔符形式，格式一改保护就静默失效。
     if [ -f "$PREV_ENV" ]; then
-        if grep -qF "=$1" "$PREV_ENV" 2>/dev/null; then return 1; fi
-        if grep -qF "='$1'" "$PREV_ENV" 2>/dev/null; then return 1; fi
+        _iov_want=$(printf '%s' "$1")
+        for _iov_v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+            _iov_have=$(_snapshot_value_of "$_iov_v")
+            [ -n "$_iov_have" ] && [ "$_iov_have" = "$_iov_want" ] && return 1
+        done
     fi
     return 0
 }
@@ -124,7 +152,7 @@ usage_error() {
         return 1
     fi
     # 开关必须跟着它的命令：--purge 只配 uninstall，--yes 只配 update。
-    # 单独给以前会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
+    # 单独给会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
     case " ${USAGE_SWITCHES:-} " in
         *" purge "*)
             if [ "${USAGE_COMMAND:-}" != "uninstall" ]; then

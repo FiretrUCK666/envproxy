@@ -16,6 +16,9 @@ $ScriptPathRegKey = "HKCU:\Software\EnvProxy"
 # 用户原值快照：安装时记下被覆盖前的用户级代理变量，卸载时按快照还原。
 # 与 $ScriptPathRegKey 父子关系——卸载清注册表键时连同删掉，不留痕迹。
 $PrevEnvRegKey   = "HKCU:\Software\EnvProxy\Backup"
+# 我们写下的值（变量名 -> 值），终端同步的钩子据此判断"当前值是不是我们的"。
+# 与 Mac 侧 ~/.envproxy/owned.env 同义：不存在就说明不是我们写的，一个都不许删。
+$OwnedRegKey     = "HKCU:\Software\EnvProxy\Owned"
 # 顶层取值必须加载期安全：CI 自检会在 Linux 上点源本文件测纯函数，
 # 那里没有 LOCALAPPDATA。运行时只在 Windows 走，兜底值走不到业务逻辑。
 $_localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
@@ -199,6 +202,15 @@ function Repair-AutoRun {
 # ------------------------------------------------------------------------------
 # 3b. PowerShell 配置文件的终端同步（对应 Mac 侧的 shell hook）
 # ------------------------------------------------------------------------------
+# DIVERGE(Win): 机制与 Mac 侧必然不同，三处：
+#   1) 挂载点——PowerShell 没有 precmd/PROMPT_COMMAND 那种官方钩子，只能改写 $PROFILE
+#      并**包住 prompt 函数**；Mac 是在 rc 文件里 source 一个脚本、注册 precmd 钩子。
+#   2) 状态来源——本侧每次回到提示符实时查注册表（HKCU\Environment 与
+#      Software\EnvProxy\Owned）；Mac 侧读的是 ~/.envproxy/proxy.env 与 owned.env 两个文件。
+#   3) 落点数量——本侧写 5.1 与 7 两个版本的 profile；Mac 写 4 个 rc（.zshenv/.zshrc/
+#      存在的 .bash_profile/.bashrc）。
+#   共同点（行为契约，两侧必须一致）：只对安装之后新启动的 shell 生效；只清"值仍等于
+#   我们写下的那个"；钩子永不输出、永不打断用户的提示符。
 # 为什么需要：环境变量只在进程启动那一刻从父进程复制，已经开着的 PowerShell 窗口
 #   拿不到新值（WM_SETTINGCHANGE 广播对已运行的控制台进程无效）。唯一可靠的时机是
 #   "每次回到提示符、准备执行下一条命令之前"——也就是 prompt 函数被调用时。
@@ -220,8 +232,16 @@ $ProfileBlockEnd   = '# <<< EnvProxy <<<'
 
 # 我们要同步的变量（与 $ProxyVarNames 同源，不另立一份清单）。
 function Get-ProfileBlockLines {
-    # 钩子本体。内容是固定的，不看外部状态——判断权全在注册表（monitor 写的）。
-    # 变量清单在生成时展开，避免两处清单漂移。
+    # 这段代码要做两件事：
+    #   1) 立刻同步一次（新开窗口马上拿到当前状态，不必等第一次回车）；
+    #   2) 包住 prompt 函数，让**每次回到提示符**都再同步一次——这才让"已经开着的窗口
+    #      敲回车就跟着变"成立。只做第 1 件的话，敲回车不会触发任何东西，
+    #      那一句承诺就是假的（Windows 没有 precmd 那种自动钩子，必须自己包 prompt）。
+    #
+    # 包 prompt 的三条约束：
+    #   a) 必须记住原函数并原样调用，否则 Oh My Posh / Starship / 自定义提示符全被顶掉；
+    #   b) 同步逻辑整体 try/catch 包死——prompt 里抛异常会让整个提示符渲染失败；
+    #   c) 不能重复包装（重复 source 会把 prompt 包成洋葱），用哨兵变量挡住。
     $names = ($ProxyVarNames | ForEach-Object { "'$_'" }) -join ', '
     $body = @(
         $ProfileBlockStart
@@ -229,27 +249,68 @@ function Get-ProfileBlockLines {
         '# 手动接管：$env:ENVPROXY_TERM = "off" 固定直连；Remove-Item Env:ENVPROXY_TERM 恢复自动',
         'try {',
         ("    `$__epNames = @(" + $names + ")"),
-        '    $__epReg = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)',
-        '    if ($null -ne $__epReg) {',
-        '        if ($env:ENVPROXY_TERM -eq "off") {',
-        '            foreach ($__epN in $__epNames) {',
-        '                $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
-        '                $__epWant = $__epReg.GetValue($__epN, $null)',
-        '                if (($null -ne $__epWant) -and ($__epCur -eq [string]$__epWant)) {',
-        '                    [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
-        '                }',
-        '            }',
-        '        } else {',
-        '            foreach ($__epN in $__epNames) {',
-        '                $__epVal = $__epReg.GetValue($__epN, $null)',
-        '                if ($null -ne $__epVal) {',
-        '                    [Environment]::SetEnvironmentVariable($__epN, [string]$__epVal, "Process")',
+        '    $__epSync = {',
+        '        try {',
+        '            $__epReg = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)',
+        '            $__epOwn = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $false)',
+        '            if ($null -ne $__epReg) {',
+        '                if ($env:ENVPROXY_TERM -eq "off") {',
+        '                    # 固定直连：只清"确实是我们写下的那些值"。值是我们写的才清，',
+        '                    # 用户自己设的（哪怕是本机地址）一律不动——这是 README 的承诺。',
+        '                    foreach ($__epN in $__epNames) {',
+        '                        $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
+        '                        $__epOurs = if ($null -ne $__epOwn) { $__epOwn.GetValue($__epN, $null) } else { $null }',
+        '                        if (($null -ne $__epOurs) -and ($__epCur -eq [string]$__epOurs)) {',
+        '                            [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
+        '                        }',
+        '                    }',
         '                } else {',
-        '                    [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
+        '                    # 自动跟随：注册表有值就注入；没有值时只清我们自己写下的那些——',
+        '                    # 判据是归属记录里有这个名字且当前值相等，用户自己设的一律不动。',
+        '                    foreach ($__epN in $__epNames) {',
+        '                        $__epVal = $__epReg.GetValue($__epN, $null)',
+        '                        $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
+        '                        $__epOurs = if ($null -ne $__epOwn) { $__epOwn.GetValue($__epN, $null) } else { $null }',
+        '                        if ($null -ne $__epVal) {',
+        '                            [Environment]::SetEnvironmentVariable($__epN, [string]$__epVal, "Process")',
+        '                        } elseif ($null -ne $__epOurs) {',
+        '                            if ($__epCur -eq [string]$__epOurs) {',
+        '                                [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
+        '                            }',
+        '                            continue',
+        '                        } else {',
+        '                            # 归属记录不存在（升级上来的老安装还没写过它）。',
+        '                            # 这里**不清任何东西**：没有记录就没有判据，猜就要猜错——',
+        '                            # 使用者自己起在任意端口的 mitmproxy 长得和我们的完全一样，',
+        '                            # 按形状猜只能二选一，必然误删其中一类。',
+        '                            # 宁可留一个过期值（下次 on 会覆盖；下次 off 时有记录就能清），',
+        '                            # 也不替他删掉自己的配置。',
+        '                            # 与 Mac 侧 write_off_sentinel 的"文件里没有可解析端口就退化成 no-op"',
+        '                            # 是同一条原则：判不了就不动。',
+        '                            continue',
+        '                        }',
+        '                    }',
         '                }',
+        '                $__epReg.Close()',
         '            }',
+        '            if ($null -ne $__epOwn) { $__epOwn.Close() }',
+        '        } catch { }',
+        '    }',
+        '    & $__epSync',
+        '    $global:__EnvProxySyncQuiet = $__epSync',
+        '    if ((-not $global:__EnvProxyPromptWrapped) -and $Host.Name -ne "ServerRemoteHost" -and [Environment]::UserInteractive) {',
+        '        $global:__EnvProxyPromptWrapped = $true',
+        '        $global:__EnvProxyPrevPrompt = $function:prompt',
+        '        function global:prompt {',
+        '            if ($null -ne $global:__EnvProxyPrevPrompt) {',
+        '                $__epTxt = (& $global:__EnvProxyPrevPrompt)',
+        '                try { & $global:__EnvProxySyncQuiet } catch { }',
+        '                return $__epTxt',
+        '            }',
+        '            $__epLoc = $executionContext.SessionState.Path.CurrentLocation',
+        '            try { & $global:__EnvProxySyncQuiet } catch { }',
+        '            return ("PS " + $__epLoc + "> ")',
         '        }',
-        '        $__epReg.Close()',
         '    }',
         '} catch { }',
         $ProfileBlockEnd
@@ -257,19 +318,54 @@ function Get-ProfileBlockLines {
     return $body
 }
 
-# 配置文件的路径现场取，不硬编码。取不到就返回 $null（调用方据此跳过并说明）。
-function Get-ProfilePathSafe {
+# 成对护栏：起止标记都在、且开始行在结束行之前。缺一侧或顺序错乱就一个字节都不改。
+# 探测一个已存在文件的编码，按同样的编码读回它的行。
+# 为什么必须这样读：用户 profile 可能是 GBK（中文系统记事本默认）、UTF-16 或带 BOM。
+# 一律按 UTF-8 读会把 GBK 的中文读成乱码，于是"我们的块在不在、内容对不对"全部判错——
+# 安装报 verify-failed、卸载认不出自己的块。写回与读回必须用同一套编码判断。
+function Get-TextFileEncoding([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return (New-Object System.Text.UTF8Encoding($false)) }
     try {
-        $p = $PROFILE
-        if ([string]::IsNullOrWhiteSpace($p)) { return $null }
-        return $p
-    } catch { return $null }
+        $b = [System.IO.File]::ReadAllBytes($Path)
+        if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return (New-Object System.Text.UTF8Encoding($true)) }
+        if ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return (New-Object System.Text.UnicodeEncoding($false, $true)) }
+        if ($b.Length -ge 2 -and $b[0] -eq 0xFE -and $b[1] -eq 0xFF) { return (New-Object System.Text.UnicodeEncoding($true, $true)) }
+        # 无 BOM：严格 UTF-8 能解就是 UTF-8，否则按系统 ANSI。
+        # 不能用 Encoding::Default——它在 .NET Framework 上是 ANSI、在 .NET Core 上是 UTF-8。
+        try {
+            $strict = New-Object System.Text.UTF8Encoding($false, $true)
+            [void]$strict.GetString($b)
+        } catch {
+            try { return [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage) } catch {}
+        }
+    } catch {}
+    return (New-Object System.Text.UTF8Encoding($false))
 }
 
-# 成对护栏：起止标记都在、且开始行在结束行之前。缺一侧或顺序错乱就一个字节都不改。
+function Read-ProfileLines([string]$Path) {
+    $enc = Get-TextFileEncoding $Path
+    try {
+        $text = $enc.GetString([System.IO.File]::ReadAllBytes($Path))
+        # 必须剥掉开头的 BOM 字符（U+FEFF）：Encoding::GetString 会把它当成正文的一部分。
+        # 不剥这一下，读出来的第一行带着 BOM，写回时编码器再加一个 BOM，
+        # 于是每装一次/卸一次就多叠一层 —— 实测装一次卸一次后 BOM 从 1 个变 3 个。
+        if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
+        return @($text -split "`r?`n")
+    } catch { return @() }
+}
+
+# 标记是否在（大小写敏感、逐字节比较）。
+# 全项目只用这一个判据：混用 -ceq 与 -contains 会让"装"与"卸"得出相反结论——
+# 标记大小写被改过时，安装报 verify-failed、卸载报 unpaired，用户从此既装不上也卸不掉。
+# 与 Mac 侧 grep -qxF（字节比较）同口径。
+function Test-MarkerPresent([string[]]$Lines, [string]$Marker) {
+    foreach ($l in $Lines) { if ($l -ceq $Marker) { return $true } }
+    return $false
+}
+
 function Test-ProfileBlockPaired([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
-    try { $lines = [System.IO.File]::ReadAllLines($Path) } catch { return $false }
+    $lines = @(Read-ProfileLines $Path)
     $s = -1; $e = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
@@ -281,7 +377,7 @@ function Test-ProfileBlockPaired([string]$Path) {
 # 读回比对：块内容与当前版本是否一致（升级后不一致要重写）。
 function Test-ProfileBlockCurrent([string]$Path) {
     if (-not (Test-ProfileBlockPaired $Path)) { return $false }
-    try { $lines = [System.IO.File]::ReadAllLines($Path) } catch { return $false }
+    $lines = @(Read-ProfileLines $Path)
     $s = -1; $e = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
@@ -306,14 +402,50 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
     }
     $tmp = Join-Path $dir (".envproxy-profile." + $PID + ".tmp")
     try {
-        # 无 BOM：PowerShell 5.1 与 7.x 都能正确读 UTF-8 无 BOM 的 ps1；
-        # 带 BOM 反而会让某些编辑器与跨平台工具显示怪字符。
-        [System.IO.File]::WriteAllLines($tmp, $Lines, (New-Object System.Text.UTF8Encoding($false)))
+        # 编码：沿用原文件的编码与 BOM 状态，绝不"统一成 UTF-8 无 BOM"。
+        # 这是用户自己长期维护的文件——它可能是 GBK（中文系统的记事本默认），
+        # 也可能带 BOM。按固定编码写回会把用户原有的中文全部写成乱码且无法恢复。
+        # 文件不存在时（首次创建）才用 UTF-8 无 BOM。
+        $enc = New-Object System.Text.UTF8Encoding($false)
+        $hasBom = $false
         if (Test-Path -LiteralPath $Path) {
-            # 保留原文件权限位
-            try { Copy-Item -LiteralPath $Path -Destination ($tmp + ".perm") -ErrorAction SilentlyContinue } catch {}
+            try {
+                $old = [System.IO.File]::ReadAllBytes($Path)
+                if ($old.Length -ge 3 -and $old[0] -eq 0xEF -and $old[1] -eq 0xBB -and $old[2] -eq 0xBF) {
+                    $hasBom = $true
+                    $enc = New-Object System.Text.UTF8Encoding($true)
+                } elseif ($old.Length -ge 2 -and $old[0] -eq 0xFF -and $old[1] -eq 0xFE) {
+                    $enc = New-Object System.Text.UnicodeEncoding($false, $true)
+                } elseif ($old.Length -ge 2 -and $old[0] -eq 0xFE -and $old[1] -eq 0xFF) {
+                    $enc = New-Object System.Text.UnicodeEncoding($true, $true)
+                } else {
+                    # 没有 BOM：可能是 UTF-8，也可能是系统 ANSI（中文系统即 GBK）。
+                    # 用严格 UTF-8 解码试探——能完整解出来就当 UTF-8，否则按 ANSI 处理。
+                    # 注意不能用 [System.Text.Encoding]::Default 拿 ANSI：
+                    # 那在 .NET Framework(5.1) 上是 ANSI，在 .NET Core(pwsh 7) 上却是 UTF-8，
+                    # 同一段代码两个宿主行为不同。而这文件的读者可能是任意一个宿主，
+                    # 所以必须显式按系统代码页（ACP）取，两个宿主才一致。
+                    try {
+                        $strict = New-Object System.Text.UTF8Encoding($false, $true)
+                        [void]$strict.GetString($old)
+                    } catch {
+                        try {
+                            $acp = [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage
+                            $enc = [System.Text.Encoding]::GetEncoding($acp)
+                        } catch {
+                            # 取不到 ANSI 就宁可不动：写坏用户配置比不写更糟。
+                            return $false
+                        }
+                    }
+                }
+            } catch {}
+        }
+        [System.IO.File]::WriteAllLines($tmp, $Lines, $enc)
+        if (Test-Path -LiteralPath $Path) {
+            # 改用户文件之前先备份：改坏了还能手工还原。
+            # 与 Mac 侧改 rc 前留 *.envproxy.bak 是同一规矩（双端对等）。
+            try { Copy-Item -LiteralPath $Path -Destination ($Path + ".envproxy.bak") -Force -ErrorAction SilentlyContinue } catch {}
             Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
-            Remove-Item -LiteralPath ($tmp + ".perm") -ErrorAction SilentlyContinue
         } else {
             Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
         }
@@ -324,14 +456,66 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
     }
 }
 
+# 需要覆盖的所有 profile 路径。
+# 为什么不是一个：Windows PowerShell 5.1 与 PowerShell 7 的 $PROFILE 是**两个不同文件**
+#   （Documents\WindowsPowerShell\... 与 Documents\PowerShell\...）。
+# 本程序是被 powershell.exe(5.1) 启动的，只看当前 $PROFILE 就只会写 5.1 那个；
+# 日常用 pwsh 7 的人永远拿不到终端同步，而且没有任何报错——静默不兑现承诺。
+# 所以两边都写。路径现场从各自宿主问，不硬编码 Documents（OneDrive 重定向会让它变）。
+function Get-ProfilePaths {
+    # 自检可以设 $env:ENVPROXY_PROFILE_OVERRIDE（分号分隔）把落点改到沙箱，
+    # 这样既能覆盖"多落点"这条逻辑，又不会碰用户真实的 profile。
+    $ov = ""
+    try { $ov = [string]$env:ENVPROXY_PROFILE_OVERRIDE } catch {}
+    if (-not [string]::IsNullOrWhiteSpace($ov)) {
+        return @($ov -split ';' | Where-Object { $_ })
+    }
+    $paths = New-Object System.Collections.ArrayList
+    $docs = ""
+    try { $docs = [Environment]::GetFolderPath('MyDocuments') } catch {}
+    if ([string]::IsNullOrWhiteSpace($docs)) {
+        try { $docs = Join-Path $env:USERPROFILE 'Documents' } catch {}
+    }
+    if (-not [string]::IsNullOrWhiteSpace($docs)) {
+        # 5.1 的默认落点
+        [void]$paths.Add((Join-Path $docs 'WindowsPowerShell\Microsoft.PowerShell_profile.ps1'))
+        # 7+ 的默认落点
+        [void]$paths.Add((Join-Path $docs 'PowerShell\Microsoft.PowerShell_profile.ps1'))
+    }
+    # 当前宿主自己的 $PROFILE 一定要包含（它可能被用户改到别处）
+    try {
+        $cur = $PROFILE
+        if (-not [string]::IsNullOrWhiteSpace($cur) -and -not ($paths -contains $cur)) { [void]$paths.Add($cur) }
+    } catch {}
+    return @($paths | Where-Object { $_ })
+}
+
 # 安装/修复：幂等。已经正确就零写入（不动用户的文件 mtime）。
+# 多个 profile 逐个处理，任一失败要如实报告是哪一个。
 function Install-ShellProfile {
-    $path = Get-ProfilePathSafe
+    $all = @(Get-ProfilePaths)
+    if ($all.Count -eq 0) { return @{ Ok = $false; Reason = 'no-profile'; Path = '' } }
+    $touched = New-Object System.Collections.ArrayList
+    $lastReason = 'current'
+    $firstErr = $null
+    foreach ($path in $all) {
+        # 逐个独立处理，一个失败不影响其余：5.1 那个 profile 标记不成对，
+        # 不该连带让 pwsh 7 的落点也不写——那会让"另一个版本拿不到同步"继续静默存在。
+        $r = Install-OneShellProfile $path
+        if (-not $r.Ok) { if ($null -eq $firstErr) { $firstErr = $r }; continue }
+        if ($r.Reason -eq 'installed') { [void]$touched.Add($path); $lastReason = 'installed' }
+    }
+    if ($null -ne $firstErr) { return $firstErr }
+    $shown = if ($touched.Count -gt 0) { ($touched -join '; ') } else { ($all -join '; ') }
+    return @{ Ok = $true; Reason = $lastReason; Path = $shown }
+}
+
+function Install-OneShellProfile([string]$path) {
     if (-not $path) { return @{ Ok = $false; Reason = 'no-profile'; Path = '' } }
     if (Test-ProfileBlockCurrent $path) { return @{ Ok = $true; Reason = 'current'; Path = $path } }
     try {
         $existing = @()
-        if (Test-Path -LiteralPath $path) { $existing = @([System.IO.File]::ReadAllLines($path)) }
+        if (Test-Path -LiteralPath $path) { $existing = @(Read-ProfileLines $path) }
         $keep = New-Object System.Collections.ArrayList
         if (Test-Path -LiteralPath $path) {
             if (Test-ProfileBlockPaired $path) {
@@ -345,7 +529,7 @@ function Install-ShellProfile {
                     if ($i -ge $s -and $i -le $e) { continue }
                     [void]$keep.Add($existing[$i])
                 }
-            } elseif ((@($existing) -contains $ProfileBlockStart) -or (@($existing) -contains $ProfileBlockEnd)) {
+            } elseif ((Test-MarkerPresent $existing $ProfileBlockStart) -or (Test-MarkerPresent $existing $ProfileBlockEnd)) {
                 # 标记不配对：绝不猜测，原样不动（与 Mac 侧同一护栏）
                 return @{ Ok = $false; Reason = 'unpaired'; Path = $path }
             } else {
@@ -372,11 +556,29 @@ function Install-ShellProfile {
 
 # 卸载：只摘我们那一块，用户其余内容一字不动。返回是否真的动过文件。
 function Remove-ShellProfile {
-    $path = Get-ProfilePathSafe
+    # 安装时写了几个 profile，卸载就要摘几个——只摘当前宿主的那个，
+    # 另一个版本的 PowerShell 里会一直留着一段引用已卸载工具的代码。
+    $all = @(Get-ProfilePaths)
+    if ($all.Count -eq 0) { return @{ Ok = $true; Reason = 'no-profile'; Path = '' } }
+    $removed = New-Object System.Collections.ArrayList
+    $firstErr = $null
+    foreach ($p in $all) {
+        # 同安装：一个落点失败不拦其余，否则另一个版本的 PowerShell 里会一直留着
+        # 一段引用已卸载工具的代码。
+        $r = Remove-OneShellProfile $p
+        if (-not $r.Ok) { if ($null -eq $firstErr) { $firstErr = $r }; continue }
+        if ($r.Reason -eq 'removed') { [void]$removed.Add($p) }
+    }
+    if ($null -ne $firstErr) { return $firstErr }
+    if ($removed.Count -gt 0) { return @{ Ok = $true; Reason = 'removed'; Path = ($removed -join '; ') } }
+    return @{ Ok = $true; Reason = 'no-block'; Path = ($all -join '; ') }
+}
+
+function Remove-OneShellProfile([string]$path) {
     if (-not $path) { return @{ Ok = $true; Reason = 'no-profile'; Path = '' } }
     if (-not (Test-Path -LiteralPath $path)) { return @{ Ok = $true; Reason = 'absent'; Path = $path } }
-    $existing = @([System.IO.File]::ReadAllLines($path))
-    if (-not ((@($existing) -contains $ProfileBlockStart) -or (@($existing) -contains $ProfileBlockEnd))) {
+    $existing = @(Read-ProfileLines $path)
+    if (-not ((Test-MarkerPresent $existing $ProfileBlockStart) -or (Test-MarkerPresent $existing $ProfileBlockEnd))) {
         # 没有我们的标记：碰都不碰（连 mtime 都不改）
         return @{ Ok = $true; Reason = 'no-block'; Path = $path }
     }
@@ -400,7 +602,7 @@ function Remove-ShellProfile {
     if (-not (Write-TextAtomic -Path $path -Lines @($keep))) {
         return @{ Ok = $false; Reason = 'write-failed'; Path = $path }
     }
-    if ((@([System.IO.File]::ReadAllLines($path)) -contains $ProfileBlockStart)) {
+    if ((Test-MarkerPresent @(Read-ProfileLines $path) $ProfileBlockStart)) {
         return @{ Ok = $false; Reason = 'verify-failed'; Path = $path }
     }
     return @{ Ok = $true; Reason = 'removed'; Path = $path }
