@@ -87,37 +87,48 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
 _CMD="${1:-}"
 _PURGE="0"
 _YES="0"
-if [ $# -gt 0 ]; then
+# 开关名与命令词一样不区分大小写（Windows 的参数绑定也不区分）：
+# 先小写化再比对，不要写死几种拼写——漏掉的组合会变成"参数写错"。
 for _a in "$@"; do
-    case "$_a" in --purge|--Purge|-Purge|-purge) _PURGE="1";; esac
-    case "$_a" in --yes|--Yes|-Yes|-yes) _YES="1";; esac
+    _al=$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')
+    case "$_al" in --purge|-purge) _PURGE="1";; esac
+    case "$_al" in --yes|-yes) _YES="1";; esac
 done
-fi
 # shellcheck disable=SC2001
 _CMD_NORM=$(printf '%s' "$_CMD" | sed 's/^--*//; s/^-//' | tr '[:upper:]' '[:lower:]')
 
+# 用法判定（判据在 base 层的 usage_error，两端同形）：这里只负责把参数归一化后交给它。
 # 用法错误要在拿操作锁**之前**判：用法错误既不改文件也不删变量，不该占着锁，
 # 也不该因为"另一个安装正在进行"而报成退出码 1（那是动作冲突，不是用法错误）。
-# --purge 只在"一键恢复"时才有意义（连日志一起删）。别处给出它，
-# 以前会被静默忽略：用户以为在清日志，工具却照常把监控起来了，还什么也没删。
-if [ "$_PURGE" = "1" ] && [ "$_CMD_NORM" != "uninstall" ]; then
-    echo "--purge 只在卸载时才有意义：它表示连日志一起删。" >&2
-    echo "请用: bash $0 uninstall --purge" >&2
-    exit 2
-fi
-# 多余的**位置参数**当用法错误：以前 "status extra" 里的 extra 被静默忽略，
-# 调用方以为参数生效了（Windows 侧同一情况报退出码 2）。
-# 只数位置参数：--purge / --yes 是开关，本来就占一个参数位。
-# 把它们也算进去的话，"uninstall --purge"、"update --yes" 这些合法用法会被一起拒掉。
-_pos=0
+USAGE_COMMAND="$_CMD_NORM"
+USAGE_COMMAND_COUNT=0
+if [ -n "$_CMD" ]; then USAGE_COMMAND_COUNT=1; fi
+USAGE_SWITCHES=""
+if [ "$_PURGE" = "1" ]; then USAGE_SWITCHES="purge"; fi
+if [ "$_YES" = "1" ]; then USAGE_SWITCHES="$USAGE_SWITCHES yes"; fi
+# 多余的位置参数与不认识的开关都算"无法识别的参数"。
+# 只认 --purge / --yes 两个开关名：它们本来就占一个参数位，
+# 把它们也算成"多余的位置参数"的话，"uninstall --purge" 这种合法用法会被一起拒掉。
+# 第一个位置参数是命令词；它为空时也要报出来——"传了个空参数"是参数写错，
+# "没传参数"才是监控模式，两者不能压成同一个空串。
+USAGE_EXTRA=""
+_extra_first=1
 for _a in "$@"; do
-    case "$_a" in
-        --purge|--Purge|-Purge|-purge|--yes|--Yes|-Yes|-yes) continue ;;
+    _al=$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')
+    case "$_al" in
+        --purge|-purge|--yes|-yes) continue ;;
     esac
-    _pos=$((_pos + 1))
+    if [ $_extra_first -eq 1 ]; then
+        _extra_first=0
+        if [ -z "$_a" ]; then USAGE_EXTRA="''"; fi
+        continue
+    fi
+    USAGE_EXTRA="$USAGE_EXTRA $_a"
 done
-if [ $_pos -gt 1 ]; then
-    echo "无法识别的参数: $*" >&2
+_usage_err=$(usage_error)
+_usage_rc=$?
+if [ $_usage_rc -ne 0 ]; then
+    echo "$_usage_err" >&2
     echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]" >&2
     exit 2
 fi

@@ -80,6 +80,49 @@ _in_list() {
     case " $2 " in *" $1 "*) return 0;; *) return 1;; esac
 }
 
+# ------------------------------------------------------------------------------
+# 5. 入口用法判定（纯函数，两端同形）
+# ------------------------------------------------------------------------------
+# 入口所有的用法错误都从这里出：输出空串 = 用法正确；输出该报的错 = 用法错误
+# （入口打印它、退出 2）。输入是四样归一化后的东西：
+#   USAGE_COMMAND       用户要的命令（小写；空 = 监控模式）
+#   USAGE_COMMAND_COUNT 命令给了几个（>1 = 用法错误）
+#   USAGE_SWITCHES      用户给的开关名（purge / yes，空格分隔）
+#   USAGE_EXTRA         不认识的参数（空格分隔）
+# 输入用全局变量传：bash 3.2 没有 nameref，函数收不了数组。
+# 抽成纯函数是有原因的：直接跑入口验"合法用法必须放行"会真的装、卸、起监控，
+# 副作用落在用户机器上（卸载删日志、更新改安装区），这类断言根本没法写。
+# 判定本身没有副作用，纯函数才能把"必须拒"和"必须放行"两个方向都钉住。
+usage_error() {
+    if [ "${USAGE_COMMAND_COUNT:-0}" -gt 1 ]; then
+        printf '一次只给一个命令。'
+        return 1
+    fi
+    if [ -n "${USAGE_EXTRA:-}" ]; then
+        printf '无法识别的参数: %s' "$USAGE_EXTRA"
+        return 1
+    fi
+    # 开关必须跟着它的命令：--purge 只配 uninstall，--yes 只配 update。
+    # 单独给以前会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
+    case " ${USAGE_SWITCHES:-} " in
+        *" purge "*)
+            if [ "${USAGE_COMMAND:-}" != "uninstall" ]; then
+                printf -- '--purge 只在卸载时才有意义：它表示连日志一起删。请用 uninstall --purge。'
+                return 1
+            fi
+            ;;
+    esac
+    case " ${USAGE_SWITCHES:-} " in
+        *" yes "*)
+            if [ "${USAGE_COMMAND:-}" != "update" ]; then
+                printf -- '--yes 只在检查更新时才有意义：它表示跳过确认。请用 update --yes。'
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
 # 版本比较：按 . 分段逐段数值比。输出 1（A 新）/ 0（相等）/ -1（A 旧）。
 compare_versions() {
     awk -v a="$1" -v b="$2" 'BEGIN{

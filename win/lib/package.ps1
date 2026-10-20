@@ -248,7 +248,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                     if ($rel -like 'monitor\*') { continue }
                     $cur = Join-Path (Join-Path $ProjectRoot $d) $rel
                     if (-not (Test-Item $cur)) { $notBack += ("{0}\{1}" -f $d, $rel); continue }
-                    if ((Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $cur -Algorithm SHA256).Hash) { $notBack += ("{0}\{1}" -f $d, $rel) }
+                    if ((Get-Sha256Hex $f.FullName) -ne (Get-Sha256Hex $cur)) { $notBack += ("{0}\{1}" -f $d, $rel) }
                 }
             }
             foreach ($rel in $pkg.Values) {
@@ -257,7 +257,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 if (-not (Test-Item $bakFile)) { continue }
                 $curFile = Join-Path $ProjectRoot $rel
                 if (-not (Test-Item $curFile)) { $notBack += $rel; continue }
-                if ((Get-FileHash -LiteralPath $bakFile -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $curFile -Algorithm SHA256).Hash) { $notBack += $rel }
+                if ((Get-Sha256Hex $bakFile) -ne (Get-Sha256Hex $curFile)) { $notBack += $rel }
             }
             if ($notBack.Count) {
                 throw ("安装区写入失败，且回滚未完成——以下文件没能还原：{0}。请到 Releases 页面手动下载安装包覆盖一次。" -f (($notBack | Select-Object -First 6) -join '；'))

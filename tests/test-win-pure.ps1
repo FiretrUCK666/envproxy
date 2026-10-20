@@ -1,5 +1,5 @@
 ﻿# EnvProxy Windows pure-function regression tests (no side effects, registry untouched).
-# Run: pwsh tests/test-win-pure.ps1   (PowerShell 5.1 compatible, ASCII only)
+# Run: pwsh tests/test-win-pure.ps1   (PowerShell 5.1 compatible, UTF-8 with BOM)
 #
 # The core is loaded through its real entry point: that exercises the library loader and its
 # completeness check, and the entry returns immediately when dot-sourced.
@@ -30,11 +30,28 @@ function New-TempDir([string]$Prefix) {
     return $d
 }
 
-# A one-shot local HTTP server, used to exercise the real network paths (a redirect, a rate
-# limit) without touching the network. It answers exactly one request and then stops: a listener
-# loop would keep the test process alive after the test itself is done.
+# A local HTTP server, used to exercise the real network paths (a redirect, a rate limit)
+# without touching the network. It serves until the test stops it.
+# Two things it must get right, or the gate turns red at random:
+#   - the port has to be one nothing else is listening on (a taken port means the client
+#     gets "connection refused", which the code reports as a network failure);
+#   - the caller must not talk to it before it is really listening (a fixed sleep is
+#     not enough on a busy machine).
+# The server keeps serving instead of answering exactly one request: a client that opens
+# a second connection (retry, pre-connect) would otherwise wait for an answer nobody sends.
 function Start-OneShotServer([int]$Status, [hashtable]$Headers, [string]$Body) {
-    $port = 18000 + (Get-Random -Maximum 2000)
+    $port = 0
+    for ($try = 0; $try -lt 30; $try++) {
+        $candidate = 18000 + (Get-Random -Maximum 2000)
+        $probe = $null
+        try {
+            $probe = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $candidate)
+            $probe.Start()
+            $port = $candidate
+        } catch { $port = 0 } finally { if ($probe) { try { $probe.Stop() } catch {} } }
+        if ($port -ne 0) { break }
+    }
+    if ($port -eq 0) { throw 'no free port for the mock server' }
     $rs = [runspacefactory]::CreateRunspace()
     $rs.Open()
     $ps = [powershell]::Create()
@@ -46,29 +63,48 @@ function Start-OneShotServer([int]$Status, [hashtable]$Headers, [string]$Body) {
         $tcp = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $p)
         $tcp.Start()
         try {
-            # Bounded wait: if the client never shows up, give up instead of blocking the run.
             # AcceptTcpClientAsync, not Socket.Poll -- on Windows a listening socket does not
             # report a pending connection through Poll, so Poll would only time out.
-            $accept = $tcp.AcceptTcpClientAsync()
-            if (-not $accept.Wait(20000)) { return }
-            $client = $accept.Result
-            $stream = $client.GetStream()
-            $buf = New-Object byte[] 2048
-            $null = $stream.Read($buf, 0, $buf.Length)
-            $raw = "HTTP/1.1 $status X`r`n"
-            foreach ($k in $hdrs.Keys) { $raw += "$k`: $($hdrs[$k])`r`n" }
-            $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-            $raw += "Content-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
-            $head = [System.Text.Encoding]::UTF8.GetBytes($raw)
-            $stream.Write($head, 0, $head.Length)
-            $stream.Write($bodyBytes, 0, $bodyBytes.Length)
-            $stream.Flush()
-            $client.Close()
+            while ($true) {
+                $accept = $tcp.AcceptTcpClientAsync()
+                if (-not $accept.Wait(1000)) { continue }
+                $client = $accept.Result
+                try {
+                    $stream = $client.GetStream()
+                    $buf = New-Object byte[] 2048
+                    $null = $stream.Read($buf, 0, $buf.Length)
+                    $raw = "HTTP/1.1 $status X`r`n"
+                    foreach ($k in $hdrs.Keys) { $raw += "$k`: $($hdrs[$k])`r`n" }
+                    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+                    $raw += "Content-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
+                    $head = [System.Text.Encoding]::UTF8.GetBytes($raw)
+                    $stream.Write($head, 0, $head.Length)
+                    $stream.Write($bodyBytes, 0, $bodyBytes.Length)
+                    $stream.Flush()
+                } catch {}
+                try { $client.Close() } catch {}
+            }
         } catch {}
         $tcp.Stop()
     }).AddArgument($port).AddArgument($Status).AddArgument($Headers).AddArgument($Body)
     $null = $ps.BeginInvoke()
-    Start-Sleep -Milliseconds 600
+    # Wait until it really accepts connections before handing the port to the caller.
+    $deadline = (Get-Date).AddSeconds(10)
+    $up = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $probe = New-Object System.Net.Sockets.TcpClient
+            $probe.Connect('127.0.0.1', $port)
+            $probe.Close()
+            $up = $true
+            break
+        } catch { Start-Sleep -Milliseconds 50 }
+    }
+    if (-not $up) {
+        try { $ps.Stop() } catch {}
+        try { $rs.Dispose() } catch {}
+        throw 'the mock server did not start listening'
+    }
     return @{ Port = $port; Runspace = $rs; Shell = $ps }
 }
 
@@ -129,11 +165,11 @@ $dst5 = Join-Path $dir5 'to.ps1'
 [System.IO.File]::WriteAllText($src5, "Write-Host 'one'`n", (New-Object System.Text.UTF8Encoding($true)))
 Copy-FileAtomic $src5 $dst5
 Assert-Eq 'copy creates the destination' $true (Test-Path -LiteralPath $dst5)
-Assert-Eq 'copy is byte exact' ((Get-FileHash -LiteralPath $src5 -Algorithm SHA256).Hash) ((Get-FileHash -LiteralPath $dst5 -Algorithm SHA256).Hash)
+Assert-Eq 'copy is byte exact' ((Get-Sha256Hex $src5)) ((Get-Sha256Hex $dst5))
 Assert-Eq 'copy keeps the BOM' 'EF-BB-BF' (([BitConverter]::ToString([System.IO.File]::ReadAllBytes($dst5)[0..2])))
 [System.IO.File]::WriteAllText($src5, "Write-Host 'two'`n", (New-Object System.Text.UTF8Encoding($false)))
 Copy-FileAtomic $src5 $dst5
-Assert-Eq 'overwrite replaces content exactly' ((Get-FileHash -LiteralPath $src5 -Algorithm SHA256).Hash) ((Get-FileHash -LiteralPath $dst5 -Algorithm SHA256).Hash)
+Assert-Eq 'overwrite replaces content exactly' ((Get-Sha256Hex $src5)) ((Get-Sha256Hex $dst5))
 Assert-Eq 'overwrite drops the old BOM' '57-72-69' (([BitConverter]::ToString([System.IO.File]::ReadAllBytes($dst5)[0..2])))
 Assert-Eq 'no temp file left behind' '0' (@(Get-ChildItem -LiteralPath $dir5 -Filter '*.envproxy-new*' -File).Count)
 $deep = Join-Path $dir5 'win\lib\base.ps1'
@@ -404,7 +440,7 @@ try {
 $digestDir = New-TempDir 'ep-digest'
 $digestFile = Join-Path $digestDir 'pkg.zip'
 [System.IO.File]::WriteAllText($digestFile, 'hello')
-$digestReal = 'sha256:' + (Get-FileHash -Path $digestFile -Algorithm SHA256).Hash.ToLower()
+$digestReal = 'sha256:' + (Get-Sha256Hex $digestFile)
 Assert-Eq 'a matching digest passes' 'ok' (Test-AssetDigest $digestFile $digestReal)
 Assert-Eq 'a wrong digest is caught' 'mismatch' (Test-AssetDigest $digestFile ('sha256:' + ('0' * 64)))
 Assert-Eq 'no digest means no check' 'skip' (Test-AssetDigest $digestFile '')
@@ -584,8 +620,12 @@ function Invoke-EntryChild([string[]]$EntryArgs) {
     $outFile = Join-Path $env:TEMP ("ep-entry-out-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
     $errFile = Join-Path $env:TEMP ("ep-entry-err-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
     try {
+        # 每个参数都要自己带引号：Start-Process 把参数数组用空格拼成一条命令行，
+        # 不加引号时空参数会被整个吞掉（"空参数要报用法错误"这条就永远测不到）。
+        $quoted = @('"-NoProfile"', '"-ExecutionPolicy"', '"Bypass"', '"-File"', ('"' + $entryPath + '"'))
+        foreach ($a in $EntryArgs) { $quoted += ('"' + $a + '"') }
         $ps = Start-Process -FilePath $exe -PassThru -NoNewWindow -Wait `
-            -ArgumentList (@('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$entryPath`"") + $EntryArgs) `
+            -ArgumentList $quoted `
             -RedirectStandardOutput $outFile -RedirectStandardError $errFile
         return $ps.ExitCode
     } finally {
@@ -605,21 +645,37 @@ foreach ($bad in @('-Installt')) {
 # "合法用法必须放行"是另一回事（见下面那条本地断言）：它要真跑子命令，
 # 而 Windows 的状态显示依赖注册表、只在 Windows 上有确定结果，所以不进跨端契约。
 $entryCases = @(
-    @{ Name = 'unknown-arg';      Args = @('-Foo');              Want = 2 },
-    @{ Name = 'extra-positional'; Args = @('extra');             Want = 2 },
-    @{ Name = 'purge-misuse';     Args = @('-Install', '-Purge'); Want = 2 }
+    @{ Name = 'unknown-arg';          Args = @('-Foo');              Want = 2 },
+    @{ Name = 'extra-positional';     Args = @('-Status', 'extra');  Want = 2 },
+    @{ Name = 'purge-misuse';         Args = @('-Install', '-Purge'); Want = 2 },
+    @{ Name = 'switch-without-command'; Args = @('-Yes');            Want = 2 },
+    @{ Name = 'unknown-switch';       Args = @('-Status', '-Foo');   Want = 2 },
+    @{ Name = 'two-commands';         Args = @('-Install', '-Uninstall'); Want = 2 }
 )
 foreach ($c in $entryCases) {
     $rc = Invoke-EntryChild $c.Args
     Assert-Eq ("入口退出码: " + $c.Name) $c.Want $rc
     Write-Host ("entry {0} {1}" -f $c.Name, $rc)
 }
-# 开关占一个参数位，不能被当成"多余的位置参数"——否则"带开关的正常用法"会被一起拒掉。
-# 这条要在 Windows 上验：状态显示读注册表，其他平台没有确定结果。
-if ($env:OS -eq 'Windows_NT') {
-    $rc = Invoke-EntryChild @('-Status', '-Yes')
-    Assert-Eq '入口：子命令带开关是合法用法' 0 $rc
-}
+# 空参数不等于"没传参数"：前者是参数写错（退出码 2），后者才是监控模式。
+$rc = Invoke-EntryChild @('')
+Assert-Eq '入口：空参数要报用法错误（不能当成没传参数）' 2 $rc
+# 用法判定本身是纯函数（base 层 Get-UsageError，两端同形），两个方向都要钉住：
+# "必须拒"不许放过，"必须放行"不许误伤。
+# "放行"这一向只能在这里测：真跑一次入口就会真的卸载或更新，副作用落在用户机器上。
+$null = Get-UsageError -Command 'status' -CommandCount 1
+Assert-Eq '用法判定：普通命令放行' '' $null
+$null = Get-UsageError -Command '' -CommandCount 0
+Assert-Eq '用法判定：无命令（监控模式）放行' '' $null
+$null = Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('purge')
+Assert-Eq '用法判定：卸载带 -Purge 放行' '' $null
+$null = Get-UsageError -Command 'update' -CommandCount 1 -Switches @('yes')
+Assert-Eq '用法判定：更新带 -Yes 放行' '' $null
+function Usage-Rejected($e) { if ($e) { '真' } else { '假' } }
+Assert-Eq '用法判定：-Purge 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'install' -CommandCount 1 -Switches @('purge')))
+Assert-Eq '用法判定：-Yes 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Switches @('yes')))
+Assert-Eq '用法判定：不认识的参数要拒' '真' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Extra @('-Foo')))
+Assert-Eq '用法判定：一次给两个命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'install' -CommandCount 2))
 
 # ------------------------------------------------------------------------------
 # [7c] 端口枚举失败 = 这一轮不知道，不是"没有端口"

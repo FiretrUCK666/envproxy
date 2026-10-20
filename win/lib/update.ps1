@@ -587,9 +587,10 @@ function Test-AssetDigest([string]$Path, [string]$Digest) {
     if (-not (Test-Path -LiteralPath $Path)) { return "skip" }
     $hash = $null
     try {
-        # -ErrorAction Stop 把"读不出来"变成异常；2>$null 吞掉错误记录，
-        # 不然控制台会冒一段红色报错原文。
-        $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop 2>$null).Hash
+        # 自己算，不用 Get-FileHash：那是模块里的命令，模块自动加载挑错版本时
+        # 会直接"找不到"（见 base 层 Get-Sha256Hex 的说明）。读不出来抛异常，
+        # 这里接住归 skip——本机读不到不等于内容被改过。
+        $hash = Get-Sha256Hex $Path
     } catch { $hash = $null }
     if (-not $hash) { return "skip" }
     $actual = "sha256:" + ("{0}" -f $hash).ToLower()

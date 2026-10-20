@@ -34,8 +34,14 @@ function Install-EnvProxy {
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
-    Apply-State (Get-CurrentState)
-    Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
+    $state = Get-CurrentState
+    Apply-State $state
+    if ($state -eq "unknown") {
+        # 端口枚举失败：这一轮不知道状态，一个变量都没动——不能说"已校正"。
+        Write-Host "[3/3] 环境变量：端口枚举失败，这一轮不知道状态，未做任何改动。" -ForegroundColor Yellow
+    } else {
+        Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
+    }
     Start-Sleep -Seconds 1
     Write-Host ""
     Show-Status

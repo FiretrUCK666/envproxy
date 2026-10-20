@@ -42,14 +42,6 @@ param(
     [switch]$Yes,
     [switch]$Purge
 )
-# 多余或打错的参数要报错退出：powershell -File 对不认识的参数名**不会**报绑定错误，
-# 它们只是落进 $args。不拦的话，敲错一个选项就会静默进入监控模式——用户以为在装东西，
-# 工具却在后台常驻起来。退出码 2 = 用法错误（与 mac 侧同一套约定）。
-if ($args.Count -gt 0) {
-    Write-Host ("无法识别的参数：{0}" -f ($args -join ' ')) -ForegroundColor Yellow
-    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu} [-Yes] [-Purge]" -ForegroundColor Yellow
-    exit 2
-}
 # ------------------------------------------------------------------------------
 #  文件结构（入口只做四件事：解析参数、挂操作锁、加载自检、分派）
 #     envproxy.ps1      入口（本文件）
@@ -114,13 +106,31 @@ function Exit-IfOpBusy {
     }
     return $m
 }
-# -Purge 只在"一键恢复"时才有意义（连日志一起删）。单独给 -Purge 以前会一路落到
-# 监控模式：用户以为在清日志，工具却把监控起来了，还什么也没删。
+# 用法判定：错的用法一律退出码 2，不许静默进入监控模式。
+# 判据在 base 层的 Get-UsageError（纯函数，两端同形）；这里只负责把参数归一化后交给它。
+# 多余或打错的参数要报错退出：powershell -File 对不认识的参数名**不会**报绑定错误，
+# 它们只是落进 $args。不拦的话，敲错一个选项就会静默进入监控模式——用户以为在装东西，
+# 工具却在后台常驻起来。
 # 用法错误要在拿操作锁**之前**判：用法错误既不改文件也不删变量，不该占着锁，
 # 也不该因为"另一个安装正在进行"而报成退出码 1（那是动作冲突，不是用法错误）。
-if ($Purge -and -not $Uninstall) {
-    Write-Host "-Purge 只在卸载时才有意义：它表示连日志一起删。" -ForegroundColor Yellow
-    Write-Host "请用：powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall -Purge" -ForegroundColor Yellow
+$usageCommands = @()
+if ($Install)   { $usageCommands += "install" }
+if ($Uninstall) { $usageCommands += "uninstall" }
+if ($Stop)      { $usageCommands += "stop" }
+if ($Status)    { $usageCommands += "status" }
+if ($Update)    { $usageCommands += "update" }
+if ($Menu)      { $usageCommands += "menu" }
+$usageSwitches = @()
+if ($Purge) { $usageSwitches += "purge" }
+if ($Yes)   { $usageSwitches += "yes" }
+# 命令给了两个以上也算用法错误（mac 侧表现为多余的位置参数）。
+$usageCommand = ""
+if ($usageCommands.Count -eq 1) { $usageCommand = $usageCommands[0] }
+$usageError = Get-UsageError -Command $usageCommand -CommandCount $usageCommands.Count `
+                            -Switches $usageSwitches -Extra @($args)
+if ($usageError) {
+    Write-Host $usageError -ForegroundColor Yellow
+    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu} [-Yes] [-Purge]" -ForegroundColor Yellow
     exit 2
 }
 if ($Update) {

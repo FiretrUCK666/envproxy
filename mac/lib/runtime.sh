@@ -312,7 +312,8 @@ remove_shell_hooks() {
 # 端口枚举失败时这一轮是“不知道”，按“没代理”去清理变量是在删一个可能还活着的代理——
 # 那正是最不该犯的错。返回 0 = 判出了状态，1 = 不知道。
 align_state_once() {
-    CURRENT_STATE="off"
+    # 不给 CURRENT_STATE 预设任何值：预设成 off 就是"读不出来被当成没有"，
+    # 而调用方失败时只读"不知道"，不读这个变量。判不出状态就别留下痕迹。
     if ! get_current_state; then
         log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
         return 1

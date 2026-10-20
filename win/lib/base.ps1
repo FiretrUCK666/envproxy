@@ -125,6 +125,59 @@ function Get-ProxyVarTable([string]$Port) {
     return $table
 }
 
+# 文件的 sha256（小写十六进制）。
+# 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
+# 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），
+# 模块自动加载就会挑中那个二进制模块并加载失败——命令直接"找不到"，
+# 不是报错而是静默缺失：校验值那一步会跟着塌掉。
+# 直接用 .NET 的 SHA256 自己算：任何环境都拿得到，不依赖模块自动加载。
+function Get-Sha256Hex([string]$Path) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $fs = [System.IO.File]::OpenRead($Path)
+        try { $bytes = $sha.ComputeHash($fs) } finally { $fs.Dispose() }
+    } finally { $sha.Dispose() }
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($b in $bytes) { [void]$sb.Append($b.ToString('x2')) }
+    return $sb.ToString()
+}
+
+# ------------------------------------------------------------------------------
+# 5. 入口用法判定（纯函数，两端同形）
+# ------------------------------------------------------------------------------
+# 入口所有的用法错误都从这里出：返回 $null = 用法正确；返回字符串 = 该报的错
+# （入口打印它、退出 2）。输入是四样归一化后的东西：
+#   Command       用户要的命令（install/uninstall/stop/status/update/menu；空 = 监控模式）
+#   CommandCount  命令给了几个（>1 = 用法错误）
+#   Switches      用户给的开关名（purge / yes）
+#   Extra         不认识的参数
+# 抽成纯函数是有原因的：直接跑入口验"合法用法必须放行"会真的装、卸、起监控，
+# 副作用落在用户机器上（卸载删日志、更新改安装区），这类断言根本没法写。
+# 判定本身没有副作用，纯函数才能把"必须拒"和"必须放行"两个方向都钉住。
+function Get-UsageError {
+    param(
+        [string]$Command = "",
+        [int]$CommandCount = 0,
+        [string[]]$Switches = @(),
+        [string[]]$Extra = @()
+    )
+    if ($CommandCount -gt 1) { return "一次只给一个命令。" }
+    if ($Extra.Count -gt 0) {
+        # 空参数也要说清是哪里的空：直接拼出来会只剩一个冒号。
+        $parts = foreach ($e in $Extra) { if ($e -eq "") { '""' } else { $e } }
+        return ("无法识别的参数：{0}" -f ($parts -join ' '))
+    }
+    # 开关必须跟着它的命令：-Purge 只配 -Uninstall，-Yes 只配 -Update。
+    # 单独给以前会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
+    if ("purge" -in $Switches -and $Command -ne "uninstall") {
+        return "-Purge 只在卸载时才有意义：它表示连日志一起删。请用 -Uninstall -Purge。"
+    }
+    if ("yes" -in $Switches -and $Command -ne "update") {
+        return "-Yes 只在检查更新时才有意义：它表示跳过确认。请用 -Update -Yes。"
+    }
+    return $null
+}
+
 # 版本比较：按 . 分段逐段数值比（"1.10" > "1.9"；字符串比会错）。
 # 返回 1（A 新）/ 0（相等）/ -1（A 旧）。
 # 注意：PowerShell 变量名不分大小写，$a 即 $A（[string] 参数），赋值会被转回字符串，

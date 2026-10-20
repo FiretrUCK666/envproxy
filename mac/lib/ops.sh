@@ -609,12 +609,27 @@ self_test() {
     _sg_rc=0
     /bin/bash "$SCRIPT_PATH" status extra >/dev/null 2>&1 || _sg_rc=$?
     _selftest_assert_eq "入口：多余的位置参数要报用法错误" "2" "$_sg_rc"
-    # 合法形式必须放行：开关占一个参数位，不能被当成"多余的位置参数"。
-    # 以前把总数当成位置参数数，"status --yes" 这种正常用法会被一起拒掉。
-    # 这条不进跨端契约（它要真跑子命令，两端的子命令各自才有确定结果）。
+    # 空参数不等于"没传参数"：前者是参数写错（退出码 2），后者才是监控模式。
     _sg_rc=0
-    /bin/bash "$SCRIPT_PATH" status --yes >/dev/null 2>&1 || _sg_rc=$?
-    _selftest_assert_eq "入口：子命令带开关是合法用法" "0" "$_sg_rc"
+    /bin/bash "$SCRIPT_PATH" "" >/dev/null 2>&1 || _sg_rc=$?
+    _selftest_assert_eq "入口：空参数要报用法错误（不能当成没传参数）" "2" "$_sg_rc"
+    # 用法判定是纯函数（base 层 usage_error，两端同形），两个方向都要钉住：
+    # "必须拒"不许放过，"必须放行"不许误伤。
+    # "放行"这一向只能在这里测：真跑一次入口就会真的卸载或更新，副作用落在用户机器上。
+    _ue_check() {
+        # $1=命令 $2=命令个数 $3=开关 $4=多余参数；输出退出码（0=放行，1=拒）
+        USAGE_COMMAND="$1"; USAGE_COMMAND_COUNT="$2"; USAGE_SWITCHES="$3"; USAGE_EXTRA="$4"
+        usage_error >/dev/null 2>&1
+        return $?
+    }
+    _ue_check "status" 1 "" ""; _selftest_assert_eq "用法判定：普通命令放行" "0" "$?"
+    _ue_check "" 0 "" ""; _selftest_assert_eq "用法判定：无命令（监控模式）放行" "0" "$?"
+    _ue_check "uninstall" 1 "purge" ""; _selftest_assert_eq "用法判定：卸载带 --purge 放行" "0" "$?"
+    _ue_check "update" 1 "yes" ""; _selftest_assert_eq "用法判定：更新带 --yes 放行" "0" "$?"
+    _ue_check "install" 1 "purge" ""; _selftest_assert_eq "用法判定：--purge 跟着别的命令要拒" "1" "$?"
+    _ue_check "status" 1 "yes" ""; _selftest_assert_eq "用法判定：--yes 跟着别的命令要拒" "1" "$?"
+    _ue_check "status" 1 "" "--foo"; _selftest_assert_eq "用法判定：不认识的参数要拒" "1" "$?"
+    _ue_check "install" 2 "" ""; _selftest_assert_eq "用法判定：一次给两个命令要拒" "1" "$?"
 
     # 带开关的一次性命令不能被当成监控：
     # 判据是脚本路径之后的第一个词，不是最后一个词。
@@ -665,6 +680,9 @@ self_test() {
     _eg_case unknown-arg 2 bogus
     _eg_case extra-positional 2 status extra
     _eg_case purge-misuse 2 install --purge
+    _eg_case switch-without-command 2 --yes
+    _eg_case unknown-switch 2 status --foo
+    _eg_case two-commands 2 install uninstall
 
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
@@ -795,13 +813,15 @@ show_status() {
         if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
     fi
     # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
-    _lp=""
-    _lp_rc=0
-    _lp=$(get_listening_ports 2>/dev/null) || _lp_rc=$?
-    if [ "$_lp_rc" -ne 0 ]; then
+    # 只枚举一次（枚举两次之间状态可能变，两次结论可能自相矛盾）；
+    # 深度与 Windows 侧一致：都只做快扫（全端口扫留给监控与诊断入口）。
+    _cands=""
+    _crc=0
+    _cands=$(find_candidate_ports 0) || _crc=$?
+    if [ "$_crc" -ne 0 ]; then
         echo "翻墙代理 : 读不出来（端口枚举失败，这一轮不知道有没有代理在运行）"
     else
-        _port=$(get_active_proxy_port 1 2>/dev/null || true)
+        _port=$(printf '%s' "$_cands" | awk '{print $1}')
         if [ -n "$_port" ]; then
             echo "翻墙代理 : 已开启（本地端口 $_port 监听中）"
         else

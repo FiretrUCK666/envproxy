@@ -126,7 +126,13 @@ get_listening_ports() {
         fi
         return 1
     fi
-    printf '%s' "$_glp_out" | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu
+    _glp_ns=$(printf '%s' "$_glp_out" | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu)
+    # netstat 也没解析出端口，而 lsof 已经证明本机确实有监听口（形状变了）——
+    # 这时不能把空表当成"本机没有端口"：读不出来就是读不出来，交上去让上层沿用上一状态。
+    if [ -z "$_glp_ns" ] && [ $_glp_sure -eq 0 ]; then
+        return 1
+    fi
+    printf '%s' "$_glp_ns"
     return 0
 }
 
