@@ -36,33 +36,31 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 ## 0. What happens after installing
 
-Most of the time you do not need to do anything. There are three cases, and only the third one needs action.
+Almost always nothing. Only the last row below needs action.
 
-| Your situation | What happens | What you need to do |
+| Your situation | What happens | What you do |
 |---|---|---|
-| **A window or program opened after installing** | It reads the current state when it starts | **Nothing at all** |
-| **Opened after installing, but the proxy changed later** | The state has to be read again | Press Enter once, or run any command |
-| **A window opened before installing** | The sync script was never loaded into it | Reopen it, or load it by hand once |
+| **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
+| **Opened after installing, proxy changed later** | It needs to read again | Press Enter once |
+| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run 3.5 |
 
-### Why an already-open window needs one Enter press
+### Why an open window needs one Enter press
 
-Each program reads the environment variables from the system once, when it starts, and keeps that copy for its whole lifetime. Changing the value in the system afterwards does not reach a program that is already running.
+Each program reads the environment variables once, at startup, and keeps that copy. Changing them later in the system does not reach a window that is already running.
 
-So a newly opened window always reads the current values, while a window that is already open keeps the values from the moment it started. The only way to update it is to make it read again.
+So new windows are always right, and old ones need to read again. EnvProxy reads at the moment a command finishes and the cursor comes back, which happens all the time anyway.
 
-EnvProxy reads the state every time a command finishes and the terminal shows the prompt again. The prompt is the text waiting for your input, such as `C:\Users\yourname>` or `$`. It reappears after every command, so this timing needs nothing extra from you.
+### AI tools, editors, IDEs
 
-### About AI tools, editors and IDEs
+They usually open a terminal as a new process, so they are correct automatically.
 
-They usually start a new process when they open a terminal, and a new process reads the current environment variables, so nothing is needed.
-
-Two cases require restarting the tool: it was already open before you installed EnvProxy, or it is a long-running background service rather than something started on demand. The check is simple: if it cannot connect, restart it once.
+Two need a restart: it was already open before you installed EnvProxy, or it runs in the background rather than on demand. If unsure, restart it once.
 
 ## 1. Install (3 steps, 5 minutes)
 
 1. Click **[here to download the Windows package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)** (Mac: [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz))
-2. Unzip it anywhere; the folder can be renamed. Open the `win` folder and double-click **`打开菜单.cmd`** (Mac: open `mac` and double-click **`打开菜单.command`**), then pick **`1 Install / Repair`**
-3. Once you see the monitor started message, you are done
+2. Unzip anywhere; the folder can be renamed. Open `win` and double-click **`打开菜单.cmd`** (Mac: open `mac`, double-click **`打开菜单.command`**), pick **`1 Install / Repair`**
+3. When you see the monitor started message, you are done
 
 Installing does five things: it saves the current values of any variables with the same names (used to restore them on uninstall), registers automatic start at login, adds a script to your terminal's startup configuration (on Windows that is PowerShell's `$PROFILE`, written to both the 5.1 and the 7 location; on Mac it is the shell rc files), starts the monitor, and corrects the environment variables once. Progress is reported step by step on screen (4 steps on Windows, 3 on Mac; the snapshot is folded into step 1).
 
@@ -106,53 +104,49 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 ## 3. Everyday commands on one page
 
-Every command you need to type by hand, collected in one place. **Windows and Mac differ; do not copy the wrong line.**
+Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 
 ### 3.1 Keep one window on a direct connection
 
-Run this in that window:
+While the proxy app is running, to make one window skip the proxy:
 
 | | Command |
 |---|---|
 | Windows | `$env:ENVPROXY_TERM = 'off'` |
 | Mac | `export ENVPROXY_TERM=off` |
 
-**Press Enter once to apply.** Afterwards this window stays direct whether the proxy app is running or not. **Other windows are unaffected.**
-
-To go back to following the proxy app:
+This window stays direct until you close it. To go back to automatic:
 
 | | Command |
 |---|---|
 | Windows | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
 | Mac | `unset ENVPROXY_TERM` |
 
-Press Enter once again.
+### 3.2 Give one window a corporate proxy
 
-### 3.2 Give one window a different proxy, such as a corporate proxy
-
-**The order matters: pin the window first, then set the proxy.**
+**Order matters: pin the window first, then set the proxy.**
 
 | Step | Windows | Mac |
 |---|---|---|
 | 1. Pin it | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
 | 2. Set the proxy | `$env:HTTPS_PROXY = 'http://your-host:port'` | `export HTTPS_PROXY=http://your-host:port` |
 
-Why pin first: while the proxy app is running, any update it makes to this window replaces the proxy address with its own. Once the window is pinned, it stops touching it.
+Why pin first: without it, any update the proxy app makes to this window overwrites your address.
 
-**Values we wrote and values you set are told apart.** A corporate proxy, your own capture tool, or an address on another port stays in place as long as the value differs from what we wrote.
+Values you set are never deleted. A corporate proxy, a capture tool, another port — anything that differs from what we wrote stays as it is.
 
-### 3.3 Check whether traffic currently goes through a proxy
+### 3.3 Check whether traffic goes through a proxy now
 
 | | Command |
 |---|---|
 | Windows | `$env:HTTPS_PROXY` |
 | Mac | `echo $HTTPS_PROXY` |
 
-A value means traffic goes through the proxy; empty means a direct connection.
+A value means proxied; empty means direct.
 
-### 3.4 Bypass the proxy for one command
+### 3.4 Make one command skip the proxy
 
-Sometimes you want a single command to skip the proxy:
+`--noproxy` is curl's own flag and **works for curl only**:
 
 | | Command |
 |---|---|
@@ -161,18 +155,24 @@ Sometimes you want a single command to skip the proxy:
 
 On Windows you must write `curl.exe`. PowerShell resolves `curl` to the `Invoke-WebRequest` alias, and plain `curl` fails with a parameter error.
 
-Other tools have their own flags (`git` uses `-c http.proxy=`, `npm` uses `--no-proxy`), which are outside what this tool handles.
+Other tools do not accept this flag and have their own forms, such as `git -c http.proxy= clone <repo>` or `npm --no-proxy install`.
 
-### 3.5 Make an already-open window catch up immediately
+### 3.5 Make an already-open window catch up
 
-If you would rather not reopen the window, run this once in it:
+Windows opened after installing catch up automatically. **Windows opened before installing do not** — the sync code was not there yet when they started.
+
+The easy fix is to open a new window.
+
+If you would rather not, run this once in the old one:
 
 | | Command |
 |---|---|
 | Windows | `. $PROFILE` |
 | Mac | `. ~/.envproxy/prompt-sync.sh` |
 
-Afterwards this window follows along on every Enter press.
+`$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs it by hand. On Mac that file is the sync script.
+
+This works for PowerShell on Windows and zsh or bash on Mac. Afterwards the window re-reads the state after every command.
 
 ## 4. Something is wrong: check in this order
 
@@ -196,19 +196,17 @@ It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does
 
 <img src="./assets/readme/mechanism.en.svg" width="100%" alt="Three-condition flow: every 2 to 3 seconds it enumerates listening ports and keeps those that answer a CONNECT handshake; then it tests each candidate for real connectivity; only then are the proxy variables written">
 
-1. **A port is listening** — some program on this machine has opened a proxy port
-2. **It really is a proxy** — a `CONNECT` handshake is sent, and only an `HTTP/1.x 200` reply counts. This rules out development servers and ordinary web servers
-3. **It really reaches the internet** — the proxy port is used to reach the **7 different sites** in the candidate list, and **any one** of them returning a real response is enough (the last known-good one is tried first, the rest in parallel if it fails)
+1. **A port is listening** — some program on this machine opened a proxy port
+2. **It really is a proxy** — a `CONNECT` handshake must answer `HTTP/1.x 200`. This rules out development servers and ordinary web servers
+3. **It really reaches the internet** — the port is used to reach **7 different sites**, and **any one** returning a real response is enough
 
-**All three must hold before it decides you are behind a proxy and writes the variables.** A web server running on your machine is therefore never mistaken for a proxy.
+All three must hold before any variable is written. A web server on your machine is never mistaken for a proxy.
 
-It does not rely on brands, process names or port numbers. Those only speed up scanning; the decision always goes through the three conditions above.
+It does not rely on brands, process names or port numbers — those only speed up scanning; the decision always goes through these three.
 
 <img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 4 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 5 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are left intact">
 
-**Deciding "down" is more cautious than deciding "up"**: a single failed probe does not count as disconnected. It takes 10 seconds of continuous failure and at least 3 probes. A single success counts as connected immediately. Removing your environment variables by mistake costs more than waiting a little.
-
-What you will actually notice:
+**Deciding "up" is more cautious than "down"**: one failed probe is not a disconnect — it takes 10 seconds of continuous failure and at least 3 probes. One success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
 
 | Action | Takes effect in |
 |---|---|
@@ -217,19 +215,17 @@ What you will actually notice:
 | Disconnecting only, without quitting | about 15–50 seconds |
 | Reconnecting after a drop | about 10–25 seconds |
 
-After reaching a conclusion it keeps watching closely for **another 1 minute**, so a wrong call corrects itself.
-
-**Which environment variables it writes** (the whole set goes in together and comes out together):
+**Which variables it writes** (the whole set goes in and comes out together):
 
 | Variable | Value | Purpose |
 |---|---|---|
 | `HTTP_PROXY` | `http://127.0.0.1:port` | Proxy for http:// requests |
 | `HTTPS_PROXY` | `http://127.0.0.1:port` | Proxy for https:// requests |
-| `ALL_PROXY` | `http://127.0.0.1:port` | Fallback used by protocols the other variables do not cover |
+| `ALL_PROXY` | `http://127.0.0.1:port` | Fallback for protocols the others do not cover |
 | `NO_PROXY` | `localhost,127.0.0.1,::1` | Local addresses bypass the proxy |
-| `NODE_USE_ENV_PROXY` | `1` | Makes newer Node tools (native fetch) read the proxy from the environment |
+| `NODE_USE_ENV_PROXY` | `1` | Makes newer Node tools read the proxy from the environment |
 
-Windows gets 5, macOS gets 9 (the same 5 plus lowercase spellings). This comes from the platforms themselves: Windows variable names are case-insensitive, so writing lowercase only overwrites the same entry, while macOS treats each case as a separate variable and some tools read only the lowercase form.
+Windows gets 5, macOS gets 9 (the same 5 plus lowercase spellings). Windows variable names are case-insensitive, so a lowercase entry only overwrites the same one; macOS treats each case separately and some tools read only lowercase.
 
 <details>
 <summary>Why these settings are what they are (does not affect usage, expand to read)</summary>
@@ -254,66 +250,69 @@ Windows gets 5, macOS gets 9 (the same 5 plus lowercase spellings). This comes f
 
 ## 6. Why it rarely breaks
 
-The design rule is: when it cannot tell, it changes nothing.
+The rule is: **when unsure, do nothing.**
 
-- **Unreadable information leads to no action**: if the port list cannot be read, it does not treat that as "no proxy" and delete your environment variables. It keeps the previous state instead.
-- **Only values still equal to ours are cleared**: values you changed by hand, corporate proxies, and addresses on other ports are all left alone. With no ownership record it changes nothing, so your own configuration is never removed.
-- **Configuration files are backed up before edits**: both PowerShell's `$PROFILE` and the Mac rc files get a `.envproxy.bak` copy first. If the write cannot happen, nothing is changed at all.
-- **Writes keep files intact**: the content goes into a temporary file first and then replaces the original as a whole. A power loss or a forced stop mid-way leaves the original file complete.
-- **Re-installing has no side effects**: when everything is already correct it does not touch your settings, and running it again causes no problems.
-- **Uninstalling verifies each item**: every item is read back afterwards, and any residue is reported as "incomplete" rather than claimed as success.
+- **Cannot read it, do not act**: if the port list cannot be read, it does not treat that as "no proxy" and delete your variables. It keeps the previous state.
+- **Only our own values are cleared**: values you changed, corporate proxies, other ports — none are touched. With no ownership record it changes nothing.
+- **Backup before editing**: `$PROFILE` and the Mac rc files get a `.envproxy.bak` copy first. If the write fails, nothing changes at all.
+- **Writes keep files intact**: content goes to a temporary file and then replaces the original. A power cut or a forced stop leaves the original complete.
+- **Re-installing is harmless**: when everything is already right it does not touch your settings.
+- **Uninstalling checks each item**: everything is read back, and any residue is reported as "incomplete" rather than claimed as success.
 
 ## 7. Performance and traffic
 
-- **Little overhead once stable**: after the state settles, each port is probed at most once every 15 seconds, reading only response headers, under 1KB each time.
-- **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold, it probes every 5 seconds and returns to 15 seconds as soon as the conclusion is settled.
-- **No residue after uninstalling**: environment variables, start at login, the locator script and the terminal sync script block are all removed, leaving only the log if you chose to keep it.
-- **Almost no delay at the prompt**: it reads one local file before each prompt is shown and starts no external process.
+- **Almost no overhead once stable**: each port is probed at most once every 15 seconds, reading only response headers, under 1KB each time.
+- **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold it probes every 5 seconds, returning to 15 once the conclusion is settled.
+- **No residue after uninstalling**: variables, start at login, the locator script and the sync block are all removed, leaving only the log if you kept it.
+- **Almost no delay at the prompt**: it reads one local file before each prompt and starts no external process.
 
 ## 8. What is in the folder
 
-Unzipping gives roughly this (the folder name can be changed; each package contains only its own platform, so the Windows package has no `mac\` and vice versa):
+Unzipping gives roughly this. The folder can be renamed; each package contains only its own platform, so the Windows package has no `mac\` and vice versa.
 
 ```
 EnvProxy\
-  win\                    Windows version: menu + entry + libraries
-    打开菜单.cmd         the only file to double-click: the menu (install/status/stop/restore/update/help)
-    envproxy.ps1         entry: parse arguments, take the operation lock, load self-checks, dispatch
-    lib\                 seven libraries: base / probe / env / runtime / package / update / ops
-    monitor\              created at runtime: monitor.log, monitor.pid, stop.flag
-  mac\                    Mac version: the same menu + entry + libraries
-    打开菜单.command      the only file to double-click: the menu (same as Windows)
-    envproxy.sh           entry (counterpart of win\envproxy.ps1)
-    locator.sh            locator script template (copied to ~/.envproxy/locator.sh on install)
-    prompt-sync.sh        terminal sync script template (copied to ~/.envproxy/prompt-sync.sh; the rc files only reference it in one line)
-    lib\                 seven libraries (same names and duties as Windows)
-    monitor\             created at runtime (same as Windows, same log format)
+  win\                    Windows version
+    打开菜单.cmd         the only file to double-click
+    envproxy.ps1         main program
+    lib\                 libraries (ignore these)
+    monitor\             created at runtime, holds the log
+  mac\                    Mac version, same layout
+    打开菜单.command      the only file to double-click
+    envproxy.sh          main program
+    locator.sh           locator script template
+    prompt-sync.sh       terminal sync script template
+    lib\  monitor\       same as above
   README.md               Chinese documentation
   README.en.md            English documentation (this file)
   LICENSE                 MIT license
   VERSION                 version number
-  release-notes\          what changed in each version (shown by Check for updates)
+  release-notes\          what changed per version (shown by Check for updates)
   assets\readme\          images used by the README
 ```
 
-- **Each package covers one platform**: `EnvProxy-win.zip` installs Windows (`win\` plus shared files), and `EnvProxy-mac.tar.gz` installs Mac (`mac\` plus shared files). Download the one you need; the other platform's folder is not affected.
-- **The program's files**: `win\`, `mac\`, `release-notes\` and `assets\` are managed by the update process and kept aligned with the package manifest. Day to day you only open `win\` (or `mac\`).
-- **Your own files**: the top level only overwrites files of the same name and never deletes; logs and run markers in `monitor\` are never overwritten or deleted.
+Three areas with different rules:
+
+- **Program files**: `win\`, `mac\`, `release-notes\`, `assets\`. Updates overwrite these — **do not put your own files there**.
+- **Runtime folder**: `monitor\`. Logs and run markers, **never overwritten, never deleted**.
+- **Top level**: only files of the same name are overwritten, **your own things are never deleted**.
+
+Day to day you only open `win\` (or `mac\`).
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder (overwritten by updates, do not keep your files there), the runtime folder (logs and run markers never overwritten or deleted), and the top level (only same-name files are overwritten, your things are never deleted)">
 
 ## 9. Copying and backing up the folder
 
-**It can be copied, renamed and moved.** One thing to know first: **once the original location is renamed or moved, the running monitor can no longer find its own script.** It exits by itself and clears the proxy variables, which prevents a stale proxy setting from being left behind.
+**It can be copied, renamed and moved.** One thing to know: **once the original location is renamed or moved, the running monitor can no longer find its own program.** It exits by itself and clears the proxy variables, so no stale setting is left behind.
 
-So after renaming or moving, there are two ways to get it running again:
+Two ways to bring it back:
 
-- **Wait until the next login**: the locator script finds the new location and takes over.
-- **Restore it immediately**: double-click Install / Repair once. Use this if you want it back straight away.
+- **Wait for the next login**: the locator script finds the new location and takes over.
+- **Bring it back now**: double-click Install / Repair once.
 
-The search covers **six levels** down from the common locations (Desktop, Documents, Downloads, OneDrive, `.config`) and **four levels** under each drive root. Moved outside those, such as `C:\Projects\EnvProxy`, the locator script cannot find it and you must double-click Install once.
+The search covers **six levels** down from the common locations (Desktop, Documents, Downloads, OneDrive, `.config`) and **four levels** under each drive root. Outside those, such as `C:\Projects\EnvProxy`, the locator script cannot find it and you must double-click Install once.
 
-A copied backup **is never mistaken for the copy in use**, because activity in the log decides which one is live, so backup folders can stay in place.
+A copied backup **is never mistaken for the live one**, since log activity decides which is running, so backups can stay in place.
 
 ## 10. Setting it up for a friend or a new machine
 
