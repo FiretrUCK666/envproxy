@@ -486,6 +486,20 @@ Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/rep
 Assert-Eq 'no source comes back with an empty repo id' '0' (@($srcTable0 | Where-Object { -not $_.Repo }).Count)
 Assert-Eq 'every exported source carries its five walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Web -or -not $_.Base -or -not $_.Preferred -or -not $_.ApiRepo }).Count)
 
+# The repo id comes off the git remote, and every way of writing that remote has to give the same
+# answer: the last two path segments. Reading it with a greedy ".*github.com[:/]([^/]+)/([^/]+)"
+# looks fine until the remote carries a port -- ssh://git@ssh.github.com:443/owner/repo hands back
+# "443/owner", the query URL is built against the wrong repo, and the user is told "the release
+# does not ship this file, download it by hand" -- the wrong next step, from a working release.
+Assert-Eq 'https remote' 'owner/repo' (Get-RepoIdFromRemoteUrl 'https://github.com/owner/repo.git')
+Assert-Eq 'https remote without the .git suffix' 'owner/repo' (Get-RepoIdFromRemoteUrl 'https://github.com/owner/repo')
+Assert-Eq 'scp-style remote' 'owner/repo' (Get-RepoIdFromRemoteUrl 'git@github.com:owner/repo.git')
+Assert-Eq 'ssh remote with a port' 'owner/repo' (Get-RepoIdFromRemoteUrl 'ssh://git@ssh.github.com:443/owner/repo.git')
+Assert-Eq 'a trailing slash is not part of the id' 'owner/repo' (Get-RepoIdFromRemoteUrl 'https://github.com/owner/repo/')
+Assert-Eq 'a host that is not GitHub is not an id' '' (Get-RepoIdFromRemoteUrl 'https://gitlab.com/owner/repo.git')
+Assert-Eq 'a local path is not an id' '' (Get-RepoIdFromRemoteUrl 'D:\somewhere\repo')
+Assert-Eq 'an empty remote is not an id' '' (Get-RepoIdFromRemoteUrl '')
+
 Write-Host '[5c] update failure classification'
 # The reason a download failed decides what the user is told to do next: wait an hour
 # (quota), open the proxy (network), download by hand (missing), or fix the disk (local).

@@ -188,15 +188,42 @@ function Remove-SourceOnlyFiles([string]$Root) {
     } catch {}
 }
 
+# 从 git 远程地址里取出 "owner/repo"（纯函数）。
+# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
+# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
+# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
+# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
+# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
+# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
+# 主机不是 GitHub 时返回空串，让调用方退回内置默认：换了个远端（本地镜像、别的托管）
+# 不该让查询地址继续指着那个主机，也不该报成"发布方没给包"。
+function Get-RepoIdFromRemoteUrl([string]$Url) {
+    if (-not $Url) { return "" }
+    $u = $Url.Trim()
+    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠，
+    # 后面就只剩一种分隔符。只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
+    $u = $u -replace '^([^/]+@[^/:]+):', '$1/'
+    $u = $u -replace '[?#].*$', ''
+    $u = $u.TrimEnd('/')
+    $u = $u -replace '\.git$', ''
+    $parts = @($u -split '[/\\]' | Where-Object { $_ -ne '' })
+    if ($parts.Count -lt 3) { return "" }
+    $hostPart = $parts[$parts.Count - 3] -replace '^.*@', ''
+    $hostPart = $hostPart -replace ':[0-9]+$', ''
+    if ($hostPart -ne 'github.com' -and $hostPart -notlike '*.github.com') { return "" }
+    $owner = $parts[$parts.Count - 2]
+    $repo = $parts[$parts.Count - 1]
+    if (-not $owner -or -not $repo) { return "" }
+    return ("{0}/{1}" -f $owner, $repo)
+}
+
 function Get-UpdateRepo {
     if (Test-DevCopy) {
         $root = Split-Path -Parent $ScriptDir
         try {
             $url = (git -C $root config --get remote.origin.url 2>$null)
-            if ($url -and ($url -match 'github\.com[:/]([^/]+)/([^/\s]+)')) {
-                $repo = $Matches[2] -replace '\.git$',''
-                if ($Matches[1] -and $repo) { return ("{0}/{1}" -f $Matches[1], $repo) }
-            }
+            $id = Get-RepoIdFromRemoteUrl $url
+            if ($id) { return $id }
         } catch {}
     }
     return $UpdateRepoDefault

@@ -531,6 +531,18 @@ self_test() {
     _selftest_assert_eq "源表展开后的条数与表里一致" "$_st_want" "$_st_one"
     if [ -n "$(update_source_id official)" ]; then _st2=1; else _st2=0; fi
     _selftest_assert_eq "official 给出非空仓库标识" "1" "$_st2"
+    # 仓库标识取自 git remote，每种写法都必须给出同一个答案：路径的最后两段。
+    # 用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则看着没问题，直到 remote 带端口——
+    # ssh://git@ssh.github.com:443/owner/repo 会返回 "443/owner"，查询地址指着不存在的仓库，
+    # 最后报"发布方没提供这个包，请手动下载"：从一个好好的发布把用户支去错的下一步。
+    _selftest_assert_eq "仓库标识：https" "owner/repo" "$(repo_id_from_remote_url 'https://github.com/owner/repo.git')"
+    _selftest_assert_eq "仓库标识：https 无 .git" "owner/repo" "$(repo_id_from_remote_url 'https://github.com/owner/repo')"
+    _selftest_assert_eq "仓库标识：scp 写法" "owner/repo" "$(repo_id_from_remote_url 'git@github.com:owner/repo.git')"
+    _selftest_assert_eq "仓库标识：带端口的 ssh" "owner/repo" "$(repo_id_from_remote_url 'ssh://git@ssh.github.com:443/owner/repo.git')"
+    _selftest_assert_eq "仓库标识：尾部斜杠不算" "owner/repo" "$(repo_id_from_remote_url 'https://github.com/owner/repo/')"
+    _selftest_assert_eq "仓库标识：不是 GitHub 就不算" "" "$(repo_id_from_remote_url 'https://gitlab.com/owner/repo.git')"
+    _selftest_assert_eq "仓库标识：本地路径不算" "" "$(repo_id_from_remote_url '/somewhere/repo')"
+    _selftest_assert_eq "仓库标识：空地址不算" "" "$(repo_id_from_remote_url '')"
 
     # 失败原因分类：下载失败的原因决定用户该做什么（等一小时 / 开代理 / 手动下载 / 修磁盘），
     # 全塌缩成一个"失败"字符串就等于把判断责任推给使用者。

@@ -84,16 +84,38 @@ get_local_version() {
     tr -d ' \t\r\n' < "$_vf" 2>/dev/null
 }
 
+# 从 git 远程地址里取出 "owner/repo"（纯函数）。
+# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
+# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
+# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
+# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
+# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
+# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
+# 主机不是 GitHub 时输出空串，让调用方退回内置默认。
+repo_id_from_remote_url() {
+    [ -n "$1" ] || return 0
+    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠。
+    # 只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
+    printf '%s' "$1" \
+        | sed -E 's#^([^/]+@[^/:]+):#\1/#; s#[?#].*$##; s#/+$##; s#\.git$##' \
+        | awk -F/ '{
+              n = NF
+              if (n < 3) exit
+              host = $(n - 2)
+              sub(/^.*@/, "", host)
+              sub(/:[0-9]+$/, "", host)
+              if (host != "github.com" && host !~ /[.]github[.]com$/) exit
+              if ($(n - 1) == "" || $n == "") exit
+              printf "%s/%s", $(n - 1), $n
+          }'
+}
+
 # 开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；安装副本用内置默认。
 get_update_repo() {
     if is_dev_copy && command -v git >/dev/null 2>&1; then
         _u=$(git -C "$(get_project_root)" config --get remote.origin.url 2>/dev/null || true)
-        case "$_u" in
-            *github.com*)
-                _r=$(printf '%s' "$_u" | sed -E 's#.*github\.com[:/]([^/]+)/([^/]+)#\1/\2#; s#\.git$##')
-                if [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
-                ;;
-        esac
+        _r=$(repo_id_from_remote_url "$_u")
+        if [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
     fi
     printf '%s' "$UPDATE_REPO_DEFAULT"
 }
