@@ -214,8 +214,8 @@ What you will actually notice:
 |---|---|
 | Starting the proxy app | 4-10 seconds |
 | Quitting the proxy app entirely | about 5 seconds |
-| Disconnecting only, without quitting | about 15-50 seconds |
-| Reconnecting after a drop | about 10-25 seconds |
+| Disconnecting only, without quitting | about 15–50 seconds |
+| Reconnecting after a drop | about 10–25 seconds |
 
 After reaching a conclusion it keeps watching closely for **another 1 minute**, so a wrong call corrects itself.
 
