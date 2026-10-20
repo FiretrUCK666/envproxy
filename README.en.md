@@ -155,24 +155,42 @@ A value means proxied; empty means direct.
 
 On Windows you must write `curl.exe`. PowerShell resolves `curl` to the `Invoke-WebRequest` alias, and plain `curl` fails with a parameter error.
 
-Other tools do not accept this flag and have their own forms, such as `git -c http.proxy= clone <repo>` or `npm --no-proxy install`.
+Other tools do not accept this flag and have their own forms:
+
+| Tool | Skip the proxy for one command |
+|---|---|
+| `curl` | see the table above |
+| `git` | `git -c http.proxy= -c https.proxy= clone <repo>` |
+| `npm` | `npm --no-proxy install <pkg>` |
+| `wget` | `wget --no-proxy <url>` |
+| `docker` | change Docker's own settings; there is no per-command flag |
+
+> These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the environment variables EnvProxy wrote.
 
 ### 3.5 Make an already-open window catch up
 
-Windows opened after installing catch up automatically. **Windows opened before installing do not** — the sync code was not there yet when they started.
+First see which case you are in:
 
-The easy fix is to open a new window.
+| Your window | What happens | What to do |
+|---|---|---|
+| Opened after installing | Correct automatically | Nothing |
+| Opened after installing, proxy changed later | Still holds the old state | Press Enter once |
+| Opened before installing | The sync code was never loaded | Open a new one, or run the command below |
 
-If you would rather not, run this once in the old one:
+For the third case, opening a new window is easiest. If you would rather not, run this once in the old one:
 
 | | Command |
 |---|---|
 | Windows | `. $PROFILE` |
 | Mac | `. ~/.envproxy/prompt-sync.sh` |
 
-`$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs it by hand. On Mac that file is the sync script.
+**What these commands are**: `$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs it by hand. On Mac that file is the sync script, same idea.
 
-This works for PowerShell on Windows and zsh or bash on Mac. Afterwards the window re-reads the state after every command.
+**Three things to note**:
+
+- The leading `.` and the space after it are both required. `.` means "run this file in the current window".
+- Works for PowerShell on Windows and zsh or bash on Mac. fish on Mac is not supported.
+- It affects that one window only. Other open windows need the same command, or just reopen them.
 
 ## 4. Something is wrong: check in this order
 
