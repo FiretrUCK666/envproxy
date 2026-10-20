@@ -222,7 +222,9 @@ It does not care about brands, process names or port numbers; it only cares who 
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| The terminal still cannot reach the internet after installing | the terminal was opened before the install, and windows already open never change by themselves | open a new window first; if it still shows the old values, close the whole terminal application and start it again (a limit of the operating system, not of this tool) |
+| The terminal still cannot reach the internet after installing | the terminal was opened before the install and no command has been run in it yet | press Enter once in the old window and it catches up; if it still does not, open a new window |
+| You want only some windows to use the proxy | the default is to follow automatically everywhere | run `export ENVPROXY_TERM=off` in the window that should stay direct (undo with `unset ENVPROXY_TERM`). It is per window and does not affect the others |
+| One window should use a different proxy | values you set yourself are never touched | just `export HTTPS_PROXY=http://your-host:port`. The test is whether the value equals the one we wrote; yours does not count as ours |
 | Variables are not removed after disconnecting | the app's disconnect does not stop its core, and the node is still reachable | expected. Quit the proxy app if you want it to stop right away |
 | Variables are removed and then come back | your node itself is flapping, and the monitor reports what it sees | expected behaviour. If it keeps happening the node is poor quality; switch to another one |
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
@@ -377,9 +379,9 @@ The Mac build sets all 9 variables, the extra four being lowercase spellings —
 
 1. Get the Mac package (`EnvProxy-mac.tar.gz`) onto any location on the Mac (or copy over a whole folder that contains `mac\`: USB drive, AirDrop, an archive — all fine)
 2. Open `mac` and double-click **`打开菜单.command`**, then choose **`1 Install / Fix`** (the first run may need a right-click and Open, see 12.5)
-3. When you see the monitor started message, you are done. Verify in a **new terminal**: `env | grep -i proxy`
+3. When you see the monitor started message, you are done. Verify by **pressing Enter in any terminal**: `env | grep -i proxy` (windows that were already open work too, no need to reopen)
 
-Installing does five things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`, which new terminals use to load `proxy.env`), starts the monitor right away, and corrects the variables once. If anything seems off later, open the menu and choose "Install / Fix" — it is the universal fix.
+Installing does five things: it snapshots existing variables with the same names first (used to restore them on uninstall), registers start at login (a LaunchAgent), writes the terminal integration (a marked hook inside `~/.zshenv`, `~/.zshrc` and, if they exist, `~/.bash_profile` and `~/.bashrc`; `~/.envproxy/prompt-sync.sh` re-reads the file before every prompt, so already-open windows follow along), starts the monitor right away, and corrects the variables once. If anything seems off later, open the menu and choose "Install / Fix" — it is the universal fix.
 
 > A note for fish users: fish does not understand the `export` syntax, so there is no native support yet. The workaround is to install bass and add `bass source "$HOME/.envproxy/proxy.env"` to `config.fish` (it re-reads the file in every new window, so port changes are picked up).
 
@@ -438,7 +440,7 @@ The 5th changes shape: on Windows the blocker is security software (antivirus, E
 
 Two more, unique to macOS:
 
-1. **Old terminals must be reopened**: existing windows do not change, only newly opened terminals and apps pick up the variables (same as Windows).
+1. **Terminal prompt hook**: zsh uses `precmd` and bash uses `PROMPT_COMMAND` to re-read `~/.envproxy/proxy.env` before every prompt, so **already-open windows catch up as soon as you press Enter**. That read uses shell builtins only (no external process, about 0.3 ms), because `launchctl getenv` costs one process per call and eight variables add up to a noticeable pause on every Enter.
 2. **The core is shell, not python**: the `/usr/bin/python3` that ships with macOS is an old version bundled with Xcode, and it fails outright on newer systems when components are missing. So the Mac build uses only `zsh`, `bash` and system tools (`curl`, `lsof`, `nc`, `netstat`, `ps`, `launchctl`, `awk`, `sed`, `tar`, `cmp` and the like), and installs nothing. **After editing any `.sh` under `mac` (the entry and the libraries in `lib/`), save it as LF with no BOM** — the opposite of Windows, where the BOM is required; here a BOM would displace the shebang and the script would not run.
 
 ### 12.7 Deploying to a friend or a new Mac

@@ -15,7 +15,12 @@ PLIST_PATH="${PLIST_PATH:-$HOME/Library/LaunchAgents/$PLIST_LABEL.plist}"
 # shell hook 标记（幂等插入/精确移除的依据）
 HOOK_START="# >>> EnvProxy >>>"
 HOOK_END="# <<< EnvProxy <<<"
-HOOK_LINE='[ -f "$HOME/.envproxy/proxy.env" ] && . "$HOME/.envproxy/proxy.env"'
+# rc 里只放这一行，逻辑住在 prompt-sync.sh：
+#   - 这一行要能被 _hook_block_paired 用整行匹配守护，所以必须短、必须单行；
+#   - zsh / bash 两套写法、以后的修正都改 prompt-sync.sh，不动使用者的文件。
+# 这一行做两件事：启动时读一次（服务非交互进程，如编辑器里的子 shell），
+# 并注册"每次提示符前重读"的钩子（让已经开着的窗口也能跟上代理状态）。
+HOOK_LINE='[ -r "$HOME/.envproxy/prompt-sync.sh" ] && . "$HOME/.envproxy/prompt-sync.sh"'
 
 # 状态疑似翻转要连续确认几轮才动手：轮数决定"抗抖能力"，也是对外公布的
 # "连回来要多久 / 断开要多久"的一部分，所以必须是具名常量（门禁要读它推导文档）。
@@ -86,12 +91,36 @@ autorun_reload_needed() {
     return 0
 }
 
+# 把终端同步脚本装到固定位置。返回 0 = 已就位（新装/已最新），1 = 失败。
+# 用内容比对而不是"文件在不在"：升级后模板变了而副本还是旧的，
+# 钩子行为就永远停在老版本——这与自启动的"内容一致"判据是同一道理。
+install_prompt_sync() {
+    _ps_src="$SCRIPT_DIR/prompt-sync.sh"
+    _ps_dst="$ENVPROXY_HOME/prompt-sync.sh"
+    [ -f "$_ps_src" ] || return 1
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    if [ -f "$_ps_dst" ] && cmp -s "$_ps_src" "$_ps_dst" 2>/dev/null; then
+        return 0
+    fi
+    _ps_tmp="$_ps_dst.tmp.$$"
+    if cp "$_ps_src" "$_ps_tmp" 2>/dev/null && mv "$_ps_tmp" "$_ps_dst" 2>/dev/null; then
+        chmod 644 "$_ps_dst" 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$_ps_tmp" 2>/dev/null || true
+    return 1
+}
+
 set_autorun() {
     mkdir -p "$ENVPROXY_HOME" "$HOME/Library/LaunchAgents" 2>/dev/null || true
     if [ -f "$SCRIPT_DIR/locator.sh" ]; then
         cp "$SCRIPT_DIR/locator.sh" "$LOCATOR_PATH" 2>/dev/null || true
         chmod +x "$LOCATOR_PATH" 2>/dev/null || true
     fi
+    # 终端同步脚本也复制到固定位置：rc 里那一行只认 ~/.envproxy/prompt-sync.sh。
+    # 这样整个文件夹被移动/改名后，已经装好的 hook 仍然指向一份有效的实现
+    # （与定位器同一套"固定位置"思路），改逻辑时只需要更新这一份。
+    install_prompt_sync
     get_plist_content > "$PLIST_PATH" 2>/dev/null || true
     update_path_record
     # 重载 launchd 代理要谨慎：bootout 会给**正在跑的监控**发 SIGTERM，
@@ -147,6 +176,13 @@ repair_autorun() {
 # hook 存在性自愈（与变量 30 轮自检、自启动内容比对同周期）：zsh 落点缺失或内容不符就补写。
 # bash 落点只在安装时处理（存在才写），稳态下不碰。
 _repair_hooks() {
+    # 先确保固定位置上的同步脚本是本版本（内容比对，不是"文件在不在"）：
+    # 升级后模板变了而副本还是旧的，钩子行为就停在老版本，而 rc 里那一行看起来完全正常。
+    if [ -f "$SCRIPT_DIR/prompt-sync.sh" ] && ! cmp -s "$SCRIPT_DIR/prompt-sync.sh" "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null; then
+        if install_prompt_sync; then
+            log_msg "已自动更新终端同步脚本（内容与当前版本不一致）"
+        fi
+    fi
     _need=0
     _any=0
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
@@ -580,7 +616,7 @@ run_monitor_loop() {
                     # off 态残留兜底（与 Windows 侧 30 轮自检同语义）：整表判据走同一套，
                     # 稳态 off 下外部改动或旧残留也能被纠正，而不是等到下次翻转。
                     if proxy_vars_present; then
-                        remove_user_env_vars
+                        remove_user_env_vars sentinel
                         log_msg "检测到代理变量残留 -> 已回收，恢复直连"
                     fi
                     ;;

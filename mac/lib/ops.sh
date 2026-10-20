@@ -79,6 +79,117 @@ self_test() {
     remove_shell_hooks 2>/dev/null || true
     _selftest_assert_file_eq "成对时正常移除" "$(printf '%s\n' 'export PATH=/x' 'alias ll="ls"')" "$HOME/.zshenv"
 
+    echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
+    # prompt-sync.sh 是使用者 shell 去 source 的独立脚本（不进 CORE_LIBS、不被入口加载）。
+    # 路径当场算出来：子 shell 里不会因为变量没导出而丢掉。
+    _ps_file=$(cd "$SCRIPT_DIR" 2>/dev/null && pwd)/prompt-sync.sh
+    [ -r "$_ps_file" ] || _ps_file="$SCRIPT_DIR/prompt-sync.sh"
+    if [ -r "$_ps_file" ]; then
+        _ps_env="$ENVPROXY_HOME/proxy.env"
+        _ps_bak=""
+        [ -f "$_ps_env" ] && _ps_bak="$_ps_bak $(cat "$_ps_env" 2>/dev/null)" || true
+        # on 态文件
+        printf '%s\n' '# envproxy-state: on 7078' \
+            'export HTTP_PROXY="http://127.0.0.1:7078"' \
+            'export HTTPS_PROXY="http://127.0.0.1:7078"' \
+            'export NO_PROXY="localhost,127.0.0.1,::1"' \
+            'export NODE_USE_ENV_PROXY="1"' > "$_ps_env"
+        # 1) 正常注入
+        _ps_r=$( unset HTTP_PROXY HTTPS_PROXY NO_PROXY NODE_USE_ENV_PROXY ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "同步：代理开着时注入" "http://127.0.0.1:7078" "$_ps_r"
+        # 2) 使用者自己的代理：off 态时一字不动（判据是值相等，不是长得像本机地址）
+        printf '%s\n' '# envproxy-state: off' \
+            '[ "${HTTPS_PROXY-}" = "http://127.0.0.1:7078" ] && unset HTTPS_PROXY' 'true' > "$_ps_env"
+        _ps_r=$( export HTTPS_PROXY="http://corp-proxy:8080"
+                 unset ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "同步：off 态不碰使用者的公司代理" "http://corp-proxy:8080" "$_ps_r"
+        # 3) 他本机上自己的 mitmproxy 也不算我们的
+        _ps_r=$( export HTTPS_PROXY="http://127.0.0.1:8080"
+                 unset ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "同步：off 态不碰使用者的本机 8080" "http://127.0.0.1:8080" "$_ps_r"
+        # 3b) on 态：按契约覆盖（安装时已快照原值、卸载还原，这是功能本身）
+        printf '%s\n' '# envproxy-state: on 7078' \
+            'export HTTPS_PROXY="http://127.0.0.1:7078"' > "$_ps_env"
+        _ps_r=$( export HTTPS_PROXY="http://corp-proxy:8080"
+                 unset ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "同步：on 态按快照契约覆盖（卸载会还原）" "http://127.0.0.1:7078" "$_ps_r"
+        # 4) ENVPROXY_TERM=off：这个终端固定直连，不清使用者的值
+        _ps_r=$( export ENVPROXY_TERM=off
+                 export HTTPS_PROXY="http://corp-proxy:8080"
+                 unset _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "接管开关：固定直连时不清使用者的值" "http://corp-proxy:8080" "$_ps_r"
+        # 5) ENVPROXY_TERM=off 且值是我们的：清干净
+        _ps_r=$( export ENVPROXY_TERM=off
+                 export HTTPS_PROXY="http://127.0.0.1:7078"
+                 unset _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "接管开关：固定直连时清掉我们的值" "" "$_ps_r"
+        # 6) off 态哨兵：只清我们写下的那个值
+        printf '%s\n' '# envproxy-state: off' \
+            '[ "${HTTPS_PROXY-}" = "http://127.0.0.1:7078" ] && unset HTTPS_PROXY' 'true' > "$_ps_env"
+        _ps_r=$( export HTTPS_PROXY="http://127.0.0.1:8080"
+                 unset ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "off 哨兵：不误清使用者的 8080" "http://127.0.0.1:8080" "$_ps_r"
+        # 7) off 态哨兵 + 值是我们的：清掉
+        _ps_r=$( export HTTPS_PROXY="http://127.0.0.1:7078"
+                 unset ENVPROXY_TERM _ENVPROXY_SYNC_READY
+                 . "$_ps_file"
+                 printf '%s' "${HTTPS_PROXY-}" )
+        _selftest_assert_eq "off 哨兵：清掉我们写下的值" "" "$_ps_r"
+        # 8) 哨兵让重复 source 不重复注册
+        _ps_r=$( unset _ENVPROXY_SYNC_READY ENVPROXY_TERM PROMPT_COMMAND
+                 . "$_ps_file"; _a="${PROMPT_COMMAND-}"
+                 . "$_ps_file" 2>/dev/null || true
+                 [ "${PROMPT_COMMAND-}" = "$_a" ] && printf same || printf doubled )
+        _selftest_assert_eq "重复 source 不重复注册" "same" "$_ps_r"
+        # 9) 钩子永不返回非零（返回非零会让使用者的主题提示符跟着崩）
+        # 用固定路径传值，不用 $( )：命令替换会重置 $?，测的就不是钩子的行为了。
+        _ps_tmp="$ENVPROXY_HOME/.selftest_rc"
+        rm -f "$_ps_tmp" 2>/dev/null || true
+        # 关键：false 与调用之间不能有任何语句——$? 会被它们重置。
+        _ps_rc=""
+        unset _ENVPROXY_SYNC_READY ENVPROXY_TERM 2>/dev/null || true
+        . "$_ps_file" 2>/dev/null || true
+        if type _envproxy_prompt_sync >/dev/null 2>&1; then
+            false; _envproxy_prompt_sync; _ps_rc=$?
+        else
+            _ps_rc="NOFUNC"
+        fi
+        _selftest_assert_eq "钩子保住上一个命令的退出码" "1" "$_ps_rc"
+        rm -f "$_ps_tmp" 2>/dev/null || true
+        # 还原 proxy.env
+        if [ -n "$_ps_bak" ]; then printf '%s\n' "$_ps_bak" | sed '/^$/d' > "$_ps_env"; else rm -f "$_ps_env"; fi
+        # 固定位置副本：安装/自愈靠它把实现送到 ~/.envproxy，rc 里那一行只认这个路径。
+        if install_prompt_sync; then _ps_cp1=1; else _ps_cp1=0; fi
+        _selftest_assert_eq "固定位置副本已就位" "1" "$_ps_cp1"
+        _selftest_assert_eq "副本与模板内容一致" "same" "$(cmp -s "$_ps_file" "$ENVPROXY_HOME/prompt-sync.sh" && echo same || echo diff)"
+        # 幂等：再装一次不重写（内容相同就直接返回）
+        _ps_mt=$(ls -l --time-style=+%s "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null | awk '{print $6}')
+        install_prompt_sync >/dev/null 2>&1 || true
+        _ps_mt2=$(ls -l --time-style=+%s "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null | awk '{print $6}')
+        _selftest_assert_eq "内容一致时不重写副本" "$_ps_mt" "$_ps_mt2"
+        # 模板变了要更新（模拟升级：改一个字节）
+        printf '\n# changed\n' >> "$ENVPROXY_HOME/prompt-sync.sh"
+        install_prompt_sync >/dev/null 2>&1 || true
+        _selftest_assert_eq "内容不一致时更新副本" "same" "$(cmp -s "$_ps_file" "$ENVPROXY_HOME/prompt-sync.sh" && echo same || echo diff)"
+        rm -f "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null || true
+    else
+        echo "  SKIP 终端同步（找不到 prompt-sync.sh）"
+    fi
+
     echo "[2] 合并与归属"
     _selftest_assert_eq "补默认项、留用户条目" "localhost,127.0.0.1,::1,example.com" "$(merge_no_proxy 'localhost,example.com,::1' "$DEFAULT_NO_PROXY")"
     _selftest_assert_eq "含单引号条目丢弃" "localhost,127.0.0.1,::1,ok.example" "$(merge_no_proxy "ok.example,a'b" "$DEFAULT_NO_PROXY")"
@@ -847,7 +958,9 @@ uninstall_envproxy() {
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
     stop_monitor || true
     remove_autorun
-    rm -f "$LOCATOR_PATH" "$PATH_CONF" 2>/dev/null || true
+    # prompt-sync.sh 是我们装到固定位置的实现，卸载时一并清掉；
+    # remove_shell_hooks 随后摘掉 rc 里那一行（标记块精确移除，用户其余内容不动）。
+    rm -f "$LOCATOR_PATH" "$PATH_CONF" "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null || true
     remove_shell_hooks
     _remove_log=0
     if [ "$_purge" = "1" ]; then
@@ -886,6 +999,7 @@ uninstall_envproxy() {
     _dirty=""
     if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then _dirty="$_dirty 开机自启动项仍在；"; fi
     if [ -f "$PLIST_PATH" ]; then _dirty="$_dirty 自启动文件仍在；"; fi
+    if [ -f "$ENVPROXY_HOME/prompt-sync.sh" ]; then _dirty="$_dirty 终端同步脚本仍在；"; fi
     if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位器文件仍在；"; fi
     if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在；"; fi
     if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在；"; fi

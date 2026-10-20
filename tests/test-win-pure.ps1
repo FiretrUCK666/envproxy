@@ -903,5 +903,72 @@ for ($i = 0; $i -lt 20; $i++) {
 Assert-Eq '失败/成功交替 20 轮里从不判"断"（抖动不累积）' $false $everDown
 Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来）' 1 $maxFails
 
+# 终端同步：$PROFILE 里的钩子块。核心是"只摘自己那一块、用户内容一字不动"，
+# 以及"标记不配对时绝不猜"。沙箱里用一个临时文件当 $PROFILE，不碰真实用户配置。
+Write-Host '[13] 终端同步：$PROFILE 钩子块'
+$profSbox = Join-Path $env:TEMP ("ep_prof_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $profSbox -Force -ErrorAction SilentlyContinue | Out-Null
+$fakeProfile = Join-Path $profSbox 'Microsoft.PowerShell_profile.ps1'
+$realProfile = $global:PROFILE
+$global:PROFILE = $fakeProfile
+try {
+    $r = Install-ShellProfile
+    Assert-Eq '全新安装成功' $true $r.Ok
+    $txt = Get-Content $fakeProfile -Raw -Encoding UTF8
+    Assert-Eq '写入开始标记' $true ($txt -match [regex]::Escape($ProfileBlockStart))
+    Assert-Eq '写入结束标记' $true ($txt -match [regex]::Escape($ProfileBlockEnd))
+    # 变量清单从生成的代码里抠出来数：只允许 5 个大写拼写，不许有小写（跨进程重名雷区）
+    $namesLine = @($txt -split "`r?`n" | Where-Object { $_ -match 'epNames = @\(' })[0]
+    $names = [regex]::Matches($namesLine, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value }
+    Assert-Eq '变量清单恰好 5 个' 5 $names.Count
+    Assert-Eq '清单里没有小写拼写' 0 (@($names | Where-Object { $_ -cmatch '^[a-z]' }).Count)
+    Assert-Eq '含手动接管开关说明' $true ($txt -match 'ENVPROXY_TERM')
+    Assert-Eq '用了 NullString 真删' $true ($txt -match 'NullString')
+
+    Assert-Eq '幂等：再装一次返回 current' 'current' (Install-ShellProfile).Reason
+    Assert-Eq '幂等：标记只出现一次' 1 (([regex]::Matches((Get-Content $fakeProfile -Raw -Encoding UTF8), [regex]::Escape($ProfileBlockStart))).Count)
+
+    # 用户原有内容必须保留，且我们的块在末尾（$PROFILE 最后执行才能包住前面的 prompt）
+    Set-Content -Path $fakeProfile -Value @('$env:MY_SETTING = "keep-me"', 'function prompt { "custom> " }') -Encoding UTF8
+    Assert-Eq '在用户内容之上安装成功' $true (Install-ShellProfile).Ok
+    $txt3 = Get-Content $fakeProfile -Raw -Encoding UTF8
+    Assert-Eq '用户的设置还在' $true ($txt3 -match 'keep-me')
+    Assert-Eq '用户的 prompt 还在' $true ($txt3 -match 'custom>')
+    Assert-Eq '块在文件末尾' $ProfileBlockEnd (@($txt3.TrimEnd() -split "`r?`n")[-1])
+
+    # 卸载：只摘我们的块
+    Assert-Eq '卸载成功' $true (Remove-ShellProfile).Ok
+    $txt4 = Get-Content $fakeProfile -Raw -Encoding UTF8
+    Assert-Eq '标记已消失' $false ($txt4 -match 'EnvProxy')
+    Assert-Eq '卸载后用户内容完好' $true ($txt4 -match 'keep-me')
+
+    # 标记不配对的护栏：一个字节都不改
+    Set-Content -Path $fakeProfile -Value @($ProfileBlockStart, 'dangling') -Encoding UTF8
+    $before = [System.IO.File]::ReadAllText($fakeProfile)
+    $r5 = Install-ShellProfile
+    Assert-Eq '不配对时拒绝安装' $false $r5.Ok
+    Assert-Eq '不配对时原因正确' 'unpaired' $r5.Reason
+    Assert-Eq '不配对时文件未被改动' $before ([System.IO.File]::ReadAllText($fakeProfile))
+    Assert-Eq '不配对时拒绝卸载' $false (Remove-ShellProfile).Ok
+    Assert-Eq '不配对时文件仍未被改动' $before ([System.IO.File]::ReadAllText($fakeProfile))
+
+    # 没有我们标记的文件：卸载碰都不碰（连 mtime 都不改）
+    Set-Content -Path $fakeProfile -Value @('$env:X = 1') -Encoding UTF8
+    $mt1 = (Get-Item $fakeProfile).LastWriteTime.Ticks
+    Start-Sleep -Milliseconds 30
+    Assert-Eq '无标记时卸载返回 no-block' 'no-block' (Remove-ShellProfile).Reason
+    Assert-Eq '无标记时 mtime 未变' $mt1 (Get-Item $fakeProfile).LastWriteTime.Ticks
+
+    # 升级：旧块内容不同必须重写（否则改了钩子却送不到用户手里）
+    Set-Content -Path $fakeProfile -Value @('$env:Y=2', $ProfileBlockStart, 'OLD-HOOK', $ProfileBlockEnd) -Encoding UTF8
+    Assert-Eq '旧块被识别为过期并重写' 'installed' (Install-ShellProfile).Reason
+    $txt7 = Get-Content $fakeProfile -Raw -Encoding UTF8
+    Assert-Eq '旧的钩子内容已消失' $false ($txt7 -match 'OLD-HOOK')
+    Assert-Eq '升级时用户内容保留' $true ($txt7 -match 'Y=2')
+} finally {
+    $global:PROFILE = $realProfile
+    Remove-Item -Recurse -Force $profSbox -ErrorAction SilentlyContinue
+}
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

@@ -197,6 +197,229 @@ function Repair-AutoRun {
 }
 
 # ------------------------------------------------------------------------------
+# 3b. PowerShell 配置文件的终端同步（对应 Mac 侧的 shell hook）
+# ------------------------------------------------------------------------------
+# 为什么需要：环境变量只在进程启动那一刻从父进程复制，已经开着的 PowerShell 窗口
+#   拿不到新值（WM_SETTINGCHANGE 广播对已运行的控制台进程无效）。唯一可靠的时机是
+#   "每次回到提示符、准备执行下一条命令之前"——也就是 prompt 函数被调用时。
+#
+# 为什么挂 $PROFILE 而不是每次自己开窗口：
+#   $PROFILE（CurrentUserCurrentHost）在四个变体里**最后执行**，能包住前面所有模块
+#   （Oh My Posh / posh-git）定义的 prompt；且只需当前用户权限。绝不硬编码 Documents
+#   路径——OneDrive 重定向会让它变，必须现场向 PowerShell 要。
+#
+# 三条硬约束（都在自检里钉住）：
+#   1) prompt 里一旦抛异常，整个提示符渲染失败（官方文档：默认 prompt 只在自定义
+#      prompt 出错时才出现）。所以同步逻辑必须整体 try/catch 包死。
+#   2) 只写 5 个大写拼写。Windows 变量名大小写不敏感，补小写会制造跨进程重名
+#      （.NET 宿主建表报 "same key has already been added"），这是项目已确立的红线。
+#   3) 删除用 [NullString]::Value：.NET 9 起 $null 不再等于删除，会留一个空值变量。
+#      本机 5.1 上两者等价，但代码要跨版本正确。
+$ProfileBlockStart = '# >>> EnvProxy >>>'
+$ProfileBlockEnd   = '# <<< EnvProxy <<<'
+
+# 我们要同步的变量（与 $ProxyVarNames 同源，不另立一份清单）。
+function Get-ProfileBlockLines {
+    # 钩子本体。内容是固定的，不看外部状态——判断权全在注册表（monitor 写的）。
+    # 变量清单在生成时展开，避免两处清单漂移。
+    $names = ($ProxyVarNames | ForEach-Object { "'$_'" }) -join ', '
+    $body = @(
+        $ProfileBlockStart
+        '# EnvProxy: 让已经开着的窗口跟着代理状态走（本块由安装程序写入，卸载时整块移除）',
+        '# 手动接管：$env:ENVPROXY_TERM = "off" 固定直连；Remove-Item Env:ENVPROXY_TERM 恢复自动',
+        'try {',
+        ("    `$__epNames = @(" + $names + ")"),
+        '    $__epReg = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)',
+        '    if ($null -ne $__epReg) {',
+        '        if ($env:ENVPROXY_TERM -eq "off") {',
+        '            foreach ($__epN in $__epNames) {',
+        '                $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
+        '                $__epWant = $__epReg.GetValue($__epN, $null)',
+        '                if (($null -ne $__epWant) -and ($__epCur -eq [string]$__epWant)) {',
+        '                    [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
+        '                }',
+        '            }',
+        '        } else {',
+        '            foreach ($__epN in $__epNames) {',
+        '                $__epVal = $__epReg.GetValue($__epN, $null)',
+        '                if ($null -ne $__epVal) {',
+        '                    [Environment]::SetEnvironmentVariable($__epN, [string]$__epVal, "Process")',
+        '                } else {',
+        '                    [Environment]::SetEnvironmentVariable($__epN, [NullString]::Value, "Process")',
+        '                }',
+        '            }',
+        '        }',
+        '        $__epReg.Close()',
+        '    }',
+        '} catch { }',
+        $ProfileBlockEnd
+    )
+    return $body
+}
+
+# 配置文件的路径现场取，不硬编码。取不到就返回 $null（调用方据此跳过并说明）。
+function Get-ProfilePathSafe {
+    try {
+        $p = $PROFILE
+        if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+        return $p
+    } catch { return $null }
+}
+
+# 成对护栏：起止标记都在、且开始行在结束行之前。缺一侧或顺序错乱就一个字节都不改。
+function Test-ProfileBlockPaired([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try { $lines = [System.IO.File]::ReadAllLines($Path) } catch { return $false }
+    $s = -1; $e = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
+        if ($lines[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+    }
+    return (($s -ge 0) -and ($e -gt $s))
+}
+
+# 读回比对：块内容与当前版本是否一致（升级后不一致要重写）。
+function Test-ProfileBlockCurrent([string]$Path) {
+    if (-not (Test-ProfileBlockPaired $Path)) { return $false }
+    try { $lines = [System.IO.File]::ReadAllLines($Path) } catch { return $false }
+    $s = -1; $e = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
+        if ($lines[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+    }
+    if ($s -lt 0 -or $e -le $s) { return $false }
+    $have = @($lines[$s..$e])
+    $want = @(Get-ProfileBlockLines)
+    if ($have.Count -ne $want.Count) { return $false }
+    for ($i = 0; $i -lt $want.Count; $i++) {
+        if ($have[$i] -cne $want[$i]) { return $false }
+    }
+    return $true
+}
+
+# 原子写回：先写同目录临时文件再整体替换，任何一步失败原文件一个字节不动。
+# 这在用户的配置文件上尤其重要——留下半截的 profile，一开 PowerShell 就报错。
+function Write-TextAtomic([string]$Path, [string[]]$Lines) {
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) {
+        New-Item -Path $dir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+    }
+    $tmp = Join-Path $dir (".envproxy-profile." + $PID + ".tmp")
+    try {
+        # 无 BOM：PowerShell 5.1 与 7.x 都能正确读 UTF-8 无 BOM 的 ps1；
+        # 带 BOM 反而会让某些编辑器与跨平台工具显示怪字符。
+        [System.IO.File]::WriteAllLines($tmp, $Lines, (New-Object System.Text.UTF8Encoding($false)))
+        if (Test-Path -LiteralPath $Path) {
+            # 保留原文件权限位
+            try { Copy-Item -LiteralPath $Path -Destination ($tmp + ".perm") -ErrorAction SilentlyContinue } catch {}
+            Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+            Remove-Item -LiteralPath ($tmp + ".perm") -ErrorAction SilentlyContinue
+        } else {
+            Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        try { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue } catch {}
+        return $false
+    }
+}
+
+# 安装/修复：幂等。已经正确就零写入（不动用户的文件 mtime）。
+function Install-ShellProfile {
+    $path = Get-ProfilePathSafe
+    if (-not $path) { return @{ Ok = $false; Reason = 'no-profile'; Path = '' } }
+    if (Test-ProfileBlockCurrent $path) { return @{ Ok = $true; Reason = 'current'; Path = $path } }
+    try {
+        $existing = @()
+        if (Test-Path -LiteralPath $path) { $existing = @([System.IO.File]::ReadAllLines($path)) }
+        $keep = New-Object System.Collections.ArrayList
+        if (Test-Path -LiteralPath $path) {
+            if (Test-ProfileBlockPaired $path) {
+                # 有完整旧块：摘掉它，换成新版
+                $s = -1; $e = -1
+                for ($i = 0; $i -lt $existing.Count; $i++) {
+                    if ($existing[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
+                    if ($existing[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+                }
+                for ($i = 0; $i -lt $existing.Count; $i++) {
+                    if ($i -ge $s -and $i -le $e) { continue }
+                    [void]$keep.Add($existing[$i])
+                }
+            } elseif ((@($existing) -contains $ProfileBlockStart) -or (@($existing) -contains $ProfileBlockEnd)) {
+                # 标记不配对：绝不猜测，原样不动（与 Mac 侧同一护栏）
+                return @{ Ok = $false; Reason = 'unpaired'; Path = $path }
+            } else {
+                foreach ($l in $existing) { [void]$keep.Add($l) }
+            }
+        }
+        # 块放在**末尾**：$PROFILE 最后执行，放最后才能包住前面所有 prompt 定义。
+        if ($keep.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($keep[$keep.Count - 1])) {
+            [void]$keep.Add('')
+        }
+        foreach ($l in (Get-ProfileBlockLines)) { [void]$keep.Add($l) }
+        if (-not (Write-TextAtomic -Path $path -Lines @($keep))) {
+            return @{ Ok = $false; Reason = 'write-failed'; Path = $path }
+        }
+        # 读回复检：修没修成由复读决定，不由"我调用了写入"决定。
+        if (-not (Test-ProfileBlockCurrent $path)) {
+            return @{ Ok = $false; Reason = 'verify-failed'; Path = $path }
+        }
+        return @{ Ok = $true; Reason = 'installed'; Path = $path }
+    } catch {
+        return @{ Ok = $false; Reason = $_.Exception.Message; Path = $path }
+    }
+}
+
+# 卸载：只摘我们那一块，用户其余内容一字不动。返回是否真的动过文件。
+function Remove-ShellProfile {
+    $path = Get-ProfilePathSafe
+    if (-not $path) { return @{ Ok = $true; Reason = 'no-profile'; Path = '' } }
+    if (-not (Test-Path -LiteralPath $path)) { return @{ Ok = $true; Reason = 'absent'; Path = $path } }
+    $existing = @([System.IO.File]::ReadAllLines($path))
+    if (-not ((@($existing) -contains $ProfileBlockStart) -or (@($existing) -contains $ProfileBlockEnd))) {
+        # 没有我们的标记：碰都不碰（连 mtime 都不改）
+        return @{ Ok = $true; Reason = 'no-block'; Path = $path }
+    }
+    if (-not (Test-ProfileBlockPaired $path)) {
+        return @{ Ok = $false; Reason = 'unpaired'; Path = $path }
+    }
+    $s = -1; $e = -1
+    for ($i = 0; $i -lt $existing.Count; $i++) {
+        if ($existing[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
+        if ($existing[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+    }
+    $keep = New-Object System.Collections.ArrayList
+    for ($i = 0; $i -lt $existing.Count; $i++) {
+        if ($i -ge $s -and $i -le $e) { continue }
+        [void]$keep.Add($existing[$i])
+    }
+    # 摘完若只剩结尾空行，一并收掉，别给用户留个空白尾巴
+    while ($keep.Count -gt 0 -and [string]::IsNullOrWhiteSpace($keep[$keep.Count - 1])) {
+        $keep.RemoveAt($keep.Count - 1)
+    }
+    if (-not (Write-TextAtomic -Path $path -Lines @($keep))) {
+        return @{ Ok = $false; Reason = 'write-failed'; Path = $path }
+    }
+    if ((@([System.IO.File]::ReadAllLines($path)) -contains $ProfileBlockStart)) {
+        return @{ Ok = $false; Reason = 'verify-failed'; Path = $path }
+    }
+    return @{ Ok = $true; Reason = 'removed'; Path = $path }
+}
+
+# 执行策略检查：Restricted 下 profile 根本不执行且无提示。
+# 静默失败最糟——用户以为在同步，实际一次都没同步过。
+function Get-ProfileExecutionPolicyWarning {
+    try {
+        $p = Get-ExecutionPolicy -Scope CurrentUser
+        if ($p -eq 'Restricted' -or $p -eq 'AllSigned') {
+            return ("当前执行策略是 $p，PowerShell 不会运行配置文件（$PROFILE）——" +
+                    "终端同步不会生效。改成 RemoteSigned 即可：Set-ExecutionPolicy RemoteSigned -Scope CurrentUser")
+        }
+    } catch {}
+    return ''
+}
+
+# ------------------------------------------------------------------------------
 # 4. 监控进程管理（PID 文件 + 优雅停止标志 + 兜底强杀）
 # ------------------------------------------------------------------------------
 # 脚本目录用入口发布的 $ScriptDir（本层不自行推算：库里的 $PSScriptRoot 指向 lib\ 自己）。
@@ -465,6 +688,16 @@ function Run-MonitorLoop {
             if ($repairRound -ge 30) {
                 $repairRound = 0
                 Repair-AutoRun
+                # 终端同步的钩子块也在这里自愈：升级后没走"安装"，旧块内容会一直留在用户
+                # $PROFILE 里（钩子改了却送不到手里）。幂等，已是最新就零写入。
+                try {
+                    $pr = Install-ShellProfile
+                    if ($pr.Reason -eq 'installed') {
+                        Write-MonitorLog "已自动更新终端同步钩子（配置块内容与当前版本不一致）"
+                    } elseif ($pr.Reason -eq 'unpaired') {
+                        Write-MonitorLog ("终端同步钩子未更新：配置文件里的标记不成对，未改动它：" + $pr.Path)
+                    }
+                } catch {}
                 # 变量自检：Apply-State 只在状态翻转时动手，稳态下它永远不会被调用，
                 # 于是"别的东西改坏了变量"没人纠正。这里按同一周期做一次整表核对：
                 # on 态补齐缺失项，off 态把残留收干净——判据与删除侧同一套，

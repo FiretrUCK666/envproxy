@@ -15,9 +15,9 @@ function Install-EnvProxy {
     $runHave = $null
     try { $runHave = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName } catch {}
     if (($runHave -eq (Get-LauncherCommand)) -and (Test-LauncherCurrent)) {
-        Write-Host "[1/3] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
+        Write-Host "[1/4] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
     } else {
-        Write-Host "[1/3] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
+        Write-Host "[1/4] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
         Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
@@ -30,9 +30,9 @@ function Install-EnvProxy {
     Snapshot-PrevEnv -FirstInstall:$firstInstall
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     if (Start-Monitor -Force:$true) {
-        Write-Host "[2/3] 监控进程：已启动" -ForegroundColor Green
+        Write-Host "[2/4] 监控进程：已启动" -ForegroundColor Green
     } else {
-        Write-Host "[2/3] 监控进程：未能确认运行，原因见下面那两行。" -ForegroundColor Yellow
+        Write-Host "[2/4] 监控进程：未能确认运行，原因见下面那两行。" -ForegroundColor Yellow
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
@@ -40,16 +40,36 @@ function Install-EnvProxy {
     Apply-State $state
     if ($state -eq "unknown") {
         # 端口枚举失败：这一轮不知道状态，一个变量都没动——不能说"已校正"。
-        Write-Host "[3/3] 环境变量：端口枚举失败，这一轮不知道状态，未做任何改动。" -ForegroundColor Yellow
+        Write-Host "[3/4] 环境变量：端口枚举失败，这一轮不知道状态，未做任何改动。" -ForegroundColor Yellow
     } else {
-        Write-Host "[3/3] 环境变量：已按当前状态校正" -ForegroundColor Green
+        Write-Host "[3/4] 环境变量：已按当前状态校正" -ForegroundColor Green
     }
+    # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
+    # 失败不阻断安装（其余三件事已经做成），但必须如实说清原因，不许报成功。
+    $prof = Install-ShellProfile
+    switch ($prof.Reason) {
+        'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 配置文件里写入钩子" -ForegroundColor Green }
+        'current'    { Write-Host "[4/4] 终端同步：已是最新" -ForegroundColor Green }
+        'no-profile' { Write-Host "[4/4] 终端同步：取不到 $PROFILE 路径，跳过（新窗口仍会生效）" -ForegroundColor Yellow }
+        'unpaired'   {
+            Write-Host "[4/4] 终端同步：配置文件里的标记不成对，未改动它（安全起见一个字节都没动）" -ForegroundColor Yellow
+            Write-Host ("      " + $prof.Path) -ForegroundColor DarkGray
+        }
+        default      {
+            Write-Host ("[4/4] 终端同步：写入失败（" + $prof.Reason + "）") -ForegroundColor Yellow
+            Write-Host ("      " + $prof.Path) -ForegroundColor DarkGray
+        }
+    }
+    $polWarn = Get-ProfileExecutionPolicyWarning
+    if ($polWarn) { Write-Host ("      " + $polWarn) -ForegroundColor Yellow }
     Start-Sleep -Seconds 1
     Write-Host ""
     Show-Status
     Write-Host ""
-    Write-Host "提示：之后【新打开】的终端/程序自动获得代理；" -ForegroundColor Yellow
-    Write-Host "      已经开着的旧窗口不会自动变化，重开一个即可。" -ForegroundColor Yellow
+    Write-Host "提示：之后新开的终端/程序自动获得代理；" -ForegroundColor Green
+    Write-Host "      已经开着的窗口敲一下回车就会跟上，退出翻墙软件后同样。" -ForegroundColor Green
+    Write-Host "      想让某个窗口固定直连：在它里面执行 `$env:ENVPROXY_TERM = 'off'" -ForegroundColor DarkGray
+    Write-Host "      （恢复自动：Remove-Item Env:ENVPROXY_TERM）。" -ForegroundColor DarkGray
 }
 
 function Uninstall-EnvProxy([bool]$Purge = $false) {
@@ -57,6 +77,15 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
     Stop-Monitor
     Remove-AutoRun
+    # 先摘终端同步的钩子块：它引用 $ProxyVarNames，留着会指向一个已经卸载的工具。
+    # 只摘我们那一块，用户 profile 里其余内容一字不动（不成对时一个字节都不改）。
+    $profRm = Remove-ShellProfile
+    if ($profRm.Ok) {
+        if ($profRm.Reason -eq 'removed') { Write-Host "终端同步：已从 PowerShell 配置文件里移除钩子" -ForegroundColor Green }
+    } else {
+        Write-Host ("终端同步：未能移除钩子（" + $profRm.Reason + "），可手动删除下面文件里 EnvProxy 标记的那几行：") -ForegroundColor Yellow
+        Write-Host ("  " + $profRm.Path) -ForegroundColor DarkGray
+    }
     # 顺序是定的：先清我们写的值，再按快照还用户原值。
     # 反过来会把用户原值里与默认集重合的项（如 localhost）当成"我们加的"剥掉，快照保护落空。
     # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。

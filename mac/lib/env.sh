@@ -36,6 +36,9 @@ set_user_env_vars() {
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     _tmp="$PROXY_ENV.tmp.$$"
     {
+        # 状态标记行：hook 侧据此区分 on/off，不必自己猜。
+        # 放第一行，且用 # 注释——即使被当成普通 shell 源码执行也无害。
+        printf '# envproxy-state: on %s\n' "$_port"
         printf 'export HTTP_PROXY="%s"\n' "$_http"
         printf 'export http_proxy="%s"\n' "$_http"
         printf 'export HTTPS_PROXY="%s"\n' "$_http"
@@ -55,6 +58,47 @@ set_user_env_vars() {
     launchctl setenv NO_PROXY "$_np" 2>/dev/null || true
     launchctl setenv no_proxy "$_np" 2>/dev/null || true
     launchctl setenv NODE_USE_ENV_PROXY "1" 2>/dev/null || true
+}
+
+# off 态也写这个文件，内容不是"删除"而是"带着归属守卫的 unset"。
+# 目的：已经开着的终端窗口，敲回车时由 shell hook 重新 source 一遍，就能把旧变量清掉。
+# （文件被删掉的话 hook 里的 [ -r ] 直接短路，旧值会一直挂在那儿——那正是"必须重开窗口"的根因。）
+#
+# 守卫的判据：**只有当前值仍然等于我们上次写下的那个，才清**。
+#   [ "$HTTPS_PROXY" = "http://127.0.0.1:7078" ] && unset HTTPS_PROXY
+# 于是这三种情况都不会误伤使用者自己的设置：
+#   - 他自己本来就 export 了公司代理（值不是我们的地址）
+#   - 他装上之后又手动改成本地 mitmproxy（地址像本机但不是我们写的那个端口）
+#   - 他从没让我们写过（文件里没有可解析的端口，整段退化成 no-op）
+# 判断权全在 monitor 侧（它有完整的归属判据与快照），hook 侧只"照做"，不猜。
+write_off_sentinel() {
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    # 端口从**现有文件**里读：它就是我们上一次写下的值，也就是"守卫要认的那个值"。
+    _op=$(sed -n 's/^export HTTP_PROXY="http:\/\/127\.0\.0\.1:\([0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    _tmp="$PROXY_ENV.tmp.$$"
+    {
+        printf '# envproxy-state: off\n'
+        if [ -n "$_op" ]; then
+            _oh="http://127.0.0.1:$_op"
+            # 一律写成 ${VAR-}：使用者可能开着 set -u / setopt nounset，
+            # 裸写 $VAR 在变量未定义时会直接报 "unbound variable"，
+            # 而这段是在他们的 shell 提示符里执行的——报错会打断他们的输入。
+            for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+                printf '[ "${%s-}" = "%s" ] && unset %s\n' "$_v" "$_oh" "$_v"
+            done
+            # NO_PROXY / no_proxy 是我们与使用者条目合并出来的，不按整值认领（会误删他的条目），
+            # 只在它正好等于"默认项 + 我们那几项"时才清；判不了就不清，宁可留着让下次 on 覆盖。
+            _onp=$(sed -n 's/^export NO_PROXY=//p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+            if [ -n "$_onp" ]; then
+                printf '[ "${NO_PROXY-}" = %s ] && unset NO_PROXY\n' "$_onp"
+                printf '[ "${no_proxy-}" = %s ] && unset no_proxy\n' "$_onp"
+            fi
+            printf '[ "${NODE_USE_ENV_PROXY-}" = "1" ] && unset NODE_USE_ENV_PROXY\n'
+        fi
+        # 末行恒真：source 这个文件必须返回 0。zsh 的 hook 里一旦返回非零，
+        # 后面的 precmd 钩子（主题、补全等）会全部不执行。
+        printf 'true\n'
+    } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
 }
 
 # 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
@@ -161,11 +205,17 @@ restore_prev_env() {
 
 remove_user_env_vars() {
     # 只回收**本工具自己写下的**东西。
-    # proxy.env 整个文件是我们的，直接删；launchctl 那一路要按项回收——
-    # 代理变量只删本机地址（归属判定），用户或公司工具写的其他地址不动；
+    #
+    # 参数 $1 = "sentinel" 时，proxy.env 不删而是改写成"守卫式 unset"（见 write_off_sentinel）：
+    #   已开着的终端敲回车时由 shell hook 重新 source，旧变量才清得掉。
+    #   这是"代理关掉"的正常路径——留一个文件不是留残留，它里面没有 export，判据不会认成"还在翻墙"。
+    # 省略参数（或传别的值）= 真删文件：卸载、自退、自检这些场景要的是"干干净净不留东西"。
+    #
+    # launchctl 那一路要按项回收——代理变量只删本机地址（归属判定），用户或公司工具写的其他地址不动；
     # NO_PROXY 用"减掉我们加的默认项"的方式回收（用户原本就有 NO_PROXY 时，
     # 按"整份等于默认集"判断会让我们加的那几项永远留在他的值里）；
     # NODE_USE_ENV_PROXY 只有值是我们写的 1 才清。
+    _rmv_mode="${1:-purge}"
     # 安装时的原值快照另存（见 snapshot_prev_env），卸载时由 restore_prev_env 还原。
     _ours_default="$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')"
     for _v in no_proxy NO_PROXY; do
@@ -191,7 +241,13 @@ remove_user_env_vars() {
     done
     _node=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
     if [ "$_node" = "1" ]; then launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null || true; fi
-    rm -f "$PROXY_ENV" 2>/dev/null || true
+    # 文件这一步必须放在"读完 launchctl"之后：write_off_sentinel 要读旧文件里的端口当守卫值，
+    # 而它会把文件整个改写掉。先改后读就只剩空文件、守卫值丢了。
+    if [ "$_rmv_mode" = "sentinel" ]; then
+        write_off_sentinel
+    else
+        rm -f "$PROXY_ENV" 2>/dev/null || true
+    fi
     for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
@@ -205,6 +261,8 @@ remove_user_env_vars() {
 # "删得掉但门槛没让它删"的残留（半代理：状态显示直连，实际还挂着代理）。
 # 归属与删除同口径：别人的代理地址不算我们的痕迹。
 proxy_vars_present() {
+    # 判据是"文件里有 export 行"，不是"文件在"：off 态会留一份守卫式 unset 的文件给已开着的终端，
+    # 它没有 export、不代表还在翻墙。按"文件在"判会把自己写的哨兵当成残留，永远清不掉。
     if [ -f "$PROXY_ENV" ] && grep -qE '^export (HTTP_PROXY|http_proxy)=' "$PROXY_ENV" 2>/dev/null; then return 0; fi
     # 必须与 remove_user_env_vars 回收同一批变量（6 个代理变量），不是只看 HTTP_PROXY：
     # 只判两个的话，一旦只剩 HTTPS_PROXY/ALL_PROXY 这类残留，判据说"没痕迹"→ 不清理 →
@@ -246,7 +304,8 @@ apply_state() {
     _state="$1"
     if [ "$_state" = "off" ]; then
         if proxy_vars_present; then
-            remove_user_env_vars
+            # sentinel：留一份守卫式 unset 给已开着的终端，敲回车就能把旧变量清掉。
+            remove_user_env_vars sentinel
             log_msg "代理已关闭 -> 已删除代理变量，恢复直连"
         fi
     else
