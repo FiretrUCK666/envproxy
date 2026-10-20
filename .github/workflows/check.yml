@@ -83,6 +83,8 @@ jobs:
           done
           # 函数名不许重复：bash 会静默地用后定义的覆盖先定义的（改了没生效的经典陷阱）。
           # 模式要认全几种写法（function f {、f() {、f () {），否则重名照样漏过去。
+          # 注意这条扫的是**源码文本**，不区分"运行期才定义"：测试里用替身覆盖生产函数时，
+          # 要写成 eval 'f() { ... }'，否则会被判成重名覆盖（真实函数仍在 probe 层）。
           dup=$(cat mac/envproxy.sh mac/lib/*.sh 2>/dev/null \
             | grep -oE '^[[:space:]]*(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(\)[[:space:]]*\{' \
             | sed -E 's/^[[:space:]]*(function[[:space:]]+)?//; s/[[:space:]]*\(\)[[:space:]]*\{$//' \
