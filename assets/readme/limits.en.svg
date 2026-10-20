@@ -21,16 +21,16 @@
   </g>
 
   <g id="numbers" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="86" y="147" dominant-baseline="central">1</text>
-    <text x="86" y="217" dominant-baseline="central">2</text>
-    <text x="86" y="287" dominant-baseline="central">3</text>
-    <text x="86" y="357" dominant-baseline="central">4</text>
+    <text x="86" y="147" dy="0.35em">1</text>
+    <text x="86" y="217" dy="0.35em">2</text>
+    <text x="86" y="287" dy="0.35em">3</text>
+    <text x="86" y="357" dy="0.35em">4</text>
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
-    <text x="120" y="147" dominant-baseline="central">Pure TUN gets nothing: correct, leave it alone</text>
-    <text x="120" y="217" dominant-baseline="central">Disconnected is not quit: traffic decides</text>
-    <text x="120" y="287" dominant-baseline="central">Moved out of range: install once by hand</text>
-    <text x="120" y="357" dominant-baseline="central">Hand-set variables are snapshotted, restored on uninstall</text>
+    <text x="120" y="147" dy="0.35em">Pure TUN gets nothing: correct, leave it alone</text>
+    <text x="120" y="217" dy="0.35em">Disconnected is not quit: traffic decides</text>
+    <text x="120" y="287" dy="0.35em">Moved out of range: install once by hand</text>
+    <text x="120" y="357" dy="0.35em">Hand-set variables are snapshotted, restored on uninstall</text>
   </g>
 </svg>

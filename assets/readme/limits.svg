@@ -21,16 +21,16 @@
   </g>
 
   <g id="numbers" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="86" y="147" dominant-baseline="central">1</text>
-    <text x="86" y="217" dominant-baseline="central">2</text>
-    <text x="86" y="287" dominant-baseline="central">3</text>
-    <text x="86" y="357" dominant-baseline="central">4</text>
+    <text x="86" y="147" dy="0.35em">1</text>
+    <text x="86" y="217" dy="0.35em">2</text>
+    <text x="86" y="287" dy="0.35em">3</text>
+    <text x="86" y="357" dy="0.35em">4</text>
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
-    <text x="120" y="147" dominant-baseline="central">纯 TUN 不注入，是正确行为，不用管</text>
-    <text x="120" y="217" dominant-baseline="central">断开不等于退出，以流量真相为准</text>
-    <text x="120" y="287" dominant-baseline="central">搬到搜索范围之外，手动安装接管一次</text>
-    <text x="120" y="357" dominant-baseline="central">手设变量先快照，卸载按快照还</text>
+    <text x="120" y="147" dy="0.35em">纯 TUN 不注入，是正确行为，不用管</text>
+    <text x="120" y="217" dy="0.35em">断开不等于退出，以流量真相为准</text>
+    <text x="120" y="287" dy="0.35em">搬到搜索范围之外，手动安装接管一次</text>
+    <text x="120" y="357" dy="0.35em">手设变量先快照，卸载按快照还</text>
   </g>
 </svg>
