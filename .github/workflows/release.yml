@@ -125,13 +125,16 @@ jobs:
       - name: 建 Release 并挂安装包（幂等：已存在则补齐资产）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+          # --latest 不能省：Release 已存在时走的是 upload + edit 那条路，而 edit 不会把
+          # 这个版本标成最新——"最新"仍停在旧版上，README 的 releases/latest 直链与更新入口
+          # 就一起指着旧包，后面的自校验会（正确地）拒绝。补漏重跑也必须能纠正这一点。
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在：上传（覆盖）两个资产，并刷新发版说明。"
+            echo "Release $TAG 已存在：上传（覆盖）两个资产，刷新发版说明，并标成最新。"
             gh release upload "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz --clobber
-            gh release edit "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG"
+            gh release edit "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG" --latest
           else
             gh release create "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz \
-              --notes-file "release-notes/$TAG.md" --title "$TAG"
+              --notes-file "release-notes/$TAG.md" --title "$TAG" --latest
           fi
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
