@@ -281,10 +281,9 @@ self_test() {
         $6 !~ /^https:\/\/[^\/]+\/./ { bad = 1 }
         END { print (bad ? 0 : 1) }')
     _selftest_assert_eq "仓库标识代入后四处地址成形、无占位符残留" "1" "$_st_out_ok"
-    # 资产 id 解析是纯函数：按对象切段、优先从该段 url 里的 assets/<id> 取，与字段顺序无关；
-    # 找不到就留空（调用方据此退回直连）。
-    # 样本必须照抄服务端真实格式：GitHub 的响应是带缩进的（冒号后带空格），
-    # 只拿压缩 JSON 测等于钉住自己的假设，而不是钉住外部世界的事实。
+    # 资产解析是纯函数，结果写进 ASSET_ID / ASSET_DIGEST 两个全局。
+    # 样本照抄服务端真实格式：GitHub 的响应带缩进（冒号后有空格），只拿压缩 JSON 测
+    # 等于钉住自己的假设，而不是钉住外部世界的事实。
     _st_asset_pretty='{
   "id": 99,
   "tag_name": "v1.2.3",
@@ -303,16 +302,51 @@ self_test() {
   ]
 }'
     _st_asset_json='{"id":99,"tag_name":"v1.2.3","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/12345","id":12345,"name":"EnvProxy-win.zip","uploader":{"login":"u","id":777}},{"url":"https://api.github.com/repos/o/r/releases/assets/67890","id":67890,"name":"EnvProxy-mac.tar.gz"}]}'
-    _selftest_assert_eq "按文件名取 id（服务端缩进格式）" "67890" "$(get_asset_id_from_json "$_st_asset_pretty" 'EnvProxy-mac.tar.gz')"
-    _selftest_assert_eq "按文件名取 id（压缩格式也认）" "67890" "$(get_asset_id_from_json "$_st_asset_json" 'EnvProxy-mac.tar.gz')"
+    get_asset_from_json "$_st_asset_pretty" 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "按文件名取 id（服务端缩进格式）" "67890" "$ASSET_ID"
+    get_asset_from_json "$_st_asset_json" 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "按文件名取 id（压缩格式也认）" "67890" "$ASSET_ID"
     # 字段顺序是服务端的实现细节：name 在前时也必须取到**本条资产**的 id，不能取到上一条。
     _st_asset_reordered='{"assets":[{"id":111,"name":"EnvProxy-win.zip"},{"name":"EnvProxy-mac.tar.gz","id":222}]}'
-    _selftest_assert_eq "字段顺序反过来仍取本条资产的 id" "222" "$(get_asset_id_from_json "$_st_asset_reordered" 'EnvProxy-mac.tar.gz')"
+    get_asset_from_json "$_st_asset_reordered" 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "字段顺序反过来仍取本条资产的 id" "222" "$ASSET_ID"
     _st_asset_space='{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/333","name":"Env Proxy mac.tar.gz"}]}'
-    _selftest_assert_eq "文件名里带空格也能匹配" "333" "$(get_asset_id_from_json "$_st_asset_space" 'Env Proxy mac.tar.gz')"
-    _selftest_assert_eq "资产 JSON 里没有该文件时留空" "" "$(get_asset_id_from_json "$_st_asset_pretty" 'EnvProxy-nope.zip')"
-    _selftest_assert_eq "资产 JSON 不合法时留空" "" "$(get_asset_id_from_json 'not json' 'EnvProxy-win.zip')"
-    _selftest_assert_eq "限流错误页不会给出 id" "" "$(get_asset_id_from_json '{"message":"API rate limit exceeded"}' 'EnvProxy-mac.tar.gz')"
+    get_asset_from_json "$_st_asset_space" 'Env Proxy mac.tar.gz'
+    _selftest_assert_eq "文件名里带空格也能匹配" "333" "$ASSET_ID"
+    get_asset_from_json "$_st_asset_pretty" 'EnvProxy-nope.zip'
+    _selftest_assert_eq "资产 JSON 里没有该文件时留空" "" "$ASSET_ID"
+    get_asset_from_json 'not json' 'EnvProxy-win.zip'
+    _selftest_assert_eq "资产 JSON 不合法时留空" "" "$ASSET_ID"
+    get_asset_from_json '{"message":"API rate limit exceeded"}' 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "限流错误页不会给出 id" "" "$ASSET_ID"
+    # 文件名必须逐字节相等：GitHub 的资产名大小写敏感，认成不敏感就会去下错文件。
+    get_asset_from_json "$_st_asset_json" 'envproxy-mac.tar.gz'
+    _selftest_assert_eq "文件名大小写不同不匹配" "" "$ASSET_ID"
+    # 发布说明是自由文本，里面出现 },{ 或引号都不该把解析搞坏（切块式写法就会在这里翻车）。
+    _st_asset_body='{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/444","id":444,"name":"EnvProxy-win.zip"}],"body":"示例 },{ 还有 \\"引号\\" 与 {花括号}"}'
+    get_asset_from_json "$_st_asset_body" 'EnvProxy-win.zip'
+    _selftest_assert_eq "发布说明里的 },{ 不影响取资产" "444" "$ASSET_ID"
+    # 编号取自 url（那是我们真正要 GET 的端点），url 里没有才退回 id 字段。
+    _st_asset_urlover='{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/555","id":999,"name":"EnvProxy-win.zip"}]}'
+    get_asset_from_json "$_st_asset_urlover" 'EnvProxy-win.zip'
+    _selftest_assert_eq "编号以 url 为准" "555" "$ASSET_ID"
+    _st_asset_idonly='{"assets":[{"url":"https://example.invalid/x","id":666,"name":"EnvProxy-win.zip"}]}'
+    get_asset_from_json "$_st_asset_idonly" 'EnvProxy-win.zip'
+    _selftest_assert_eq "url 里没有编号时退回 id 字段" "666" "$ASSET_ID"
+    # 编号形状不对就不认：0、前导零、二十位数都不该进 URL。
+    for _st_bad in 0 007 12345678901234567890; do
+        get_asset_from_json "{\"assets\":[{\"url\":\"https://api.github.com/repos/o/r/releases/assets/$_st_bad\",\"name\":\"EnvProxy-win.zip\"}]}" 'EnvProxy-win.zip'
+        _selftest_assert_eq "编号 $_st_bad 不认" "" "$ASSET_ID"
+    done
+    # digest 是 GitHub 自己算的资产校验值：形状不对就当没有（老资产根本没这字段）。
+    _st_asset_dg="sha256:$(printf 'a%.0s' $(seq 1 64))"
+    _st_asset_digest="{\"assets\":[{\"url\":\"https://api.github.com/repos/o/r/releases/assets/777\",\"name\":\"EnvProxy-win.zip\",\"digest\":\"$_st_asset_dg\"}]}"
+    get_asset_from_json "$_st_asset_digest" 'EnvProxy-win.zip'
+    _selftest_assert_eq "digest 合法时取到" "$_st_asset_dg" "$ASSET_DIGEST"
+    get_asset_from_json '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":null}]}' 'EnvProxy-win.zip'
+    _selftest_assert_eq "digest 为 null 时当作没有" "" "$ASSET_DIGEST"
+    get_asset_from_json '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:XYZ"}]}' 'EnvProxy-win.zip'
+    _selftest_assert_eq "digest 形状不对时当作没有" "" "$ASSET_DIGEST"
     # 换源判据：必须比本地新，且不能比已选定的胜出版本旧。只判"比本地新"会让 1.5.0
     # 在 9.9.9 取不到包时被接受，把用户带到更旧的版本上。
     _selftest_assert_eq "换源：同版本接受" "0" "$(source_acceptable 9.9.9 9.9.9 1.0.0; echo $?)"

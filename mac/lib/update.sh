@@ -210,39 +210,146 @@ select_update_failure_kind() {
     printf 'network'
 }
 
-# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产 id（纯函数，自检可测）。
-# 找不到、或 JSON 形状不对，一律输出空——调用方据此退回直连下载，不当错误处理。
-# 做法：先按 "},{" 把 assets 里的对象切成一段一段，在**同一段**里同时找文件名与编号。
-#   编号优先从这段的 url 取（…/releases/assets/<id>）——url 属于这条资产自己，与字段
-#   先后无关；取不到才退回这段里的第一个 "id"。这样既不依赖 JSON 是单行还是带缩进
-#   （GitHub 按 Accept 不同两种都会回），也不依赖 id 与 name 谁先谁后（那只是当前实现的
-#   巧合，顺序一换旧写法就会返回上一条资产的 id）。
+# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产（纯函数，自检可测）。
+# 结果写进全局 ASSET_ID（资产编号）与 ASSET_DIGEST（GitHub 给的 sha256，可能为空）。
+# 找不到、或 JSON 形状不对，两个全局都留空——调用方据此退回直连下载，不当错误处理。
+#
+# 为什么逐字符扫而不是"按 },{ 切块 + 正则取字段"：切块是文本扫描，遇到自由文本就出错。
+# 真实响应里每个资产都带一个 uploader 对象，里面**也有 id 字段**（用户的 GitHub 账号 id）；
+# 发布标题的 name 字段和资产的文件名同处顶层；而发布说明是自由文本，里面出现 },{ 就会把
+# 切块切坏。所以这里认得字符串边界（引号与转义）与嵌套层级，只在 assets 数组的第一层取值。
+#
+# 契约（两侧必须一致，见 check.yml 门禁 6）：
+#   1. 文件名逐字节相等（区分大小写）——GitHub 的资产名大小写敏感。
+#   2. 编号取自 url 字段（…/releases/assets/<编号>）：那是我们真正要 GET 的端点，
+#      权威性高于 id 字段；url 里没有才退回 id 字段。
+#   3. 编号必须是 1..16 位、首位非 0（0、007、二十位数都不该进 URL）。
+#   4. digest 有则必须是 sha256:<64 位十六进制>，没有就留空（老资产没这字段）。
 # 不用 jq：macOS 自带环境没有它，零依赖是安装口号。
-get_asset_id_from_json() {
-    printf '%s' "$1" | tr '\n' ' ' | awk -v want="$2" '
-    BEGIN {
-        w = want
-        gsub(/[\\.^$*+?()\[\]{}|]/, "\\\\&", w)
-        pat = "\"name\"[ \t]*:[ \t]*\"" w "\""
+# awk 写法只用 POSIX 语法：macOS 自带的是 BSD awk，不支持 {n} 区间量词。
+get_asset_from_json() {
+    ASSET_ID=""
+    ASSET_DIGEST=""
+    [ -n "$1" ] && [ -n "$2" ] || return 0
+    _gaf=$(printf '%s' "$1" | tr '\n' ' ' | awk -v want="$2" '
+    function valid_id(v) { return (v ~ /^[1-9][0-9]*$/ && length(v) <= 16) }
+    function is_sha256(v,   h) {
+        if (length(v) != 71) return 0
+        if (substr(v, 1, 7) != "sha256:") return 0
+        h = substr(v, 8)
+        return (h ~ /^[0-9a-f]+$/) ? 1 : 0
+    }
+    function id_from(url, idf,   v) {
+        if (match(url, /releases\/assets\/[0-9]+/)) {
+            v = substr(url, RSTART, RLENGTH)
+            gsub(/[^0-9]/, "", v)
+            if (valid_id(v)) return v
+        }
+        if (idf ~ /^[0-9]+$/ && valid_id(idf)) return idf
+        return ""
     }
     {
-        s = $0
-        # 对象之间可能是 "},{"，也可能是 "}," 加换行加缩进（服务端带缩进时就是后者），
-        # 所以分隔符要容忍空白，否则整段数组被当成一个对象、取到第一条资产的编号。
-        gsub(/\},[ \t]*\{/, "}\n{", s)
-        n = split(s, obj, "\n")
-        for (i = 1; i <= n; i++) {
-            if (obj[i] !~ pat) continue
-            if (match(obj[i], /releases\/assets\/[0-9]+/)) {
-                m = substr(obj[i], RSTART, RLENGTH); gsub(/[^0-9]/, "", m)
-                if (m != "") { print m; exit }
+        doc = $0
+        n = length(doc)
+        i = 1
+        depth = 0
+        instr = 0
+        esc = 0
+        s = ""
+        key = ""
+        expectval = 0
+        inassets = 0
+        adep = -1
+        aname = ""; aurl = ""; aid = ""; adg = ""
+        while (i <= n) {
+            c = substr(doc, i, 1)
+            if (expectval) {
+                while (i <= n && substr(doc, i, 1) ~ /[ \t]/) i++
+                c = substr(doc, i, 1)
+                if (c == "\"") { instr = 1; s = ""; esc = 0; i++; expectval = 0; continue }
+                if (c == "{" || c == "[") { expectval = 0; continue }
+                v = ""
+                while (i <= n) {
+                    c = substr(doc, i, 1)
+                    if (c == "," || c == "}" || c == "]" || c == " " || c == "\t") break
+                    v = v c
+                    i++
+                }
+                if (inassets && depth == adep + 1) {
+                    if (key == "id") aid = v
+                    else if (key == "digest") adg = v
+                }
+                key = ""
+                expectval = 0
+                continue
             }
-            if (match(obj[i], /"id"[ \t]*:[ \t]*[0-9]+/)) {
-                m = substr(obj[i], RSTART, RLENGTH); gsub(/[^0-9]/, "", m)
-                if (m != "") { print m; exit }
+            if (instr) {
+                if (esc) { s = s c; esc = 0 }
+                else if (c == "\\") { esc = 1 }
+                else if (c == "\"") {
+                    instr = 0
+                    j = i + 1
+                    while (j <= n && substr(doc, j, 1) ~ /[ \t]/) j++
+                    if (substr(doc, j, 1) == ":") {
+                        key = s
+                    } else {
+                        if (inassets && depth == adep + 1) {
+                            if (key == "name") aname = s
+                            else if (key == "url") aurl = s
+                            else if (key == "id") aid = s
+                            else if (key == "digest") adg = s
+                        }
+                        key = ""
+                    }
+                } else { s = s c }
+                i++
+                continue
             }
+            if (c == "\"") { instr = 1; s = ""; esc = 0; i++; continue }
+            if (c == ":") { expectval = 1; i++; continue }
+            if (c == "{") {
+                depth++
+                if (inassets && depth == adep + 1) { aname=""; aurl=""; aid=""; adg="" }
+                i++
+                continue
+            }
+            if (c == "}") {
+                if (inassets && depth == adep + 1) {
+                    if (aname == want) {
+                        v = id_from(aurl, aid)
+                        if (v != "") {
+                            d = is_sha256(adg) ? adg : ""
+                            printf "%s|%s", v, d
+                            exit
+                        }
+                    }
+                    aname=""; aurl=""; aid=""; adg=""
+                }
+                depth--
+                i++
+                continue
+            }
+            if (c == "[") {
+                if (key == "assets" && !inassets) { inassets = 1; adep = depth }
+                key = ""
+                i++
+                continue
+            }
+            if (c == "]") {
+                if (inassets && depth == adep) { inassets = 0 }
+                key = ""
+                i++
+                continue
+            }
+            if (c == ",") { key = ""; i++; continue }
+            i++
         }
-    }'
+    }')
+    [ -n "$_gaf" ] || return 0
+    ASSET_ID="${_gaf%%|*}"
+    ASSET_DIGEST="${_gaf#*|}"
+    [ "$ASSET_DIGEST" = "$_gaf" ] && ASSET_DIGEST=""
+    return 0
 }
 
 # 下载成功不等于拿到的是安装包：请求头被网络中间层丢掉时，资产端点会回 200 + JSON。
@@ -255,10 +362,10 @@ _is_gzip() {
 }
 
 # 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到输出空，绝不报错退出。
-get_update_asset_id() {
+get_update_asset() {
     _ga_json=$(fetch_update_text "$1/releases/tags/$2" || true)
     [ -n "$_ga_json" ] || return 0
-    get_asset_id_from_json "$_ga_json" "$3"
+    get_asset_from_json "$_ga_json" "$3"
 }
 
 # 取一个文件到本地：$1=目标文件 $2=额外请求头（空则不带）$3=URL
@@ -285,6 +392,10 @@ _fetch_to_file_direct() {
 
 # 下载失败的原因（见下面的失败原因词表）：fetch_update_file 写入，调用方读取。
 FETCH_FAILURE=""
+# 资产解析结果：get_asset_from_json 写入，调用方读取。
+# ASSET_ID 是 GitHub 资产端点的编号，ASSET_DIGEST 是 GitHub 算好的 sha256（老资产没有，为空）。
+ASSET_ID=""
+ASSET_DIGEST=""
 
 # 下载文件：$1=URL $2=目标文件 $3=额外请求头（可空，API 资产端点要 Accept: application/octet-stream）
 # 入口开着 set -u，所以 $3 必须带默认值：两参调用（直连兜底那条）不许因为少一个参数就整条失效。
@@ -561,7 +672,11 @@ update_envproxy() {
         # 两条路都可能"这一版没提供这个文件"，任一条拿到就算成功；都不成才换源。
         # 每次失败的**原因**记进 _pkg_kinds，最后统一挑一句准确的话报给用户。
         _got=1
-        _asset_id=$(get_update_asset_id "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true)
+        # 资产编号与校验值是**全局变量**（get_asset_from_json 写全局）：
+        # 用命令替换捕获会在子 shell 里跑，取回来的永远是空——所以这里直接调用再读全局。
+        get_update_asset "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true
+        _asset_id="$ASSET_ID"
+        _asset_digest="$ASSET_DIGEST"
         if [ -n "$_asset_id" ]; then
             fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream"
             _rc=$?

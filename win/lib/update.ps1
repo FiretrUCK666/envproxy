@@ -411,26 +411,47 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
     }
 }
 
-# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产 id（纯函数，可单测）。
-# 找不到、或者 JSON 形状不对，一律返回空串——调用方据此退回直连下载，不把它当错误。
+# 从 releases/tags/<标签> 的 JSON 里找出某个文件名对应的资产（纯函数，可单测）。
+# 返回 @{ Id = "..."; Digest = "..." }；找不到或形状不对一律返回 $null——
+# 调用方据此退回直连下载，不把它当错误。
 # 用 @() 包一层：只有一个资产的发布会让 PowerShell 把数组解包成对象本身。
-function Get-AssetIdFromJson([string]$Json, [string]$FileName) {
-    if (-not $Json -or -not $FileName) { return "" }
+#
+# 契约（两侧必须一致，见 check.yml 门禁 6）：
+#   1. 文件名**逐字节相等**（区分大小写）。GitHub 的资产名大小写敏感，
+#      而 PowerShell 的 -eq 对字符串**不区分大小写**——用 -eq 会把 "envproxy-win.zip"
+#      也认成 "EnvProxy-win.zip"，与 mac 侧行为不一致。
+#   2. 编号取自 url 字段（…/releases/assets/<编号>）：那是我们真正要 GET 的端点，
+#      权威性高于 id 字段；url 里没有才退回 id 字段。
+#   3. 编号必须是 1..16 位、首位非 0：0、007、二十位数都不该进 URL。
+#   4. digest 是 GitHub 自己算的资产校验值；老资产没有这字段，有则必须是
+#      sha256:<64 位十六进制>，否则当作没有。
+function Get-AssetFromJson([string]$Json, [string]$FileName) {
+    if (-not $Json -or -not $FileName) { return $null }
     try {
         $rel = $Json | ConvertFrom-Json
         foreach ($a in @($rel.assets)) {
-            if ($a -and (("{0}" -f $a.name) -eq $FileName)) { return ("{0}" -f $a.id) }
+            if (-not $a) { continue }
+            if (("{0}" -f $a.name) -cne $FileName) { continue }
+            $id = ""
+            $url = "{0}" -f $a.url
+            if ($url -match '/releases/assets/([0-9]+)') { $id = $Matches[1] }
+            if (-not $id) { $id = ("{0}" -f $a.id) }
+            if ($id -notmatch '^[1-9][0-9]{0,15}$') { return $null }
+            $digest = ""
+            $dg = "{0}" -f $a.digest
+            if ($dg -match '^sha256:[0-9a-f]{64}$') { $digest = $dg }
+            return @{ Id = $id; Digest = $digest }
         }
     } catch { }
-    return ""
+    return $null
 }
 
-# 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到就返回空，绝不抛。
+# 问这一源的 API 要"某个标签下某个文件的资产"。拿不到就返回 $null，绝不抛。
 # 这一步多花一次 API 配额（匿名 60 次/小时），换来的是不用碰时通时不通的 github.com。
-function Get-UpdateAssetId([hashtable]$Remote, [string]$FileName) {
-    if (-not $Remote.ApiRepo) { return "" }
+function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
+    if (-not $Remote.ApiRepo) { return $null }
     $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, $Remote.Tag
-    return (Get-AssetIdFromJson (Invoke-UpdateText $url) $FileName)
+    return (Get-AssetFromJson (Invoke-UpdateText $url) $FileName)
 }
 
 # 带代理兜底的 HTTPS 下载：成功返回 "ok"，失败返回**失败原因**（见 Get-UpdateFailureKind 的词表）。
@@ -545,9 +566,9 @@ function Get-UpdatePackage([hashtable]$Remote) {
         # 全部失败时才按"有真失败就报失败、否则报缺包"给提示。
         $file = "EnvProxy-win.zip"
         $targets = @()
-        $assetId = Get-UpdateAssetId $Remote $file
-        if ($assetId) {
-            $targets += @{ Url = ("{0}/releases/assets/{1}" -f $Remote.ApiRepo, $assetId); Headers = @{ Accept = "application/octet-stream" } }
+        $asset = Get-UpdateAsset $Remote $file
+        if ($asset -and $asset.Id) {
+            $targets += @{ Url = ("{0}/releases/assets/{1}" -f $Remote.ApiRepo, $asset.Id); Headers = @{ Accept = "application/octet-stream" } }
         }
         $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, $Remote.Tag, $file); Headers = @{} }
         $dl = "fail"

@@ -289,12 +289,34 @@ $assetPretty = @'
   ]
 }
 '@
-Assert-Eq 'an asset id is taken from the indented payload the server really sends' '67890' (Get-AssetIdFromJson $assetPretty 'EnvProxy-mac.tar.gz')
-Assert-Eq 'an asset id is taken by file name' '67890' (Get-AssetIdFromJson $assetJson 'EnvProxy-mac.tar.gz')
-Assert-Eq 'the first asset is still matched exactly' '12345' (Get-AssetIdFromJson $assetJson 'EnvProxy-win.zip')
-Assert-Eq 'a missing file name yields nothing' '' (Get-AssetIdFromJson $assetJson 'EnvProxy-nope.zip')
-Assert-Eq 'an unparsable payload yields nothing' '' (Get-AssetIdFromJson 'not json' 'EnvProxy-win.zip')
-Assert-Eq 'an empty payload yields nothing' '' (Get-AssetIdFromJson '' 'EnvProxy-win.zip')
+Assert-Eq 'an asset id is taken from the indented payload the server really sends' '67890' ((Get-AssetFromJson $assetPretty 'EnvProxy-mac.tar.gz').Id)
+Assert-Eq 'an asset id is taken by file name' '67890' ((Get-AssetFromJson $assetJson 'EnvProxy-mac.tar.gz').Id)
+Assert-Eq 'the first asset is still matched exactly' '12345' ((Get-AssetFromJson $assetJson 'EnvProxy-win.zip').Id)
+Assert-Eq 'a missing file name yields nothing' '' (Get-AssetFromJson $assetJson 'EnvProxy-nope.zip')
+Assert-Eq 'an unparsable payload yields nothing' '' (Get-AssetFromJson 'not json' 'EnvProxy-win.zip')
+Assert-Eq 'an empty payload yields nothing' '' (Get-AssetFromJson '' 'EnvProxy-win.zip')
+# The file name must match byte for byte: GitHub asset names are case sensitive, and PowerShell's
+# -eq is NOT — without -ceq a differently-cased name would match and download the wrong file.
+Assert-Eq 'a differently cased file name does not match' '' (Get-AssetFromJson $assetJson 'envproxy-mac.tar.gz')
+# The id comes from the url (the endpoint we actually GET); the id field is only a fallback.
+$assetUrlFirst = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/555","id":999,"name":"EnvProxy-win.zip"}]}'
+Assert-Eq 'the url wins over the id field' '555' ((Get-AssetFromJson $assetUrlFirst 'EnvProxy-win.zip').Id)
+$assetIdOnly = '{"assets":[{"url":"https://example.invalid/x","id":666,"name":"EnvProxy-win.zip"}]}'
+Assert-Eq 'the id field is used when the url has no number' '666' ((Get-AssetFromJson $assetIdOnly 'EnvProxy-win.zip').Id)
+# A malformed id must not reach the URL: 0, a leading zero and an absurd length are all wrong.
+foreach ($badId in @('0', '007', '12345678901234567890')) {
+    $badJson = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/' + $badId + '","name":"EnvProxy-win.zip"}]}'
+    Assert-Eq ("a malformed id is refused: " + $badId) '' (Get-AssetFromJson $badJson 'EnvProxy-win.zip')
+}
+# The digest is GitHub's own checksum of the asset. A wrong shape counts as no digest at all
+# (older assets do not carry the field).
+$digestOk = 'sha256:' + ('a' * 64)
+$assetDigest = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"' + $digestOk + '"}]}'
+Assert-Eq 'a valid digest is taken' $digestOk ((Get-AssetFromJson $assetDigest 'EnvProxy-win.zip').Digest)
+$assetDigestNull = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":null}]}'
+Assert-Eq 'a null digest counts as no digest' '' ((Get-AssetFromJson $assetDigestNull 'EnvProxy-win.zip').Digest)
+$assetDigestBad = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:XYZ"}]}'
+Assert-Eq 'a malformed digest counts as no digest' '' ((Get-AssetFromJson $assetDigestBad 'EnvProxy-win.zip').Digest)
 # Reading a tag out of a redirect target is shape-checked, and that check is not cosmetic: a repo
 # that got renamed answers /releases/latest with a redirect to the renamed repo's path, whose last
 # segment is the literal "latest". Taking the tail blindly would turn that into a version number

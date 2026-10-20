@@ -601,6 +601,18 @@ jobs:
               if ($mk -notcontains $k) { Write-Host ("Mac 侧失败原因词表缺 {0}" -f $k); $fail = 1 }
             }
           }
+          # 资产解析的契约必须两侧同形：文件名区分大小写、编号形状一致、url 优先于 id。
+          # 这些不是风格问题：认成大小写不敏感会去下错文件，编号不校验会把垃圾拼进 URL，
+          # 两侧规则不同则同一个故障在两个平台报不同的错。
+          foreach ($pair in @(@('Win', $ps), @('Mac', $sh))) {
+            if ($pair[1] -notmatch '\^\[1-9\]\[0-9\]') { Write-Host ("{0} 侧没有校验资产编号的形状" -f $pair[0]); $fail = 1 }
+            if ($pair[1] -notmatch 'releases/assets/') { Write-Host ("{0} 侧没有从 url 里取资产编号" -f $pair[0]); $fail = 1 }
+            if ($pair[1] -notmatch 'sha256:') { Write-Host ("{0} 侧没有校验资产 digest 的形状" -f $pair[0]); $fail = 1 }
+          }
+          # Windows 侧用 -ceq 比文件名（区分大小写），mac 侧用字符串相等（也区分大小写）：
+          # 两侧都必须区分大小写，GitHub 的资产名是大小写敏感的。
+          if ($ps -notmatch '-cne\s+\$FileName') { Write-Host 'Win 侧没有用区分大小写的方式比文件名'; $fail = 1 }
+          if ($sh -notmatch 'aname\s*==\s*want') { Write-Host 'Mac 侧没有用区分大小写的方式比文件名'; $fail = 1 }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 
