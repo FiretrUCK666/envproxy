@@ -30,6 +30,53 @@ function New-TempDir([string]$Prefix) {
     return $d
 }
 
+# A one-shot local HTTP server, used to exercise the real network paths (a redirect, a rate
+# limit) without touching the network. It answers exactly one request and then stops: a listener
+# loop would keep the test process alive after the test itself is done.
+function Start-OneShotServer([int]$Status, [hashtable]$Headers, [string]$Body) {
+    $port = 18000 + (Get-Random -Maximum 2000)
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $null = $ps.AddScript({
+        # Arguments come in through $args: a scriptblock handed to AddScript does not bind its
+        # own param block reliably across PowerShell versions.
+        $p = $args[0]; $status = $args[1]; $hdrs = $args[2]; $body = $args[3]
+        $tcp = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $p)
+        $tcp.Start()
+        try {
+            # Bounded wait: if the client never shows up, give up instead of blocking the run.
+            # AcceptTcpClientAsync, not Socket.Poll -- on Windows a listening socket does not
+            # report a pending connection through Poll, so Poll would only time out.
+            $accept = $tcp.AcceptTcpClientAsync()
+            if (-not $accept.Wait(20000)) { return }
+            $client = $accept.Result
+            $stream = $client.GetStream()
+            $buf = New-Object byte[] 2048
+            $null = $stream.Read($buf, 0, $buf.Length)
+            $raw = "HTTP/1.1 $status X`r`n"
+            foreach ($k in $hdrs.Keys) { $raw += "$k`: $($hdrs[$k])`r`n" }
+            $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+            $raw += "Content-Length: $($bodyBytes.Length)`r`nConnection: close`r`n`r`n"
+            $head = [System.Text.Encoding]::UTF8.GetBytes($raw)
+            $stream.Write($head, 0, $head.Length)
+            $stream.Write($bodyBytes, 0, $bodyBytes.Length)
+            $stream.Flush()
+            $client.Close()
+        } catch {}
+        $tcp.Stop()
+    }).AddArgument($port).AddArgument($Status).AddArgument($Headers).AddArgument($Body)
+    $null = $ps.BeginInvoke()
+    Start-Sleep -Milliseconds 600
+    return @{ Port = $port; Runspace = $rs; Shell = $ps }
+}
+
+function Stop-OneShotServer($Server) {
+    try { $Server.Shell.Stop() } catch {}
+    try { $Server.Runspace.Dispose() } catch {}
+}
+
 Write-Host '[1] pure functions'
 Assert-Eq 'merge keeps user entries' 'localhost,127.0.0.1,::1,example.com' (Merge-NoProxy 'localhost,example.com,::1' $DefaultNoProxy)
 Assert-Eq 'merge empty' 'localhost,127.0.0.1,::1' (Merge-NoProxy '' $DefaultNoProxy)
@@ -326,6 +373,35 @@ Assert-Eq 'a renamed-repo redirect yields nothing' '' (Get-TagFromLocation 'http
 Assert-Eq 'a tag with parentheses survives intact' 'v2026.09(jdk25)' (Get-TagFromLocation 'https://github.com/x/y/releases/tag/v2026.09(jdk25)')
 Assert-Eq 'an empty redirect target yields nothing' '' (Get-TagFromLocation '')
 Assert-Eq 'a location without a tag segment yields nothing' '' (Get-TagFromLocation 'https://github.com/owner/repo/releases')
+# The web path answers with a 302, and a 302 is not a success status code. Reading the status
+# before the redirect target turns this whole fallback into a dead path -- and since "network"
+# outranks "quota" in the failure table, it also flattens the rate limit the API path did detect.
+# So the redirect is exercised against a real local server here: a unit test on the pure
+# function alone would never have caught it.
+$srv = Start-OneShotServer 302 @{ Location = "http://127.0.0.1:0/owner/repo/releases/tag/v7.7.7" } ''
+try {
+    $webResult = Get-TagFromWebVia "http://127.0.0.1:$($srv.Port)/owner/repo/releases/latest" ""
+    Assert-Eq 'the web path reads the tag out of a 302 redirect' 'v7.7.7' $webResult.Tag
+    Assert-Eq 'a 302 is not a failure' '' $webResult.Failure
+} finally { Stop-OneShotServer $srv }
+# The API path has to tell a rate limit apart from a refusal, and it does it by reading
+# X-RateLimit-Remaining. Getting that wrong sends the user off to switch on a proxy for
+# something that will be fine in an hour.
+$srv = Start-OneShotServer 403 @{ 'X-RateLimit-Remaining' = '0' } '{"message":"API rate limit exceeded"}'
+try {
+    $null = Invoke-UpdateText "http://127.0.0.1:$($srv.Port)/repos/o/r/releases/latest"
+    Assert-Eq 'a rate limited version query is reported as a quota problem' 'quota' $script:UpdateLastVersionFailure
+} finally { Stop-OneShotServer $srv }
+$srv = Start-OneShotServer 403 @{ 'X-RateLimit-Remaining' = '42' } '{"message":"Forbidden"}'
+try {
+    $null = Invoke-UpdateText "http://127.0.0.1:$($srv.Port)/repos/o/r/releases/latest"
+    Assert-Eq 'a refused version query with quota left is reported as a server problem' 'server' $script:UpdateLastVersionFailure
+} finally { Stop-OneShotServer $srv }
+# The reason for a failed asset lookup must take part in the picking. Otherwise that failure
+# stays invisible and only the direct download counts -- and a 404 there gets reported as
+# "the release does not ship this file", blaming the maintainer for what is really a quota.
+$remoteForAsset = @{ ApiRepo = 'http://127.0.0.1:1/repos/o/r'; Tag = 'v1.0.0'; Base = 'http://127.0.0.1:1/o/r'; Name = 'GitHub' }
+Assert-Eq 'an asset lookup that cannot reach the API reports a network problem' 'network' (Get-UpdateAsset $remoteForAsset 'EnvProxy-win.zip').Failure
 Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
 # No source may come back with an empty repo id: the walker would build a URL with a hole where the
 # id goes, and the fetch would fail in a way that looks like a network problem.

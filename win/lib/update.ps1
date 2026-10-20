@@ -335,7 +335,10 @@ function Get-TagFromApi([string]$Url) {
         $obj = $json | ConvertFrom-Json
         return (("{0}" -f $obj.tag_name).Trim())
     } catch {
-        $script:UpdateLastVersionFailure = "server"
+        # 200 但内容不是预期的 JSON：多半是网络中间层换了内容（劫持页、门户页）。
+        # 报"连不上"比"服务端出错"贴近——服务端好好的，是中间那层不对，
+        # 而用户该做的动作是开代理或换网络，不是干等。
+        $script:UpdateLastVersionFailure = "network"
         return ""
     }
 }
@@ -390,6 +393,17 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
         $task = $client.GetAsync($Url)
         if (-not $task.Wait(8000)) { return @{ Tag = ""; Failure = "network" } }
         $resp = $task.Result
+        # 这条路的**正常应答就是 3xx**（不跟随重定向，才读得到 Location 里的标签）。
+        # 所以先认 Location，再按状态码归类——反过来写会把 302 当成失败：
+        # .NET 的 IsSuccessStatusCode 只对 2xx 为真，那样网页兜底这条路永远是死的，
+        # "API 限流时网页能救回来"就成了空话，还会把 API 判出的限流压成"连不上"。
+        $loc = $resp.Headers.Location
+        if ($loc) {
+            $tag = Get-TagFromLocation $loc.ToString()
+            if ($tag) { return @{ Tag = $tag; Failure = "" } }
+            # 重定向了但里面没有可认的标签：对方指向了预期之外的地方。
+            return @{ Tag = ""; Failure = "server" }
+        }
         if (-not $resp.IsSuccessStatusCode) {
             $rem = ""
             try {
@@ -399,11 +413,7 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
             } catch {}
             return @{ Tag = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
         }
-        $loc = $resp.Headers.Location
-        if (-not $loc) { return @{ Tag = ""; Failure = "server" } }
-        $tag = Get-TagFromLocation $loc.ToString()
-        if (-not $tag) { return @{ Tag = ""; Failure = "server" } }
-        return @{ Tag = $tag; Failure = "" }
+        return @{ Tag = ""; Failure = "server" }
     } catch { return @{ Tag = ""; Failure = "network" } }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
@@ -446,12 +456,24 @@ function Get-AssetFromJson([string]$Json, [string]$FileName) {
     return $null
 }
 
-# 问这一源的 API 要"某个标签下某个文件的资产"。拿不到就返回 $null，绝不抛。
+# 问这一源的 API 要"某个标签下某个文件的资产"。拿不到编号时也把原因带回来，绝不抛。
 # 这一步多花一次 API 配额（匿名 60 次/小时），换来的是不用碰时通时不通的 github.com。
+# 返回 @{ Id = ""; Digest = ""; Failure = "<原因>" } 表示"没拿到编号"，Failure 必填：
+# **查编号这一步失败的原因必须一起参与挑选**，否则这条失败会隐形，
+# 最终只剩直连那一次的结果——直连 404 就被报成"发布方没提供安装包"，
+# 而真实原因可能是配额用尽或对方 5xx，那是在冤枉维护者。
 function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
-    if (-not $Remote.ApiRepo) { return $null }
+    if (-not $Remote.ApiRepo) { return @{ Id = ""; Digest = ""; Failure = "network" } }
     $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, $Remote.Tag
-    return (Get-AssetFromJson (Invoke-UpdateText $url) $FileName)
+    $body = Invoke-UpdateText $url
+    $failure = $script:UpdateLastVersionFailure
+    $asset = Get-AssetFromJson $body $FileName
+    if ($asset) { return $asset }
+    if ($body) {
+        # 请求成功但这一版里没有这个文件：这就是"没提供安装包"。
+        return @{ Id = ""; Digest = ""; Failure = "missing" }
+    }
+    return @{ Id = ""; Digest = ""; Failure = $failure }
 }
 
 # 带代理兜底的 HTTPS 下载：成功返回 "ok"，失败返回**失败原因**（见 Get-UpdateFailureKind 的词表）。
@@ -566,13 +588,18 @@ function Get-UpdatePackage([hashtable]$Remote) {
         # 全部失败时才按"有真失败就报失败、否则报缺包"给提示。
         $file = "EnvProxy-win.zip"
         $targets = @()
+        $kinds = @()
         $asset = Get-UpdateAsset $Remote $file
         if ($asset -and $asset.Id) {
             $targets += @{ Url = ("{0}/releases/assets/{1}" -f $Remote.ApiRepo, $asset.Id); Headers = @{ Accept = "application/octet-stream" } }
+        } elseif ($asset -and $asset.Failure) {
+            # 查资产编号这一步自己就失败了：这个原因必须一起参与挑选，
+            # 否则"这条失败的路没走成"会隐形，最后只剩直连那一次的结果——
+            # 直连 404 就被报成"发布方没提供安装包"，而真实原因可能是配额用尽。
+            $kinds += $asset.Failure
         }
         $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, $Remote.Tag, $file); Headers = @{} }
         $dl = "fail"
-        $kinds = @()
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
             if ($r -eq "ok") {

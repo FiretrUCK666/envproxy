@@ -105,15 +105,26 @@ update_source_id() {
     printf '%s' "$(get_update_repo)"
 }
 
+# 响应头落盘的位置：取版本时要靠它分"配额用尽"和"真的被拒"（403 有两种含义）。
+# 用按 PID 算的固定路径，而不是靠变量传递——变量在命令替换（子 shell）里带不出来。
+_update_headers_base() {
+    printf '%s/envproxy-update-%s' "${TMPDIR:-/tmp}" "$$"
+}
+
 # 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
+# 输出约定：**最后一行是 HTTP 状态码，其前是正文**。
+# 之所以要带上状态码：取版本要靠它分失败原因——curl -f 的退出码对任何 >=400 一律是 22
+# （实测 400/401/403/404/410/429/500/502/503 全是 22），把 22 当"连不上"会把限流、
+# 缺包、服务端故障一起压平，而这几种要用户做的事完全不同。
+# 正文为空时（404 时 curl -f 不给正文），输出就只剩状态码那一行。
 # DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
 # Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
-# 失败原因写进全局 FETCH_FAILURE（见下面的失败原因词表），调用方据此提示。
 fetch_update_text() {
-    _out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null) \
-        && { printf '%s' "$_out"; return 0; }
+    _ftt_h=$(_update_headers_base).headers
+    _ftt_out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null) \
+        && { printf '%s' "$_ftt_out"; return 0; }
     env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null
+        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null
 }
 
 # ------------------------------------------------------------------------------
@@ -361,11 +372,32 @@ _is_gzip() {
     tar -tzf "$1" >/dev/null 2>&1
 }
 
-# 问这一源的 API 要"某个标签下某个文件的资产 id"。拿不到输出空，绝不报错退出。
+# 问这一源的 API 要"某个标签下某个文件的资产"。拿不到编号时把原因写进 ASSET_FAILURE。
+# 这个原因**必须**一起参与挑选：查编号失败时这条下载路就没走成，
+# 如果让它隐形，最后只剩直连那一次的结果——直连 404 就被报成"发布方没提供安装包"，
+# 而真实原因可能是配额用尽或对方 5xx，那是在冤枉维护者。
+# 查资产编号这一步失败时的原因（纯函数，自检可测）：$1=状态码 $2=剩余配额。
+# 200 表示请求成功——那时要看包里到底有没有这个文件，那是另一回事。
+asset_query_failure() {
+    ASSET_FAILURE=""
+    [ "$1" = "200" ] && return 0
+    ASSET_FAILURE=$(update_failure_kind "$1" "$2")
+    return 0
+}
+
 get_update_asset() {
-    _ga_json=$(fetch_update_text "$1/releases/tags/$2" || true)
-    [ -n "$_ga_json" ] || return 0
+    ASSET_ID=""
+    ASSET_DIGEST=""
+    ASSET_FAILURE=""
+    _ga_out=$(fetch_update_text "$1/releases/tags/$2" || true)
+    _ga_code=$(printf '%s' "$_ga_out" | tail -n 1)
+    # 去掉最后那行状态码，余下的是正文。
+    _ga_json=$(printf '%s' "$_ga_out" | sed '$d')
+    asset_query_failure "$_ga_code" "$(_fetch_rate_remaining "$(_update_headers_base)")"
+    [ -z "$ASSET_FAILURE" ] || return 0
     get_asset_from_json "$_ga_json" "$3"
+    [ -n "$ASSET_ID" ] || ASSET_FAILURE="missing"
+    return 0
 }
 
 # 取一个文件到本地：$1=目标文件 $2=额外请求头（空则不带）$3=URL
@@ -396,6 +428,8 @@ FETCH_FAILURE=""
 # ASSET_ID 是 GitHub 资产端点的编号，ASSET_DIGEST 是 GitHub 算好的 sha256（老资产没有，为空）。
 ASSET_ID=""
 ASSET_DIGEST=""
+# 查资产编号失败的原因（调用方直接调用本函数，所以全局传得出去）。
+ASSET_FAILURE=""
 
 # 下载文件：$1=URL $2=目标文件 $3=额外请求头（可空，API 资产端点要 Accept: application/octet-stream）
 # 入口开着 set -u，所以 $3 必须带默认值：两参调用（直连兜底那条）不许因为少一个参数就整条失效。
@@ -407,7 +441,9 @@ fetch_update_file() {
     _fuf_hdr="${3:-}"
     _fuf_code=$(_fetch_to_file "$2" "$_fuf_hdr" "$1")
     _fuf_rc=$?
-    [ "$_fuf_rc" -eq 0 ] && return 0
+    # 成功时清掉原因：否则"先失败一次再成功"之后，FETCH_FAILURE 里还留着上一次的旧值，
+    # 谁读到它就会拿到一个已经过去的失败原因。
+    [ "$_fuf_rc" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
     _fuf_rem=$(_fetch_rate_remaining "$2")
     FETCH_FAILURE=$(update_failure_kind "$_fuf_code" "$_fuf_rem")
     # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
@@ -415,7 +451,7 @@ fetch_update_file() {
     if [ "$FETCH_FAILURE" = "network" ]; then
         _fuf_code2=$(_fetch_to_file_direct "$2" "$_fuf_hdr" "$1")
         _fuf_rc2=$?
-        [ "$_fuf_rc2" -eq 0 ] && return 0
+        [ "$_fuf_rc2" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
         _fuf_rem2=$(_fetch_rate_remaining "$2")
         FETCH_FAILURE=$(update_failure_kind "$_fuf_code2" "$_fuf_rem2")
     fi
@@ -428,7 +464,9 @@ fetch_update_file() {
 _fetch_rate_remaining() {
     _frr_h="$1.headers"
     [ -f "$_frr_h" ] || return 0
-    # 取最后一个 x-ratelimit-remaining（重定向时会有多组头，最后一组才是最终响应）。
+    # 取**最后一个**出现的 x-ratelimit-remaining。
+    # 注意别把它当成"最终响应的那一个"：重定向时中间响应也可能带这个头，
+    # 谁带这个头取决于对方的中间层，不是"最后一组就一定是最终响应"。
     _frr_v=$(grep -i '^x-ratelimit-remaining:' "$_frr_h" 2>/dev/null | tail -n 1 | tr -d '\r' | sed 's/^[^:]*:[[:space:]]*//')
     printf '%s' "$_frr_v"
 }
@@ -468,51 +506,104 @@ get_tag_from_location() {
 }
 
 # 网页路径：读 302 的 Location 取标签。带直连兜底（与 API 路径同一个模式）。
-get_tag_from_web() {
-    _wloc=$(curl -sI -o /dev/null -w '%{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
-    [ -n "$_wloc" ] || _wloc=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -sI -o /dev/null -w '%{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
-    get_tag_from_location "$_wloc"
-}
-
-# API 路径：读 JSON 的 tag_name。
-get_tag_from_api() {
-    FETCH_FAILURE=""
-    _ajson=$(fetch_update_text "$1" || true)
-    if [ -z "$_ajson" ]; then
-        # curl 的退出码分不出 404/403/超时：这里按"连不上或被拒"归类，
-        # 由上层统一挑一句准确的话报给用户。
-        FETCH_FAILURE="network"
+# 成功置 TAG，失败置 TAG_FAILURE。**3xx 是这条路的正常应答**（不跟随重定向，
+# 才读得到 Location 里的标签），所以先认重定向目标，再按状态码归类。
+# 从一次网页应答里取标签（纯函数，自检可测）：$1=状态码 $2=重定向目标 $3=剩余配额。
+# **3xx 是这条路的正常应答**（不跟随重定向，才读得到 Location 里的标签），
+# 所以先认重定向目标，再按状态码归类——反过来写会把 302 当成失败，
+# 网页兜底这条路就永远是死的，"API 限流时网页能救回来"也成了空话。
+tag_from_web_response() {
+    TAG=""
+    TAG_FAILURE=""
+    if [ -n "$2" ]; then
+        _gtw_tag=$(get_tag_from_location "$2")
+        if [ -n "$_gtw_tag" ]; then TAG="$_gtw_tag"; return 0; fi
+        # 重定向了但里面没有可认的标签：对方指向了预期之外的地方。
+        TAG_FAILURE="server"
         return 0
     fi
-    printf '%s' "$_ajson" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/'
+    TAG_FAILURE=$(update_failure_kind "$1" "$3")
+    return 0
+}
+
+get_tag_from_web() {
+    _gtw_h=$(_update_headers_base).headers
+    _gtw_out=$(curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+    [ -n "$_gtw_out" ] || _gtw_out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+    case "$_gtw_out" in
+        *" "*) _gtw_code="${_gtw_out%% *}"; _gtw_loc="${_gtw_out#* }" ;;
+        *) _gtw_code="$_gtw_out"; _gtw_loc="" ;;
+    esac
+    tag_from_web_response "$_gtw_code" "$_gtw_loc" "$(_fetch_rate_remaining "$(_update_headers_base)")"
+}
+
+# 问版本的结果。**调用方必须直接调用下面两个函数，不能套命令替换**：
+# 命令替换跑在子 shell 里，赋给全局的值出不来——上层就永远只看到"连不上"，
+# 限流、缺包这些"要用户做不同动作"的情况全被压平（门禁 6 会核对这一点）。
+# DIVERGE(Mac): Win 侧靠 $script: 变量在同一作用域传，天然没有这个坑。
+TAG=""
+TAG_FAILURE=""
+
+# 从一次 API 应答里取标签（纯函数，自检可测）：成功置 TAG，失败置 TAG_FAILURE。
+# $1 是 fetch_update_text 的输出（最后一行是状态码，其前是正文），$2 是剩余配额。
+# HTTP 层与解析层分开，解析层就能被直接测——不联网、不改别人的函数。
+tag_from_api_response() {
+    TAG=""
+    TAG_FAILURE=""
+    _gta_code=$(printf '%s' "$1" | tail -n 1)
+    _gta_body=$(printf '%s' "$1" | sed '$d')
+    if [ "$_gta_code" = "200" ]; then
+        _gta_tag=$(printf '%s' "$_gta_body" | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+        if [ -n "$_gta_tag" ]; then TAG="$_gta_tag"; return 0; fi
+        # 200 但内容不是预期的 JSON：多半是网络中间层换了内容（劫持页、门户页）。
+        # 报"连不上"比"服务端出错"贴近——服务端好好的，是中间那层不对，
+        # 而用户该做的动作是开代理或换网络，不是干等。
+        TAG_FAILURE="network"
+        return 0
+    fi
+    TAG_FAILURE=$(update_failure_kind "$_gta_code" "$2")
+    return 0
+}
+
+# API 路径：读 JSON 的 tag_name。成功置 TAG，失败置 TAG_FAILURE。
+get_tag_from_api() {
+    tag_from_api_response "$(fetch_update_text "$1" || true)" "$(_fetch_rate_remaining "$(_update_headers_base)")"
 }
 
 # 按这一源声明的优先顺序问版本：先 Preferred 那条，不行再试另一条。
+# 两条都失败时按失败原因词表挑一个报（与 Windows 侧同一套规则）。
 get_tag_from_source() {
+    TAG=""
+    TAG_FAILURE=""
+    _gts_kinds=""
     if [ "$2" = "Web" ]; then _k1=Web; _k2=Api; else _k1=Api; _k2=Web; fi
     for _kind in $_k1 $_k2; do
         if [ "$_kind" = "Web" ]; then
             [ -n "$4" ] || continue
-            _tag=$(get_tag_from_web "$4")
+            get_tag_from_web "$4"
         else
             [ -n "$3" ] || continue
-            _tag=$(get_tag_from_api "$3")
+            get_tag_from_api "$3"
         fi
-        if [ -n "$_tag" ]; then printf '%s' "$_tag"; return 0; fi
+        if [ -n "$TAG" ]; then TAG_FAILURE=""; return 0; fi
+        [ -n "$TAG_FAILURE" ] && _gts_kinds="$_gts_kinds $TAG_FAILURE"
     done
+    TAG_FAILURE=$(select_update_failure_kind "$_gts_kinds")
     return 0
 }
 
 # 从**一个**源查最新 Release：这一源自己的两条路径都试过还不行，才算它答不上来。
 # 拆出这一层是为了让更新入口能按源做完整尝试（问版本 + 取包），而不只是问版本。
+# 这一源问版本失败时的原因（调用方直接调用本函数，所以全局传得出去）。
+REMOTE_SOURCE_FAILURE=""
 get_remote_version_from() {
     _rsname="$1"; _rspref="$2"; _rsapi="$3"; _rsweb="$4"; _rsbase="$5"
-    _rstag=$(get_tag_from_source "$_rsname" "$_rspref" "$_rsapi" "$_rsweb")
-    [ -n "$_rstag" ] || return 1
-    _rsver=$(printf '%s' "$_rstag" | sed -E 's/^v//')
-    [ -n "$_rsver" ] || return 1
-    REMOTE_TAG="$_rstag"
+    get_tag_from_source "$_rsname" "$_rspref" "$_rsapi" "$_rsweb"
+    if [ -z "$TAG" ]; then REMOTE_SOURCE_FAILURE="$TAG_FAILURE"; return 1; fi
+    _rsver=$(printf '%s' "$TAG" | sed -E 's/^v//')
+    if [ -z "$_rsver" ]; then REMOTE_SOURCE_FAILURE=""; return 1; fi
+    REMOTE_TAG="$TAG"
     REMOTE_VERSION="$_rsver"
     REMOTE_SOURCE_BASE="$_rsbase"
     REMOTE_SOURCE_NAME="$_rsname"
@@ -532,7 +623,7 @@ get_remote_version() {
             REMOTE_FAILURE_KIND=""
             return 0
         fi
-        [ -n "$FETCH_FAILURE" ] && _grv_kinds="$_grv_kinds $FETCH_FAILURE"
+        [ -n "$REMOTE_SOURCE_FAILURE" ] && _grv_kinds="$_grv_kinds $REMOTE_SOURCE_FAILURE"
     done <<_ENVPROXY_SRCS_
 $(get_update_sources)
 _ENVPROXY_SRCS_
@@ -634,7 +725,7 @@ update_envproxy() {
     # 换源连同版本一起换：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
-    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：本机临时目录建不起临时文件，未做任何改动。"; echo "请检查磁盘空间与 /tmp 权限，或到 Releases 页面手动下载安装包。"; return 0; }
+    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 0; }
     rm -f "$_rnd" 2>/dev/null || true
     _tgz=""
     _exdir=""
@@ -677,6 +768,12 @@ update_envproxy() {
         get_update_asset "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true
         _asset_id="$ASSET_ID"
         _asset_digest="$ASSET_DIGEST"
+        if [ -z "$_asset_id" ] && [ -n "$ASSET_FAILURE" ]; then
+            # 查资产编号这一步自己就失败了：这个原因必须一起参与挑选，
+            # 否则"这条失败的路没走成"会隐形，最后只剩直连那一次的结果——
+            # 直连 404 就被报成"发布方没提供安装包"，而真实原因可能是配额用尽。
+            _pkg_kinds="$_pkg_kinds $ASSET_FAILURE"
+        fi
         if [ -n "$_asset_id" ]; then
             fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream"
             _rc=$?

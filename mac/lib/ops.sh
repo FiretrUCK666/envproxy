@@ -347,6 +347,48 @@ self_test() {
     _selftest_assert_eq "digest 为 null 时当作没有" "" "$ASSET_DIGEST"
     get_asset_from_json '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:XYZ"}]}' 'EnvProxy-win.zip'
     _selftest_assert_eq "digest 形状不对时当作没有" "" "$ASSET_DIGEST"
+    # 问版本阶段的原因要分得清。解析层是纯函数，直接喂应答即可——不联网，
+    # 也不用改别人的函数（在自检里重定义库函数会真的覆盖生产函数，库之间不能重名）。
+    # 这些判据曾集体失效：原因写在全局、调用却套了命令替换，命令替换跑在子 shell 里，
+    # 全局赋值出不来，于是限流、缺包、服务端故障全被报成"连不上"，
+    # 用户会被叫去开翻墙软件（白折腾）。
+    tag_from_api_response "x
+429" ""
+    _selftest_assert_eq "问版本：429 是配额用尽" "quota" "$TAG_FAILURE"
+    tag_from_api_response "x
+404" ""
+    _selftest_assert_eq "问版本：404 是没这个版本" "missing" "$TAG_FAILURE"
+    tag_from_api_response "x
+403" "0"
+    _selftest_assert_eq "问版本：403 且配额剩 0 是配额用尽" "quota" "$TAG_FAILURE"
+    tag_from_api_response "x
+403" "42"
+    _selftest_assert_eq "问版本：403 但还有配额是被拒" "server" "$TAG_FAILURE"
+    tag_from_api_response "x
+500" ""
+    _selftest_assert_eq "问版本：5xx 是服务端问题" "server" "$TAG_FAILURE"
+    tag_from_api_response "x
+200" ""
+    _selftest_assert_eq "问版本：200 但内容不是 JSON 报连不上" "network" "$TAG_FAILURE"
+    tag_from_api_response '{"tag_name":"v3.2.1"}
+200' ""
+    _selftest_assert_eq "问版本：200 且有标签时取到标签" "v3.2.1" "$TAG"
+    # 网页路径：3xx 是正常应答，重定向目标里有标签就该取到。
+    tag_from_web_response "302" "https://github.com/o/r/releases/tag/v1.2.3" ""
+    _selftest_assert_eq "问版本：网页 302 里的标签取得到" "v1.2.3" "$TAG"
+    _selftest_assert_eq "问版本：网页 302 不是失败" "" "$TAG_FAILURE"
+    tag_from_web_response "302" "https://github.com/o/r/releases/latest" ""
+    _selftest_assert_eq "问版本：重定向到预期之外的地方算服务端问题" "server" "$TAG_FAILURE"
+    tag_from_web_response "429" "" ""
+    _selftest_assert_eq "问版本：网页路 429 是配额用尽" "quota" "$TAG_FAILURE"
+    # 查资产编号失败的原因也要参与挑选：否则"这条失败的路没走成"会隐形，
+    # 最后只剩直连那一次的结果——直连 404 就被报成"发布方没提供安装包"，
+    # 而真实原因可能是配额用尽，那是在冤枉维护者。
+    asset_query_failure "429" ""
+    _selftest_assert_eq "查资产编号：限流的原因带得出来" "quota" "$ASSET_FAILURE"
+    _selftest_assert_eq "查资产编号：限流时不报缺包" "quota" "$(select_update_failure_kind "$ASSET_FAILURE missing")"
+    asset_query_failure "200" ""
+    _selftest_assert_eq "查资产编号：请求成功时先不判原因" "" "$ASSET_FAILURE"
     # 换源判据：必须比本地新，且不能比已选定的胜出版本旧。只判"比本地新"会让 1.5.0
     # 在 9.9.9 取不到包时被接受，把用户带到更旧的版本上。
     _selftest_assert_eq "换源：同版本接受" "0" "$(source_acceptable 9.9.9 9.9.9 1.0.0; echo $?)"

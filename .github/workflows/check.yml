@@ -613,6 +613,20 @@ jobs:
           # 两侧都必须区分大小写，GitHub 的资产名是大小写敏感的。
           if ($ps -notmatch '-cne\s+\$FileName') { Write-Host 'Win 侧没有用区分大小写的方式比文件名'; $fail = 1 }
           if ($sh -notmatch 'aname\s*==\s*want') { Write-Host 'Mac 侧没有用区分大小写的方式比文件名'; $fail = 1 }
+          # Mac 侧的失败原因靠全局变量传，而命令替换跑在**子 shell** 里，全局赋值出不来。
+          # 所以问版本这几个函数必须**直接调用**：套上 $(...) 的话原因会静默丢失，
+          # 限流、缺包、服务端故障全被报成"连不上"，用户会被叫去开翻墙软件（白折腾）。
+          # 这类问题曾真实发生过，靠人记不住，所以在这里拦。
+          foreach ($fn in @('get_tag_from_api', 'get_tag_from_web', 'get_tag_from_source', 'get_remote_version_from', 'get_update_asset')) {
+            if ($sh -match ('\$\(\s*' + $fn + '\b')) {
+              Write-Host ("Mac 侧 {0} 被套进了命令替换，失败原因会丢失" -f $fn)
+              $fail = 1
+            }
+          }
+          # 查资产编号失败的原因必须参与挑选，否则"这条失败的路没走成"会隐形：
+          # 直连 404 会被报成"发布方没提供安装包"，而真实原因可能是配额用尽。
+          if ($ps -notmatch 'Failure\s*=\s*"missing"') { Write-Host 'Win 侧查资产编号失败时没有区分"缺包"与"请求失败"'; $fail = 1 }
+          if ($sh -notmatch 'ASSET_FAILURE="missing"') { Write-Host 'Mac 侧查资产编号失败时没有区分"缺包"与"请求失败"'; $fail = 1 }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 
