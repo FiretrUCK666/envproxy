@@ -106,10 +106,18 @@ function Exit-IfOpBusy {
     }
     return $m
 }
+# -Purge 只在"一键恢复"时才有意义（连日志一起删）。单独给 -Purge 以前会一路落到
+# 监控模式：用户以为在清日志，工具却把监控起来了，还什么也没删。
+if ($Purge -and -not $Uninstall) {
+    Write-Host "-Purge 是"一键恢复"的附加选项：它表示连日志一起删。" -ForegroundColor Yellow
+    Write-Host "请用：powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Uninstall -Purge" -ForegroundColor Yellow
+    exit 2
+}
 if ($Update) {
     $opMutex = Exit-IfOpBusy
     Update-EnvProxy -AutoYes:$Yes
-    return
+    # 退出码如实反映结果：计划任务、CI 靠它判断更新成功没有。
+    exit $script:UpdateExitCode
 }
 if ($Install) {
     $opMutex = Exit-IfOpBusy

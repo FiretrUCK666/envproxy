@@ -106,9 +106,12 @@ update_source_id() {
 }
 
 # 响应头落盘的位置：取版本时要靠它分"配额用尽"和"真的被拒"（403 有两种含义）。
-# 用按 PID 算的固定路径，而不是靠变量传递——变量在命令替换（子 shell）里带不出来。
-_update_headers_base() {
-    printf '%s/envproxy-update-%s' "${TMPDIR:-/tmp}" "$$"
+# 名字用 mktemp 造（不可预测），用完由调用方删掉：
+# 以前是按 PID 算的固定路径，两个问题——同机别的用户可以预先摆一个同名软链，
+# curl -D 会跟着软链写，把响应头写进你有权写的任意文件；而且文件留在磁盘上没人清理。
+# 传不进变量是因为命令替换跑在子 shell 里，所以这里回显路径给调用方，由调用方负责删。
+_update_headers_new() {
+    mktemp "${TMPDIR:-/tmp}/envproxy-update-XXXXXX" 2>/dev/null || printf ''
 }
 
 # 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
@@ -119,8 +122,9 @@ _update_headers_base() {
 # 正文为空时（404 时 curl -f 不给正文），输出就只剩状态码那一行。
 # DIVERGE(Mac): Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试；
 # Mac 侧 curl 继承环境变量代理，这里反向补一次直连回退，两方向都覆盖。
+# $1=地址 $2=响应头落盘路径（调用方负责删）。
 fetch_update_text() {
-    _ftt_h=$(_update_headers_base).headers
+    _ftt_h="$2"
     _ftt_out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null) \
         && { printf '%s' "$_ftt_out"; return 0; }
     env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
@@ -238,16 +242,23 @@ select_update_failure_kind() {
 #   4. digest 有则必须是 sha256:<64 位十六进制>，没有就留空（老资产没这字段）。
 # 不用 jq：macOS 自带环境没有它，零依赖是安装口号。
 # awk 写法只用 POSIX 语法：macOS 自带的是 BSD awk，不支持 {n} 区间量词。
+# ASSET_SCOPE 说明这段正文是什么：release = 确实是 Release JSON（顶层有 assets 数组），
+# other = 不是（HTML 登录页、错误对象……）。调用方据此区分"这版没提供这个文件"
+# 和"中间层换了内容"——报 missing 是冤枉维护者。
+ASSET_SCOPE=""
 get_asset_from_json() {
     ASSET_ID=""
     ASSET_DIGEST=""
+    ASSET_SCOPE="other"
     [ -n "$1" ] && [ -n "$2" ] || return 0
     _gaf=$(printf '%s' "$1" | tr '\n' ' ' | awk -v want="$2" '
     function valid_id(v) { return (v ~ /^[1-9][0-9]*$/ && length(v) <= 16) }
     function is_sha256(v,   h) {
         if (length(v) != 71) return 0
         if (substr(v, 1, 7) != "sha256:") return 0
-        h = substr(v, 8)
+        h = tolower(substr(v, 8))
+        # 大小写两侧必须一致（Windows 侧按不区分大小写处理）：对方改了大小写就静默不校验，
+        # 等于这道保险自己失效。
         return (h ~ /^[0-9a-f]+$/) ? 1 : 0
     }
     function id_from(url, idf,   v) {
@@ -329,7 +340,7 @@ get_asset_from_json() {
                     if (aname == want) {
                         v = id_from(aurl, aid)
                         if (v != "") {
-                            d = is_sha256(adg) ? adg : ""
+                            d = is_sha256(adg) ? tolower(adg) : ""
                             printf "%s|%s", v, d
                             exit
                         }
@@ -341,7 +352,7 @@ get_asset_from_json() {
                 continue
             }
             if (c == "[") {
-                if (key == "assets" && !inassets) { inassets = 1; adep = depth }
+                if (key == "assets" && !inassets) { inassets = 1; adep = depth; sawassets = 1 }
                 key = ""
                 i++
                 continue
@@ -355,8 +366,18 @@ get_asset_from_json() {
             if (c == ",") { key = ""; i++; continue }
             i++
         }
+        # 见过 assets 数组但没这个文件：回一个标记，好让调用方知道"这确实是 Release JSON"。
+        if (sawassets) printf "|"
     }')
-    [ -n "$_gaf" ] || return 0
+    if [ -z "$_gaf" ]; then
+        ASSET_SCOPE="other"
+        return 0
+    fi
+    if [ "$_gaf" = "|" ]; then
+        ASSET_SCOPE="release"
+        return 0
+    fi
+    ASSET_SCOPE="release"
     ASSET_ID="${_gaf%%|*}"
     ASSET_DIGEST="${_gaf#*|}"
     [ "$ASSET_DIGEST" = "$_gaf" ] && ASSET_DIGEST=""
@@ -389,14 +410,26 @@ get_update_asset() {
     ASSET_ID=""
     ASSET_DIGEST=""
     ASSET_FAILURE=""
-    _ga_out=$(fetch_update_text "$1/releases/tags/$2" || true)
+    _ga_h=$(_update_headers_new)
+    _ga_out=$(fetch_update_text "$1/releases/tags/$2" "$_ga_h" || true)
     _ga_code=$(printf '%s' "$_ga_out" | tail -n 1)
     # 去掉最后那行状态码，余下的是正文。
     _ga_json=$(printf '%s' "$_ga_out" | sed '$d')
-    asset_query_failure "$_ga_code" "$(_fetch_rate_remaining "$(_update_headers_base)")"
+    _ga_rem=$(_fetch_rate_remaining "$_ga_h")
+    rm -f "$_ga_h" 2>/dev/null || true
+    asset_query_failure "$_ga_code" "$_ga_rem"
     [ -z "$ASSET_FAILURE" ] || return 0
     get_asset_from_json "$_ga_json" "$3"
-    [ -n "$ASSET_ID" ] || ASSET_FAILURE="missing"
+    if [ -z "$ASSET_ID" ]; then
+        if [ "$ASSET_SCOPE" = "release" ]; then
+            # 确实是 Release JSON，里面没有这个文件：这就是"没提供安装包"。
+            ASSET_FAILURE="missing"
+        else
+            # 回的根本不是 Release JSON（HTML 登录页、错误对象……）：中间层换了内容。
+            # 报 missing 是冤枉维护者，还让用户去手动下载——那里同样拿不到。
+            ASSET_FAILURE="network"
+        fi
+    fi
     return 0
 }
 
@@ -464,6 +497,17 @@ check_asset_digest() {
 # 判据必须是**真实状态码**，不能拿 curl -f 的退出码当语义：-f 对任何 >=400 一律返回 22
 # （实测 400/401/403/404/410/429/500/502/503 全是 22），把 22 当"没提供安装包"会把限流和
 # 服务端故障一起误报成缺包，还会掐掉本该有的直连重试。Windows 侧判的就是 404/410。
+# 请求头不许带 CR/LF：值里带换行就能塞进额外的请求头（请求走私）。
+# 这里的头都是我们自己写的常量，但这条护栏让"以后加一个动态的头"也不会出事。
+valid_request_header() {
+    case "$1" in
+        *'
+'*|*"
+"*) return 1;;
+    esac
+    return 0
+}
+
 fetch_update_file() {
     _fuf_hdr="${3:-}"
     _fuf_code=$(_fetch_to_file "$2" "$_fuf_hdr" "$1")
@@ -471,7 +515,7 @@ fetch_update_file() {
     # 成功时清掉原因：否则"先失败一次再成功"之后，FETCH_FAILURE 里还留着上一次的旧值，
     # 谁读到它就会拿到一个已经过去的失败原因。
     [ "$_fuf_rc" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
-    _fuf_rem=$(_fetch_rate_remaining "$2")
+    _fuf_rem=$(_fetch_rate_remaining "$2.headers")
     FETCH_FAILURE=$(update_failure_kind "$_fuf_code" "$_fuf_rem")
     # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
     # 但只有"连不上"才值得再试一次：配额与服务端错误换个出口也是同样结果，重试只是白等。
@@ -479,17 +523,17 @@ fetch_update_file() {
         _fuf_code2=$(_fetch_to_file_direct "$2" "$_fuf_hdr" "$1")
         _fuf_rc2=$?
         [ "$_fuf_rc2" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
-        _fuf_rem2=$(_fetch_rate_remaining "$2")
+        _fuf_rem2=$(_fetch_rate_remaining "$2.headers")
         FETCH_FAILURE=$(update_failure_kind "$_fuf_code2" "$_fuf_rem2")
     fi
     return 1
 }
 
-# 从上一次下载留下的响应头里读"配额还剩多少"（读不到就返回空）。
-# curl 把响应头写进目标文件旁边的 .headers 文件里（见 _fetch_to_file）。
+# 从响应头文件里读"配额还剩多少"（读不到就返回空）。
+# $1 是**响应头文件的确切路径**（下载那条路是目标文件旁边的 .headers，见 _fetch_to_file）。
 # 403 有两种含义（限流 / 真的被拒），靠这个头区分：剩 0 就是配额用尽。
 _fetch_rate_remaining() {
-    _frr_h="$1.headers"
+    _frr_h="$1"
     [ -f "$_frr_h" ] || return 0
     # 取**最后一个**出现的 x-ratelimit-remaining。
     # 注意别把它当成"最终响应的那一个"：重定向时中间响应也可能带这个头，
@@ -554,7 +598,7 @@ tag_from_web_response() {
 }
 
 get_tag_from_web() {
-    _gtw_h=$(_update_headers_base).headers
+    _gtw_h=$(_update_headers_new)
     _gtw_out=$(curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
     [ -n "$_gtw_out" ] || _gtw_out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
         curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
@@ -562,7 +606,9 @@ get_tag_from_web() {
         *" "*) _gtw_code="${_gtw_out%% *}"; _gtw_loc="${_gtw_out#* }" ;;
         *) _gtw_code="$_gtw_out"; _gtw_loc="" ;;
     esac
-    tag_from_web_response "$_gtw_code" "$_gtw_loc" "$(_fetch_rate_remaining "$(_update_headers_base)")"
+    _gtw_rem=$(_fetch_rate_remaining "$_gtw_h")
+    rm -f "$_gtw_h" 2>/dev/null || true
+    tag_from_web_response "$_gtw_code" "$_gtw_loc" "$_gtw_rem"
 }
 
 # 问版本的结果。**调用方必须直接调用下面两个函数，不能套命令替换**：
@@ -595,7 +641,11 @@ tag_from_api_response() {
 
 # API 路径：读 JSON 的 tag_name。成功置 TAG，失败置 TAG_FAILURE。
 get_tag_from_api() {
-    tag_from_api_response "$(fetch_update_text "$1" || true)" "$(_fetch_rate_remaining "$(_update_headers_base)")"
+    _gtap_h=$(_update_headers_new)
+    _gtap_out=$(fetch_update_text "$1" "$_gtap_h" || true)
+    _gtap_rem=$(_fetch_rate_remaining "$_gtap_h")
+    rm -f "$_gtap_h" 2>/dev/null || true
+    tag_from_api_response "$_gtap_out" "$_gtap_rem"
 }
 
 # 按这一源声明的优先顺序问版本：先 Preferred 那条，不行再试另一条。
@@ -658,6 +708,58 @@ _ENVPROXY_SRCS_
     return 1
 }
 
+# 清掉 24 小时以前留下的更新临时目录。
+# 判据是**修改时间**，不是创建时间：目录里的文件被改过就说明它还在用。
+remove_stale_update_temp() {
+    _rst_base="${TMPDIR:-/tmp}"
+    [ -d "$_rst_base" ] || return 0
+    _rst_now=$(date +%s 2>/dev/null || echo 0)
+    for _rst_d in "$_rst_base"/envproxy_update.*; do
+        [ -d "$_rst_d" ] || continue
+        _rst_m=$(stat -f '%m' "$_rst_d" 2>/dev/null || stat -c '%Y' "$_rst_d" 2>/dev/null || echo "")
+        [ -n "$_rst_m" ] || continue
+        [ "$_rst_now" -gt "$_rst_m" ] 2>/dev/null || continue
+        [ $((_rst_now - _rst_m)) -ge 86400 ] 2>/dev/null || continue
+        rm -rf "$_rst_d" 2>/dev/null || true
+    done
+}
+
+# 标签要编码后才拼进 URL。
+# 标签来自远端应答（tag_name 或重定向目标），不是我们写的——带空格、#、/ 的标签
+# 会把地址拼坏（甚至把路径拼到别处去）。编码后才是合法地址。
+# 只留 A-Za-z0-9-._~，其余逐字节 %XX（纯 POSIX，不依赖任何外部命令以外的工具）。
+url_encode() {
+    # 用 bash 的参数展开做替换：不起任何子进程（逐字节起进程的话，
+    # 一个几十字节的标签就是几十个进程，白白拖慢一次更新）。
+    # % 必须第一个替换——不然后面替换出来的 %25 会被再编码一次。
+    _ue="$1"
+    _ue=${_ue//%/%25}
+    _ue=${_ue// /%20}
+    _ue=${_ue//\"/%22}
+    _ue=${_ue//#/%23}
+    _ue=${_ue//\$/%24}
+    _ue=${_ue//&/%26}
+    _ue=${_ue//\'/%27}
+    _ue=${_ue//\(/%28}
+    _ue=${_ue//\)/%29}
+    _ue=${_ue//\*/%2A}
+    _ue=${_ue//+/%2B}
+    _ue=${_ue//,/%2C}
+    _ue=${_ue//\//%2F}
+    _ue=${_ue//:/%3A}
+    _ue=${_ue//;/%3B}
+    _ue=${_ue//=/%3D}
+    _ue=${_ue//\?/%3F}
+    _ue=${_ue//@/%40}
+    _ue=${_ue//\[/%5B}
+    _ue=${_ue//\]/%5D}
+    _ue=${_ue//\^/%5E}
+    _ue=${_ue//\`/%60}
+    _ue=${_ue//\{/%7B}
+    _ue=${_ue//\}/%7D}
+    printf '%s' "$_ue"
+}
+
 # 换源时这个源该不该接受（纯函数，自检可测）：必须比本地新，且不能比已经选定的胜出版本旧。
 # 只看"比本地新"是不够的——那样 A 源答 9.9.9 却拿不到包时，B 源的 1.5.0 也会被接受，
 # 用户会被"换源"带到更旧的版本上（Windows 侧比的是胜出版本，两侧必须同一套判据）。
@@ -674,6 +776,9 @@ source_acceptable() {
     return 0
 }
 
+# 退出码（与 Windows 侧同一套，脚本与计划任务靠它判断成功没有）：
+#   0 = 达成目的（已更新 / 已是最新 / 用户选择不更新 / 开发副本不改）
+#   1 = 失败（检查失败、下载失败、校验失败、覆盖失败、没法提问）
 update_envproxy() {
     _yes="$1"
     echo "======== EnvProxy 检查更新 ========"
@@ -683,7 +788,7 @@ update_envproxy() {
     if ! get_remote_version; then
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
         echo "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
-        return 0
+        return 1
     fi
     echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     _clean_source=0
@@ -720,6 +825,13 @@ update_envproxy() {
             return 0
         fi
     fi
+    # 非交互环境（没有能提问的终端）：问不到人，就别白下一个包。
+    # 以前是先下载再问，问不到人再取消——白烧一次 GitHub 配额和一份安装包。
+    if [ "$_yes" != "1" ] && ! [ -t 0 ] && ! [ -r /dev/tty ]; then
+        echo "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的终端），未做任何改动。"
+        echo "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
+        return 1
+    fi
     # 目的地校验 + 版本闸门：脚本一旦不在 <根>/mac/ 布局里，推导出的"安装根"就是错的，
     # 后面的删除循环会删用户自己的文件；VERSION 读不到时任何"比较"都是瞎猜。
     # 两项任一不过就拒绝并指明路，不下载、不覆盖、不删任何东西。
@@ -727,12 +839,12 @@ update_envproxy() {
     if [ ! -f "$_uroot/mac/envproxy.sh" ] || [ ! -f "$_uroot/VERSION" ]; then
         echo "这里不是 EnvProxy 安装目录（缺少 mac/envproxy.sh 或 VERSION），未做任何改动。"
         echo "请从安装包的 mac/ 目录里运行，或手动下载安装包覆盖。"
-        return 0
+        return 1
     fi
     if [ -z "$_local" ]; then
         echo "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
         echo "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。"
-        return 0
+        return 1
     fi
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
     _reg=""
@@ -752,7 +864,9 @@ update_envproxy() {
     # 换源连同版本一起换：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     # DIVERGE(Mac): Mac 取 tar.gz + tar；Win 取 zip + Expand-Archive（见 envproxy.ps1）。
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
-    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 0; }
+    # 先清掉以前留下的临时目录：进程被强杀（或者断电）会留下，不清就一直堆着。
+    remove_stale_update_temp
+    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 1; }
     rm -f "$_rnd" 2>/dev/null || true
     _tgz=""
     _exdir=""
@@ -792,7 +906,7 @@ update_envproxy() {
         _got=1
         # 资产编号与校验值是**全局变量**（get_asset_from_json 写全局）：
         # 用命令替换捕获会在子 shell 里跑，取回来的永远是空——所以这里直接调用再读全局。
-        get_update_asset "$_sapirepo" "$REMOTE_TAG" "EnvProxy-mac.tar.gz" || true
+        get_update_asset "$_sapirepo" "$(url_encode "$REMOTE_TAG")" "EnvProxy-mac.tar.gz" || true
         _asset_id="$ASSET_ID"
         _asset_digest="$ASSET_DIGEST"
         if [ -z "$_asset_id" ] && [ -n "$ASSET_FAILURE" ]; then
@@ -829,7 +943,7 @@ update_envproxy() {
         if [ "$_got" -ne 0 ]; then
             # 直连拿到的也是同一份资产（同一个 tag 下的同一个文件），所以 digest 一样适用——
             # 校验值不是只管 API 那条路。
-            fetch_update_file "$_sbase/releases/download/$REMOTE_TAG/EnvProxy-mac.tar.gz" "$_try_tgz" ""
+            fetch_update_file "$_sbase/releases/download/$(url_encode "$REMOTE_TAG")/EnvProxy-mac.tar.gz" "$_try_tgz" ""
             _rc=$?
             if [ "$_rc" -eq 0 ]; then
                 if _is_gzip "$_try_tgz"; then
@@ -880,7 +994,7 @@ _ENVPROXY_PKG_
         echo "更新失败：$(update_failure_message "$_pkg_kind" "${REMOTE_SOURCE_NAME:-更新源}")"
         echo "未做任何改动。"
         rm -f "$_rnd"* 2>/dev/null || true
-        return 0
+        return 1
     fi
     echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     # 先把这一版改了什么给用户看，再问要不要装

@@ -116,10 +116,12 @@ case "$_CMD_NORM" in
     stop) stop_monitor; remove_user_env_vars; echo "代理变量已清除，当前恢复直连。";;
     uninstall) uninstall_envproxy "$_PURGE";;
     status) show_status;;
-    update) update_envproxy "$_YES";;
+    # 退出码要如实反映结果（计划任务、脚本靠它判断更新成功没有）。
+    update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     self-test) self_test;;
     "") run_monitor_loop;;
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 1;;
+    # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|self-test} [--purge] [--yes]"; exit 2;;
 esac
 fi

@@ -409,6 +409,25 @@ self_test() {
     _selftest_assert_eq "资产 JSON 不合法时留空" "" "$ASSET_ID"
     get_asset_from_json '{"message":"API rate limit exceeded"}' 'EnvProxy-mac.tar.gz'
     _selftest_assert_eq "限流错误页不会给出 id" "" "$ASSET_ID"
+    # 200 但不是 Release JSON（企业代理劫持页、错误对象）不能报"这版没提供安装包"——
+    # 那是冤枉维护者，还让用户去手动下载（那里同样拿不到）。
+    get_asset_from_json '<html><body>Login</body></html>' 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "HTML 页面不是 Release JSON" "other" "$ASSET_SCOPE"
+    get_asset_from_json '{"message":"Bad credentials"}' 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "错误对象不是 Release JSON" "other" "$ASSET_SCOPE"
+    get_asset_from_json "$_st_asset_json" 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "Release JSON 认得出来" "release" "$ASSET_SCOPE"
+    get_asset_from_json "$_st_asset_json" 'EnvProxy-nope.zip'
+    _selftest_assert_eq "Release JSON 里没有该文件时仍然是 Release JSON" "release" "$ASSET_SCOPE"
+    # digest 的十六进制大小写两侧必须一致：对方改成大写时，不能一边验、一边静默不验。
+    _st_asset_upper='{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/888","name":"EnvProxy-mac.tar.gz","digest":"sha256:1731CE10FDE048900C7B3A793D81CBA5EC8411D6E1FE82930B3C34BC82CFB4D5"}]}'
+    get_asset_from_json "$_st_asset_upper" 'EnvProxy-mac.tar.gz'
+    _selftest_assert_eq "大写 digest 认得出来并归一为小写" "sha256:1731ce10fde048900c7b3a793d81cba5ec8411d6e1fe82930b3c34bc82cfb4d5" "$ASSET_DIGEST"
+    # 标签要编码后才拼进 URL（标签来自远端应答，不编码会拼出坏地址）。
+    _selftest_assert_eq "普通标签不编码" "v1.2.3" "$(url_encode 'v1.2.3')"
+    _selftest_assert_eq "标签里的空格要编码" "v1%202" "$(url_encode 'v1 2')"
+    _selftest_assert_eq "标签里的斜杠要编码" "..%2F..%2Fevil" "$(url_encode '../../evil')"
+    _selftest_assert_eq "标签里的问号要编码" "v1%3F2" "$(url_encode 'v1?2')"
     # 文件名必须逐字节相等：GitHub 的资产名大小写敏感，认成不敏感就会去下错文件。
     get_asset_from_json "$_st_asset_json" 'envproxy-mac.tar.gz'
     _selftest_assert_eq "文件名大小写不同不匹配" "" "$ASSET_ID"

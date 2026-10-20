@@ -409,6 +409,34 @@ Assert-Eq 'a matching digest passes' 'ok' (Test-AssetDigest $digestFile $digestR
 Assert-Eq 'a wrong digest is caught' 'mismatch' (Test-AssetDigest $digestFile ('sha256:' + ('0' * 64)))
 Assert-Eq 'no digest means no check' 'skip' (Test-AssetDigest $digestFile '')
 Assert-Eq 'a malformed digest is not a pass' 'mismatch' (Test-AssetDigest $digestFile 'sha256:XYZ')
+# A file we cannot read is not a file that was tampered with. An antivirus scanner holds the
+# freshly downloaded package for a moment; calling that "the content was rewritten" blames the
+# publisher for a local hiccup (and the mac side lets the same case through).
+$digestMissing = Join-Path $digestDir 'not-there.zip'
+Assert-Eq 'a file that is not there is not a mismatch' 'skip' (Test-AssetDigest $digestMissing $digestReal)
+# The digest hex case must be handled the same way on both sides: a publisher that answers in
+# uppercase must not make one platform check and the other silently skip.
+$assetDigestUpper = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824"}]}'
+Assert-Eq 'an uppercase digest is accepted and normalised' 'sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' ((Get-AssetFromJson $assetDigestUpper 'EnvProxy-win.zip').Digest)
+# A tag goes into a URL, so it has to be encoded first. The tag comes from the server's answer,
+# not from us: a tag with a space or a slash would otherwise build a broken address.
+Assert-Eq 'a plain tag is left alone' 'v1.2.3' (ConvertTo-UrlSegment 'v1.2.3')
+Assert-Eq 'a space in a tag is encoded' 'v1%202' (ConvertTo-UrlSegment 'v1 2')
+Assert-Eq 'a slash in a tag is encoded' '..%2F..%2Fevil' (ConvertTo-UrlSegment '../../evil')
+Assert-Eq 'a question mark in a tag is encoded' 'v1%3F2' (ConvertTo-UrlSegment 'v1?2')
+# A 200 that does not carry a release document is not "this release ships no such file".
+    # A captive portal answers 200 with an HTML login page; reporting that as a missing file
+    # blames the publisher and sends the user to a page that cannot help either.
+    $relJson = '{"tag_name":"v1.0.0","assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/1","name":"EnvProxy-win.zip"}]}'
+    [void](Get-AssetFromJson $relJson 'EnvProxy-win.zip')
+    Assert-Eq 'a release document is recognised as one' 'release' $script:UpdateAssetScope
+    [void](Get-AssetFromJson '<html><body>Login</body></html>' 'EnvProxy-win.zip')
+    Assert-Eq 'an HTML page is not a release document' 'other' $script:UpdateAssetScope
+    [void](Get-AssetFromJson '{"message":"Bad credentials"}' 'EnvProxy-win.zip')
+    Assert-Eq 'an error object is not a release document' 'other' $script:UpdateAssetScope
+    [void](Get-AssetFromJson $relJson 'EnvProxy-nope.zip')
+    Assert-Eq 'a release document without our file is still a release document' 'release' $script:UpdateAssetScope
+
 # The reason for a failed asset lookup must take part in the picking. Otherwise that failure
 # stays invisible and only the direct download counts -- and a 404 there gets reported as
 # "the release does not ship this file", blaming the maintainer for what is really a quota.
@@ -479,6 +507,37 @@ Assert-Eq 'a port that is not a number is rejected' '1' ([int]($null -eq (Conver
 Assert-Eq 'port zero is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '127.0.0.1:0')))
 Assert-Eq 'a port above the range is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '127.0.0.1:70000')))
 Assert-Eq 'a broken bracket is rejected' '1' ([int]($null -eq (ConvertTo-ListenEndpoint '[::1:8080')))
+
+# The signal "are there TCP rows" must not come out of the parse itself. When the row shape
+# changes (an extra column, a state made of two words) nothing matches, and an empty answer
+# would be read as "no port is listening" -- the state machine would then call off and delete
+# the user's proxy variables. The protocol column is never localised, so a loose match on it
+# survives every shape change.
+if ($env:OS -eq 'Windows_NT') {
+    $global:NetstatStub = @()
+    function global:netstat.exe { $global:NetstatStub }
+    $shapeCases = @(
+        @{ Name = 'an extra column'; Lines = @('  Proto Local Foreign State PID InHost', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTENING    6544    -') },
+        @{ Name = 'a state made of two words'; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTEN  6544') },
+        @{ Name = 'a localised state'; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    ABHÖREN    6544') }
+    )
+    foreach ($case in $shapeCases) {
+        $global:NetstatStub = $case.Lines
+        $shapeThrew = $false
+        $shapeCount = -1
+        try { $shapeCount = @(Get-ListeningTcpConnections).Count } catch { $shapeThrew = $true }
+        # Falling back to WMI is the right answer: it is slow but it is right.
+        Assert-Eq ('a netstat row shape that changed is handled, not swallowed: ' + $case.Name) '0' ([int]$shapeThrew)
+    }
+    # Output that carries no TCP row at all is not something we can read: say so instead of
+    # handing back an empty list, which looks exactly like "nothing is listening".
+    $global:NetstatStub = @('  Proto Local Foreign State PID')
+    $noTcpThrew = $false
+    try { [void](Get-ListeningTcpConnections) } catch { $noTcpThrew = $true }
+    Assert-Eq 'output without a single TCP row is refused instead of reported as empty' '1' ([int]$noTcpThrew)
+    Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
+    Remove-Variable -Name NetstatStub -Scope Global -ErrorAction SilentlyContinue
+}
 
 # The enumeration has to agree with the system: a port that is really listening must be found,
 # and a port that is not must not be. This is the one check that would catch a parse that

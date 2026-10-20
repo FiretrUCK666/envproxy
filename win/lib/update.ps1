@@ -63,6 +63,20 @@ $UpdateFailureKinds = @("local", "network", "quota", "server", "bad-content", "m
 # 把 HTTP 状态码归到失败原因。403/429 有两种含义（限流 vs 真的被拒），
 # 靠响应头里的 X-RateLimit-Remaining 区分：剩 0 就是配额用尽。
 # $RateLimitRemaining 传空表示"没拿到这个头"，此时按"真的被拒"处理。
+# 更新结果：0 = 达成目的（已更新 / 已是最新 / 用户选择不更新 / 开发副本不改）；
+# 1 = 失败（检查失败、下载失败、校验失败、覆盖失败、收尾没成）。
+# 用脚本级变量而不是返回值：函数里各种命令都可能往管道里写东西，返回值会被污染；
+# 而计划任务、CI 这类调用方靠**退出码**判断更新成功没有。
+$script:UpdateExitCode = 0
+
+# 这个进程能不能跟人对话？
+# 判据：标准输入被重定向就没人能回答（后台任务、计划任务、CI 都是这样）。
+function Test-Interactive {
+    try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
+    try { if (-not $Host.UI.RawUI) { return $false } } catch { return $false }
+    return $true
+}
+
 function Get-UpdateFailureKind([int]$StatusCode, [string]$RateLimitRemaining = "") {
     if ($StatusCode -eq 404 -or $StatusCode -eq 410) { return "missing" }
     if ($StatusCode -eq 429) { return "quota" }
@@ -413,7 +427,10 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
             } catch {}
             return @{ Tag = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
         }
-        return @{ Tag = ""; Failure = "server" }
+        # 2xx 但没有重定向目标：这一层给的不是我们期待的形状。
+        # 报"连不上"比"服务端出错"贴近——服务端好好的，是中间那层不对，
+        # 而用户该做的动作是开代理或换网络，不是干等（与 mac 侧、与问版本那条路同一口径）。
+        return @{ Tag = ""; Failure = "network" }
     } catch { return @{ Tag = ""; Failure = "network" } }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
@@ -435,10 +452,30 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
 #   3. 编号必须是 1..16 位、首位非 0：0、007、二十位数都不该进 URL。
 #   4. digest 是 GitHub 自己算的资产校验值；老资产没有这字段，有则必须是
 #      sha256:<64 位十六进制>，否则当作没有。
+# 标签要编码后才拼进 URL。
+# 标签来自远端应答（tag_name 或重定向目标），不是我们写的——带空格、#、/ 的标签
+# 会把地址拼坏（甚至把路径拼到别处去）。编码后才是合法地址。
+function ConvertTo-UrlSegment([string]$Value) {
+    if ($null -eq $Value) { return "" }
+    try { return [uri]::EscapeDataString($Value) } catch { return "" }
+}
+
+# 这段正文是不是我们要的 Release JSON？结果放在 $script:UpdateAssetScope。
+# 为什么要分清：企业代理/门户劫持 api.github.com 时会回 200 + HTML 登录页，
+# 或者 200 + 一个错误对象。那不是"这一版没提供安装包"——是中间层换了内容。
+# 报 missing 等于冤枉维护者，还让用户白跑一趟 Releases 页面（那里同样拿不到）。
+# 判据：能解析成对象，且顶层有 assets 字段。
+$script:UpdateAssetScope = "other"
 function Get-AssetFromJson([string]$Json, [string]$FileName) {
+    $script:UpdateAssetScope = "other"
     if (-not $Json -or -not $FileName) { return $null }
     try {
-        $rel = $Json | ConvertFrom-Json
+        $rel = $Json | ConvertFrom-Json -ErrorAction Stop
+    } catch { return $null }
+    if ($null -eq $rel -or $rel -is [array]) { return $null }
+    if ($null -eq $rel.PSObject.Properties["assets"]) { return $null }
+    $script:UpdateAssetScope = "release"
+    try {
         foreach ($a in @($rel.assets)) {
             if (-not $a) { continue }
             if (("{0}" -f $a.name) -cne $FileName) { continue }
@@ -449,7 +486,9 @@ function Get-AssetFromJson([string]$Json, [string]$FileName) {
             if ($id -notmatch '^[1-9][0-9]{0,15}$') { return $null }
             $digest = ""
             $dg = "{0}" -f $a.digest
-            if ($dg -match '^sha256:[0-9a-f]{64}$') { $digest = $dg }
+            # 大小写两侧必须一致（mac 侧按不区分大小写处理）：对方改了大小写就静默不校验，
+            # 等于这道保险自己失效。统一按小写存，比较时也按小写比。
+            if ($dg -match '^sha256:[0-9a-fA-F]{64}$') { $digest = $dg.ToLower() }
             return @{ Id = $id; Digest = $digest }
         }
     } catch { }
@@ -464,14 +503,19 @@ function Get-AssetFromJson([string]$Json, [string]$FileName) {
 # 而真实原因可能是配额用尽或对方 5xx，那是在冤枉维护者。
 function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
     if (-not $Remote.ApiRepo) { return @{ Id = ""; Digest = ""; Failure = "network" } }
-    $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, $Remote.Tag
+    $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, (ConvertTo-UrlSegment $Remote.Tag)
     $body = Invoke-UpdateText $url
     $failure = $script:UpdateLastVersionFailure
     $asset = Get-AssetFromJson $body $FileName
     if ($asset) { return $asset }
-    if ($body) {
-        # 请求成功但这一版里没有这个文件：这就是"没提供安装包"。
+    if ($script:UpdateAssetScope -eq "release") {
+        # 确实是 Release JSON，里面没有这个文件：这就是"没提供安装包"。
         return @{ Id = ""; Digest = ""; Failure = "missing" }
+    }
+    if ($body) {
+        # 回的根本不是 Release JSON（HTML 登录页、错误对象……）：中间层换了内容。
+        # 报 missing 是冤枉维护者，而且会叫用户去手动下载——那里同样拿不到。
+        return @{ Id = ""; Digest = ""; Failure = "network" }
     }
     return @{ Id = ""; Digest = ""; Failure = $failure }
 }
@@ -480,13 +524,26 @@ function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
 # digest 是 GitHub 自己算的 sha256，查资产编号那一步顺带就拿到了——
 # 不额外发请求、不额外下文件、不依赖我们自己的发版流程。
 # 旧版本没有这个字段（那时 GitHub 还不给），那就跳过校验，不因此拦住更新。
-# 返回 "ok" / "mismatch" / "skip"。
+#
+# 返回三态：
+#   "ok"        校验值对得上
+#   "mismatch"  对不上——内容被改写或截断
+#   "skip"      没有校验值可比，或者**文件读不出来**
+# 读不出来必须归 skip 而不是 mismatch：杀毒扫描器会短暂锁住刚下好的文件，
+# 这时候把"本机读不到"说成"内容被改过"，是把一个瞬时问题扣到发布方头上。
+# （mac 侧同样故障是放行的，两端行为必须一致。）
 function Test-AssetDigest([string]$Path, [string]$Digest) {
     if (-not $Digest) { return "skip" }
+    if (-not (Test-Path -LiteralPath $Path)) { return "skip" }
+    $hash = $null
     try {
-        $actual = "sha256:" + (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLower()
-        if ($actual -eq $Digest) { return "ok" }
-    } catch { }
+        # -ErrorAction Stop 把"读不出来"变成异常；2>$null 吞掉错误记录，
+        # 不然控制台会冒一段红色报错原文。
+        $hash = (Get-FileHash -LiteralPath $Path -Algorithm SHA256 -ErrorAction Stop 2>$null).Hash
+    } catch { $hash = $null }
+    if (-not $hash) { return "skip" }
+    $actual = "sha256:" + ("{0}" -f $hash).ToLower()
+    if ($actual -eq ("{0}" -f $Digest).ToLower()) { return "ok" }
     return "mismatch"
 }
 
@@ -526,7 +583,12 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         # 那这条请求拿回来的会是 JSON 而不是安装包——当场判失败，别把 JSON 当包往下走。
         if ($Headers) {
             foreach ($hk in $Headers.Keys) {
-                if (-not $client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk])) { return "bad-content" }
+                $hn = [string]$hk
+                $hv = [string]$Headers[$hk]
+                # TryAddWithoutValidation 不做校验：头名或值里带 CR/LF，就能塞进额外的请求头
+                # （请求走私）。这里自己拦一道。
+                if ($hn -match '[\r\n:]' -or $hv -match '[\r\n]') { return "bad-content" }
+                if (-not $client.DefaultRequestHeaders.TryAddWithoutValidation($hn, $hv)) { return "bad-content" }
             }
         }
         $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
@@ -585,9 +647,25 @@ function Test-UsableZip([string]$Path) {
 # 失败路径绝不给安装区留下任何东西。
 # 失败原因写进脚本级变量 $UpdateLastFailure：调用方要靠它决定给用户什么提示，
 # 在这里打印会让"每个源各说一句"和"最后一句总结"互相打架。
+# 清掉 24 小时以前留下的更新临时目录。
+# 判据是**修改时间**，不是创建时间：目录里的文件被改过就说明它还在用。
+function Remove-StaleUpdateTemp {
+    try {
+        $root = [System.IO.Path]::GetTempPath()
+        $cutoff = (Get-Date).AddHours(-24)
+        foreach ($d in (Get-ChildItem -LiteralPath $root -Directory -Filter "EnvProxyUpdate-*" -ErrorAction SilentlyContinue)) {
+            try {
+                if ($d.LastWriteTime -lt $cutoff) { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            } catch {}
+        }
+    } catch {}
+}
+
 function Get-UpdatePackage([hashtable]$Remote) {
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
     $script:UpdateLastFailure = "network"
+    # 先清掉以前留下的临时目录：进程被强杀（或者断电）会留下整个目录，不清就一直堆着。
+    Remove-StaleUpdateTemp
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($Remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
     $zipFile = "$tmpBase.zip"
     $extractDir = "${tmpBase}-pkg"
@@ -612,7 +690,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
             # 直连 404 就被报成"发布方没提供安装包"，而真实原因可能是配额用尽。
             $kinds += $asset.Failure
         }
-        $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, $Remote.Tag, $file); Headers = @{} }
+        $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, (ConvertTo-UrlSegment $Remote.Tag), $file); Headers = @{} }
         $dl = "fail"
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
@@ -702,6 +780,7 @@ function Test-InstallRootMonitor([string]$Root) {
 }
 
 function Update-EnvProxy([bool]$AutoYes = $false) {
+    $script:UpdateExitCode = 0
     Write-Host "======== EnvProxy 检查更新 ========" -ForegroundColor Cyan
     $local = Get-LocalVersion
     if ($local) { Write-Host ("本地版本 : v{0}" -f $local) -ForegroundColor Green }
@@ -711,6 +790,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     if (-not $remote) {
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
         Write-Host ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源")) -ForegroundColor Yellow
+        $script:UpdateExitCode = 1
         return
     }
     Write-Host ("最新版本 : {0}（来源：{1}）" -f $remote.Tag, $remote.Name) -ForegroundColor Green
@@ -736,6 +816,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     if (-not $local) {
         Write-Host "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。" -ForegroundColor Yellow
         Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。" -ForegroundColor Yellow
+        $script:UpdateExitCode = 1
         return
     }
     if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
@@ -754,6 +835,14 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         Write-Host ("注意：你现在点的是 [{0}]，" -f $ScriptPath) -ForegroundColor Yellow
         Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
         Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
+    }
+    # 非交互环境（没有能提问的控制台）：问不到人，就别白下一个包。
+    # 以前是先下载再问，问不到人再取消——白烧一次 GitHub 配额和一份安装包。
+    if (-not $AutoYes -and -not (Test-Interactive)) {
+        Write-Host ("发现新版本 {0}，但当前环境没法提问（没有可交互的控制台），未做任何改动。" -f $remote.Tag) -ForegroundColor Yellow
+        Write-Host "要更新请在能交互的终端里运行，或加 -Yes 跳过确认。" -ForegroundColor Yellow
+        $script:UpdateExitCode = 1
+        return
     }
     # 取包：先试胜出源，它取不到就换下一个源再试。
     # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
@@ -786,6 +875,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds)
             Write-Host ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name)) -ForegroundColor Yellow
             Write-Host "未做任何改动。" -ForegroundColor Yellow
+            $script:UpdateExitCode = 1
             return
         }
         $extractDir = $pkg.Root
@@ -811,6 +901,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
             Write-Host "已恢复原状，正在重启监控..." -ForegroundColor Yellow
             try { Install-EnvProxy | Out-Null } catch {}
+            $script:UpdateExitCode = 1
             return
         }
         if ($cleanSource) { Remove-SourceOnlyFiles $root }
@@ -835,11 +926,14 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             $ok = Test-InstallRootMonitor $root
         }
         if (-not $ok) {
+            # 文件已经覆盖到位，但监控没起来：目的没达成，退出码要如实说"没成"。
             Write-Host "监控未能确认运行，请打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
+            $script:UpdateExitCode = 1
         }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
+        $script:UpdateExitCode = 1
     } finally {
         # 取包失败时这两个变量还是 $null：没拿到包就说明临时物已经在取包函数里清过了。
         if ($zipFile) { try { Remove-ItemSafe $zipFile } catch {} }

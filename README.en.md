@@ -101,7 +101,7 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. Both the check and the download try `api.github.com` first, so on most home networks it works without a VPN; if neither route works, toggle your proxy app once and retry.
+To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. Both the check and the download try `api.github.com` first, so on most home networks it works without a VPN; if neither route works, toggle your proxy app once and retry. After the download it compares the package against the checksum GitHub publishes and refuses to install anything that does not match, because a broken install is worse than no install.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 

@@ -63,8 +63,14 @@ function Get-ListeningTcpConnections {
     $sawListening = $false
     $sawTcp = $false
     foreach ($line in $raw) {
+        # "有没有 TCP 行"必须**独立于**整行的解析结果来判断。
+        # 以前 $sawTcp 只有整行匹配上才置真：于是"行形状变了"（多一列、状态列带空格、
+        # 别的 netstat 构建）会一行都匹配不上 → $sawTcp 为假 → 直接返回空数组。
+        # 空数组会被上层读成"本机没有端口在监听" → 状态机下一轮判 off →
+        # 把用户的代理环境变量删掉。解析失败绝不能长得像"没有端口"。
+        # 宽松判据只认协议列（"TCP"这个 token 不会被本地化），形状怎么变都认得出。
+        if ($line -match '^\s*TCP\s') { $sawTcp = $true }
         if ($line -notmatch '^\s*TCP\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$') { continue }
-        $sawTcp = $true
         $state = $Matches[3]
         if ($state -ne "LISTENING") { continue }
         $sawListening = $true
@@ -79,10 +85,17 @@ function Get-ListeningTcpConnections {
     if ($listeners.Count -gt 0) { return $listeners }
     if ($sawListening) { throw "netstat 解析出错：有 LISTENING 行但没解析出端口" }
     if ($sawTcp) {
-        # 有 TCP 行、却一个 LISTENING 都没有：状态列多半被本地化了。改走 WMI 那一路。
+        # 有 TCP 行、却一个监听口都没解析出来：状态列被本地化了，或者行形状变了。
+        # 两种都走 WMI 那一路（慢，但可靠）。
         return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
     }
-    return $listeners
+    # 一条 TCP 行都没有：协议列不是 "TCP"，这在 netstat 的输出里不会出现
+    # （协议名不会被本地化）。要么这台机器真的一个 TCP 连接都没有，
+    # 要么 netstat 被换成了别的东西——后者会把用户的代理变量误删。
+    # 认不出来就抛出去，交给上层的"重试一次 + 记一条枚举失败"处理：
+    # 那条路是保守的（这一轮按无端口处理，但会留下可诊断的痕迹），
+    # 而返回空数组是静默地把用户的环境变量删掉。
+    throw "netstat 输出里没有 TCP 行，无法枚举监听端口"
 }
 
 function Test-PortListening([int]$Port) {
