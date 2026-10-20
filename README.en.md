@@ -101,7 +101,7 @@ Installing does four things: it snapshots existing variables with the same names
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download your platform's package, double-click the menu and choose Install, see the monitor started message; below, a side by side comparison: windows that are already open stay unchanged, newly opened ones pick the proxy up right away">
 
-To update later, open the menu and choose **`5 Check for updates`**. It tells you what the new version changed and installs only after you agree. Both the check and the download try `api.github.com` first, so on most home networks it works without a VPN; if neither route works, toggle your proxy app once and retry. After the download it compares the package against the checksum GitHub publishes and refuses to install anything that does not match, because a broken install is worse than no install.
+To update later, choose **`5 Check for updates`** in the menu: it shows what the release changed and installs only after you agree. Both the check and the download reach GitHub directly first (`api.github.com`), so most networks need no VPN for this; if it fails, toggle your proxy app once and retry. Before installing it compares the package against the checksum GitHub publishes and refuses a mismatch — a broken install is worse than no install.
 
 If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the universal fix: it will not install twice, will not drop your connection, and will not lose anything.
 
@@ -206,12 +206,26 @@ It does not care about brands, process names or port numbers; it only cares who 
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
 | The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
 | The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
+
+<details>
+<summary>Updates and the command line</summary>
+
+| Symptom | Cause | What to do |
+|---|---|---|
 | Update check reports a check failure | the message says which kind of failure it is: unreachable, GitHub rate limit, server error, or something else | follow the message: for **unreachable**, toggle your proxy app once and retry; for **rate limit** (60 requests per hour), wait an hour; for a **server error**, retry in a while |
 | An error during an update | the download, extraction, verification or write step failed; the message says which kind of failure it is | follow the message; or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
 | A command line update exits with a code other than 0 | the exit code is there for scripts: 1 = it did not succeed (the message says why), 2 = the argument or subcommand is wrong | 1: follow the message (see the rows above); 2: copy the command correctly — Windows only knows `-Update`, Mac only knows `update` |
 | It says the argument is wrong and exits with code 2 | a switch has to follow the command it belongs to: `-Purge` only with `-Uninstall`, `-Yes` only with `-Update`; on Mac `--purge` only with `uninstall` and `--yes` only with `update` | move the switch behind its command: on Windows `powershell -File win\envproxy.ps1 -Uninstall -Purge`, on Mac `bash mac/envproxy.sh uninstall --purge` |
 | "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
 | "The GitHub API quota is exhausted" | anonymous access to the GitHub API allows 60 requests per hour per IP, and asking too often gets you rate limited | it clears by itself after an hour. Meanwhile you can download the package by hand from the Releases page |
+
+</details>
+
+<details>
+<summary>Install, uninstall and special cases</summary>
+
+| Symptom | Cause | What to do |
+|---|---|---|
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no package downloaded from the site (installer, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
 | "This is a development copy" | the folder contains `.git`, so it is a git working tree | expected: the updater leaves git copies alone, use `git pull` to sync |
 | You want to undo everything | — | open the menu and choose "Full restore", then answer the log question |
@@ -220,6 +234,8 @@ It does not care about brands, process names or port numbers; it only cares who 
 | After "Install / Fix" it reports the monitor could not be confirmed | a second copy on the same machine already holds the single-instance lock (only one monitor runs at a time), or the launch was blocked | open the menu and choose "Show status" to see the real state; if you no longer need that other copy, run "Full restore" inside its folder, then choose "Install / Fix" once |
 | Browsers cannot open pages, but the terminal is fine | the proxy app was shut down or rebooted without disconnecting, leaving a dead address in the **system proxy** (the browsers' world, not the variables this tool writes) | open the menu and choose "Show status" — it tells you directly whether the system proxy is a leftover. Turn it off under system settings, network, proxy — or open the proxy app and disconnect cleanly once |
 | "安装不完整，缺少程序文件" (incomplete install, the missing files are listed below it) | the folder was not copied over completely, or files inside it were deleted (the program is one entry plus seven libraries under `lib\`; missing any one of them means nothing runs) | download your platform's package again from the Releases page and copy it over the folder. **Updating through the menu cleans your platform's old files automatically** (the other platform's folder is left alone); only hand-covering needs leftover files deleted by hand. Opening the menu to run "Install / Fix" cannot fix this — it needs those same files to run |
+
+</details>
 
 <details>
 <summary>Less common cases</summary>
@@ -248,7 +264,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Outside traffic | a few MB even if the proxy runs 24 hours a day. A real probe happens at most once every 15 seconds per port, reads only the response headers, and stays under 1KB |
 | File writes | one write per state change; nothing at all while the state is stable |
 
-One detail worth spelling out: **outside traffic only happens while some local port answers a proxy handshake.** When the proxy app has quit and no port is listening, the traffic really is zero. "Disconnected but the core is still running" is not zero, because the port still answers and the monitor still probes once every 15 seconds — and that probing is the only way to tell "disconnected" apart from "behind the proxy".
+One detail worth spelling out: **outside traffic only happens while some local port answers a proxy handshake.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe still runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy".
 
 To see the actual numbers, look in Task Manager for the powershell process whose command line contains `envproxy.ps1`.
 
@@ -277,23 +293,20 @@ EnvProxy\
   assets\readme\          images used by these READMEs
 ```
 
-The two assets: `EnvProxy-win.zip` is the Windows package (`win\` plus the docs, version, notes and images),
-`EnvProxy-mac.tar.gz` is the Mac package (`mac\` plus the same shared files). Download your own side; updates use the same per-platform package, and each side leaves the other platform folder alone.
-
-`win\`, `mac\`, `release-notes\` and `assets\` belong to the program: updating aligns the in-scope contents with the package, and never touches the other platform folder. For daily use you only ever open `win\` (on Mac, `mac\`); the files at the top level can be left alone.
-
-The top level and the log need no care: the top level only overwrites same-named files and never deletes anything of yours, and nothing inside `monitor\` is ever overwritten or deleted.
+- **One package per platform**: `EnvProxy-win.zip` is Windows (`win\` plus the shared files), `EnvProxy-mac.tar.gz` is Mac (`mac\` plus the same shared files). Each side updates from its own package and never touches the other folder.
+- **The program's own ground**: `win\`, `mac\`, `release-notes\` and `assets\` — updating aligns them with the package. For daily use you only ever open `win\` (on Mac, `mac\`).
+- **Your own files**: the top level only overwrites same-named files and never deletes anything; nothing inside `monitor\` is ever overwritten or deleted.
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three zones: the program folders (the updater overwrites them, do not keep your own files there), the runtime folder (the log and the run marker are never overwritten or deleted), and the top level of the folder (only same-named files are overwritten, nothing of yours is deleted)">
 
 ## 9. Copying the folder as a backup
 
-You can copy the whole `EnvProxy` folder elsewhere as a backup. It causes no harm:
-
-- Start at login, the registry entries and the locator all point at the copy you installed, never at a backup. The locator sorts by log activity, so a backup is never picked up by mistake.
-- One thing to avoid: **do not open the menu and run the install inside a backup folder** — that turns the backup into the live installation.
-- To delete the whole folder, run "Full restore" from the menu first. Otherwise the login item and the locator stay behind (they cost nothing and leave no dead proxy — the fixed locator keeps cleaning variables on every login; reinstalling puts everything back).
-- Keep one installation per machine. Before moving, open the menu and run "Full restore" in the old location, then "Install / Fix" in the new one. The program has a single instance lock and migration protection, so two monitors never fight over the same variables; the rule exists because the old start at login entry and path record would otherwise be left behind and missed during a later uninstall.
+| What you want to do | What happens |
+|---|---|
+| Copy the whole folder as a backup | Copy freely, it causes no harm. Start at login, the registry entries and the locator all point at the copy you installed; the locator sorts by log activity, so a backup is never picked up by mistake |
+| Run the install inside a backup folder | **Do not** — that turns the backup into the live installation |
+| Delete the whole folder | Run "Full restore" from the menu first, otherwise the login item and the locator stay behind. They cost nothing and leave no dead proxy (the locator keeps cleaning variables on every login), and reinstalling puts everything back |
+| Move it, or keep two copies on one machine | One installation per machine. Run "Full restore" in the old location, then "Install / Fix" in the new one. A single instance lock and migration protection keep two monitors from fighting over the same variables; the rule exists so the old login item and path record are not left behind |
 
 ## 10. Deploying to a friend or a new machine
 
@@ -314,10 +327,12 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 ## 11. Technical limits (4 points)
 
-1. **TUN mode gets nothing.** TUN already captures all traffic globally, so the terminal works without any help and this tool cannot find a local proxy port, so it does not write the variables. That is the correct behaviour, not a bug. The same applies to system wide VPNs such as Outline and to SOCKS only ports with no HTTP socket.
-2. **"Disconnected" is not the same as quitting.** The disconnect button in most proxy apps leaves the core running and the port alive. This tool follows the traffic: if traffic gets through, the variables are written; if it does not, they are removed.
-3. **Moving outside the search range needs one manual step.** The locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep). If you move the folder outside that range (for example `C:\Tools`, `~/Projects`, or any very deep path), open the menu and run "Install / Fix" once and it takes over. Everything else is automatic.
-4. **Proxy variables you set by hand before are taken over.** Installing snapshots user level variables with the same names before overwriting them, and restores the snapshot on uninstall. System level variables and the system proxy are never touched. This is rare on a personal machine, and safe on a corporate one.
+| Limit | Why it is like that | What you do about it |
+|---|---|---|
+| **TUN mode gets nothing** | TUN already captures all traffic globally, so the terminal works without help and no local proxy port can be found | Nothing — this is correct behaviour, not a bug. The same applies to system wide VPNs such as Outline and to SOCKS only ports with no HTTP socket |
+| **"Disconnected" is not the same as quitting** | the disconnect button in most proxy apps leaves the core running and the port alive | Nothing. Traffic decides: if traffic gets through, the variables are written; if not, they are removed |
+| **Moving outside the search range needs one manual step** | the locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep) | if the folder moves outside that range (`C:\Tools`, `~/Projects`, any very deep path), open the menu and run "Install / Fix" once; everything else is automatic |
+| **Proxy variables you set by hand before are taken over** | installing snapshots user level variables with the same names before overwriting them and restores the snapshot on uninstall; system level variables and the system proxy are never touched | Nothing; rare on a personal machine and safe on a corporate one |
 
 <img src="./assets/readme/limits.en.svg" width="100%" alt="Four technical limits: pure TUN gets nothing, disconnected is not quitting, manual takeover outside the range, hand-set variables snapshotted">
 
@@ -382,7 +397,11 @@ EnvProxy/
 
 ### 12.5 Three things that may block the first install on a Mac
 
-1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Easiest first: double-click once so it warns you, then go to System Settings, Privacy and Security and click "Open Anyway" (that button only appears after you tried to open it; on Sequoia and later, right-clicking no longer offers a bypass); or run `bash mac/envproxy.sh install` in a terminal (always works, but run it from the project root); otherwise run `xattr -d com.apple.quarantine mac/打开菜单.command` first (also from the project root) and double-click again. Do not turn off Gatekeeper as a whole with `spctl --master-disable` — a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware.
+1. **Double-clicking does nothing, or macOS says the file cannot be opened**: Gatekeeper. Try these in order of effort:
+   - double-click once so it warns you, then go to System Settings, Privacy and Security and click "Open Anyway" (the button only appears after you tried; on Sequoia and later, right-clicking no longer offers a bypass)
+   - or run `bash mac/envproxy.sh install` from the project root (always works)
+   - otherwise run `xattr -d com.apple.quarantine mac/打开菜单.command` from the project root, then double-click again
+   - do **not** turn off Gatekeeper as a whole with `spctl --master-disable`: a `.command` file is just an unsigned script, signing would not fix anything, and disabling it opens the door to malware
 2. **The executable bit is lost** (common when the folder came from Windows): run `chmod +x *.command *.sh` once inside the `mac` folder.
 3. **The first login asks whether the terminal may access Documents or Desktop**: click OK (the locator searches for new locations). Clicking "Do Not Allow" is not fatal either — open the menu and run "Install / Fix" once and it is corrected.
 
@@ -411,6 +430,6 @@ This project is open source under the MIT license (see `LICENSE`): use it, chang
 
 To contribute (report a bug, propose a change), read `CONTRIBUTING.md` first — it covers the question format, the fork flow and the gates to run before submitting. Pull requests that skip it will be sent back.
 
-If something goes wrong, check the troubleshooting table in section 6 first. If that does not help, open an issue at `https://github.com/FiretrUCK666/envproxy/issues` and include your system version, the full output of "Show status" from the menu, and the relevant recent lines of `win\monitor\monitor.log` (on Mac, the files with the same names under `mac`).
+If something goes wrong, start with section 6. If that does not help, open an issue at `https://github.com/FiretrUCK666/envproxy/issues` with your system version, the full "Show status" output, and the relevant recent lines of `win\monitor\monitor.log` (on Mac, the same file names under `mac`).
 
 Repository: `https://github.com/FiretrUCK666/envproxy`. To change the code, read `CONTRIBUTING.md` first; a `git clone` copy carries `.git`, so sync upstream with `git pull` — the updater recognises such copies and leaves your working tree alone.
