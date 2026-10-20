@@ -27,7 +27,13 @@ jobs:
           # 目录级通配：mac/ 根与 lib/ 下的脚本一起查，新增文件自动纳入，不需要改这里。
           for f in mac/*.sh mac/lib/*.sh; do
             [ -f "$f" ] || continue
-            bash -n "$f" || fail=1
+            # 逐文件报出文件名再解析：CI 上出错时日志要能直接指向是哪个文件，
+            # 否则只看到一行 "bash: syntax error" 分不清来源。
+            if ! err=$(bash -n "$f" 2>&1); then
+              echo "语法错误：$f"
+              echo "$err"
+              fail=1
+            fi
           done
           # 壳↔核心：.command 直调入口，用的子命令必须在核心分派里；
           # mac/ 根下只留入口与定位器模板，多出来的 .sh 就是没回家的传话层。
