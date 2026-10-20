@@ -209,6 +209,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Update check reports a check failure | the message says which kind of failure it is: unreachable, GitHub rate limit, server error, or something else | follow the message: for **unreachable**, toggle your proxy app once and retry; for **rate limit** (60 requests per hour), wait an hour; for a **server error**, retry in a while |
 | An error during an update | the download, extraction, verification or write step failed; the message says which kind of failure it is | follow the message; or download the package by hand, unzip it over the folder and open the menu to run "Install / Fix" once |
 | A command line update exits with a code other than 0 | the exit code is there for scripts: 1 = it did not succeed (the message says why), 2 = the argument or subcommand is wrong | 1: follow the message (see the rows above); 2: copy the command correctly — Windows only knows `-Update`, Mac only knows `update` |
+| It says the argument is wrong and exits with code 2 | a switch has to follow the command it belongs to: `-Purge` only with `-Uninstall`, `-Yes` only with `-Update`; on Mac `--purge` only with `uninstall` and `--yes` only with `update` | move the switch behind its command: on Windows `powershell -File win\envproxy.ps1 -Uninstall -Purge`, on Mac `bash mac/envproxy.sh uninstall --purge` |
 | "This version does not provide a package" | that release did not get its package uploaded | download your platform's package from the Releases page by hand, unzip it over the folder and open the menu to run "Install / Fix" once. Nothing is wrong with your machine |
 | "The GitHub API quota is exhausted" | anonymous access to the GitHub API allows 60 requests per hour per IP, and asking too often gets you rate limited | it clears by itself after an hour. Meanwhile you can download the package by hand from the Releases page |
 | The folder contains `AGENTS.md`, `CONTRIBUTING.md`, `.github` or `tests/` | you cloned the whole repository — only a clone has these developer files; no package downloaded from the site (installer, source code or branch) contains them | for daily use download your platform's package from Releases; keep the clone for code and sync it with `git pull` |
@@ -362,6 +363,8 @@ Only one thing lives in the `mac` folder to double-click. The menu is identical 
 </details>
 
 Terminal users can also run the commands directly from the project root: `bash mac/envproxy.sh install`, `bash mac/envproxy.sh stop`, `bash mac/envproxy.sh uninstall` (add `--purge` to delete the log without asking), `bash mac/envproxy.sh status`, `bash mac/envproxy.sh update` (add `--yes` to skip the confirmation). The `.command` file is only a double-click shell; the logic lives in the entry script and the libraries under `lib/`.
+
+A switch has to follow the command it belongs to: `--purge` goes with `uninstall`, `--yes` goes with `update`. Put it anywhere else and the script says the argument is wrong and exits with code 2, without touching your proxy settings.
 
 ### 12.4 What is inside the `mac` folder
 

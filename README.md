@@ -209,6 +209,7 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 | 检查更新显示"检查失败" | 提示里会写清是哪一类原因：连不上、GitHub 限流、服务端出错，还是别的 | 照提示做：**连不上**就把翻墙软件开关一次再试；**限流**（每小时 60 次）就等一小时；**服务端出错**就过一会儿再试 |
 | 更新中途报错 | 下载、解压、校验或写入失败，提示里同样会写清是哪一类原因 | 照提示做；也可以手动下载安装包覆盖后打开菜单选一次"安装 / 修复" |
 | 命令行跑更新，退出码不是 0 | 退出码是给脚本看的：1 = 这次没成功（原因在提示里），2 = 参数或子命令写错了 | 1：照提示做（见上面几行）；2：把命令抄对——Windows 只认 `-Update`，Mac 只认 `update` |
+| 提示"参数用错了"，退出码是 2 | 开关必须跟着它的命令：`-Purge` 只配 `-Uninstall`、`-Yes` 只配 `-Update`；Mac 侧 `--purge` 只配 `uninstall`、`--yes` 只配 `update` | 把开关挪到它该跟的命令后面：Windows 侧 `powershell -File win\envproxy.ps1 -Uninstall -Purge`，Mac 侧 `bash mac/envproxy.sh uninstall --purge` |
 | 提示"这个版本没有提供安装包" | 那次发布没把安装包挂上去 | 到 Releases 页面手动下载你平台的包（Windows 下 `EnvProxy-win.zip`，Mac 下 `EnvProxy-mac.tar.gz`——别下错，下错了删掉重下），覆盖解压后打开菜单选一次"安装 / 修复"。不是你机器的问题 |
 | 提示"GitHub 接口配额用尽了" | 匿名访问 GitHub 的接口每个 IP 每小时只有 60 次，问太多次就会被限流 | 等一小时自动恢复。这期间可以先到 Releases 页面手动下载安装包覆盖 |
 | 文件夹里有 `AGENTS.md`、`CONTRIBUTING.md`、`.github`、`tests/` 这些看不懂的东西 | 你 clone 了整个仓库——只有克隆才有这些开发文件，页面上下载的任何包（安装包、Source code、分支包）里都没有 | 纯使用请去 Releases 页下载你平台的包；这个 clone 留着看代码，同步上游用 `git pull` |
@@ -363,6 +364,8 @@ Mac 版注入整套 9 个变量，比 Windows 多的是一份小写拼写——m
 </details>
 
 终端用户也可以直接用命令（在项目根目录）：`bash mac/envproxy.sh install`、`bash mac/envproxy.sh stop`、`bash mac/envproxy.sh uninstall`（加 `--purge` 连日志一起删、不询问）、`bash mac/envproxy.sh status`、`bash mac/envproxy.sh update`（加 `--yes` 跳过确认）。`.command` 只是双击壳，逻辑全在入口与 `lib/` 里的库里。
+
+开关必须紧跟它该跟的命令：`--purge` 只配 `uninstall`，`--yes` 只配 `update`。写错位置会直接报"参数用错了"并退出（退出码 2），不会去动你的代理设置。
 
 ### 12.4 `mac` 文件夹里都有什么
 
