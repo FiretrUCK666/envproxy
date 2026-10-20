@@ -176,7 +176,7 @@ function Show-Status {
 
     # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
-    # DIVERGE(Win): Mac 侧用 scutil --proxy 同语义，待真机回齐。
+    # Mac 侧同语义实现在 show_status（读 scutil --proxy + nc 试连），两侧判据一致。
     try {
         $sp = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
         if (($sp.ProxyEnable -eq 1) -and ($sp.ProxyServer -match "127\.0\.0\.1:(\d+)")) {

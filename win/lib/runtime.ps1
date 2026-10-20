@@ -389,8 +389,11 @@ function Write-MonitorLog([string]$msg) {
 }
 
 # ------------------------------------------------------------------------------
-# 6. 监控主循环（事件驱动 + 双轮确认去抖，无频繁写操作）
+# 6. 监控主循环（事件驱动 + 多轮确认去抖，无频繁写操作）
 # ------------------------------------------------------------------------------
+# 状态疑似翻转要连续确认几轮才动手：轮数决定"抗抖能力"，也是对外公布的
+# "连回来要多久 / 断开要多久"的一部分，所以必须是具名常量（门禁要读它推导文档）。
+$StateDebounceRounds = 2
 function Run-MonitorLoop {
     # 单实例互斥：重复启动自动退出。名字按用户隔离（见 Get-MutexName），
     # 同一台电脑多个账户各装一份时互不干扰。
@@ -443,9 +446,9 @@ function Run-MonitorLoop {
             }
 
             if ($state -ne $lastState) {
-                # 状态疑似翻转：连续确认 2 轮才动手，杜绝抖动
+                # 状态疑似翻转：连续确认 $StateDebounceRounds 轮才动手，杜绝抖动
                 if ($state -eq $pendingState) { $pendingCount++ } else { $pendingState = $state; $pendingCount = 1 }
-                if ($pendingCount -ge 2) {
+                if ($pendingCount -ge $StateDebounceRounds) {
                     Apply-State $state
                     $lastState = $state
                     $pendingState = $null

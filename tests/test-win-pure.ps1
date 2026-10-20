@@ -815,17 +815,24 @@ if ($env:OS -eq 'Windows_NT') {
 #   - 时间够、次数不够（一次失败间隔很久，不能只凭"时长"就判断）
 Assert-Eq '双条件：3 次但只横跨 4 秒不判断' $false (Test-NodeVerdict 3 4 $NodeFailThreshold $NodeFailDwellSec)
 Assert-Eq '双条件：2 次即使横跨 30 秒也不判断' $false (Test-NodeVerdict 2 30 $NodeFailThreshold $NodeFailDwellSec)
-Assert-Eq '双条件：3 次且横跨满 dwell 才判断' $true (Test-NodeVerdict 3 10 $NodeFailThreshold $NodeFailDwellSec)
-Assert-Eq '双条件：差一点点也不行' $false (Test-NodeVerdict 3 9.9 $NodeFailThreshold $NodeFailDwellSec)
-Assert-Eq '双条件：更多次、更久当然判断' $true (Test-NodeVerdict 5 40 $NodeFailThreshold $NodeFailDwellSec)
+# 边界用常量推导，不写字面量：写死 10 / 9.9 等于把"dwell 必须恰好是 10"固化进用例，
+# 以后正常调参（比如调到 20）会误报红，而这两条声称测的是"双条件"这个机制。
+Assert-Eq '双条件：次数够且横跨恰好满 dwell 才判断' $true (Test-NodeVerdict $NodeFailThreshold $NodeFailDwellSec $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：差一点点也不行' $false (Test-NodeVerdict $NodeFailThreshold ($NodeFailDwellSec - 0.1) $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：次数差一次就不判断' $false (Test-NodeVerdict ($NodeFailThreshold - 1) ($NodeFailDwellSec * 3) $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：更多次、更久当然判断' $true (Test-NodeVerdict ($NodeFailThreshold + 2) ($NodeFailDwellSec * 4) $NodeFailThreshold $NodeFailDwellSec)
 
-# 采样间隔跟着"有没有结论"走：稳定态省流量，正在查和刚下结论时加密。
-# 这条也钉住了"稳定态不再决定判据时长"——今天那个 15 秒只管流量。
+# 采样间隔跟着"有没有结论"走：稳定态省流量，正在收集证据和刚下结论时加密。
+# 关键是最后两条：失败已达阈值（结论已定）时必须回到稳定档——只按"有没有失败"
+# 决定间隔的话，节点一直死时计数会无界增长、间隔永远钉在快速档（实测 2.5 倍流量）。
 $tNow = [datetime]::Now
-Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $tNow.AddSeconds(1) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $tNow.AddSeconds(-1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+$thr = $NodeFailThreshold
+Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $thr $tNow.AddSeconds(1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr $tNow.AddSeconds(-1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败已达阈值（结论已定）回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval $thr $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败远超阈值也仍是稳定档（计数不会让间隔永远快下去）' $NodeCheckThrottleSec (Get-NodeProbeInterval 999 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
 
 # 常量自身的形状：加密必须比稳定快，否则"加密"没有意义；判据时长必须是可解释的小数秒。
 if ($NodeFastSec -lt $NodeCheckThrottleSec) { Write-Host '  ok   加密间隔确实比稳定态快' } else { Write-Host '  FAIL 加密间隔不比稳定态快，加密没有意义'; $script:fails++ }
@@ -864,6 +871,37 @@ $script:NodeState['7078'] = @{ LastCheck = [datetime]::Now.AddSeconds(-20); Aliv
     FailCount = 3; FirstFailAt = [datetime]::Now.AddSeconds(-30); FastUntil = [datetime]::MinValue }
 [void](Test-NodeAlive 7078)                       # 断->通 翻转
 Assert-Eq '断->通翻转后确实开窗' $true ($script:NodeState['7078'].FastUntil -gt (Get-Date))
+
+# 换端口时新端口必须重新判定，不能沿用上一个端口的结论。
+# Win 侧按端口分槽本来就不会串；这条挡的是"将来有人把分槽改成单槽"——
+# Mac 侧单槽就是这么把死端口报成"通"的（写错变量的那一类）。
+$script:NodeState = @{}
+$script:ProbeOk = $true
+[void](Test-NodeAlive 7078)                        # 7078 通
+Assert-Eq '换端口前：7078 判为通' $true $script:NodeState['7078'].Alive
+$script:ProbeOk = $false
+$r7897 = Test-NodeAlive 7897                       # 换到死端口，非强制
+Assert-Eq '换到死端口首次探测就判为断（不沿用上个端口的"通"）' $false $r7897
+Assert-Eq '新端口的槽从零开始计数' 1 $script:NodeState['7897'].FailCount
+
+# 抖动不累积：失败与成功交替时必须始终判"通"（一次成功即清零计数）。
+# 轮间隔要落在"能真探到"（≥ 稳定档）与"不触发闲置清零"（< 闲置门槛）之间。
+# 取 -30 秒会每轮撞上闲置清零，计数恒为 1、永远够不到阈值——那样这条用例测的是
+# 闲置清零，而不是它声称的"抖动不累积"，把"成功即清零"删掉它照样绿。
+$probeGap = [int](($NodeCheckThrottleSec + $NodeIdleResetSec) / 2)
+$script:NodeState = @{}
+$script:NodeState['7078'] = @{ LastCheck = [datetime]::MinValue; Alive = $true
+    FailCount = 0; FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
+$everDown = $false
+$maxFails = 0
+for ($i = 0; $i -lt 20; $i++) {
+    $script:ProbeOk = ($i % 2 -eq 0)
+    $script:NodeState['7078'].LastCheck = (Get-Date).AddSeconds(-$probeGap)
+    if (-not (Test-NodeAlive 7078)) { $everDown = $true }
+    if ($script:NodeState['7078'].FailCount -gt $maxFails) { $maxFails = $script:NodeState['7078'].FailCount }
+}
+Assert-Eq '失败/成功交替 20 轮里从不判"断"（抖动不累积）' $false $everDown
+Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来）' 1 $maxFails
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

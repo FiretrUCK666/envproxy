@@ -17,6 +17,10 @@ HOOK_START="# >>> EnvProxy >>>"
 HOOK_END="# <<< EnvProxy <<<"
 HOOK_LINE='[ -f "$HOME/.envproxy/proxy.env" ] && . "$HOME/.envproxy/proxy.env"'
 
+# 状态疑似翻转要连续确认几轮才动手：轮数决定"抗抖能力"，也是对外公布的
+# "连回来要多久 / 断开要多久"的一部分，所以必须是具名常量（门禁要读它推导文档）。
+STATE_DEBOUNCE_ROUNDS=2
+
 # ------------------------------------------------------------------------------
 # 1. 日志（只记状态翻转；超过 200KB 截断为最近 200 行）
 # ------------------------------------------------------------------------------
@@ -553,7 +557,7 @@ run_monitor_loop() {
         _st="$CURRENT_STATE"
         if [ "$_st" != "$_last" ]; then
             if [ "$_st" = "$_pending" ]; then _pending_n=$((_pending_n + 1)); else _pending="$_st"; _pending_n=1; fi
-            if [ $_pending_n -ge 2 ]; then
+            if [ $_pending_n -ge "$STATE_DEBOUNCE_ROUNDS" ]; then
                 apply_state "$_st" || true
                 _last="$_st"
                 _pending=""; _pending_n=0

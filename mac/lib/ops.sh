@@ -384,18 +384,47 @@ self_test() {
     node_verdict 5 40 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
     _selftest_assert_eq "双条件：更多次、更久当然判断" "1" "$NODE_VERDICT"
 
-    # 采样间隔跟着"有没有结论"走：稳定态省流量，正在查和刚下结论时加密。
-    node_probe_interval 0 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    # 采样间隔跟着"有没有结论"走：稳定态省流量，正在收集证据和刚下结论时加密。
+    node_probe_interval 0 "$NODE_FAIL_THRESHOLD" 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
     _selftest_assert_eq "间隔：稳定态用稳定间隔" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
-    node_probe_interval 1 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    node_probe_interval 1 "$NODE_FAIL_THRESHOLD" 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
     _selftest_assert_eq "间隔：有失败未达阈值时加密" "$NODE_FAST_SEC" "$NODE_PROBE_INTERVAL"
-    node_probe_interval 0 1030 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    node_probe_interval 0 "$NODE_FAIL_THRESHOLD" 1030 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
     _selftest_assert_eq "间隔：刚下完结论时加密" "$NODE_FAST_SEC" "$NODE_PROBE_INTERVAL"
-    node_probe_interval 0 999 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    node_probe_interval 0 "$NODE_FAIL_THRESHOLD" 999 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
     _selftest_assert_eq "间隔：加密窗口过了就回到稳定档" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
 
     if [ "$NODE_FAST_SEC" -lt "$NODE_CHECK_THROTTLE_SEC" ]; then _r15=1; else _r15=0; fi
     _selftest_assert_eq "加密间隔确实比稳定态快" "1" "$_r15"
+
+    # 死态必须回到稳定档：只按"有没有失败"决定间隔的话，节点一直死时计数无界增长、
+    # 间隔永远钉在快速档（实测流量是承诺值的 2.5 倍）。
+    node_probe_interval "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_THRESHOLD" 0 1000 \
+        "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "失败已达阈值（结论已定）回到稳定档" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
+    node_probe_interval 999 "$NODE_FAIL_THRESHOLD" 0 1000 \
+        "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "失败远超阈值也仍是稳定档" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
+
+    # 换端口必须重新判定，不能沿用上个端口的结论——Mac 单槽曾因此把死端口报成"通"。
+    # 用替身驱动真实 test_node_alive（只换掉网络那一层）。
+    if [ "$(type -t test_node_alive 2>/dev/null || true)" = "function" ]; then
+        _s2_saved_port="$NODE_CACHE_PORT"; _s2_saved_alive="$NODE_ALIVE"
+        _s2_saved_cnt="$NODE_FAIL_COUNT"; _s2_saved_ffa="$NODE_FIRST_FAIL_AT"
+        _s2_saved_until="$NODE_FAST_UNTIL"; _s2_saved_lc="$LAST_NODE_CHECK"
+        _s2_real=$(declare -f test_real_connectivity 2>/dev/null || true)
+        test_real_connectivity() { [ "$1" = "7078" ]; }
+        NODE_CACHE_PORT=""; NODE_ALIVE=0; NODE_FAIL_COUNT=0; NODE_FIRST_FAIL_AT=0
+        NODE_FAST_UNTIL=0; LAST_NODE_CHECK=0
+        test_node_alive 7078 0; _s2a=$?
+        test_node_alive 7897 0; _s2b=$?
+        _selftest_assert_eq "换端口前：7078 判为通" "0" "$_s2a"
+        _selftest_assert_eq "换到死端口首次探测就判为断（不沿用上个端口的通）" "1" "$_s2b"
+        if [ -n "$_s2_real" ]; then eval "$_s2_real"; else unset -f test_real_connectivity 2>/dev/null || true; fi
+        NODE_CACHE_PORT="$_s2_saved_port"; NODE_ALIVE="$_s2_saved_alive"
+        NODE_FAIL_COUNT="$_s2_saved_cnt"; NODE_FIRST_FAIL_AT="$_s2_saved_ffa"
+        NODE_FAST_UNTIL="$_s2_saved_until"; LAST_NODE_CHECK="$_s2_saved_lc"
+    fi
 
     echo "[9] 菜单分派"
     # menu 子命令必须在入口分派里存在，show_menu 必须已定义；
@@ -908,6 +937,25 @@ show_status() {
     fi
     _cur=$(get_current_proxy_port 2>/dev/null || true)
     if [ -n "$_cur" ]; then echo "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else echo "代理变量 : 无（直连状态）"; fi
+    # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
+    # 与 Win 侧 HKCU Internet Settings 那段同语义（读系统设置 → 试连 → 只在连不上时提醒）。
+    _sp_info=$(scutil --proxy 2>/dev/null || true)
+    if [ -n "$_sp_info" ]; then
+        _sp_enable=$(printf '%s' "$_sp_info" | awk '/HTTPEnable *: *1/ {print 1; exit}')
+        _sp_host=$(printf '%s' "$_sp_info" | awk '/HTTPProxy *: */ {sub(/.*: */, ""); print; exit}')
+        _sp_port=$(printf '%s' "$_sp_info" | awk '/HTTPPort *: */ {sub(/.*: */, ""); print; exit}')
+        if [ "$_sp_enable" = "1" ] && [ "$_sp_host" = "127.0.0.1" ] && [ -n "$_sp_port" ]; then
+            # "在听"还不够：多数翻墙软件的断开按钮不停内核，端口仍会应答。
+            # 真连一次才分得清"活着"与"占着不放"（与 Win 侧 TcpClient 试连同口径）。
+            _sp_alive=0
+            if printf '' | nc -z -G 1 -w 1 127.0.0.1 "$_sp_port" 2>/dev/null; then _sp_alive=1; fi
+            if [ "$_sp_alive" = "0" ]; then
+                echo "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）"
+                echo "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+            fi
+        fi
+    fi
     # 版本信息（只读：查不到只提示，不写文件、不提问）
     _local_ver=$(get_local_version || true)
     if [ -n "$_local_ver" ]; then echo "本地版本 : v$_local_ver"; else echo "本地版本 : 未知"; fi

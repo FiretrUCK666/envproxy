@@ -206,7 +206,10 @@ remove_user_env_vars() {
 # 归属与删除同口径：别人的代理地址不算我们的痕迹。
 proxy_vars_present() {
     if [ -f "$PROXY_ENV" ] && grep -qE '^export (HTTP_PROXY|http_proxy)=' "$PROXY_ENV" 2>/dev/null; then return 0; fi
-    for _v in HTTP_PROXY http_proxy; do
+    # 必须与 remove_user_env_vars 回收同一批变量（6 个代理变量），不是只看 HTTP_PROXY：
+    # 只判两个的话，一旦只剩 HTTPS_PROXY/ALL_PROXY 这类残留，判据说"没痕迹"→ 不清理 →
+    # 状态页报"直连"而实际还挂着代理，正是要防的那种半代理。
+    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         if is_owned_proxy_value "$_cur"; then return 0; fi
     done

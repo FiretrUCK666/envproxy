@@ -494,7 +494,8 @@ jobs:
             @('\$NodeCheckThrottleSec\s*=\s*(\d+)', 'NODE_CHECK_THROTTLE_SEC=(\d+)', '真实探测节流秒数'),
             @('\$NodeFastSec\s*=\s*(\d+)', 'NODE_FAST_SEC=(\d+)', '存疑期加密探测间隔'),
             @('\$NodeFailDwellSec\s*=\s*(\d+)', 'NODE_FAIL_DWELL_SEC=(\d+)', '连续失败判"断"所需秒数'),
-            @('\$NodeFastWindowSec\s*=\s*(\d+)', 'NODE_FAST_WINDOW_SEC=(\d+)', '下结论后的加密观察窗口')
+            @('\$NodeFastWindowSec\s*=\s*(\d+)', 'NODE_FAST_WINDOW_SEC=(\d+)', '下结论后的加密观察窗口'),
+            @('\$NodeIdleResetSec\s*=\s*(\d+)', 'NODE_IDLE_RESET_SEC=(\d+)', '槽位闲置丢弃门槛')
           )
           foreach ($p in $pairs) {
             $a = Grab $ps $p[0] ($p[2] + '（Win 侧）')
@@ -567,9 +568,36 @@ jobs:
           }
           if ($ptoMs -le 0) { Write-Host '找不到探测读超时，无法推导时间区间'; $fail = 1 }
           $pto = [int][math]::Ceiling($ptoMs / 1000.0)
-          $deb = 4   # 双轮去抖：两轮 × 最长轮间隔 2 秒（判"断"发生在 on 态，轮间隔 2 秒）
-          $loRaw = [math]::Max(($flr - 1) * $fast, $dwl) + $deb
-          $hiRaw = $thr + $pto + [math]::Max(($flr - 1) * ($fast + $pto), $dwl) + $deb
+          # 双轮去抖的时长由"轮数 × 该方向的轮间隔"推导，不写死：
+          # 判"断"发生在 on 态（轮间隔 2 秒），判"通"发生在 off 态（轮间隔 3 秒），方向不同各取各的。
+          $debRounds = [int](Grab $ps '\$StateDebounceRounds\s*=\s*(\d+)' 'Win 状态去抖轮数')
+          $debMac = [int](Grab $sh 'STATE_DEBOUNCE_ROUNDS=(\d+)' 'Mac 状态去抖轮数')
+          if ((-not $debRounds) -or (-not $debMac)) { $fail = 1 }
+          elseif ($debRounds -ne $debMac) { Write-Host ("状态去抖轮数两侧不一致：Win {0} / Mac {1}" -f $debRounds, $debMac); $fail = 1 }
+          # 轮间隔也读代码，别写死：改轮速时文档跟着动。
+          $sleepOn = [int]([regex]::Match($ps, '\$sleepSec = \$\(if \(\$lastState -eq "off"\) \{ (\d+) \} else \{ (\d+) \}\)').Groups[2].Value)
+          $sleepOff = [int]([regex]::Match($ps, '\$sleepSec = \$\(if \(\$lastState -eq "off"\) \{ (\d+) \} else \{ (\d+) \}\)').Groups[1].Value)
+          $sleepOnMac = [int]([regex]::Match($sh, 'then sleep (\d+); else sleep (\d+);').Groups[2].Value)
+          $sleepOffMac = [int]([regex]::Match($sh, 'then sleep (\d+); else sleep (\d+);').Groups[1].Value)
+          if ((-not $sleepOn) -or (-not $sleepOff) -or ($sleepOn -ne $sleepOnMac) -or ($sleepOff -ne $sleepOffMac)) {
+            Write-Host ("轮间隔缺失或两侧不一致：Win on/off={0}/{1}，Mac on/off={2}/{3}" -f $sleepOn, $sleepOff, $sleepOnMac, $sleepOffMac)
+            $fail = 1
+          }
+          $debDown = $debRounds * $sleepOn      # 判"断"在 on 态
+          $debUp   = $debRounds * $sleepOff     # 判"通"在 off 态
+          # 观察窗按分钟对外表达（README 说的是"多盯 1 分钟"），常量是秒，换算一次。
+          $fwin = [int](Grab $ps '\$NodeFastWindowSec\s*=\s*(\d+)' 'Win 观察窗秒数')
+          if (-not $fwin) { $fail = 1 }
+          elseif (($fwin % 60) -ne 0) { Write-Host ("观察窗必须是整分钟，才能对读者说「N 分钟」：当前 ${fwin} 秒"); $fail = 1 }
+          $fwin = [int]($fwin / 60)
+          # 恢复耗时：从"节点回来"到变量写回，最坏要等一次快档探测（$NodeFastSec）
+          # 加两轮去抖；最好情形是刚探完就回来，仍要两轮去抖。同样向上取整到 5 秒。
+          # 恢复耗时：从"节点回来"到变量写回，要等下一次探测（最坏是稳定档一整轮，
+          # 因为判别"断"之后观察窗可能已经过期）再加两轮去抖（判通发生在 off 态，轮间隔取 off 的）。
+          $reLo = [int]([math]::Ceiling($debUp / 5.0) * 5)
+          $reHi = [int]([math]::Ceiling(($thr + $debUp) / 5.0) * 5)
+          $loRaw = [math]::Max(($flr - 1) * $fast, $dwl) + $debDown
+          $hiRaw = $thr + $pto + [math]::Max(($flr - 1) * ($fast + $pto), $dwl) + $debDown
           $lo = [int]([math]::Ceiling($loRaw / 5.0) * 5)
           $hi = [int]([math]::Ceiling($hiRaw / 5.0) * 5)
           $facts = @(
@@ -581,6 +609,8 @@ jobs:
             @('判"断"双条件-次数', "至少 ${flr} 次", "at least ${flr} probes"),
             @('判"断"双条件-时长', "连续失败满 ${dwl} 秒", "${dwl} seconds of continuous failure"),
             @('只断开的时间区间', "约 ${lo}–${hi} 秒", "about ${lo}–${hi} seconds"),
+            @('连回来的时间区间', "约 ${reLo}–${reHi} 秒", "about ${reLo}–${reHi} seconds"),
+            @('结论后的加密观察窗', "多盯 ${fwin} 分钟", "another ${fwin} minute"),
             @('用户目录深度', '向下 6 层', 'six levels'),
             @('磁盘根深度', '4 层', 'four levels')
           )

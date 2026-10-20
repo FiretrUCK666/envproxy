@@ -163,7 +163,7 @@ It is the black box for troubleshooting. When you report a problem, include the 
 | Connect the proxy app | sees the proxy working, writes the variables | 4–10 seconds (up to about 30 seconds for apps and ports that are not in the common tables) |
 | Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 15–50 seconds after disconnecting (usually around twenty) |
 | Change the port, reconnect | finds the new port and applies it | about 10 seconds |
-| Reconnect after disconnecting | sees the node is back and restores the variables | about 3 seconds |
+| Reconnect after disconnecting | sees the node is back and restores the variables | about 10–25 seconds (waits for the next probe to confirm, then two rounds of confirmation) |
 
 <details>
 <summary>Other cases (also nothing to do)</summary>
@@ -196,9 +196,9 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Mechanism | What it prevents |
 |---|---|
 | Two round confirmation | changes happen only after the state is confirmed twice — connecting and disconnecting within seconds will not make the variables flip |
-| Conservative disconnect | two conditions must both hold before the variables are removed: 10 seconds of continuous failure, and at least 3 probes that could not get through. One success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
+| Conservative disconnect | two conditions must both hold before the variables are removed: 10 seconds of continuous failure, and at least 3 probes that could not get through. A single success is enough to stop counting it as disconnected. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
 | Several outside sites agree | 7 different sites are used together; normally only the one that worked last time is asked, and others only when it fails, so one site having a bad day never deletes your variables |
-| Cheap probing | while everything is healthy each port is probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB. When something looks wrong the interval shortens to every 5 seconds, and it keeps watching for another minute after the question is settled just to be sure it was not a brief glitch |
+| Cheap probing | while everything is healthy each port is probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB. When something looks wrong the interval shortens to every 5 seconds, and it keeps watching for another 1 minute after the question is settled just to be sure it was not a brief glitch |
 | One monitor process only | a single instance lock, so processes do not pile up |
 | Local dev servers are not proxies | a listening port is not enough; it must really forward requests, so a local service on 8080 or 8888 is never mistaken for a proxy |
 
@@ -286,7 +286,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Outside traffic | a few MB even if the proxy runs 24 hours a day. While everything is healthy a probe happens at most once every 15 seconds per port and stays under 1KB |
 | File writes | one write per state change; nothing at all while the state is stable |
 
-One detail worth spelling out: **outside traffic only happens while something local is still answering proxy requests.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe normally runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy". When something looks wrong the interval shortens to every 5 seconds until the question is settled, and it keeps watching for another minute after that — the whole episode lasts a couple of minutes at most, costs a handful of extra probes and a few KB, and does not change the totals above.
+One detail worth spelling out: **outside traffic only happens while something local is still answering proxy requests.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe normally runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy". When something looks wrong the interval shortens to every 5 seconds until the question is settled, and it keeps watching for another 1 minute after that — the whole episode lasts a couple of minutes at most, costs a handful of extra probes and a few KB, and does not change the totals above.
 
 To see the actual numbers, look in Task Manager for the powershell process whose command line contains `envproxy.ps1`.
 

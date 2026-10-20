@@ -39,22 +39,29 @@ CURRENT_STATE="off"
 # 可调阈值（改行为只改这里，机制不动；取值与 Win 侧同形，门禁 6 核对）
 # 采样间隔：稳定态多久探一次。它只决定"流量"和"发现异常的快慢"，不再决定判"断"要多久。
 NODE_CHECK_THROTTLE_SEC=15
-# 过渡态采样间隔：已经出现失败、或刚下完结论时用这个值。此时要么在"查"，要么可能需要纠正。
+# 过渡态采样间隔：正在收集证据（有失败、但还没凑够判据）或刚下完结论时用这个值。
+# 注意不是"有失败就用"：失败已达阈值说明结论已定，那时要回稳定档，否则节点一直死时
+# 计数会无界增长、间隔永远钉在快档（实测流量是承诺值的 2.5 倍）。
 NODE_FAST_SEC=5
 # 下完结论后继续加密观察多久（判错了能在这段时间里自己改回来）。
 NODE_FAST_WINDOW_SEC=60
 # 判"断"的双条件：至少这么多次，且失败必须已经持续这么久。
 NODE_FAIL_THRESHOLD=3
 NODE_FAIL_DWELL_SEC=10
+# 槽位闲置多久就丢弃旧失败起点：判定的节奏是快档（NODE_FAST_SEC），正常失败时远达不到这个门限，
+# 只有"端口消失很久后又回来"才会撞上。独立常量，不与节流档位绑定。
+NODE_IDLE_RESET_SEC=30
 
 # 这一轮该隔多久再探（纯函数，不碰网络、不读时钟，便于回归）：
-#   已稳定            -> 稳定态间隔（省流量）
-#   有失败、未达阈值   -> 快速间隔（正在查，问勤一点才可能尽快下结论）
-#   刚下完结论         -> 快速间隔（判错了要能马上改回来）
+#   正在收集证据（有失败、还没凑够判据）  -> 快速间隔（问勤一点才可能尽快下结论）
+#   刚下完结论（可能判错，需要能马上纠正） -> 快速间隔
+#   结论已经稳定（失败已达阈值、或一切正常） -> 稳定间隔（省流量）
+# 第三条是关键：只按"有没有失败"决定间隔的话，节点一直死时失败计数会无界增长、
+# 间隔永远钉在快速档——实测 3600 秒探测次数是承诺值的 2.5 倍。
 # 结果进 $NODE_PROBE_INTERVAL（本侧 bash 3.2 无 $(...) 之外的方便返回手段，统一走全局）。
 node_probe_interval() {
-    _np_fail="$1"; _np_until="$2"; _np_now="$3"; _np_steady="$4"; _np_fast="$5"
-    if [ "$_np_fail" -gt 0 ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
+    _np_fail="$1"; _np_thr="$2"; _np_until="$3"; _np_now="$4"; _np_steady="$5"; _np_fast="$6"
+    if [ "$_np_fail" -gt 0 ] && [ "$_np_fail" -lt "$_np_thr" ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
     if [ "$_np_now" -lt "$_np_until" ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
     NODE_PROBE_INTERVAL="$_np_steady"
 }
@@ -342,7 +349,7 @@ test_node_alive() {
     _now=$(date +%s)
     if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then
         _age=$((_now - LAST_NODE_CHECK))
-        node_probe_interval "$NODE_FAIL_COUNT" "$NODE_FAST_UNTIL" "$_now" \
+        node_probe_interval "$NODE_FAIL_COUNT" "$NODE_FAIL_THRESHOLD" "$NODE_FAST_UNTIL" "$_now" \
             "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
         if [ $_age -lt "$NODE_PROBE_INTERVAL" ]; then
             [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
@@ -352,13 +359,16 @@ test_node_alive() {
     if [ "$_port" != "$NODE_CACHE_PORT" ]; then
         NODE_FAIL_COUNT=0
         NODE_FIRST_FAIL_AT=0
+        # 结论也属于上一个端口。不清的话，新端口首次失败（计数才 1、未达阈值）时
+        # 函数末尾会沿用上个端口的"通"，把刚探测失败的端口报成通——正是"不该写时写"。
+        NODE_ALIVE=0
     fi
     # "连续"失败必须先真的连续观测：同一端口很久没探过（槽位留着旧账），那几次失败
     # 与现在不构成同一个连续段。不清零的话，跨度会把中间整段没观测的时间算进去，
     # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进。
-    # 门限取两个稳定态间隔：正常失败时采样已加密到 NODE_FAST_SEC，远达不到这个门限。
+    # 门限用独立常量，不借用节流档位（两者含义不同，绑一起会让调任一个都牵动另一个）。
     _idle=$((_now - LAST_NODE_CHECK))
-    if [ "$NODE_FAIL_COUNT" -gt 0 ] && [ "$_idle" -gt $((NODE_CHECK_THROTTLE_SEC * 2)) ]; then
+    if [ "$NODE_FAIL_COUNT" -gt 0 ] && [ "$_idle" -gt "$NODE_IDLE_RESET_SEC" ]; then
         NODE_FAIL_COUNT=0
         NODE_FIRST_FAIL_AT=0
     fi

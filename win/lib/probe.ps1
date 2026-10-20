@@ -472,21 +472,29 @@ $script:NodeState = @{}
 # --- 判定用的常量（两侧同形，门禁 6 核对取值一致）--------------------------------
 # 采样间隔：稳定态多久探一次。它只决定"流量"和"发现异常的快慢"，不再决定判"断"要多久。
 $NodeCheckThrottleSec = 15
-# 过渡态采样间隔：已经出现失败、或刚下完结论时用这个值。此时要么在"查"，要么可能需要纠正。
+# 过渡态采样间隔：正在收集证据（有失败、但还没凑够判据）或刚下完结论时用这个值。
+# 注意不是"有失败就用"：失败已达阈值说明结论已定，那时要回稳定档，否则节点一直死时
+# 计数会无界增长、间隔永远钉在快档（实测流量是承诺值的 2.5 倍）。
 $NodeFastSec          = 5
 # 下完结论后继续加密观察多久（判错了能在这段时间里自己改回来）。
 $NodeFastWindowSec    = 60
 # 判"断"的双条件：至少这么多次，且失败必须已经持续这么久。
 $NodeFailThreshold    = 3
 $NodeFailDwellSec     = 10
+# 槽位闲置多久就丢弃旧失败起点：判定的节奏是快档（$NodeFastSec），正常失败时远达不到这个门限，
+# 只有"端口消失很久后又回来"才会撞上。独立常量，不与节流档位绑定。
+$NodeIdleResetSec     = 30
 
 # 这一轮该隔多久再探（纯函数，不碰网络、不读时钟，便于回归）：
-#   已稳定            -> 稳定态间隔（省流量）
-#   有失败、未达阈值   -> 快速间隔（正在查，问勤一点才可能尽快下结论）
-#   刚下完结论         -> 快速间隔（判错了要能马上改回来）
-function Get-NodeProbeInterval([int]$FailCount, [datetime]$FastUntil, [datetime]$Now,
+#   正在收集证据（有失败、还没凑够判据）  -> 快速间隔（问勤一点才可能尽快下结论）
+#   刚下完结论（可能判错，需要能马上纠正） -> 快速间隔
+#   结论已经稳定（失败已达阈值、或一切正常） -> 稳定间隔（省流量）
+# 第三条是关键：只按"有没有失败"决定间隔的话，节点一直死时失败计数会无界增长、
+# 间隔永远钉在快速档——实测 3600 秒探测 601 次，是承诺值的 2.5 倍。
+# "已经得出结论"就不必再勤问：多问几次不会改变结论。
+function Get-NodeProbeInterval([int]$FailCount, [int]$Threshold, [datetime]$FastUntil, [datetime]$Now,
                                [int]$Steady, [int]$Fast) {
-    if ($FailCount -gt 0) { return $Fast }
+    if ($FailCount -gt 0 -and $FailCount -lt $Threshold) { return $Fast }
     if ($Now -lt $FastUntil) { return $Fast }
     return $Steady
 }
@@ -508,15 +516,16 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     # "连续"失败必须先真的连续观测：这个端口很久没被探过（槽位留着旧账），
     # 那几次失败与现在不构成同一个连续段。不清零的话，跨度会把中间整段没观测的时间算进去，
     # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进，也和 Mac 侧不等价。
-    # 门限取两个稳定态间隔：正常失败时采样已加密到 $NodeFastSec，远达不到这个门限。
+    # 门限用独立的常量，不借用节流档位：判定的节奏是快档（5 秒），而节流档位说的是"多久探一次"，
+    # 两者含义不同，绑在一起会让以后调任一个都牵动另一个。
     $idle = ($now - $st.LastCheck).TotalSeconds
-    if ($st.FailCount -gt 0 -and $idle -gt ($NodeCheckThrottleSec * 2)) {
+    if ($st.FailCount -gt 0 -and $idle -gt $NodeIdleResetSec) {
         $st.FailCount = 0
         $st.FirstFailAt = [datetime]::MinValue
     }
     if (-not $Force) {
         $age = $idle
-        $iv = Get-NodeProbeInterval $st.FailCount $st.FastUntil $now $NodeCheckThrottleSec $NodeFastSec
+        $iv = Get-NodeProbeInterval $st.FailCount $NodeFailThreshold $st.FastUntil $now $NodeCheckThrottleSec $NodeFastSec
         if ($age -lt $iv) { return $st.Alive }
     }
     $st.LastCheck = $now
