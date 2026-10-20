@@ -477,6 +477,10 @@ Assert-Eq 'a question mark in a tag is encoded' 'v1%3F2' (ConvertTo-UrlSegment '
 # stays invisible and only the direct download counts -- and a 404 there gets reported as
 # "the release does not ship this file", blaming the maintainer for what is really a quota.
 $remoteForAsset = @{ ApiRepo = 'http://127.0.0.1:1/repos/o/r'; Tag = 'v1.0.0'; Base = 'http://127.0.0.1:1/o/r'; Name = 'GitHub' }
+# 这条只问一件事：连不上时归哪一类。可本机要是正好有代理在跑，代码会经它重试一次，
+# 代理替我们回一个 502，就被归成"对方服务端出错"——测试结果跟着这台机器当时的状态摇摆。
+# 把"有没有活代理"在测试作用域里固定成没有，这一条才只测它自己那件事。
+function Get-ActiveProxyPort { param([switch]$FullScan) return $null }
 Assert-Eq 'an asset lookup that cannot reach the API reports a network problem' 'network' (Get-UpdateAsset $remoteForAsset 'EnvProxy-win.zip').Failure
 Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
 # No source may come back with an empty repo id: the walker would build a URL with a hole where the
