@@ -312,5 +312,44 @@ Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/rep
 Assert-Eq 'no source comes back with an empty repo id' '0' (@($srcTable0 | Where-Object { -not $_.Repo }).Count)
 Assert-Eq 'every exported source carries its five walker fields' '0' (@($srcTable0 | Where-Object { -not $_.Api -or -not $_.Web -or -not $_.Base -or -not $_.Preferred -or -not $_.ApiRepo }).Count)
 
+Write-Host '[5c] update failure classification'
+# The reason a download failed decides what the user is told to do next: wait an hour
+# (quota), open the proxy (network), download by hand (missing), or fix the disk (local).
+# Collapsing them into one "failed" string is what made the advice useless.
+Assert-Eq '404 means the release does not ship the file' 'missing' (Get-UpdateFailureKind 404)
+Assert-Eq '410 also means the file is gone' 'missing' (Get-UpdateFailureKind 410)
+Assert-Eq '429 means the API quota is exhausted' 'quota' (Get-UpdateFailureKind 429)
+Assert-Eq '403 with no quota left means the quota is exhausted' 'quota' (Get-UpdateFailureKind 403 '0')
+Assert-Eq '403 with quota to spare is a refusal, not a quota problem' 'server' (Get-UpdateFailureKind 403 '42')
+Assert-Eq '403 with an unknown quota header is a refusal' 'server' (Get-UpdateFailureKind 403)
+Assert-Eq '5xx is a server-side problem' 'server' (Get-UpdateFailureKind 503)
+Assert-Eq 'any other status is treated as unreachable' 'network' (Get-UpdateFailureKind 418)
+# Picking one reason out of several attempts: "missing" only stands when nothing else
+# explains the failure. A walled middlebox answers 404 to everything, so a lone 404
+# next to a timeout must not be reported as "the maintainer forgot to publish".
+Assert-Eq 'a single reason is reported as is' 'missing' (Select-UpdateFailureKind @('missing'))
+Assert-Eq 'two identical reasons collapse to one' 'missing' (Select-UpdateFailureKind @('missing', 'missing'))
+Assert-Eq 'a timeout next to a 404 reports the timeout' 'network' (Select-UpdateFailureKind @('missing', 'network'))
+Assert-Eq 'a quota next to a 404 reports the quota' 'quota' (Select-UpdateFailureKind @('missing', 'quota'))
+Assert-Eq 'an unwritable temp dir outranks the timeout' 'local' (Select-UpdateFailureKind @('network', 'local'))
+# The table's order IS the report priority, so it is worth pinning: adding a reason must not
+# silently reorder the advice, and "missing" must stay last (it accuses the maintainer).
+Assert-Eq 'the table lists every reason exactly once' '6' (@($UpdateFailureKinds | Select-Object -Unique).Count)
+Assert-Eq 'the table puts the local problem first' 'local' $UpdateFailureKinds[0]
+Assert-Eq 'the table puts the missing-package case last' 'missing' $UpdateFailureKinds[$UpdateFailureKinds.Count - 1]
+Assert-Eq 'no reason at all falls back to unreachable' 'network' (Select-UpdateFailureKind @())
+Assert-Eq 'an empty reason falls back to unreachable' 'network' (Select-UpdateFailureKind @(''))
+# The advice must name the action, otherwise the user still has to guess.
+$msgMissing = Get-UpdateFailureMessage 'missing' 'GitHub'
+$msgQuota = Get-UpdateFailureMessage 'quota' 'GitHub'
+$msgNet = Get-UpdateFailureMessage 'network' 'GitHub'
+$msgLocal = Get-UpdateFailureMessage 'local' 'GitHub'
+Assert-Eq 'the missing-file advice points at manual download' '1' ([int]($msgMissing -match '手动下载'))
+Assert-Eq 'the quota advice says it clears with time' '1' ([int]($msgQuota -match '一小时|重试'))
+Assert-Eq 'the network advice points at the proxy' '1' ([int]($msgNet -match '代理'))
+Assert-Eq 'the local advice points at the disk' '1' ([int]($msgLocal -match '磁盘|权限'))
+$advices = @('missing', 'quota', 'server', 'network', 'bad-content', 'local') | ForEach-Object { Get-UpdateFailureMessage $_ 'GitHub' }
+Assert-Eq 'no advice claims success' '0' (@($advices | Where-Object { $_ -match '成功' }).Count)
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

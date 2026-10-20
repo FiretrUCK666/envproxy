@@ -583,6 +583,24 @@ jobs:
             if ($pair[1] -notmatch '/releases/assets/') { Write-Host ("{0} 侧没有 API 资产端点下载路径" -f $pair[0]); $fail = 1 }
             if ($pair[1] -notmatch 'application/octet-stream') { Write-Host ("{0} 侧下载资产时没带 Accept: application/octet-stream" -f $pair[0]); $fail = 1 }
           }
+          # 失败原因词表两侧必须同形：分类的意义是让用户知道该做什么（等/开代理/手动下载/修磁盘），
+          # 两边词表一漂，提示就会在两个平台说不同的原因——同一个故障，两种说法。
+          $winKinds = [regex]::Match($ps, '\$UpdateFailureKinds\s*=\s*@\(([^)]*)\)')
+          $macKinds = [regex]::Match($sh, 'UPDATE_FAILURE_KINDS="([^"]*)"')
+          if (-not $winKinds.Success) { Write-Host 'Win 侧找不到失败原因词表'; $fail = 1 }
+          if (-not $macKinds.Success) { Write-Host 'Mac 侧找不到失败原因词表'; $fail = 1 }
+          if ($winKinds.Success -and $macKinds.Success) {
+            $wk = @([regex]::Matches($winKinds.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+            $mk = @($macKinds.Groups[1].Value -split '\s+' | Where-Object { $_ })
+            if (($wk -join ' ') -ne ($mk -join ' ')) {
+              Write-Host ("失败原因词表两侧不一致：Win [{0}] / Mac [{1}]" -f ($wk -join ','), ($mk -join ','))
+              $fail = 1
+            }
+            foreach ($k in @('missing', 'quota', 'server', 'network', 'bad-content', 'local')) {
+              if ($wk -notcontains $k) { Write-Host ("Win 侧失败原因词表缺 {0}" -f $k); $fail = 1 }
+              if ($mk -notcontains $k) { Write-Host ("Mac 侧失败原因词表缺 {0}" -f $k); $fail = 1 }
+            }
+          }
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

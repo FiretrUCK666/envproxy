@@ -31,6 +31,22 @@ _selftest_assert_file_eq() {
     fi
 }
 
+# 断言一段文字里含有某个片段（用于提示文案必须包含关键动作）。
+# 比"整串相等"更适合文案：文案会变，但"必须提到手动下载"这件事不能变。
+_selftest_assert_contains() {
+    _name="$1"; _needle="$2"; _hay="$3"
+    case "$_hay" in
+        *"$_needle"*)
+            echo "  PASS $_name"
+            ;;
+        *)
+            echo "  FAIL $_name（应包含 [$_needle]，实际：）"
+            printf '%s\n' "$_hay" | sed 's/^/    |/'
+            _selftest_fails=$((_selftest_fails + 1))
+            ;;
+    esac
+}
+
 self_test() {
     _selftest_fails=0
     _sandbox=$(mktemp -d /tmp/envproxy_selftest.XXXXXX 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
@@ -318,6 +334,41 @@ self_test() {
     if [ -n "$(update_source_id official)" ]; then _st2=1; else _st2=0; fi
     _selftest_assert_eq "official 给出非空仓库标识" "1" "$_st2"
 
+    # 失败原因分类：下载失败的原因决定用户该做什么（等一小时 / 开代理 / 手动下载 / 修磁盘），
+    # 全塌缩成一个"失败"字符串就等于把判断责任推给使用者。
+    _selftest_assert_eq "失败分类：404 是发布没提供该文件" "missing" "$(update_failure_kind 404 '')"
+    _selftest_assert_eq "失败分类：410 也是文件没了" "missing" "$(update_failure_kind 410 '')"
+    _selftest_assert_eq "失败分类：429 是配额用尽" "quota" "$(update_failure_kind 429 '')"
+    _selftest_assert_eq "失败分类：403 且配额剩 0 是配额用尽" "quota" "$(update_failure_kind 403 0)"
+    _selftest_assert_eq "失败分类：403 但还有配额是被拒绝" "server" "$(update_failure_kind 403 42)"
+    _selftest_assert_eq "失败分类：403 读不到配额头算被拒绝" "server" "$(update_failure_kind 403 '')"
+    _selftest_assert_eq "失败分类：5xx 是服务端问题" "server" "$(update_failure_kind 503 '')"
+    _selftest_assert_eq "失败分类：其它状态码按连不上处理" "network" "$(update_failure_kind 418 '')"
+    # 多个原因里挑一个报：只有"全都是 missing"才报 missing。中间设备被墙时会对什么都回 404，
+    # 404 旁边还有个超时就报"发布漏了包"等于冤枉维护者。
+    _selftest_assert_eq "挑原因：单个原样报出" "missing" "$(select_update_failure_kind missing)"
+    _selftest_assert_eq "挑原因：两个相同合并成一个" "missing" "$(select_update_failure_kind missing missing)"
+    _selftest_assert_eq "挑原因：404 旁边的超时报超时" "network" "$(select_update_failure_kind missing network)"
+    _selftest_assert_eq "挑原因：404 旁边的配额报配额" "quota" "$(select_update_failure_kind missing quota)"
+    _selftest_assert_eq "挑原因：临时目录不可写比超时更该先说" "local" "$(select_update_failure_kind network local)"
+    _selftest_assert_eq "挑原因：没有原因时退回连不上" "network" "$(select_update_failure_kind '')"
+    # 词表的顺序就是报告优先级：加一个原因不能悄悄改掉建议的先后，
+    # 而 missing（指控发布方）必须排在最后。
+    _ufk_n=$(printf '%s\n' $UPDATE_FAILURE_KINDS | grep -c . || true)
+    _selftest_assert_eq "失败词表：每个原因只出现一次" "6" "$(printf '%s\n' $UPDATE_FAILURE_KINDS | sort -u | grep -c . || true)"
+    _selftest_assert_eq "失败词表：本机问题排第一" "local" "$(printf '%s\n' $UPDATE_FAILURE_KINDS | head -n 1)"
+    _selftest_assert_eq "失败词表：缺包排最后" "missing" "$(printf '%s\n' $UPDATE_FAILURE_KINDS | tail -n 1)"
+    # 提示必须给出下一步动作，否则用户还是得自己猜。
+    _ufm_m=$(update_failure_message missing GitHub)
+    _ufm_q=$(update_failure_message quota GitHub)
+    _ufm_n=$(update_failure_message network GitHub)
+    _ufm_l=$(update_failure_message local GitHub)
+    _selftest_assert_contains "提示：缺包要说手动下载" "手动下载" "$_ufm_m"
+    _selftest_assert_contains "提示：配额要说会随时间恢复" "重试" "$_ufm_q"
+    _selftest_assert_contains "提示：连不上要说开代理" "代理" "$_ufm_n"
+    _selftest_assert_contains "提示：本机问题要说磁盘与权限" "磁盘" "$_ufm_l"
+    _selftest_assert_eq "提示：没有一种说法会声称成功" "0" "$(for _k in missing quota server network bad-content local; do update_failure_message "$_k" GitHub; done | grep -c '成功' || true)"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"
@@ -479,7 +530,9 @@ show_status() {
             fi
         fi
     else
-        echo "最新版本 : 检查失败（所有更新源都不可达，稍后重试）"
+        # 状态显示也要说清是哪一类失败：笼统说"都不可达"会让用户以为是网络问题，
+        # 而限流（等一小时）、缺包（手动下载）要做的动作完全不同。
+        echo "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
         echo "更新状态 : 未知"
     fi
     echo "---------------- 最近日志 ----------------"

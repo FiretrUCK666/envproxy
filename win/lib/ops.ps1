@@ -207,7 +207,9 @@ function Show-Status {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
     } else {
-        Write-Host "最新版本 : 检查失败（所有更新源都不可达，稍后重试）" -ForegroundColor Yellow
+        # 状态显示也要说清是哪一类失败：笼统说"都不可达"会让用户以为是网络问题，
+        # 而限流（等一小时）、缺包（手动下载）要做的动作完全不同。
+        Write-Host ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源")) -ForegroundColor Yellow
         Write-Host "更新状态 : 未知" -ForegroundColor DarkGray
     }
 

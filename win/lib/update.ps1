@@ -43,6 +43,89 @@ $UpdateSourceTable = @(
     @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; ApiRepo = "https://api.github.com/repos/@@"; }
 )
 
+# ------------------------------------------------------------------------------
+# 失败原因分类：把"为什么不行"从一堆布尔量变成一个明确的值
+# ------------------------------------------------------------------------------
+# 以前所有失败都塌缩成同一个 "fail"，于是提示只能笼统说"下载失败"——用户分不清
+# 是发布漏了包（等也没用）、GitHub 限流（一小时后会好）、还是自己网络不通（开代理就好）。
+# 这三种情况要做的动作完全不同，混成一句话等于把判断责任推给使用者。
+# 原因词表（两侧必须一致，见 check.yml 门禁 6）。**表的顺序就是报告优先级**：
+# 越靠前越该先报给用户——"最可行动"的那个先说，用户照着做就行。
+#   local       本机临时目录不可写——是本机的问题，与网络和发布都无关
+#   network     连不上（超时、DNS、连接被拒）——开代理或换网络就好
+#   quota       GitHub 接口配额用尽（403/429 且带限流特征）——等一小时会好
+#   server      GitHub 服务端出错（5xx）——等一会儿会好
+#   bad-content 拿回来的不是安装包（200 但内容是 JSON/HTML/损坏的包）
+#   missing     这个版本没有提供该文件（404/410）——等不会好，要去 Releases 手动下
+# missing 排在最后是刻意的：它指控的是发布方，只有在没有别的解释时才能这么说。
+$UpdateFailureKinds = @("local", "network", "quota", "server", "bad-content", "missing")
+
+# 把 HTTP 状态码归到失败原因。403/429 有两种含义（限流 vs 真的被拒），
+# 靠响应头里的 X-RateLimit-Remaining 区分：剩 0 就是配额用尽。
+# $RateLimitRemaining 传空表示"没拿到这个头"，此时按"真的被拒"处理。
+function Get-UpdateFailureKind([int]$StatusCode, [string]$RateLimitRemaining = "") {
+    if ($StatusCode -eq 404 -or $StatusCode -eq 410) { return "missing" }
+    if ($StatusCode -eq 429) { return "quota" }
+    if ($StatusCode -eq 403) {
+        if ($RateLimitRemaining -eq "0") { return "quota" }
+        return "server"
+    }
+    if ($StatusCode -ge 500) { return "server" }
+    return "network"
+}
+
+# 把失败原因翻译成一句人能据此行动的话。
+# 判据只有一条：用户读完这句，知道下一步该做什么。
+function Get-UpdateFailureMessage([string]$Kind, [string]$SourceName) {
+    switch ($Kind) {
+        "missing" {
+            return ("{0} 上没有提供这个版本的安装包（等也不会出现）。" -f $SourceName) +
+                "请到 Releases 页面手动下载对应平台的安装包，覆盖一次即可。"
+        }
+        "quota" {
+            return ("GitHub 接口配额用尽了（匿名访问每小时 60 次，{0} 也因此没问出结果）。" -f $SourceName) +
+                "等一小时后重试通常就好；也可以先到 Releases 页面手动下载。"
+        }
+        "server" {
+            return ("{0} 服务端出错（HTTP 5xx 或请求被拒）。" -f $SourceName) +
+                "这通常是对方临时故障，过一会儿重试就好。"
+        }
+        "network" {
+            return ("连不上 {0}（超时或连接被拒）。" -f $SourceName) +
+                "可以打开翻墙软件让请求走代理再试一次，或稍后重试。"
+        }
+        "bad-content" {
+            return ("从 {0} 拿回来的内容不是安装包（可能下载不完整，或被中间网络改写）。" -f $SourceName) +
+                "请重试一次，或到 Releases 页面手动下载安装包。"
+        }
+        "local" {
+            return "本机临时目录不可写，没法下载安装包（与网络和发布都无关）。" +
+                "请检查磁盘空间与临时目录权限，或手动下载安装包覆盖。"
+        }
+        default {
+            return ("从 {0} 更新失败。" -f $SourceName) + "请稍后重试，或到 Releases 页面手动下载安装包。"
+        }
+    }
+}
+
+# 从多条尝试的失败原因里挑一个报给用户（纯函数，可单测）。
+# 规则：
+#   1. 只有"全部都是 missing"才报 missing。404 必须是没有别的解释时才算数——
+#      被墙的中间设备会给假 404，混着网络故障时说"发布漏了包"等于冤枉维护者。
+#   2. 其余情况按"最可行动"排序取第一个：local（要修本机）> network（开代理就好）>
+#      quota（等一小时）> server（等一会儿）> bad-content（重试或手动）。
+function Select-UpdateFailureKind([string[]]$Kinds) {
+    if (-not $Kinds) { return "network" }
+    $distinct = @($Kinds | Where-Object { $_ } | Select-Object -Unique)
+    if (-not $distinct.Count) { return "network" }
+    if ($distinct.Count -eq 1) { return $distinct[0] }
+    # 按词表顺序取第一个命中的：missing 排在最后（它只在没有别的解释时才成立）。
+    foreach ($k in $UpdateFailureKinds) {
+        if ($distinct -contains $k) { return $k }
+    }
+    return $distinct[0]
+}
+
 # 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
 function Test-DevCopy {
     $root = Split-Path -Parent $ScriptDir
@@ -139,13 +222,21 @@ function Get-LocalVersion {
 # 带代理兜底的 HTTPS 取文本：先直连，失败且本地代理 active 时经代理重试一次。
 # DIVERGE(Win): Mac 侧 curl 自动继承环境变量代理，单次调用叠加直连回退即可；
 # Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试。
+# 失败原因记在 $script:UpdateLastVersionFailure：调用方要靠它区分"连不上"与"被限流"。
 function Invoke-UpdateText([string]$Url) {
     $text = Invoke-UpdateTextVia $Url ""
-    if ($text) { return $text }
-    $port = $null
-    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
-    if ($port) { return (Invoke-UpdateTextVia $Url "$port") }
+    if ($text.Text) { return $text.Text }
+    $script:UpdateLastVersionFailure = $text.Failure
+    if ($text.Failure -eq "network") {
+        $port = $null
+        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+        if ($port) {
+            $t2 = Invoke-UpdateTextVia $Url "$port"
+            if ($t2.Text) { return $t2.Text }
+            $script:UpdateLastVersionFailure = $t2.Failure
+        }
+    }
     return $null
 }
 
@@ -163,10 +254,20 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
         $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(8)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
-        $task = $client.GetStringAsync($Url)
-        if ($task.Wait(8000)) { return $task.Result }
-        return $null
-    } catch { return $null }
+        $task = $client.GetAsync($Url)
+        if (-not $task.Wait(8000)) { return @{ Text = ""; Failure = "network" } }
+        $resp = $task.Result
+        if (-not $resp.IsSuccessStatusCode) {
+            $rem = ""
+            try {
+                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
+                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
+                }
+            } catch {}
+            return @{ Text = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
+        }
+        return @{ Text = $task.Result.Content.ReadAsStringAsync().Result; Failure = "" }
+    } catch { return @{ Text = ""; Failure = "network" } }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
@@ -179,11 +280,16 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
 # 逐个源尝试，第一个答出来的胜出。
 # 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
 # 否则会出现"拿 A 源的版本号去下 B 源的包"。
+# 全都问不到时，$script:UpdateLastVersionFailure 记下原因（供提示用）。
+$script:UpdateLastVersionFailure = "network"
 function Get-RemoteVersion {
+    $kinds = @()
     foreach ($src in (Get-UpdateSources)) {
         $r = Get-RemoteVersionFrom $src
         if ($r) { return $r }
+        if ($script:UpdateLastVersionFailure) { $kinds += $script:UpdateLastVersionFailure }
     }
+    $script:UpdateLastVersionFailure = (Select-UpdateFailureKind $kinds)
     return $null
 }
 
@@ -203,26 +309,35 @@ function Get-RemoteVersionFrom([hashtable]$Src) {
 }
 
 # 按这一源声明的优先顺序问版本，先答出来的那条胜出。
+# 两条路都没答出来时，$script:UpdateLastVersionFailure 记下原因（供最终提示用）。
 function Get-TagFromSource([hashtable]$Src) {
     $order = if ("$($Src.Preferred)" -eq "Web") { @("Web", "Api") } else { @("Api", "Web") }
+    $kinds = @()
     foreach ($kind in $order) {
         $tpl = if ($kind -eq "Web") { $Src.Web } else { $Src.Api }
         if (-not $tpl) { continue }
         $url = $tpl.Replace('@@', $Src.Repo)
         $tag = if ($kind -eq "Web") { Get-TagFromWeb $url } else { Get-TagFromApi $url }
         if ($tag) { return $tag }
+        if ($script:UpdateLastVersionFailure) { $kinds += $script:UpdateLastVersionFailure }
     }
+    $script:UpdateLastVersionFailure = (Select-UpdateFailureKind $kinds)
     return ""
 }
 
 # API 路径：读 JSON 的 tag_name。
+# 拿不到时把原因记进 $script:UpdateLastVersionFailure（限流与连不上要分开说）。
 function Get-TagFromApi([string]$Url) {
+    $script:UpdateLastVersionFailure = ""
     try {
         $json = Invoke-UpdateText $Url
         if (-not $json) { return "" }
         $obj = $json | ConvertFrom-Json
         return (("{0}" -f $obj.tag_name).Trim())
-    } catch { return "" }
+    } catch {
+        $script:UpdateLastVersionFailure = "server"
+        return ""
+    }
 }
 
 # 从重定向目标里提取标签；形状不对就返回空（调用方据此换另一条路径）。
@@ -239,13 +354,21 @@ function Get-TagFromLocation([string]$Location) {
 
 # 网页路径：读 302 的 Location 取标签。带代理兜底（与 API 路径同一个模式）。
 function Get-TagFromWeb([string]$Url) {
-    $tag = Get-TagFromWebVia $Url ""
-    if ($tag) { return $tag }
-    $port = $null
-    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
-    if (-not $port) { return "" }
-    return (Get-TagFromWebVia $Url "$port")
+    $script:UpdateLastVersionFailure = ""
+    $r = Get-TagFromWebVia $Url ""
+    if ($r.Tag) { return $r.Tag }
+    $script:UpdateLastVersionFailure = $r.Failure
+    if ($r.Failure -eq "network") {
+        $port = $null
+        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+        if ($port) {
+            $r2 = Get-TagFromWebVia $Url "$port"
+            if ($r2.Tag) { return $r2.Tag }
+            $script:UpdateLastVersionFailure = $r2.Failure
+        }
+    }
+    return ""
 }
 
 function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
@@ -265,11 +388,23 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
         $client.Timeout = [TimeSpan]::FromSeconds(8)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
         $task = $client.GetAsync($Url)
-        if (-not $task.Wait(8000)) { return "" }
-        $loc = $task.Result.Headers.Location
-        if (-not $loc) { return "" }
-        return (Get-TagFromLocation $loc.ToString())
-    } catch { return "" }
+        if (-not $task.Wait(8000)) { return @{ Tag = ""; Failure = "network" } }
+        $resp = $task.Result
+        if (-not $resp.IsSuccessStatusCode) {
+            $rem = ""
+            try {
+                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
+                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
+                }
+            } catch {}
+            return @{ Tag = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
+        }
+        $loc = $resp.Headers.Location
+        if (-not $loc) { return @{ Tag = ""; Failure = "server" } }
+        $tag = Get-TagFromLocation $loc.ToString()
+        if (-not $tag) { return @{ Tag = ""; Failure = "server" } }
+        return @{ Tag = $tag; Failure = "" }
+    } catch { return @{ Tag = ""; Failure = "network" } }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
@@ -298,17 +433,22 @@ function Get-UpdateAssetId([hashtable]$Remote, [string]$FileName) {
     return (Get-AssetIdFromJson (Invoke-UpdateText $url) $FileName)
 }
 
-# 带代理兜底的 HTTPS 下载：返回 "ok" / "missing"（这个版本没提供该文件）/ "fail"。
-# 单独分出 "missing"，是为了把「这次发布漏了安装包」和「本机网络不通」两句提示分开。
+# 带代理兜底的 HTTPS 下载：成功返回 "ok"，失败返回**失败原因**（见 Get-UpdateFailureKind 的词表）。
+# 单独分出每一种原因，是为了让最终提示能说清"等一会儿""开代理"还是"手动下载"——
+# 这些动作互不相同，塌缩成一个 fail 就只能把判断推给使用者。
 # Headers 用于 API 资产端点那条路（Accept: application/octet-stream 才会回二进制）。
 function Save-UpdateFile([string]$Url, [string]$DestFile, [hashtable]$Headers = @{}) {
     $r = Save-UpdateFileVia $Url $DestFile "" $Headers
-    if ($r -ne "fail") { return $r }
-    $port = $null
-    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
-    if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port" $Headers) }
-    return "fail"
+    if ($r -eq "ok") { return "ok" }
+    # 走代理只在"网络连不上"时才有意义：缺包/配额/服务端错误换个出口也是同样结果，
+    # 重试只是白等一遍。代理本身是本机的另一个出口，连接失败换条路可能就通了。
+    if ($r -eq "network") {
+        $port = $null
+        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+        if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port" $Headers) }
+    }
+    return $r
 }
 
 function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort, [hashtable]$Headers = @{}) {
@@ -329,19 +469,31 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         # 那这条请求拿回来的会是 JSON 而不是安装包——当场判失败，别把 JSON 当包往下走。
         if ($Headers) {
             foreach ($hk in $Headers.Keys) {
-                if (-not $client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk])) { return "fail" }
+                if (-not $client.DefaultRequestHeaders.TryAddWithoutValidation([string]$hk, [string]$Headers[$hk])) { return "bad-content" }
             }
         }
         $respTask = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead)
-        if (-not $respTask.Wait(60000)) { return "fail" }
+        if (-not $respTask.Wait(60000)) { return "network" }
         $resp = $respTask.Result
-        if (($resp.StatusCode -eq [System.Net.HttpStatusCode]::NotFound) -or ($resp.StatusCode -eq [System.Net.HttpStatusCode]::Gone)) { return "missing" }
-        if (-not $resp.IsSuccessStatusCode) { return "fail" }
+        if (-not $resp.IsSuccessStatusCode) {
+            # 403 有两种含义（限流 / 真的被拒），靠限流头区分：剩 0 就是配额用尽。
+            $rem = ""
+            try {
+                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
+                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
+                }
+            } catch {}
+            return (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim())
+        }
         $bodyTask = $resp.Content.ReadAsByteArrayAsync()
-        if (-not $bodyTask.Wait(60000)) { return "fail" }
+        if (-not $bodyTask.Wait(60000)) { return "network" }
         [System.IO.File]::WriteAllBytes($DestFile, $bodyTask.Result)
         return "ok"
-    } catch { return "fail" }
+    } catch {
+        # 写文件失败（临时目录不可写）是本机问题，不能和网络问题混成一句。
+        if ($_.Exception -is [System.UnauthorizedAccessException] -or $_.Exception -is [System.IO.IOException]) { return "local" }
+        return "network"
+    }
     finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
@@ -374,8 +526,11 @@ function Test-UsableZip([string]$Path) {
 # 从**指定源**取一个合格的安装包：下载 → 解压 → 结构校验，全过才算数。
 # 任何一步不过都返回 $null（换不换源由调用方决定），并把临时物清干净——
 # 失败路径绝不给安装区留下任何东西。
+# 失败原因写进脚本级变量 $UpdateLastFailure：调用方要靠它决定给用户什么提示，
+# 在这里打印会让"每个源各说一句"和"最后一句总结"互相打架。
 function Get-UpdatePackage([hashtable]$Remote) {
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
+    $script:UpdateLastFailure = "network"
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($Remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
     $zipFile = "$tmpBase.zip"
     $extractDir = "${tmpBase}-pkg"
@@ -396,31 +551,41 @@ function Get-UpdatePackage([hashtable]$Remote) {
         }
         $targets += @{ Url = ("{0}/releases/download/{1}/{2}" -f $Remote.Base, $Remote.Tag, $file); Headers = @{} }
         $dl = "fail"
-        $sawFail = $false
-        $sawMissing = $false
+        $kinds = @()
         foreach ($t in $targets) {
             $r = Save-UpdateFile $t.Url $zipFile $t.Headers
             if ($r -eq "ok") {
                 if (Test-UsableZip $zipFile) { $dl = "ok"; break }
                 # 200 但不是一个能打开的 zip：丢掉这份内容，继续试下一条路（多半是直连）。
                 Remove-ItemSafe $zipFile
-                $r = "fail"
+                $r = "bad-content"
             }
-            if ($r -eq "missing") { $sawMissing = $true } else { $sawFail = $true }
+            $kinds += $r
         }
-        if ($dl -ne "ok") { $dl = if ($sawFail) { "fail" } elseif ($sawMissing) { "missing" } else { "fail" } }
-        if ($dl -eq "missing") {
-            Write-Host ("  {0} 上没有提供这个版本的安装包。" -f $Remote.Name) -ForegroundColor DarkGray
-        } elseif ($dl -ne "ok") {
-            Write-Host ("  从 {0} 下载失败。" -f $Remote.Name) -ForegroundColor DarkGray
-        } else {
+        if ($dl -ne "ok") { $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds) }
+        if ($dl -eq "ok") {
             Write-Host "正在解压并校验..." -ForegroundColor Cyan
-            Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
-            Test-Package $extractDir $Remote.Version "win"
+            try {
+                Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
+            } catch {
+                $script:UpdateLastFailure = "bad-content"
+                Remove-ItemSafe $zipFile
+                Remove-ItemSafe $extractDir
+                return $null
+            }
+            try {
+                Test-Package $extractDir $Remote.Version "win"
+            } catch {
+                # 包能解开但结构不对 = 内容不对（发版漏文件、包被改写），不是网络问题。
+                $script:UpdateLastFailure = "bad-content"
+                Remove-ItemSafe $zipFile
+                Remove-ItemSafe $extractDir
+                return $null
+            }
             $ok = $true
         }
     } catch {
-        Write-Host ("  {0} 的安装包没通过校验：{1}" -f $Remote.Name, $_.Exception.Message) -ForegroundColor DarkGray
+        $script:UpdateLastFailure = "local"
     }
     if (-not $ok) {
         Remove-ItemSafe $zipFile
@@ -471,8 +636,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     Write-Host "正在检查最新版本（最多等十几秒）..." -ForegroundColor DarkGray
     $remote = Get-RemoteVersion
     if (-not $remote) {
-        Write-Host "最新版本 : 检查失败（所有更新源都不可达）" -ForegroundColor Yellow
-        Write-Host "请稍后重试。也可以先关掉、再打开翻墙软件，让它换一个状态，常常就能连上。" -ForegroundColor Yellow
+        # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
+        Write-Host ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源")) -ForegroundColor Yellow
         return
     }
     Write-Host ("最新版本 : {0}（来源：{1}）" -f $remote.Tag, $remote.Name) -ForegroundColor Green
@@ -523,8 +688,10 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     # 换源必须**连同版本一起换**：用那一源自己的标签下它自己的包，保持"版本与包同源"。
     $zipFile = $null
     $extractDir = $null
+    $kinds = @()
     try {
         $pkg = Get-UpdatePackage $remote
+        if (-not $pkg) { $kinds += $script:UpdateLastFailure }
         if (-not $pkg) {
             foreach ($src in (Get-UpdateSources)) {
                 # 同名源跳过必须排在联网之前：胜出源刚刚已经试过，再问一次只会白烧一次
@@ -537,11 +704,17 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
                 Write-Host ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag) -ForegroundColor Cyan
                 $pkg = Get-UpdatePackage $alt
                 if ($pkg) { break }
+                $kinds += $script:UpdateLastFailure
             }
         }
-        # 这里不再复述"下载失败/校验没过"：上面每一条路失败时已经按真实原因说过一句
-        # （缺包 / 下载失败 / 校验没通过），这里再说一遍就会自相矛盾。
-        if (-not $pkg) { throw "更新失败：没有可用的安装包（具体原因见上面那一行），未做任何改动。请稍后重试，也可以到 Releases 页面手动下载安装包覆盖一次。" }
+        # 一句话说清"为什么没成、接下来怎么办"：由真实失败原因决定，
+        # 不再各说各的（以前这里一句"下载失败或校验没过"会和上面"没有提供安装包"自相矛盾）。
+        if (-not $pkg) {
+            $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds)
+            Write-Host ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name)) -ForegroundColor Yellow
+            Write-Host "未做任何改动。" -ForegroundColor Yellow
+            return
+        }
         $extractDir = $pkg.Root
         $zipFile = $pkg.Zip
         # 先把这一版改了什么给用户看，再问要不要装
