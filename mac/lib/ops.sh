@@ -596,6 +596,15 @@ self_test() {
         echo "  SKIP 造不出坏掉的 lsof/netstat 桩（权限或文件系统不支持）"
     fi
 
+    # 入口参数守卫：多余的参数、别处用的 --purge，都要报用法错误（退出码 2），
+    # 不许静默进入监控模式。两道守卫都在分派之前触发，所以这两个调用不会真的装/删任何东西。
+    _sg_rc=0
+    /bin/bash "$SCRIPT_PATH" install --purge >/dev/null 2>&1 || _sg_rc=$?
+    _selftest_assert_eq "入口：--purge 用在 uninstall 以外要报用法错误" "2" "$_sg_rc"
+    _sg_rc=0
+    /bin/bash "$SCRIPT_PATH" status extra >/dev/null 2>&1 || _sg_rc=$?
+    _selftest_assert_eq "入口：多余的位置参数要报用法错误" "2" "$_sg_rc"
+
     # 带开关的一次性命令不能被当成监控：
     # 判据是脚本路径之后的第一个词，不是最后一个词。
     _selftest_assert_eq "带开关的一次性命令不是监控: uninstall --purge" "1" "$(is_monitor_args "/bin/bash $SCRIPT_PATH uninstall --purge" && echo 0 || echo 1)"
