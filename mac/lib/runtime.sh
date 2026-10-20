@@ -73,6 +73,15 @@ get_plist_content() {
 EOF
 }
 
+# 该不该重载 launchd 代理？返回 0 = 要重载，1 = 不用。
+# 判据只有两条：明确要求重载（安装路径），或者代理根本没被装载（那时也没有监控可杀）。
+# 纯函数，自检可测。
+autorun_reload_needed() {
+    [ "${1:-}" = "1" ] && return 0
+    launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" && return 1
+    return 0
+}
+
 set_autorun() {
     mkdir -p "$ENVPROXY_HOME" "$HOME/Library/LaunchAgents" 2>/dev/null || true
     if [ -f "$SCRIPT_DIR/locator.sh" ]; then
@@ -81,10 +90,18 @@ set_autorun() {
     fi
     get_plist_content > "$PLIST_PATH" 2>/dev/null || true
     update_path_record
-    _uid=$(id -u)
-    launchctl bootout "gui/$_uid/$PLIST_LABEL" 2>/dev/null || true
-    if ! launchctl bootstrap "gui/$_uid" "$PLIST_PATH" 2>/dev/null; then
-        launchctl load "$PLIST_PATH" 2>/dev/null || true
+    # 重载 launchd 代理要谨慎：bootout 会给**正在跑的监控**发 SIGTERM，
+    # 而紧接着 bootstrap 启的新监控可能抢不到单实例锁（旧的还没退干净），
+    # 于是"自愈"的结果是监控没了——直到下次登录才恢复。
+    # plist 内容只在装载时被 launchd 读一次，所以内容更新落进文件就够了；
+    # 真正需要重载的只有"代理根本没被装载"这一种情况（那时也没有监控可杀）。
+    # $1=1 是明确要求重载（安装路径：要把新的 plist 装载进去）。
+    if autorun_reload_needed "${1:-}"; then
+        _uid=$(id -u)
+        launchctl bootout "gui/$_uid/$PLIST_LABEL" 2>/dev/null || true
+        if ! launchctl bootstrap "gui/$_uid" "$PLIST_PATH" 2>/dev/null; then
+            launchctl load "$PLIST_PATH" 2>/dev/null || true
+        fi
     fi
     # 落点判据：两个固定产物都在才算成功，调用方据此打印实话。
     [ -f "$PLIST_PATH" ] && [ -f "$LOCATOR_PATH" ]
@@ -191,6 +208,65 @@ _backup_rc() {
     cp -p "$1" "$1.envproxy.bak" 2>/dev/null || true
 }
 
+# 解析软链指向的真实文件（最多跟 10 层）。
+# mv 是原子的（目标要么是旧内容、要么是新内容，不会是半截），
+# 但直接 mv 会把软链换成普通文件——所以先找到软链指向的真实文件，对它做替换。
+# macOS 的 readlink 只解一层，链子要自己跟到底。
+_resolve_real_path() {
+    _rrp="$1"
+    _rrp_n=0
+    while [ -L "$_rrp" ] && [ "$_rrp_n" -lt 10 ]; do
+        _rrp_n=$((_rrp_n + 1))
+        _rrp_link=$(readlink "$_rrp" 2>/dev/null) || break
+        [ -n "$_rrp_link" ] || break
+        case "$_rrp_link" in
+            /*) _rrp="$_rrp_link" ;;
+            *) _rrp="$(dirname "$_rrp")/$_rrp_link" ;;
+        esac
+    done
+    printf '%s' "$_rrp"
+}
+
+# 取文件的权限位（八进制）。macOS 是 stat -f，Linux 是 stat -c。
+# 两个都试，但**必须校验结果像权限位**：GNU 的 stat -f 是"看文件系统"，
+# 不是"按格式输出"，它会成功返回一段文件系统信息——不校验就会把那段信息当权限位用。
+_perm_of() {
+    _po=$(stat -f '%Lp' "$1" 2>/dev/null | head -n 1)
+    case "$_po" in
+        [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$_po"; return 0;;
+    esac
+    _po=$(stat -c '%a' "$1" 2>/dev/null | head -n 1)
+    case "$_po" in
+        [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) printf '%s' "$_po"; return 0;;
+    esac
+    printf ''
+}
+
+# 把临时文件的内容落到目标文件：原子替换。
+# 以前是 `cat 临时文件 > 原文件`——那是**就地截断重写**：中途失败或进程被杀，
+# 用户的 .zshrc 就停在半截上，shell 一开就报错（配置坏了比没装更糟）。
+# 改成同目录临时文件 + mv：mv 是改名，原子；权限位照原文件带过去。
+_write_rc_atomic() {
+    _wra_src="$1"
+    _wra_dst="$2"
+    _wra_real=$(_resolve_real_path "$_wra_dst")
+    _wra_dir=$(dirname "$_wra_real")
+    [ -d "$_wra_dir" ] || return 1
+    # 临时文件必须和目标同目录，mv 才是同一文件系统内的改名（才是原子的）。
+    _wra_tmp="$_wra_dir/.envproxy-rc.$$"
+    if ! cat "$_wra_src" > "$_wra_tmp" 2>/dev/null; then
+        rm -f "$_wra_tmp" 2>/dev/null || true
+        return 1
+    fi
+    _wra_perm=$(_perm_of "$_wra_real")
+    [ -n "$_wra_perm" ] && chmod "$_wra_perm" "$_wra_tmp" 2>/dev/null || true
+    if mv "$_wra_tmp" "$_wra_real" 2>/dev/null; then
+        return 0
+    fi
+    rm -f "$_wra_tmp" 2>/dev/null || true
+    return 1
+}
+
 _normalize_hook_block() {
     _hrc="$1"
     grep -qxF "$HOOK_START" "$_hrc" 2>/dev/null || return 0
@@ -204,7 +280,9 @@ _normalize_hook_block() {
     _htmp="$_hrc.tmp.$$"
     _backup_rc "$_hrc"
     if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_hrc" > "$_htmp" 2>/dev/null; then
-        cat "$_htmp" > "$_hrc" 2>/dev/null || true
+        if ! _write_rc_atomic "$_htmp" "$_hrc"; then
+            log_msg "shell hook 改写失败（原文件保持不变）：$_hrc"
+        fi
     fi
     rm -f "$_htmp" 2>/dev/null || true
     return 0
@@ -220,10 +298,11 @@ remove_shell_hooks() {
             continue
         fi
         _tmp="$_rc.tmp.$$"
-        # 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
         _backup_rc "$_rc"
         if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null; then
-            cat "$_tmp" > "$_rc" 2>/dev/null || true
+            if ! _write_rc_atomic "$_tmp" "$_rc"; then
+                log_msg "shell hook 清理失败（原文件保持不变）：$_rc"
+            fi
         fi
         rm -f "$_tmp" 2>/dev/null || true
     done
@@ -232,6 +311,25 @@ remove_shell_hooks() {
 # ------------------------------------------------------------------------------
 # 7. 监控进程管理（PID 文件 + 命令行校验 + 优雅停止）
 # ------------------------------------------------------------------------------
+# 判据：这个进程是"监控"还是"一次性命令"。
+# 监控的命令行是"解释器 + 脚本路径"，后面没有子命令；
+# 一次性命令的命令行是"解释器 + 脚本路径 + 子命令"，子命令在最后一个词。
+# 判据必须是**参数位**，不能是"命令行里有没有 install/stop 这些字"——
+# 装在名字带 install 的目录里（Downloads/install/…）的监控会被误判成一次性命令：
+# 于是"监控没在跑"→ 又起一个，停的时候也停不掉。
+# 纯函数，自检可测（不联网、不起进程）。
+is_monitor_args() {
+    case "$1" in
+        *envproxy.sh*) ;;
+        *) return 1;;
+    esac
+    _ima_last="${1##* }"
+    case "$_ima_last" in
+        install|stop|uninstall|status|purge|update|menu|self-test) return 1;;
+    esac
+    return 0
+}
+
 # 判据一：监控自己写下的 pid 文件（它在拿到单实例锁之后才写）。
 # 这是"监控真的在跑"的唯一可靠判据——命令行特征只能说明"有这么个进程"，
 # 而刚启动、还没抢到锁就在退出的那个也满足它，拿它当"已启动"就会报假话。
@@ -242,14 +340,10 @@ get_monitor_pid_from_file() {
     [ "$_pid" != "$$" ] || return 1
     kill -0 "$_pid" 2>/dev/null || return 1
     _args=$(ps -p "$_pid" -o args= 2>/dev/null)
-    case "$_args" in
-        *envproxy.sh*)
-            case "$_args" in
-                *install*|*stop*|*uninstall*|*status*|*purge*) return 1;;
-                *) printf '%s' "$_pid"; return 0;;
-            esac
-            ;;
-    esac
+    if is_monitor_args "$_args"; then
+        printf '%s' "$_pid"
+        return 0
+    fi
     return 1
 }
 
@@ -341,6 +435,40 @@ stop_monitor() {
     else
         echo "监控进程已停止。"
     fi
+}
+
+# 拿操作锁（安装/更新/停止/卸载共用）：成功返回 0；撞上返回 1 并打印提示。
+# 用 ln 而不是 mkdir：mkdir 成功到"把 pid 写进去"之间有个空窗，
+# 那个空窗里另一个进程读到空的 pid，会把锁当成陈旧的接管掉——
+# 两个安装同时跑，就会互相覆盖文件。
+# ln 是原子的：目标存在就失败，失败即输；先把 pid 写进临时文件再 ln 过去，
+# 锁一出现就是完整的。
+# $1=锁文件路径。
+acquire_op_lock() {
+    _aol_lock="$1"
+    _aol_tmp="$_aol_lock.tmp.$$"
+    printf '%s\n' "$$" > "$_aol_tmp" 2>/dev/null || true
+    if ln "$_aol_tmp" "$_aol_lock" 2>/dev/null; then
+        rm -f "$_aol_tmp" 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$_aol_tmp" 2>/dev/null || true
+    _aol_pid=$(cat "$_aol_lock" 2>/dev/null || echo 0)
+    if [ -n "$_aol_pid" ] && [ "$_aol_pid" != "0" ] && kill -0 "$_aol_pid" 2>/dev/null; then
+        echo "另一个安装/更新正在进行（PID $_aol_pid），请等它结束再试（没有做任何改动）。"
+        return 1
+    fi
+    # 陈旧锁（持有者已经不在）：接管。删掉再 ln——ln 是原子的，
+    # 两个进程同时接管也只有一个能成功。
+    rm -f "$_aol_lock" 2>/dev/null || true
+    printf '%s\n' "$$" > "$_aol_tmp" 2>/dev/null || true
+    if ln "$_aol_tmp" "$_aol_lock" 2>/dev/null; then
+        rm -f "$_aol_tmp" 2>/dev/null || true
+        return 0
+    fi
+    rm -f "$_aol_tmp" 2>/dev/null || true
+    echo "另一个安装/更新正在进行，请稍候（没有做任何改动）。"
+    return 1
 }
 
 # ------------------------------------------------------------------------------

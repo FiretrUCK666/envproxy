@@ -243,6 +243,96 @@ self_test() {
     if [ -n "$SCRIPT_PATH" ] && [ "$SCRIPT_PATH" = "$SCRIPT_DIR/envproxy.sh" ] && [ -f "$SCRIPT_PATH" ]; then _l3=1; else _l3=0; fi
     _selftest_assert_eq "入口公布的 SCRIPT_PATH 指向入口脚本本身" "1" "$_l3"
 
+    echo "[8b] 运行时加固"
+    # 监控的判据必须看**参数位**，不是看命令行里有没有 install/stop 这些字。
+    # 装在名字带 install 的目录里的监控，用子串匹配会被当成一次性命令：
+    # 于是"监控没在跑"→ 又起一个，停的时候也停不掉。
+    if is_monitor_args "/bin/bash /Users/me/Downloads/install/mac/envproxy.sh"; then _r1=1; else _r1=0; fi
+    _selftest_assert_eq "路径里带 install 的监控仍然算监控" "1" "$_r1"
+    if is_monitor_args "/bin/bash /Users/me/mac/envproxy.sh"; then _r2=1; else _r2=0; fi
+    _selftest_assert_eq "不带子命令的算监控" "1" "$_r2"
+    if is_monitor_args "/bin/bash /Users/me/mac/envproxy.sh install"; then _r3=0; else _r3=1; fi
+    _selftest_assert_eq "带 install 子命令的不算监控" "1" "$_r3"
+    if is_monitor_args "/bin/bash /Users/me/mac/envproxy.sh status"; then _r4=0; else _r4=1; fi
+    _selftest_assert_eq "带 status 子命令的不算监控" "1" "$_r4"
+    if is_monitor_args "/usr/bin/sleep 100"; then _r5=0; else _r5=1; fi
+    _selftest_assert_eq "别的进程不算监控" "1" "$_r5"
+
+    # 操作锁：拿锁必须原子的。以前用 mkdir 拿锁、再把 pid 写进去——
+    # 中间那个空窗里另一个进程读到空的 pid，会把锁当成陈旧的接管掉，
+    # 两个安装同时跑就互相覆盖文件。现在用 ln：锁一出现就是完整的。
+    _rlock="$_sandbox/.op.lock.test"
+    if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r6=1; else _r6=0; fi
+    _selftest_assert_eq "第一次拿锁成功" "1" "$_r6"
+    if [ -f "$_rlock" ]; then _r7=1; else _r7=0; fi
+    _selftest_assert_eq "锁文件存在" "1" "$_r7"
+    if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r8=0; else _r8=1; fi
+    _selftest_assert_eq "持锁者还在时第二个拿不到" "1" "$_r8"
+    # 陈旧锁（持有者已经不在）必须能被接管——否则一次崩溃就把用户锁死在门外。
+    rm -f "$_rlock" 2>/dev/null || true
+    printf '999999\n' > "$_rlock" 2>/dev/null || true
+    if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r9=1; else _r9=0; fi
+    _selftest_assert_eq "陈旧的锁能被接管" "1" "$_r9"
+    rm -f "$_rlock" 2>/dev/null || true
+    # 锁内容必须就是持有者的 pid：读出来才能判断"持有者还在不在"。
+    _rlock2="$_sandbox/.op.lock.test2"
+    acquire_op_lock "$_rlock2" >/dev/null 2>&1 || true
+    _r10=$(cat "$_rlock2" 2>/dev/null | tr -d ' \t\r\n')
+    _selftest_assert_eq "锁里写的是持有者的 pid" "$$" "$_r10"
+    rm -f "$_rlock2" 2>/dev/null || true
+
+    # hook 改写必须原子：以前是就地截断重写，中途失败或被杀，
+    # 用户的 .zshrc 就停在半截上，shell 一开就报错。
+    _rcf="$_sandbox/rc-test"
+    _rcsrc="$_sandbox/rc-src"
+    printf 'old content\n' > "$_rcf" 2>/dev/null || true
+    printf 'new content\n' > "$_rcsrc" 2>/dev/null || true
+    if _write_rc_atomic "$_rcsrc" "$_rcf" 2>/dev/null; then _r11=1; else _r11=0; fi
+    _selftest_assert_eq "原子写成功" "1" "$_r11"
+    _selftest_assert_file_eq "内容换成了新的" "$(printf 'new content')" "$_rcf"
+    # 软链不能被换成普通文件：mv 是原子的，但直接 mv 会把软链换成实体文件。
+    # 有些环境（Windows 的 git-bash）建不出真软链——ln -s 会退化成复制，
+    # 那时这条测不了，跳过并记一笔（真 macOS 与 CI 的 ubuntu 都测得到）。
+    _rctarget="$_sandbox/rc-target"
+    _rclink="$_sandbox/rc-link"
+    printf 'target old\n' > "$_rctarget" 2>/dev/null || true
+    printf 'target new\n' > "$_rcsrc" 2>/dev/null || true
+    if ln -sf "$_rctarget" "$_rclink" 2>/dev/null && [ -L "$_rclink" ]; then
+        _write_rc_atomic "$_rcsrc" "$_rclink" 2>/dev/null || true
+        if [ -L "$_rclink" ]; then _r12=1; else _r12=0; fi
+        _selftest_assert_eq "软链还是软链" "1" "$_r12"
+        _selftest_assert_file_eq "软链指向的文件内容更新了" "$(printf 'target new')" "$_rctarget"
+    else
+        echo "  SKIP 软链改写（本机建不出真软链）"
+    fi
+
+    # 权限位要照原文件带过去（用户可能特意设过）。
+    # Windows 的 git-bash 上 chmod 是空操作（MSYS 不实现 POSIX 权限），
+    # 那时权限测不了，跳过并记一笔。
+    case "$(uname -s 2>/dev/null)" in
+        MINGW*|MSYS*|CYGWIN*) echo "  SKIP 权限位与快照权限（非 POSIX 环境）";;
+        *)
+            chmod 600 "$_rcf" 2>/dev/null || true
+            printf 'again\n' > "$_rcsrc" 2>/dev/null || true
+            _write_rc_atomic "$_rcsrc" "$_rcf" 2>/dev/null || true
+            _rperm=$(_perm_of "$_rcf")
+            _selftest_assert_eq "权限位保持不变" "600" "$_rperm"
+            # 快照里是用户原来的代理地址，可能带账号密码。默认权限（同 umask，通常 0644）
+            # 是同机其他用户都能读——凭据就这么漏出去了。
+            rm -f "$PREV_ENV" 2>/dev/null || true
+            snapshot_prev_env >/dev/null 2>&1 || true
+            _rperm2=$(_perm_of "$PREV_ENV")
+            _selftest_assert_eq "快照文件的权限是 600" "600" "$_rperm2"
+            ;;
+    esac
+
+    # 自愈不许杀正在跑的监控：bootout 会给监控发 SIGTERM，
+    # 而紧接着启的新监控可能抢不到单实例锁——于是"自愈"的结果是监控没了。
+    if autorun_reload_needed 1; then _r13=1; else _r13=0; fi
+    _selftest_assert_eq "明确要求时才重载代理" "1" "$_r13"
+    if grep -q 'autorun_reload_needed' "$LIB_DIR/runtime.sh" 2>/dev/null; then _r14=1; else _r14=0; fi
+    _selftest_assert_eq "set_autorun 走的是这个判据" "1" "$_r14"
+
     echo "[9] 菜单分派"
     # menu 子命令必须在入口分派里存在，show_menu 必须已定义；
     # 菜单列出的每个子命令都必须能在入口分派里找到（壳调回来的路不断）。

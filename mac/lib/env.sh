@@ -122,6 +122,10 @@ snapshot_prev_env() {
         [ "$_cur" = "1" ] && _cur=""
         printf '%s\t%s\n' "NODE_USE_ENV_PROXY" "$_cur"
     } > "$_sntmp" 2>/dev/null && mv "$_sntmp" "$PREV_ENV" 2>/dev/null || rm -f "$_sntmp" 2>/dev/null || true
+    # 快照里是用户**原来**的代理地址，可能带账号密码（http://user:pass@host:port）。
+    # 默认权限（同 umask，通常 0644）是同机其他用户都能读——凭据就这么漏出去了。
+    # 收紧到 0600：只有自己能读。
+    [ -f "$PREV_ENV" ] && chmod 600 "$PREV_ENV" 2>/dev/null || true
     return 0
 }
 

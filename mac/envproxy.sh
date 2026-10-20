@@ -100,23 +100,14 @@ case "$_CMD_NORM" in
     install|update|stop|uninstall)
         # 操作锁：这四个动作都会改文件或删变量，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
         # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
+        # 拿锁用 ln 而不是 mkdir（理由见 runtime 层的 acquire_op_lock）：
+        # mkdir 成功到"把 pid 写进去"之间有个空窗，那个空窗里另一个进程
+        # 读到空的 pid，会把锁当成陈旧的接管掉——两个安装同时跑就互相覆盖文件。
         mkdir -p "$MONITOR_DIR" 2>/dev/null || true
         OP_LOCK="$MONITOR_DIR/.op.lock"
-        if ! mkdir "$OP_LOCK" 2>/dev/null; then
-            _opid=$(cat "$OP_LOCK/pid" 2>/dev/null || echo 0)
-            if [ -n "$_opid" ] && [ "$_opid" != "0" ] && kill -0 "$_opid" 2>/dev/null; then
-                echo "另一个安装/更新正在进行（PID $_opid），请等它结束再试（没有做任何改动）。"
-                exit 1
-            fi
-            rm -rf "$OP_LOCK" 2>/dev/null || true
-            if ! mkdir "$OP_LOCK" 2>/dev/null; then
-                echo "另一个安装/更新正在进行，请稍候（没有做任何改动）。"
-                exit 1
-            fi
-        fi
-        printf '%s\n' "$$" > "$OP_LOCK/pid" 2>/dev/null || true
+        acquire_op_lock "$OP_LOCK" || exit 1
         # shellcheck disable=SC2064
-        trap 'rm -rf "$OP_LOCK" 2>/dev/null || true' EXIT
+        trap 'rm -f "$OP_LOCK" 2>/dev/null || true' EXIT
         ;;
 esac
 
