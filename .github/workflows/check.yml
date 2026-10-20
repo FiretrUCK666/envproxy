@@ -491,7 +491,10 @@ jobs:
           # 行为阈值：两侧取值必须一致
           $pairs = @(
             @('\$NodeFailThreshold\s*=\s*(\d+)', 'NODE_FAIL_THRESHOLD=(\d+)', '连续失败判"断"阈值'),
-            @('\$NodeCheckThrottleSec\s*=\s*(\d+)', 'NODE_CHECK_THROTTLE_SEC=(\d+)', '真实探测节流秒数')
+            @('\$NodeCheckThrottleSec\s*=\s*(\d+)', 'NODE_CHECK_THROTTLE_SEC=(\d+)', '真实探测节流秒数'),
+            @('\$NodeFastSec\s*=\s*(\d+)', 'NODE_FAST_SEC=(\d+)', '存疑期加密探测间隔'),
+            @('\$NodeFailDwellSec\s*=\s*(\d+)', 'NODE_FAIL_DWELL_SEC=(\d+)', '连续失败判"断"所需秒数'),
+            @('\$NodeFastWindowSec\s*=\s*(\d+)', 'NODE_FAST_WINDOW_SEC=(\d+)', '下结论后的加密观察窗口')
           )
           foreach ($p in $pairs) {
             $a = Grab $ps $p[0] ($p[2] + '（Win 侧）')
@@ -541,13 +544,43 @@ jobs:
           $locText = Get-Content 'mac/locator.sh' -Raw -Encoding UTF8
           if ($locText -notmatch '_search_one "\$_r" 6') { Write-Host '定位器缺少用户目录搜索深度 6'; $fail = 1 }
           if ($locText -notmatch '_search_one "\$_vol" 4') { Write-Host '定位器缺少磁盘根搜索深度 4'; $fail = 1 }
+          # 判"断"双条件：次数由 $NodeFailThreshold 定，时长由 $NodeFailDwellSec 定，两者必须同现在 README。
+          # 只钉次数的话，改了次数文档不动；只钉时长同理。两句一起断言才挡得住"改一个没改另一个"。
+          $dwl = [int](Grab $ps '\$NodeFailDwellSec\s*=\s*(\d+)' 'Win 判"断"所需秒数')
+          $fast = [int](Grab $ps '\$NodeFastSec\s*=\s*(\d+)' 'Win 存疑期加密间隔')
+          if ((-not $dwl) -or (-not $fast) -or (-not $thr) -or (-not $flr)) { $fail = 1 }
+          # 对外口径的时间区间由常量推导，不许手写：
+          #   最短 = dwell + 一轮去抖（离散步进，按时长向上取整到 5 秒）
+          #   最长 = 稳定态一轮采样 + dwell + 一次探测跑满超时 + 一轮去抖（同上取整）
+          # 对外口径的时间区间由常量推导，不许手写：
+          #   最快 = max((阈值-1) × 加密间隔, dwell) + 一轮去抖
+          #          三个条件里"最后一个"可能是次数也可能是时长，取两者较晚的那个；
+          #          稳定态那 15 秒是"多久才轮得到第一次探测"的抽样运气，可能恰好就撞上，故不计入下界。
+          #   最慢 = 稳定态一轮采样 + 一次探测跑满超时 + max((阈值-1) × (加密间隔+超时), dwell) + 一轮去抖
+          #          探测超时取"最长的那个读超时"（500ms 那处是快速握手试探，6000ms 才是真实连通性
+          #          探测），取最大值即取到后者，不必锚定行号或函数名，将来加一档也不影响取到最坏值。
+          # 两个值都向上取整到 5 秒，口径不带假精度。实测（快速失败 / 节点挂起）须落在区间内，见验收。
+          $ptoMs = 0
+          foreach ($m in [regex]::Matches($ps, '(?:ReceiveTimeout|ReadTimeout)\s*=\s*(\d+)')) {
+            $v = [int]$m.Groups[1].Value
+            if ($v -gt $ptoMs) { $ptoMs = $v }
+          }
+          if ($ptoMs -le 0) { Write-Host '找不到探测读超时，无法推导时间区间'; $fail = 1 }
+          $pto = [int][math]::Ceiling($ptoMs / 1000.0)
+          $deb = 4   # 双轮去抖：两轮 × 最长轮间隔 2 秒（判"断"发生在 on 态，轮间隔 2 秒）
+          $loRaw = [math]::Max(($flr - 1) * $fast, $dwl) + $deb
+          $hiRaw = $thr + $pto + [math]::Max(($flr - 1) * ($fast + $pto), $dwl) + $deb
+          $lo = [int]([math]::Ceiling($loRaw / 5.0) * 5)
+          $hi = [int]([math]::Ceiling($hiRaw / 5.0) * 5)
           $facts = @(
             @('端点个数', "$epCount 个不同的站点", "$epCount different sites"),
             @('日志上限', "${psKB}KB", "${psKB}KB"),
             @('日志截断行数', "最近 $psTail 行", "most recent $psTail lines"),
             @('自愈周期', "每 $psRep 轮", "every $psRep rounds"),
             @('探测节流', "${thr} 秒", "${thr} seconds"),
-            @('失败阈值', "连续 ${flr} 次探测失败", 'three failed probes'),
+            @('判"断"双条件-次数', "至少 ${flr} 次", "at least ${flr} probes"),
+            @('判"断"双条件-时长', "连续失败满 ${dwl} 秒", "${dwl} seconds of continuous failure"),
+            @('只断开的时间区间', "约 ${lo}–${hi} 秒", "about ${lo}–${hi} seconds"),
             @('用户目录深度', '向下 6 层', 'six levels'),
             @('磁盘根深度', '4 层', 'four levels')
           )

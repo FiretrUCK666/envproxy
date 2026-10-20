@@ -87,6 +87,26 @@ self_test() {
     _selftest_assert_eq "本机地址算我们的" "1" "$_o1"
     _selftest_assert_eq "公司地址不算我们的" "0" "$_o2"
     _selftest_assert_eq "转义幂等" "'a'" "$(shell_escape_sq 'a')"
+    # 归属的第二层：安装快照（prev.env）里本来就记着的值，哪怕长得像我们的，也是使用者的。
+    # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy 会在 off 态被定时删掉。
+    _s1_bak=$(mktemp /tmp/envproxy_prev.XXXXXX 2>/dev/null) || _s1_bak=""
+    if [ -n "$_s1_bak" ]; then
+        _s1_old_prev="$PREV_ENV"
+        PREV_ENV="$_s1_bak"
+        { printf "NO_PROXY='localhost'\n"; printf "HTTP_PROXY='http://127.0.0.1:8080'\n"; } > "$PREV_ENV"
+        if is_owned_proxy_value "http://127.0.0.1:8080"; then _s1a=1; else _s1a=0; fi
+        if is_owned_proxy_value "http://127.0.0.1:7897"; then _s1b=1; else _s1b=0; fi
+        if no_proxy_entry_in_snapshot "localhost"; then _s1c=1; else _s1c=0; fi
+        if no_proxy_entry_in_snapshot "127.0.0.1"; then _s1d=1; else _s1d=0; fi
+        rm -f "$PREV_ENV" 2>/dev/null || true
+        PREV_ENV="$_s1_old_prev"
+        _selftest_assert_eq "快照里有的本机代理地址判为使用者的" "0" "$_s1a"
+        _selftest_assert_eq "快照里没有的本机代理地址仍归我们回收" "1" "$_s1b"
+        _selftest_assert_eq "快照里有的 NO_PROXY 项判为使用者的" "1" "$_s1c"
+        _selftest_assert_eq "快照里没有的默认项仍归我们回收" "0" "$_s1d"
+    else
+        echo "  SKIP 快照归属判定（建不出临时文件）"
+    fi
     # compare_versions 结果走 stdout（exit 恒 0），直接取输出断言。
     _selftest_assert_eq "版本逐段数值比" "1" "$(compare_versions "1.0.10" "1.0.9")"
 
@@ -348,6 +368,34 @@ self_test() {
     _selftest_assert_eq "明确要求时才重载代理" "1" "$_r13"
     if grep -q 'autorun_reload_needed' "$LIB_DIR/runtime.sh" 2>/dev/null; then _r14=1; else _r14=0; fi
     _selftest_assert_eq "set_autorun 走的是这个判据" "1" "$_r14"
+
+    # 判"断"要同时满足"次数"和"时长"（与 Win 侧 Test-NodeVerdict 同形）。
+    # 只数次数时，判据的时长是「次数 × 节流间隔」的乘积：改节流（省流量）会直接变成
+    # 判"断"的耗时。拆开后两种失败都要被拦住——次数够时间不够、时间够次数不够。
+    echo "[9b] 迟滞的双条件与自适应节流（与 Win 侧同形）"
+    node_verdict 3 4 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+    _selftest_assert_eq "双条件：3 次但只横跨 4 秒不判断" "0" "$NODE_VERDICT"
+    node_verdict 2 30 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+    _selftest_assert_eq "双条件：2 次即使横跨 30 秒也不判断" "0" "$NODE_VERDICT"
+    node_verdict 3 10 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+    _selftest_assert_eq "双条件：3 次且横跨满 dwell 才判断" "1" "$NODE_VERDICT"
+    node_verdict 3 9 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+    _selftest_assert_eq "双条件：差一点点也不行" "0" "$NODE_VERDICT"
+    node_verdict 5 40 "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+    _selftest_assert_eq "双条件：更多次、更久当然判断" "1" "$NODE_VERDICT"
+
+    # 采样间隔跟着"有没有结论"走：稳定态省流量，正在查和刚下结论时加密。
+    node_probe_interval 0 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "间隔：稳定态用稳定间隔" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
+    node_probe_interval 1 0 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "间隔：有失败未达阈值时加密" "$NODE_FAST_SEC" "$NODE_PROBE_INTERVAL"
+    node_probe_interval 0 1030 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "间隔：刚下完结论时加密" "$NODE_FAST_SEC" "$NODE_PROBE_INTERVAL"
+    node_probe_interval 0 999 1000 "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+    _selftest_assert_eq "间隔：加密窗口过了就回到稳定档" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
+
+    if [ "$NODE_FAST_SEC" -lt "$NODE_CHECK_THROTTLE_SEC" ]; then _r15=1; else _r15=0; fi
+    _selftest_assert_eq "加密间隔确实比稳定态快" "1" "$_r15"
 
     echo "[9] 菜单分派"
     # menu 子命令必须在入口分派里存在，show_menu 必须已定义；

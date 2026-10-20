@@ -64,12 +64,22 @@ function Remove-UserEnvVars {
             # 只回收我们加进去的那几项：从当前值里逐项减掉默认集，剩下的原样写回（保留用户的写法与顺序），
             # 减空了才删变量。不能按"整份等于默认集"判断——用户原本就有 NO_PROXY 时，我们加的那几项
             # 会永远留在他的值里，回收不干净。
+            # 但快照里本来就有的条目是使用者的，哪怕它正好等于默认项也不许减（见 Test-SnapshotRecorded）。
             $oursSet = Get-NormalizedNoProxyEntries $ours
+            $bakSet = @()
+            try {
+                if (Test-RegKey $PrevEnvRegKey) {
+                    $rawBak = (Get-ItemProperty -Path $PrevEnvRegKey -Name "NO_PROXY" -ErrorAction SilentlyContinue)."NO_PROXY"
+                    if ($rawBak) { $bakSet = Get-NormalizedNoProxyEntries ([string]$rawBak) }
+                }
+            } catch {}
             $keep = @()
             foreach ($part in ($cur -split ',')) {
                 $t = $part.Trim()
                 if (-not $t) { continue }
-                if ($oursSet -contains $t.ToLowerInvariant()) { continue }
+                $key = $t.ToLowerInvariant()
+                if ($bakSet -contains $key) { $keep += $t; continue }      # 使用者自己的，原样留
+                if ($oursSet -contains $key) { continue }                   # 我们加的，摘掉
                 $keep += $t
             }
             if ($keep.Count -eq 0) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
@@ -77,22 +87,22 @@ function Remove-UserEnvVars {
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") {
-            if ($cur -eq "1") { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            if (Test-IsOwnedProxyValue $n $cur) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
             continue
         }
         if ($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
-            # 归属判定：只有本机地址才是我们写下的，用户或公司工具写的其他地址一律不动。
-            if ($cur -like "http://127.0.0.1:*") { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            # 归属判定：形状上是本机地址、且安装快照里本来没有它，才是我们写下的。
+            # 用户自己挂的 mitmproxy（http://127.0.0.1:8080）同样有快照，一律不动。
+            if (Test-IsOwnedProxyValue $n $cur) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
             continue
         }
         [Environment]::SetEnvironmentVariable($n, $null, "User")
     }
 }
 
-# 单个值是不是我们写下的（纯函数，不碰注册表，可单测）。
-# 与 Remove-UserEnvVars 的逐项规则同源：改这里必须同时看那边——判据与删除必须同一套，
-# 否则会出现"删得掉但门槛没让它删"的残留。
-function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
+# --- 归属判定分三层，每层只回答一个问题 ------------------------------------------
+# 第 1 层：这个值「长得像」我们写的吗？只看形状，纯函数。
+function Test-OwnedProxyShape([string]$Name, [string]$Value) {
     if (-not $Value) { return $false }
     if ($Name -eq "NO_PROXY") {
         $oursSet = Get-NormalizedNoProxyEntries $DefaultNoProxy
@@ -103,6 +113,28 @@ function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
     return ($Value -like "http://127.0.0.1:*")
 }
 
+# 第 2 层：安装快照里本来就记着它吗？记着 = 使用者自己的，我们永远不许动。
+# 这一层是必需的：光看形状会把用户自己写的 NO_PROXY=localhost、或 mitmproxy 的
+# http://127.0.0.1:8080 当成我们的，在 off 态每 30 轮定时删掉，日志还谎称"回收残留"。
+function Test-SnapshotRecorded([string]$Name, [string]$Value) {
+    try {
+        if (-not (Test-RegKey $PrevEnvRegKey)) { return $false }
+        $raw = (Get-ItemProperty -Path $PrevEnvRegKey -Name $Name -ErrorAction SilentlyContinue).$Name
+        if ($null -eq $raw) { return $false }
+        if ($Name -ne "NO_PROXY") { return ($Value -eq [string]$raw) }
+        # NO_PROXY 逐条比：快照里出现的条目一律算使用者的。
+        $bakSet = Get-NormalizedNoProxyEntries ([string]$raw)
+        foreach ($e in (Get-NormalizedNoProxyEntries $Value)) { if ($bakSet -contains $e) { return $true } }
+        return $false
+    } catch { return $false }
+}
+
+# 第 3 层：到底该不该回收。形状像、且快照里没有它，才是我们写下的。
+# 判据与 Remove-UserEnvVars 必须同一套，否则会出现"删得掉但门槛没让它删"的残留。
+function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
+    if (-not (Test-OwnedProxyShape $Name $Value)) { return $false }
+    return (-not (Test-SnapshotRecorded $Name $Value))
+}
 # 我们该持有的那套变量现在还在不在。判据与 Remove-UserEnvVars 完全一致：
 # 三个代理变量只要有一个还有值就算在，NO_PROXY 看有没有我们写的默认项，
 # NODE_USE_ENV_PROXY 看值是不是我们写的 1。两边共用一套判据，才不会出现

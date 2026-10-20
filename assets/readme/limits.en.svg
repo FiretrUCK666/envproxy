@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-  <title id="limitsTitle">Four limits: read first</title>
-  <desc id="limitsDesc">Four numbered technical limits. Pure TUN mode gets nothing written, which is correct behaviour; disconnected is not the same as quitting, traffic decides; moving outside the search range needs one manual install to take over; previously hand-set user proxy variables are snapshotted first and restored on uninstall.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+  <title id="limitsTitle">Five limits: read first</title>
+  <desc id="limitsDesc">Five numbered technical limits. Pure TUN mode gets nothing written, which is correct behaviour; disconnected is not the same as quitting, traffic decides; moving outside the search range needs one manual install to take over; previously hand-set user proxy variables are snapshotted first and restored on uninstall; security software may treat it as suspicious and block the scripts, so allow it or whitelist it.</desc>
 
-  <rect width="1200" height="400" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="398.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="470" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="468.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Four limits: read first</text>
+    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Five limits: read first</text>
   </g>
 
   <g id="rules" stroke="#2A3B58" stroke-width="1.5">
-    <path d="M56 112H1144M56 182H1144M56 252H1144M56 322H1144"/>
+    <path d="M56 112H1144M56 182H1144M56 252H1144M56 322H1144M56 392H1144"/>
   </g>
 
   <g id="badges" fill="none" stroke="#34D399" stroke-width="2">
@@ -18,6 +18,7 @@
     <circle cx="86" cy="217" r="16"/>
     <circle cx="86" cy="287" r="16"/>
     <circle cx="86" cy="357" r="16"/>
+    <circle cx="86" cy="427" r="16"/>
   </g>
 
   <g id="numbers" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">
@@ -25,6 +26,7 @@
     <text x="86" y="217" dy="0.35em">2</text>
     <text x="86" y="287" dy="0.35em">3</text>
     <text x="86" y="357" dy="0.35em">4</text>
+    <text x="86" y="427" dy="0.35em">5</text>
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
@@ -32,5 +34,6 @@
     <text x="120" y="217" dy="0.35em">Disconnected is not quit: traffic decides</text>
     <text x="120" y="287" dy="0.35em">Moved out of range: install once by hand</text>
     <text x="120" y="357" dy="0.35em">Hand-set variables are snapshotted, restored on uninstall</text>
+    <text x="120" y="427" dy="0.35em">Security software may block the scripts: allow or whitelist</text>
   </g>
 </svg>

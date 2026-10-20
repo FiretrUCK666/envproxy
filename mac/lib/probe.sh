@@ -28,15 +28,48 @@ LAST_NODE_CHECK=0
 NODE_CACHE_PORT=""
 NODE_ALIVE=0
 NODE_FAIL_COUNT=0
+NODE_FIRST_FAIL_AT=0     # 本轮连续失败的起点（epoch 秒），成功后清零
+NODE_FAST_UNTIL=0        # 刚下结论后的加密观察窗口截止时刻（epoch 秒）
 CACHED_PORT=""
 LAST_SEEN_SET=""
 LAST_ALIVE_PORT=""
 ROUND=0
 CURRENT_STATE="off"
 
-# 可调阈值（改行为只改这里，机制不动）
-NODE_CHECK_THROTTLE_SEC=15   # 真实探测节流：每端口 15 秒最多一次（流量预算靠它）
-NODE_FAIL_THRESHOLD=3        # 连续失败几次才判"断"（与 Win 侧 $NodeFailThreshold 对齐）
+# 可调阈值（改行为只改这里，机制不动；取值与 Win 侧同形，门禁 6 核对）
+# 采样间隔：稳定态多久探一次。它只决定"流量"和"发现异常的快慢"，不再决定判"断"要多久。
+NODE_CHECK_THROTTLE_SEC=15
+# 过渡态采样间隔：已经出现失败、或刚下完结论时用这个值。此时要么在"查"，要么可能需要纠正。
+NODE_FAST_SEC=5
+# 下完结论后继续加密观察多久（判错了能在这段时间里自己改回来）。
+NODE_FAST_WINDOW_SEC=60
+# 判"断"的双条件：至少这么多次，且失败必须已经持续这么久。
+NODE_FAIL_THRESHOLD=3
+NODE_FAIL_DWELL_SEC=10
+
+# 这一轮该隔多久再探（纯函数，不碰网络、不读时钟，便于回归）：
+#   已稳定            -> 稳定态间隔（省流量）
+#   有失败、未达阈值   -> 快速间隔（正在查，问勤一点才可能尽快下结论）
+#   刚下完结论         -> 快速间隔（判错了要能马上改回来）
+# 结果进 $NODE_PROBE_INTERVAL（本侧 bash 3.2 无 $(...) 之外的方便返回手段，统一走全局）。
+node_probe_interval() {
+    _np_fail="$1"; _np_until="$2"; _np_now="$3"; _np_steady="$4"; _np_fast="$5"
+    if [ "$_np_fail" -gt 0 ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
+    if [ "$_np_now" -lt "$_np_until" ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
+    NODE_PROBE_INTERVAL="$_np_steady"
+}
+
+# 这一轮能不能判"断"（纯函数）：次数与时长两个条件都满足才算。
+# 用"首次失败时刻"算时长而不是累加间隔——间隔会随上面那个函数变化，累加会漂。
+# 结论进 $NODE_VERDICT（0 = 还不算断，1 = 可以判断）。
+node_verdict() {
+    _nv_fail="$1"; _nv_span="$2"; _nv_thr="$3"; _nv_dwell="$4"
+    if [ "$_nv_fail" -ge "$_nv_thr" ] && [ "$_nv_span" -ge "$_nv_dwell" ]; then
+        NODE_VERDICT=1
+    else
+        NODE_VERDICT=0
+    fi
+}
 
 # ------------------------------------------------------------------------------
 # 3. 代理端口发现（不绑定品牌/端口号，只认"谁真的在提供代理服务"）
@@ -291,37 +324,62 @@ test_real_connectivity() {
     return 1
 }
 
-# 15 秒节流 + 连续 NODE_FAIL_THRESHOLD 次失败才判死（恢复 1 次即判活并清零计数）
+# 自适应节流 + 双条件迟滞（与 Win 侧 Test-NodeAlive 同语义）
 # 迟滞必须不对称（这不是可调口味，是判据本身）：判"断"的代价是「删变量 + 通知所有应用
 # 重读环境」，影响机器上每一个应用；误留代理变量的代价只是多等一会儿。两个代价不对称，
 # 判据就不许对称——一次探测不通不等于代理没了。反向约束同样成立："通"要快（1 次成功即认），
 # 否则重连后要白等一个迟滞窗口。
+# 为什么是"次数 + 时长"两个条件而不是只数次数：只数次数时，判据的时长是
+# 「次数 × 节流间隔」的乘积，改节流省的流量会直接变成判"断"的耗时，两件事被一个旋钮绑住。
+# 拆开后：防抖强度（能吸收多长的抖动）只看 dwell，流量口径只看稳定态间隔，各管各的。
 # 节流缓存只认"同一端口"（单槽位：bash 3.2 无关联数组）。
 # 同端口节流内直接给缓存结论；换端口一律重验——多候选试活时不会读到别的端口的旧结论。
-# DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount 各一份，见 Test-NodeAlive），
-# Mac 侧单槽；失败计数随之也是全局的，差异与代价写在计数更新那一处（test_node_alive 内）。
+# DIVERGE(Mac): Win 侧用哈希表按端口分槽（LastCheck / Alive / FailCount / FirstFailAt 各一份），
+# Mac 侧单槽。换端口时把失败计数与起点一起清零（见下面那处），否则上一个端口留下的
+# 失败起点会让新端口的 dwell 立刻满足——那条差异就从"可能早判几秒"收窄成"不成立"。
 test_node_alive() {
     _port="$1"; _force="${2:-0}"
     _now=$(date +%s)
     if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then
         _age=$((_now - LAST_NODE_CHECK))
-        if [ $_age -lt "$NODE_CHECK_THROTTLE_SEC" ]; then
+        node_probe_interval "$NODE_FAIL_COUNT" "$NODE_FAST_UNTIL" "$_now" \
+            "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
+        if [ $_age -lt "$NODE_PROBE_INTERVAL" ]; then
             [ "$NODE_ALIVE" = "1" ] && return 0 || return 1
         fi
     fi
+    # 换端口：上一个端口的失败计数与起点对新端口没有意义，必须清零再算。
+    if [ "$_port" != "$NODE_CACHE_PORT" ]; then
+        NODE_FAIL_COUNT=0
+        NODE_FIRST_FAIL_AT=0
+    fi
+    # "连续"失败必须先真的连续观测：同一端口很久没探过（槽位留着旧账），那几次失败
+    # 与现在不构成同一个连续段。不清零的话，跨度会把中间整段没观测的时间算进去，
+    # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进。
+    # 门限取两个稳定态间隔：正常失败时采样已加密到 NODE_FAST_SEC，远达不到这个门限。
+    _idle=$((_now - LAST_NODE_CHECK))
+    if [ "$NODE_FAIL_COUNT" -gt 0 ] && [ "$_idle" -gt $((NODE_CHECK_THROTTLE_SEC * 2)) ]; then
+        NODE_FAIL_COUNT=0
+        NODE_FIRST_FAIL_AT=0
+    fi
     LAST_NODE_CHECK="$_now"
     NODE_CACHE_PORT="$_port"
-    # DIVERGE(Mac): 计数只有一个槽（Windows 侧按端口分槽）。macOS 自带的 bash 是 3.2，
-    # 没有关联数组，分槽要么退化成一串手工变量、要么引入外部命令；而代价只在
-    # "同时有多个候选端口交替出现"时体现（计数会被不同端口的结果共同推进，
-    # 可能提前一次失败判"断"，最多早约 15 秒）。单代理与换端口这两条主路径不受影响。
     if test_real_connectivity "$_port"; then
         NODE_FAIL_COUNT=0
+        NODE_FIRST_FAIL_AT=0
+        # 只在结论翻转（断->通）时开加密观察窗。若每次成功都重开，窗口永远不结束，
+        # 稳态间隔就永远走不到——实测会退化成每 5-6 秒一探，流量是承诺值的 3 倍。
+        [ "$NODE_ALIVE" = "1" ] || NODE_FAST_UNTIL=$((_now + NODE_FAST_WINDOW_SEC))
         NODE_ALIVE=1
         return 0
     else
         NODE_FAIL_COUNT=$((NODE_FAIL_COUNT + 1))
-        if [ "$_force" = "1" ] || [ $NODE_FAIL_COUNT -ge "$NODE_FAIL_THRESHOLD" ]; then
+        [ "$NODE_FIRST_FAIL_AT" -eq 0 ] && NODE_FIRST_FAIL_AT="$_now"
+        _span=$((_now - NODE_FIRST_FAIL_AT))
+        node_verdict "$NODE_FAIL_COUNT" "$_span" "$NODE_FAIL_THRESHOLD" "$NODE_FAIL_DWELL_SEC"
+        if [ "$_force" = "1" ] || [ "$NODE_VERDICT" = "1" ]; then
+            # 只在结论翻转（通->断）时开窗：判错的话 5 秒内就能探到成功、把变量补回来。
+            [ "$NODE_ALIVE" = "1" ] && NODE_FAST_UNTIL=$((_now + NODE_FAST_WINDOW_SEC))
             NODE_ALIVE=0
         fi
         [ "$NODE_ALIVE" = "1" ] && return 0 || return 1

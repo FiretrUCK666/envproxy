@@ -179,6 +179,8 @@ remove_user_env_vars() {
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
+            # 快照里本来就有的条目是使用者的，哪怕它正好等于默认项也不许减。
+            if no_proxy_entry_in_snapshot "$_pt"; then _keep="${_keep:+$_keep,}$_pt"; continue; fi
             if is_default_no_proxy_entry "$_pt"; then continue; fi
             _keep="${_keep:+$_keep,}$_pt"
         done
@@ -218,6 +220,8 @@ proxy_vars_present() {
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
+            # 与 remove_user_env_vars 同口径：快照里本来就有的条目不算我们的痕迹。
+            if no_proxy_entry_in_snapshot "$_pt"; then continue; fi
             if is_default_no_proxy_entry "$_pt"; then
                 IFS=$_old; [ "$_had_f" -eq 1 ] || set +f
                 return 0

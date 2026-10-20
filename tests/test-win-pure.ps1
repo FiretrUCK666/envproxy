@@ -133,6 +133,31 @@ Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY
 Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
 Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
 
+# 归属判定的第二层：安装快照里本来就记着的值，哪怕长得像我们的，也永远是使用者的。
+# 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy（127.0.0.1:8080）
+# 会在 off 态每 30 轮被定时删掉，日志还谎称"回收残留"。
+if ($env:OS -eq 'Windows_NT') {
+    $bakKey = 'HKCU:\Software\EnvProxy\Backup'
+    $madeParent = $false
+    if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) { New-Item -Path 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue | Out-Null; $madeParent = $true }
+    $madeBak = $false
+    if (-not (Test-RegKey $bakKey)) { New-Item -Path $bakKey -ErrorAction SilentlyContinue | Out-Null; $madeBak = $true }
+    try {
+        Set-ItemProperty -Path $bakKey -Name 'NO_PROXY' -Value 'localhost' -ErrorAction Stop
+        Set-ItemProperty -Path $bakKey -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:8080' -ErrorAction Stop
+        Assert-Eq '快照里有的 NO_PROXY 项判为使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
+        Assert-Eq '快照里没有的默认项仍归我们回收' $true (Test-IsOwnedProxyValue 'NO_PROXY' '127.0.0.1')
+        Assert-Eq '快照里有的本机代理地址判为使用者的' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:8080')
+        Assert-Eq '快照里没有的本机代理地址仍归我们回收' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7897')
+    } finally {
+        foreach ($nm in @('NO_PROXY', 'HTTP_PROXY')) { Remove-ItemProperty -Path $bakKey -Name $nm -ErrorAction SilentlyContinue }
+        if ($madeBak) { Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($madeParent) { Remove-Item -Path 'HKCU:\Software\EnvProxy' -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+} else {
+    Write-Host '  SKIP 快照归属判定（本机没有注册表）'
+}
+
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
 Assert-Eq 'batch closed finds nothing' '' (Test-HttpProxyBatch @(9, 1))
@@ -779,6 +804,66 @@ if ($env:OS -eq 'Windows_NT') {
 } else {
     Write-Host '  SKIP 注册表判断（本机没有注册表）'
 }
+
+# ------------------------------------------------------------------------------
+# [12] 节点判定的双条件迟滞与自适应节流
+# ------------------------------------------------------------------------------
+# 判"断"要同时满足"次数"和"时长"。只数次数时，判据的时长是「次数 × 节流间隔」的乘积，
+# 于是改节流（省流量）会直接变成判"断"的耗时——两件事被一个旋钮绑住，实测 3 × 15 秒
+# 意味着"只断开"要等 50 秒。拆开后两种失败都要被拦住：
+#   - 次数够、时间不够（短促抖动，问得再勤也不许下结论）
+#   - 时间够、次数不够（一次失败间隔很久，不能只凭"时长"就判断）
+Assert-Eq '双条件：3 次但只横跨 4 秒不判断' $false (Test-NodeVerdict 3 4 $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：2 次即使横跨 30 秒也不判断' $false (Test-NodeVerdict 2 30 $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：3 次且横跨满 dwell 才判断' $true (Test-NodeVerdict 3 10 $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：差一点点也不行' $false (Test-NodeVerdict 3 9.9 $NodeFailThreshold $NodeFailDwellSec)
+Assert-Eq '双条件：更多次、更久当然判断' $true (Test-NodeVerdict 5 40 $NodeFailThreshold $NodeFailDwellSec)
+
+# 采样间隔跟着"有没有结论"走：稳定态省流量，正在查和刚下结论时加密。
+# 这条也钉住了"稳定态不再决定判据时长"——今天那个 15 秒只管流量。
+$tNow = [datetime]::Now
+Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $tNow.AddSeconds(1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $tNow.AddSeconds(-1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+
+# 常量自身的形状：加密必须比稳定快，否则"加密"没有意义；判据时长必须是可解释的小数秒。
+if ($NodeFastSec -lt $NodeCheckThrottleSec) { Write-Host '  ok   加密间隔确实比稳定态快' } else { Write-Host '  FAIL 加密间隔不比稳定态快，加密没有意义'; $script:fails++ }
+if ($NodeFailDwellSec -gt 0) { Write-Host '  ok   dwell 是正数' } else { Write-Host '  FAIL dwell 必须是正数'; $script:fails++ }
+
+# "连续"失败必须先真的连续观测：端口槽位留着旧账时，旧失败起点会让跨度把中间整段
+# 没观测的时间算进去，于是一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进。
+# 这里直接驱动 Test-NodeAlive，钉住"闲置太久就丢弃旧起点"真的发生了。
+$script:NodeState = @{}
+$script:ProbeOk = $false
+${function:Test-RealConnectivity} = { param([int]$p) return $script:ProbeOk }
+[void](Test-NodeAlive 7078)                       # 先失败一次，建立失败起点
+$slot = $script:NodeState['7078']
+$slot.LastCheck = (Get-Date).AddMinutes(-10)      # 模拟这个端口很久没被探过
+$slot.FirstFailAt = (Get-Date).AddMinutes(-10)
+$slot.FailCount = 1
+[void](Test-NodeAlive 7078)                       # 闲置之后再来一次失败
+$span = ((Get-Date) - $script:NodeState['7078'].FirstFailAt).TotalSeconds
+Assert-Eq '闲置太久的旧失败起点被丢弃（跨度从 0 重算，不是 600 秒）' $true ($span -lt 60)
+Assert-Eq '闲置后失败计数从 1 重新算' 1 $script:NodeState['7078'].FailCount
+
+# 加密观察窗只在**结论翻转**时开。若每次成功都重开，窗口永远不结束，稳态间隔就永远
+# 走不到——实测会退化成每 5-6 秒一探，流量变成承诺值的 3 倍。钉住这个闭环：
+$script:ProbeOk = $true
+$script:NodeState = @{}
+$script:NodeState['7078'] = @{ LastCheck = [datetime]::Now.AddSeconds(-20); Alive = $true
+    FailCount = 0; FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
+for ($i = 0; $i -lt 4; $i++) {
+    [void](Test-NodeAlive 7078)
+    $script:NodeState['7078'].LastCheck = (Get-Date).AddSeconds(-2)   # 模拟每轮 2 秒的节奏
+}
+Assert-Eq '连续成功时不会反复开窗（窗口保持过期，间隔才能回到稳态）' $true ($script:NodeState['7078'].FastUntil -eq [datetime]::MinValue)
+
+$script:NodeState = @{}
+$script:NodeState['7078'] = @{ LastCheck = [datetime]::Now.AddSeconds(-20); Alive = $false
+    FailCount = 3; FirstFailAt = [datetime]::Now.AddSeconds(-30); FastUntil = [datetime]::MinValue }
+[void](Test-NodeAlive 7078)                       # 断->通 翻转
+Assert-Eq '断->通翻转后确实开窗' $true ($script:NodeState['7078'].FastUntil -gt (Get-Date))
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

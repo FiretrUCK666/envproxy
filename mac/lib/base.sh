@@ -69,10 +69,31 @@ is_default_no_proxy_entry() {
     return 1
 }
 
+# 安装快照（prev.env）里本来就记着这一项吗？记着 = 使用者自己的，我们永远不许动。
+# 光看"形状像不像我们的"不够：用户自己也完全可能写 NO_PROXY=localhost，
+# 或者用 mitmproxy 挂 http://127.0.0.1:8080。只看形状会在 off 态把它定时删掉。
+no_proxy_entry_in_snapshot() {
+    [ -f "$PREV_ENV" ] || return 1
+    _nes=$(awk -F= '/^NO_PROXY=/ { sub(/^NO_PROXY=/, ""); gsub(/^'"'"'|'"'"'$/, ""); print; exit }' "$PREV_ENV" 2>/dev/null)
+    [ -n "$_nes" ] || return 1
+    _nes_me=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    _nes_list=$(printf '%s' "$_nes" | tr -d ' ' | tr 'A-Z' 'a-z')
+    case ",$_nes_list," in *",$_nes_me,"*) return 0 ;; esac
+    return 1
+}
+
 # 这个值是不是本工具写下的：只有 127.0.0.1 本机地址才算我们的，
 # 用户或公司工具写的其他地址一律不动。
+# 光看形状不够——用户自己也可能挂 mitmproxy（http://127.0.0.1:8080）；
+# 安装快照里本来就有这个值，那就是他的，永远不许我们删（与 Win 侧分层同形）。
 is_owned_proxy_value() {
-    case "$1" in "$OWNED_HTTP_PREFIX"*) return 0;; *) return 1;; esac
+    case "$1" in "$OWNED_HTTP_PREFIX"*) ;; *) return 1;; esac
+    # 快照里存的是单引号转义后的值（见 shell_escape_sq），所以两种写法都要认。
+    if [ -f "$PREV_ENV" ]; then
+        if grep -qF "=$1" "$PREV_ENV" 2>/dev/null; then return 1; fi
+        if grep -qF "='$1'" "$PREV_ENV" 2>/dev/null; then return 1; fi
+    fi
+    return 0
 }
 
 # 成员判断：$1 在空格分隔表 $2 里则返回 0

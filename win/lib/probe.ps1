@@ -449,10 +449,14 @@ function Test-RealConnectivity([int]$Port) {
     }
 }
 
-# 节点连通性判定（15 秒节流 + 迟滞防抖）：
-#   节流：真实探测产生一次外网请求（约 200 字节），每端口 15 秒最多探测一次。
-#   迟滞：连续 $NodeFailThreshold 次失败才判"断"；恢复则 1 次成功立即判"通"
-#         并把失败计数清零，使偶发抖动不累积成"断"。
+# 节点连通性判定（自适应节流 + 双条件迟滞）：
+#   节流：真实探测产生一次外网请求（约 200 字节）。间隔不是固定值，而是跟着"有没有结论"走
+#         （见 Get-NodeProbeInterval）：稳定态省流量，正在查和刚下结论时加密。
+#   迟滞：连续失败**满 $NodeFailDwellSec 秒且至少 $NodeFailThreshold 次**才判"断"；
+#         恢复则 1 次成功立即判"通"并把计数与起点清零，使偶发抖动不累积成"断"。
+# 为什么是"次数 + 时长"两个条件而不是只数次数：只数次数时，判据的时长是
+# 「次数 × 节流间隔」的乘积，改节流省的流量会直接变成判"断"的耗时，两件事被一个旋钮绑住。
+# 拆开后：防抖强度（能吸收多长的抖动）只看 dwell，流量口径只看稳定态间隔，各管各的。
 # 迟滞必须不对称（这不是可调口味，是判据本身）：判"断"的代价是「删变量 + 全系统广播」，
 # 影响机器上每一个应用；误留代理变量的代价只是多等一会儿。两个代价不对称，判据就不许对称——
 # 一次探测不通不等于代理没了。另一侧的反向约束同样成立："通"要快（1 次成功即认），
@@ -464,29 +468,76 @@ function Test-RealConnectivity([int]$Port) {
 # 行为契约一致（同端口节流、异端口重验）。$script:LastGoodEndpoint 两侧都保持全局
 # （只是快路提示，猜错最多浪费一次探测，不影响正确性）。
 $script:NodeState = @{}
+
+# --- 判定用的常量（两侧同形，门禁 6 核对取值一致）--------------------------------
+# 采样间隔：稳定态多久探一次。它只决定"流量"和"发现异常的快慢"，不再决定判"断"要多久。
 $NodeCheckThrottleSec = 15
+# 过渡态采样间隔：已经出现失败、或刚下完结论时用这个值。此时要么在"查"，要么可能需要纠正。
+$NodeFastSec          = 5
+# 下完结论后继续加密观察多久（判错了能在这段时间里自己改回来）。
+$NodeFastWindowSec    = 60
+# 判"断"的双条件：至少这么多次，且失败必须已经持续这么久。
 $NodeFailThreshold    = 3
+$NodeFailDwellSec     = 10
+
+# 这一轮该隔多久再探（纯函数，不碰网络、不读时钟，便于回归）：
+#   已稳定            -> 稳定态间隔（省流量）
+#   有失败、未达阈值   -> 快速间隔（正在查，问勤一点才可能尽快下结论）
+#   刚下完结论         -> 快速间隔（判错了要能马上改回来）
+function Get-NodeProbeInterval([int]$FailCount, [datetime]$FastUntil, [datetime]$Now,
+                               [int]$Steady, [int]$Fast) {
+    if ($FailCount -gt 0) { return $Fast }
+    if ($Now -lt $FastUntil) { return $Fast }
+    return $Steady
+}
+
+# 这一轮能不能判"断"（纯函数）：次数与时长两个条件都满足才算。
+# 用"首次失败时刻"算时长而不是累加间隔——间隔会随上面那个函数变化，累加会漂。
+function Test-NodeVerdict([int]$FailCount, [double]$FailSpanSec, [int]$Threshold, [int]$DwellSec) {
+    return (($FailCount -ge $Threshold) -and ($FailSpanSec -ge $DwellSec))
+}
 
 function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
+    $now = Get-Date
     $st = $script:NodeState["$Port"]
     if (-not $st) {
-        $st = @{ LastCheck = [datetime]::MinValue; Alive = $false; FailCount = 0 }
+        $st = @{ LastCheck = [datetime]::MinValue; Alive = $false; FailCount = 0
+                 FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
         $script:NodeState["$Port"] = $st
     }
-    if (-not $Force) {
-        $age = ((Get-Date) - $st.LastCheck).TotalSeconds
-        if ($age -lt $NodeCheckThrottleSec) { return $st.Alive }
+    # "连续"失败必须先真的连续观测：这个端口很久没被探过（槽位留着旧账），
+    # 那几次失败与现在不构成同一个连续段。不清零的话，跨度会把中间整段没观测的时间算进去，
+    # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进，也和 Mac 侧不等价。
+    # 门限取两个稳定态间隔：正常失败时采样已加密到 $NodeFastSec，远达不到这个门限。
+    $idle = ($now - $st.LastCheck).TotalSeconds
+    if ($st.FailCount -gt 0 -and $idle -gt ($NodeCheckThrottleSec * 2)) {
+        $st.FailCount = 0
+        $st.FirstFailAt = [datetime]::MinValue
     }
-    $st.LastCheck = Get-Date
+    if (-not $Force) {
+        $age = $idle
+        $iv = Get-NodeProbeInterval $st.FailCount $st.FastUntil $now $NodeCheckThrottleSec $NodeFastSec
+        if ($age -lt $iv) { return $st.Alive }
+    }
+    $st.LastCheck = $now
+    $wasAlive = $st.Alive
     $result = Test-RealConnectivity $Port
     if ($result) {
         $st.FailCount = 0
+        $st.FirstFailAt = [datetime]::MinValue
         $st.Alive = $true
+        # 只在结论翻转（断->通）时开加密观察窗。若每次成功都重开，窗口永远不结束，
+        # 稳态间隔就永远走不到——实测会退化成每 6 秒一探，流量是承诺值的 3 倍。
+        if (-not $wasAlive) { $st.FastUntil = $now.AddSeconds($NodeFastWindowSec) }
     } else {
         $st.FailCount++
-        # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则连续 $NodeFailThreshold 次失败才判死
-        if ($Force -or ($st.FailCount -ge $NodeFailThreshold)) {
+        if ($st.FirstFailAt -eq [datetime]::MinValue) { $st.FirstFailAt = $now }
+        $span = ($now - $st.FirstFailAt).TotalSeconds
+        # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则双条件都满足才判死
+        if ($Force -or (Test-NodeVerdict $st.FailCount $span $NodeFailThreshold $NodeFailDwellSec)) {
             $st.Alive = $false
+            # 只在结论翻转（通->断）时开窗：判错的话 5 秒内就能探到成功、把变量补回来。
+            if ($wasAlive) { $st.FastUntil = $now.AddSeconds($NodeFastWindowSec) }
         }
     }
     return $st.Alive

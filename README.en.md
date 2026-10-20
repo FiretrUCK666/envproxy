@@ -38,7 +38,7 @@
 - [8. What is inside the folder](#8-what-is-inside-the-folder)
 - [9. Copying the folder as a backup](#9-copying-the-folder-as-a-backup)
 - [10. Deploying to a friend or a new machine](#10-deploying-to-a-friend-or-a-new-machine)
-- [11. Technical limits (4 points)](#11-technical-limits-4-points)
+- [11. Technical limits (5 points)](#11-technical-limits-5-points)
 - [12. macOS](#12-macos)
 - [13. License and feedback](#13-license-and-feedback)
 
@@ -161,8 +161,9 @@ It is the black box for troubleshooting. When you report a problem, include the 
 | What you do | What it does | How long |
 |---|---|---|
 | Connect the proxy app | sees the proxy working, writes the variables | 4–10 seconds (up to about 30 seconds for apps and ports that are not in the common tables) |
-| Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 30–45 seconds after disconnecting |
+| Disconnect or quit the proxy app | sees it gone, removes the variables | about 5 seconds after quitting; about 15–50 seconds after disconnecting (usually around twenty) |
 | Change the port, reconnect | finds the new port and applies it | about 10 seconds |
+| Reconnect after disconnecting | sees the node is back and restores the variables | about 3 seconds |
 
 <details>
 <summary>Other cases (also nothing to do)</summary>
@@ -195,9 +196,9 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Mechanism | What it prevents |
 |---|---|
 | Two round confirmation | changes happen only after the state is confirmed twice — connecting and disconnecting within seconds will not make the variables flip |
-| Conservative disconnect | three failed probes in a row (about 30–45 seconds) are needed to call it disconnected, while one success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
-| Several outside sites | it uses 7 different sites and normally asks the one that last worked, switching only when that one fails — one site having a bad day does not get your variables removed |
-| Cheap probing | each port is really probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB |
+| Conservative disconnect | two conditions must both hold before the variables are removed: 10 seconds of continuous failure, and at least 3 probes that could not get through. One success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
+| Several outside sites agree | 7 different sites are used together; normally only the one that worked last time is asked, and others only when it fails, so one site having a bad day never deletes your variables |
+| Cheap probing | while everything is healthy each port is probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB. When something looks wrong the interval shortens to every 5 seconds, and it keeps watching for another minute after the question is settled just to be sure it was not a brief glitch |
 | One monitor process only | a single instance lock, so processes do not pile up |
 | Local dev servers are not proxies | a listening port is not enough; it must really forward requests, so a local service on 8080 or 8888 is never mistaken for a proxy |
 
@@ -221,7 +222,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 
 | Symptom | Cause | What to do |
 |---|---|---|
-| The terminal still cannot reach the internet after installing | the terminal was opened before the install | close it completely and open a new one |
+| The terminal still cannot reach the internet after installing | the terminal was opened before the install, and windows already open never change by themselves | open a new window first; if it still shows the old values, close the whole terminal application and start it again (a limit of the operating system, not of this tool) |
 | Variables are not removed after disconnecting | the app's disconnect does not stop its core, and the node is still reachable | expected. Quit the proxy app if you want it to stop right away |
 | Variables are removed and then come back | your node itself is flapping, and the monitor reports what it sees | expected behaviour. If it keeps happening the node is poor quality; switch to another one |
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
@@ -282,10 +283,10 @@ It does not care about brands, process names or port numbers; it only cares who 
 |---|---|
 | CPU | not noticeable. A round of probing takes milliseconds; what you see is mainly the footprint of one PowerShell process (on Mac it is bash, which has no such footprint) |
 | Memory | tens of MB, again mostly the process itself |
-| Outside traffic | a few MB even if the proxy runs 24 hours a day. A probe happens at most once every 15 seconds per port and stays under 1KB |
+| Outside traffic | a few MB even if the proxy runs 24 hours a day. While everything is healthy a probe happens at most once every 15 seconds per port and stays under 1KB |
 | File writes | one write per state change; nothing at all while the state is stable |
 
-One detail worth spelling out: **outside traffic only happens while something local is still answering proxy requests.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe still runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy".
+One detail worth spelling out: **outside traffic only happens while something local is still answering proxy requests.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe normally runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy". When something looks wrong the interval shortens to every 5 seconds until the question is settled, and it keeps watching for another minute after that — the whole episode lasts a couple of minutes at most, costs a handful of extra probes and a few KB, and does not change the totals above.
 
 To see the actual numbers, look in Task Manager for the powershell process whose command line contains `envproxy.ps1`.
 
@@ -346,7 +347,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 </details>
 
-## 11. Technical limits (4 points)
+## 11. Technical limits (5 points)
 
 | Limit | Why it is like that | What you do about it |
 |---|---|---|
@@ -354,8 +355,9 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 | **"Disconnected" is not the same as quitting** | the disconnect button in most proxy apps leaves the core running and the port alive | Nothing. Traffic decides: if traffic gets through, the variables are written; if not, they are removed |
 | **Moving outside the search range needs one manual step** | the locator does not scan the whole disk; it looks for the new location, sorted by activity, inside your home folders (Desktop, Documents, Downloads, OneDrive, .config, six levels deep) and the roots of other drives (four levels deep) | if the folder moves outside that range (`C:\Tools`, `~/Projects`, any very deep path), open the menu and run "Install / Fix" once; everything else is automatic |
 | **Proxy variables you set by hand before are taken over** | installing snapshots user level variables with the same names before overwriting them and restores the snapshot on uninstall; system level variables and the system proxy are never touched | Nothing; rare on a personal machine and safe on a corporate one |
+| **Security software may block the scripts** (Windows) | what it does looks like something suspicious: writing user level environment variables, adding a startup entry to the registry, and putting scripts in your home folder | if it is blocked, allow it or whitelist it in the security tool, or install this tool somewhere the tool already trusts. Never turn the protection off for it |
 
-<img src="./assets/readme/limits.en.svg" width="100%" alt="Four technical limits: pure TUN gets nothing, disconnected is not quitting, manual takeover outside the range, hand-set variables snapshotted">
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits: pure TUN gets nothing, disconnected is not quitting, manual takeover outside the range, hand-set variables snapshotted, security software may block the scripts">
 
 ---
 
@@ -428,11 +430,13 @@ EnvProxy/
 
 <img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three Mac first-install hurdles: unblock in Settings, chmod back the bit, click OK on the prompt">
 
-### 12.6 macOS technical limits (the Windows 3 still apply, plus 2 more)
+### 12.6 macOS technical limits (the first 4 Windows ones still apply, the 5th changes shape, plus 2 unique)
 
-The Windows ones: TUN mode gets nothing (correct behaviour); "disconnected" is not quitting, traffic decides; moving outside the search range needs one manual install.
+The Windows ones: TUN mode gets nothing (correct behaviour); "disconnected" is not quitting, traffic decides; moving outside the search range needs one manual install; user level proxy variables you set by hand are snapshotted first and restored on uninstall.
 
-Two more:
+The 5th changes shape: on Windows the blocker is security software (antivirus, EDR); on a Mac the counterpart is Gatekeeper — the first run of a `.command` may say the developer cannot be verified, and a right-click then Open clears it (see 12.5).
+
+Two more, unique to macOS:
 
 1. **Old terminals must be reopened**: existing windows do not change, only newly opened terminals and apps pick up the variables (same as Windows).
 2. **The core is shell, not python**: the `/usr/bin/python3` that ships with macOS is an old version bundled with Xcode, and it fails outright on newer systems when components are missing. So the Mac build uses only `zsh`, `bash` and system tools (`curl`, `lsof`, `nc`, `netstat`, `ps`, `launchctl`, `awk`, `sed`, `tar`, `cmp` and the like), and installs nothing. **After editing any `.sh` under `mac` (the entry and the libraries in `lib/`), save it as LF with no BOM** — the opposite of Windows, where the BOM is required; here a BOM would displace the shebang and the script would not run.
