@@ -98,16 +98,32 @@ test_http_proxy_batch() {
 # lsof 退出码 1 = 没有匹配的进程（这是正常结果，端口表就是空的）；
 # 127 = 命令不存在或跑不起来（这才是"读不出来"）。
 get_listening_ports() {
-    _glp_out=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null)
+    # lsof 优先。退出码 1 = 没有匹配的进程（这是正常结果，不是读不出来），
+    # 127 = 命令不存在或跑不起来（这才是读不出来）。
+    _glp_raw=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null)
     _glp_rc=$?
+    _glp_sure=0
     if [ $_glp_rc -eq 0 ] || [ $_glp_rc -eq 1 ]; then
-        printf '%s' "$_glp_out" | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu
-        return 0
+        _glp_ports=$(printf '%s' "$_glp_raw" | grep -oE ':[0-9]+ \(LISTEN\)' | grep -oE '[0-9]+' | sort -nu)
+        if [ -n "$_glp_ports" ]; then
+            printf '%s' "$_glp_ports"
+            return 0
+        fi
+        # 一个端口都没解析出来：lsof 自己什么都没输出 = 本机真的没有监听口；
+        # 输出里有东西却解析不出来 = 输出形状变了（以后 macOS 改格式就是这种）。
+        if [ -z "$_glp_raw" ]; then
+            _glp_sure=1
+        fi
     fi
-    # lsof 读不出来，退到 netstat。netstat 读不出来才算真的读不出来。
+    # 退到 netstat：lsof 不可用，或形状变了。
     _glp_out=$(netstat -anvp tcp 2>/dev/null)
     _glp_rc=$?
     if [ $_glp_rc -ne 0 ]; then
+        # netstat 也读不出来：只有 lsof 明确"跑起来了、什么都没说"时才敢判"没有端口"；
+        # 其余情况是"读不出来"，交上去让上层沿用上一状态（别把用户的变量删了）。
+        if [ $_glp_sure -eq 1 ]; then
+            return 0
+        fi
         return 1
     fi
     printf '%s' "$_glp_out" | awk '/LISTEN/ {print $4}' | sed 's/.*\.//' | grep -E '^[0-9]+$' | sort -nu
