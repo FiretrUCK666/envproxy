@@ -112,10 +112,10 @@ If anything seems off, open the menu and choose **`1 Install / Fix`**. It is the
 
 Choose **`5 Check for updates`** in the menu: it shows the new version and what the release changed, and installs only after you agree.
 
-- **No VPN needed for this**: the check and the download reach GitHub directly first (`api.github.com`) and retry once by themselves; if that still fails, toggle your proxy app once.
-- **Checked before install**: the package is compared against the sha256 GitHub publishes, and a mismatch is refused — a broken install is worse than no install.
+- **No VPN needed for this**: it talks to GitHub directly, which works on most networks; if it ever says it cannot connect, toggle your proxy app once and retry.
+- **Checked before install**: the download is compared against the checksum GitHub publishes, and a mismatch is refused — a broken install is worse than no install.
 - **Only program files are touched**: your own files, the log and the run markers in `monitor\` stay as they are, and the monitor restarts on the new code afterwards.
-- **Failures say which kind**: unreachable, quota exhausted, server error, wrong package, or this release ships nothing — each with its own next step.
+- **Failures say why**: cannot connect, rate limited, GitHub trouble, a bad package — each with its own next step, so nothing is left to guess.
 
 <details>
 <summary>Updating from a terminal instead</summary>
@@ -184,10 +184,10 @@ It is the black box for troubleshooting. When you report a problem, include the 
 ## 4. How it decides whether the proxy is working
 
 <p align="center">
-  <img src="./assets/readme/mechanism.en.svg" width="100%" alt="Three layer verification: every 2-3 seconds it checks whether a local port is listening, whether that port answers a CONNECT handshake, and whether the outside world is reachable through it. All three passing means the proxy variables are written; any layer failing means the whole set is removed.">
+  <img src="./assets/readme/mechanism.en.svg" width="100%" alt="Three layer verification: every 2-3 seconds it checks whether a local port is listening, whether that port really forwards requests, and whether the outside world is reachable through it. All three passing means the proxy variables are written; any layer failing means the whole set is removed.">
 </p>
 
-Every 2–3 seconds it checks whether any local port is listening. If one is, it verifies two more things: whether that port answers a proxy handshake, and whether the outside world is reachable through it.
+Every 2–3 seconds it checks whether any local port is listening. If one is, it verifies two more things: whether that port behaves like a real proxy, and whether the outside world is reachable through it.
 All three passing counts as being behind a proxy, and the variables are written. Any layer failing counts as not being behind one, so the variables are removed and the terminal goes direct — "disconnected but the app's core is still running" lands here.
 
 It does not care about brands, process names or port numbers; it only cares who is really serving as a proxy. Clash, v2rayN, Shadowsocks, Hiddify, sing-box, NekoBox, Surge and others all work, and switching apps or ports needs no configuration change.
@@ -198,10 +198,10 @@ It does not care about brands, process names or port numbers; it only cares who 
 |---|---|
 | Two round confirmation | changes happen only after the state is confirmed twice — connecting and disconnecting within seconds will not make the variables flip |
 | Conservative disconnect | three failed probes in a row (about 30–45 seconds) are needed to call it disconnected, while one success is accepted immediately. Removing the variables notifies every application, so the cost of being wrong is much higher than waiting a little |
-| Several check endpoints | 7 endpoints across different providers and network segments. Normally only the last successful one is probed, and only if it fails are the others tried in parallel — one blocked segment cannot cause a false removal |
+| Several outside sites | it uses 7 different sites and normally asks the one that last worked, switching only when that one fails — one site having a bad day does not get your variables removed |
 | Cheap probing | each port is really probed at most once every 15 seconds, and only the response headers are read, not the body, so each probe stays under 1KB |
 | One monitor process only | a single instance lock, so processes do not pile up |
-| Local dev servers are not proxies | a listening port is not enough; it must answer the CONNECT handshake, so a local service on 8080 or 8888 is never mistaken for a proxy |
+| Local dev servers are not proxies | a listening port is not enough; it must really forward requests, so a local service on 8080 or 8888 is never mistaken for a proxy |
 
 <details>
 <summary>The remaining safeguards (nothing here affects normal use)</summary>
@@ -214,7 +214,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Locator clean-up | if the machine is shut down before the monitor can exit, the locator removes the leftovers from the old location on the next boot; if no new location is found it also clears leftover proxy variables so new terminals stop reading stale ones |
 | Activity based location | all search roots are collected first and then sorted by log activity, so a copied backup folder is never picked up by mistake |
 | Graceful cross-location stop | stopping a monitor in another location writes the signal into that monitor's own folder, so it exits gracefully instead of being killed |
-| Self healing start at login | every 30 rounds (about 60–90 seconds) the locator and the start at login entry are rebuilt from the current code; the test is that the content matches, not merely that the file exists |
+| Self healing start at login | every 30 rounds (about 60–90 seconds) it checks and puts the login item back if it was cleared or is out of date |
 | Candidate testing | candidate ports are tested in order, the one that worked last time is preferred, and two apps running side by side hand over automatically |
 
 </details>
@@ -227,7 +227,7 @@ It does not care about brands, process names or port numbers; it only cares who 
 | Variables are not removed after disconnecting | the app's disconnect does not stop its core, and the node is still reachable | expected. Quit the proxy app if you want it to stop right away |
 | Variables are removed and then come back | your node itself is flapping, and the monitor reports what it sees | expected behaviour. If it keeps happening the node is poor quality; switch to another one |
 | A tool reports `An item with the same key has already been added`, or cannot read all variables | the session carries two spellings of the same variable (`HTTP_PROXY` and `http_proxy`) | close that terminal and everything started from it. The registry itself is clean, so no logout is needed |
-| The proxy app is connected, but the variables are reported as removed | the network segment of the check endpoints is temporarily unreachable | 7 endpoints cover different segments, so one unreachable segment should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
+| The proxy app is connected, but the variables are reported as removed | the outside sites it checks against are temporarily unreachable | it tries other sites, so one of them failing should not trigger this. If it still happens, open the menu and choose "Install / Fix" once |
 | The log shows a detection error | a single round failed, the whole run is unaffected | ignore it, it recovers. If it keeps appearing, open the menu and choose "Install / Fix" once |
 
 <details>
@@ -284,10 +284,10 @@ It does not care about brands, process names or port numbers; it only cares who 
 |---|---|
 | CPU | not noticeable. A round of probing takes milliseconds; what you see is mainly the footprint of one PowerShell process (on Mac it is bash, which has no such footprint) |
 | Memory | tens of MB, again mostly the process itself |
-| Outside traffic | a few MB even if the proxy runs 24 hours a day. A real probe happens at most once every 15 seconds per port, reads only the response headers, and stays under 1KB |
+| Outside traffic | a few MB even if the proxy runs 24 hours a day. A probe happens at most once every 15 seconds per port and stays under 1KB |
 | File writes | one write per state change; nothing at all while the state is stable |
 
-One detail worth spelling out: **outside traffic only happens while some local port answers a proxy handshake.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe still runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy".
+One detail worth spelling out: **outside traffic only happens while something local is still answering proxy requests.** With the proxy app fully quit the traffic really is zero. "Disconnected but the core is still running" is not zero: the port still answers, a probe still runs every 15 seconds, and that probing is the only way to tell "disconnected" from "behind the proxy".
 
 To see the actual numbers, look in Task Manager for the powershell process whose command line contains `envproxy.ps1`.
 
@@ -369,7 +369,7 @@ Nothing needs to be installed (no Node, no Python), no administrator rights are 
 
 Windows writes the variables into the registry and broadcasts once, which makes them global. macOS has no registry, so the Mac build writes through two paths at the same time: terminals read `~/.envproxy/proxy.env` (loaded automatically by new terminals), and apps launched from the Dock are covered by `launchctl setenv`. The two paths move together.
 
-The Mac build sets all 9 variables, the extra four being lowercase spellings — macOS is genuinely case sensitive, so the two spellings are separate variables and some tools read only the lowercase ones (the reason is under the variable table above). Everything else matches Windows: 2 and 3 second polling, two round confirmation, three failures before calling it disconnected, 7 endpoints with a fast path and a parallel fallback, 15 second throttling, the 200KB log cap, and self healing every 30 rounds. Stopping the monitor means the same thing as on Windows: stopped stays stopped until the next login.
+The Mac build sets all 9 variables, the extra four being lowercase spellings — macOS is genuinely case sensitive, so the two spellings are separate variables and some tools read only the lowercase ones (the reason is under the variable table above). Everything else matches Windows exactly: when it switches, how long it waits before deciding, the log cap, and the self healing login item. Stopping the monitor means the same thing as on Windows: stopped stays stopped until the next login.
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="macOS writes the variables through two paths: the terminal reads proxy.env through a shell hook, and apps started from the Dock read the same set through launchctl setenv; both paths always change together">
 

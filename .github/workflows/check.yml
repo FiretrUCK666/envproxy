@@ -542,7 +542,7 @@ jobs:
           if ($locText -notmatch '_search_one "\$_r" 6') { Write-Host '定位器缺少用户目录搜索深度 6'; $fail = 1 }
           if ($locText -notmatch '_search_one "\$_vol" 4') { Write-Host '定位器缺少磁盘根搜索深度 4'; $fail = 1 }
           $facts = @(
-            @('端点个数', "$epCount 个检查端点", "$epCount endpoints"),
+            @('端点个数', "$epCount 个不同的站点", "$epCount different sites"),
             @('日志上限', "${psKB}KB", "${psKB}KB"),
             @('日志截断行数', "最近 $psTail 行", "most recent $psTail lines"),
             @('自愈周期', "每 $psRep 轮", "every $psRep rounds"),
