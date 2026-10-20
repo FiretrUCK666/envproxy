@@ -1,81 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="450" viewBox="0 0 1200 450" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">菜单每个选项动什么</title>
-  <desc id="buttonsDesc">五行五列的对照表。行是菜单里的五个选项，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有翻墙来定。看列比看行快：环境变量是安装时按状态校正、停止时清掉；开机自启是停止留下、恢复清掉；日志任何一项都不删。查看状态与检查更新两行全是圆点，只有你在检查更新里同意升级之后才会动手，那时等于跑一次安装。</desc>
+  <desc id="buttonsDesc">五行五列的对照表。行是菜单里的五个选项，列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定。安装只校正环境变量；停止清掉监控与变量、留下自启与定位器；一键恢复全清、只留日志；查看状态与检查更新都是只读。</desc>
 
-  <rect width="1200" height="500" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="498.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="450" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="448.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项动什么</text>
-    <text x="56" y="98" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
-    <text x="84" y="106" font-size="20" fill="#94A6BE">保留</text>
-    <text x="164" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
-    <text x="202" y="106" font-size="20" fill="#94A6BE">清掉</text>
-    <circle cx="286" cy="99.5" r="4" fill="#7A8CA6"/>
-    <text x="302" y="106" font-size="20" fill="#94A6BE">只读不动</text>
-    <text x="440" y="106" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
-    <text x="466" y="106" font-size="20" fill="#94A6BE">看当前有没有在翻墙</text>
+    <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项动什么</text>
+    <text x="56" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
+    <text x="84" y="126" font-size="20" fill="#94A6BE">保留</text>
+    <text x="164" y="126" font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="202" y="126" font-size="20" fill="#94A6BE">清掉</text>
+    <circle cx="290" cy="119.5" r="4" fill="#7A8CA6"/>
+    <text x="302" y="126" font-size="20" fill="#94A6BE">只读不动</text>
+    <text x="422" y="126" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
+    <text x="446" y="126" font-size="20" fill="#94A6BE">看当前有没有在翻墙</text>
   </g>
 
   <g id="grid" fill="none" stroke-width="1.5">
-    <path d="M200 136V374M380 136V374M560 136V374M740 136V374M920 136V374M1100 136V374M56 214H1144M56 254H1144M56 294H1144M56 334H1144" stroke="#2A3B58"/>
-    <path d="M56 174H1144" stroke="#33486B"/>
+    <path d="M200 156V394M380 156V394M560 156V394M740 156V394M920 156V394M1100 156V394" stroke="#2A3B58"/>
+    <path d="M56 156H1144M56 394H1144M56 234H1144M56 274H1144M56 314H1144M56 354H1144" stroke="#2A3B58"/>
+    <path d="M56 194H1144" stroke="#33486B"/>
   </g>
 
   <g id="column-labels" font-size="20" fill="#C7D3E3" text-anchor="middle">
-    <text x="290" y="162">开机自启</text>
-    <text x="470" y="162">监控进程</text>
-    <text x="650" y="162">环境变量</text>
-    <text x="830" y="162">日志</text>
-    <text x="1010" y="162">定位器与路径记录</text>
+    <text x="290" y="182">开机自启</text>
+    <text x="470" y="182">监控进程</text>
+    <text x="650" y="182">环境变量</text>
+    <text x="830" y="182">日志</text>
+    <text x="1010" y="182">定位器与路径记录</text>
   </g>
 
   <g id="row-labels" font-size="21" fill="#E9EFF8">
-    <text x="56" y="202">1 安装 / 修复</text>
-    <text x="56" y="242">2 查看状态</text>
-    <text x="56" y="282">3 停止监控</text>
-    <text x="56" y="322">4 一键恢复</text>
-    <text x="56" y="362">5 检查更新</text>
+    <text x="56" y="222">1 安装 / 修复</text>
+    <text x="56" y="262">2 查看状态</text>
+    <text x="56" y="302">3 停止监控</text>
+    <text x="56" y="342">4 一键恢复</text>
+    <text x="56" y="382">5 检查更新</text>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="290" y="194" dominant-baseline="central">✓</text>
-    <text x="470" y="194" dominant-baseline="central">✓</text>
-    <text x="830" y="194" dominant-baseline="central">✓</text>
-    <text x="1010" y="194" dominant-baseline="central">✓</text>
-    <text x="290" y="274" dominant-baseline="central">✓</text>
-    <text x="830" y="274" dominant-baseline="central">✓</text>
-    <text x="1010" y="274" dominant-baseline="central">✓</text>
-    <text x="830" y="314" dominant-baseline="central">✓</text>
+    <text x="290" y="214" dominant-baseline="central">✓</text>
+    <text x="470" y="214" dominant-baseline="central">✓</text>
+    <text x="830" y="214" dominant-baseline="central">✓</text>
+    <text x="1010" y="214" dominant-baseline="central">✓</text>
+    <text x="290" y="294" dominant-baseline="central">✓</text>
+    <text x="830" y="294" dominant-baseline="central">✓</text>
+    <text x="1010" y="294" dominant-baseline="central">✓</text>
+    <text x="830" y="334" dominant-baseline="central">✓</text>
   </g>
 
   <g id="by-state" font-size="26" font-weight="700" fill="#C7D3E3" text-anchor="middle">
-    <text x="650" y="194" dominant-baseline="central">±</text>
+    <text x="650" y="214" dominant-baseline="central">±</text>
   </g>
 
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
-    <text x="470" y="280.5">—</text>
-    <text x="650" y="280.5">—</text>
-    <text x="290" y="320.5">—</text>
-    <text x="470" y="320.5">—</text>
-    <text x="650" y="320.5">—</text>
-    <text x="1010" y="320.5">—</text>
+    <text x="470" y="300.5">—</text>
+    <text x="650" y="300.5">—</text>
+    <text x="290" y="340.5">—</text>
+    <text x="470" y="340.5">—</text>
+    <text x="650" y="340.5">—</text>
+    <text x="1010" y="340.5">—</text>
   </g>
 
   <g id="read-only" fill="#7A8CA6">
-    <circle cx="290" cy="234" r="4"/>
-    <circle cx="470" cy="234" r="4"/>
-    <circle cx="650" cy="234" r="4"/>
-    <circle cx="830" cy="234" r="4"/>
-    <circle cx="1010" cy="234" r="4"/>
-    <circle cx="290" cy="354" r="4"/>
-    <circle cx="470" cy="354" r="4"/>
-    <circle cx="650" cy="354" r="4"/>
-    <circle cx="830" cy="354" r="4"/>
-    <circle cx="1010" cy="354" r="4"/>
+    <circle cx="290" cy="254" r="4"/>
+    <circle cx="470" cy="254" r="4"/>
+    <circle cx="650" cy="254" r="4"/>
+    <circle cx="830" cy="254" r="4"/>
+    <circle cx="1010" cy="254" r="4"/>
+    <circle cx="290" cy="374" r="4"/>
+    <circle cx="470" cy="374" r="4"/>
+    <circle cx="650" cy="374" r="4"/>
+    <circle cx="830" cy="374" r="4"/>
+    <circle cx="1010" cy="374" r="4"/>
   </g>
-
-  <text x="56" y="404" font-size="20" fill="#C7D3E3">看列比看行快：环境变量是安装时校正、停止时清掉；开机自启是停止留下、恢复清掉。</text>
-  <text x="56" y="438" font-size="20" fill="#C7D3E3">日志一律保留，只有「一键恢复」会问你一句要不要连日志一起删。</text>
-  <text x="56" y="472" font-size="20" fill="#C7D3E3">查看状态、检查更新这两行只读：只有你在检查更新里同意升级，它才动手，那时等于跑一次安装。</text>
 </svg>

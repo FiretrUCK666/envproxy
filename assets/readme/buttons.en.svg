@@ -1,81 +1,78 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="450" viewBox="0 0 1200 450" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">What each menu item touches</title>
-  <desc id="buttonsDesc">A five by five grid. Rows are the five menu items, columns are start at login, the monitor process, the variables, the log, and the locator plus path record. A check means kept, a dash means removed, a dot means read only, a plus-minus means it follows whether a proxy is running right now. Read a column: the variables are corrected on install and cleared on stop; start at login is kept on stop and removed on uninstall; the log is never deleted. The status and update rows are dots all the way across: update only acts after you agree, and that action is a full install.</desc>
+  <desc id="buttonsDesc">A five by five grid. Rows are the five menu items, columns are start at login, the monitor process, the variables, the log, and the locator plus path record. A check means kept, a dash means removed, a dot means read only, a plus-minus means it follows whether a proxy is running right now. Install only corrects the variables; stop clears the monitor and the variables but keeps start at login and the locator; full restore clears everything except the log; status and update are read only.</desc>
 
-  <rect width="1200" height="500" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="498.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="450" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="448.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">What each menu item touches</text>
-    <text x="56" y="98" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
-    <text x="84" y="106" font-size="20" fill="#94A6BE">kept</text>
-    <text x="164" y="106" font-size="26" font-weight="700" fill="#94A6BE">—</text>
-    <text x="202" y="106" font-size="20" fill="#94A6BE">removed</text>
-    <circle cx="330" cy="99.5" r="4" fill="#7A8CA6"/>
-    <text x="346" y="106" font-size="20" fill="#94A6BE">read only</text>
-    <text x="470" y="106" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
-    <text x="496" y="106" font-size="20" fill="#94A6BE">follows the current state</text>
+    <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">What each menu item touches</text>
+    <text x="56" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
+    <text x="84" y="126" font-size="20" fill="#94A6BE">kept</text>
+    <text x="164" y="126" font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="202" y="126" font-size="20" fill="#94A6BE">removed</text>
+    <circle cx="321" cy="119.5" r="4" fill="#7A8CA6"/>
+    <text x="333" y="126" font-size="20" fill="#94A6BE">read only</text>
+    <text x="465" y="126" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
+    <text x="489" y="126" font-size="20" fill="#94A6BE">follows the current state</text>
   </g>
 
   <g id="grid" fill="none" stroke-width="1.5">
-    <path d="M200 136V374M380 136V374M560 136V374M740 136V374M920 136V374M1100 136V374M56 214H1144M56 254H1144M56 294H1144M56 334H1144" stroke="#2A3B58"/>
-    <path d="M56 174H1144" stroke="#33486B"/>
+    <path d="M200 156V394M380 156V394M560 156V394M740 156V394M920 156V394M1100 156V394" stroke="#2A3B58"/>
+    <path d="M56 156H1144M56 394H1144M56 234H1144M56 274H1144M56 314H1144M56 354H1144" stroke="#2A3B58"/>
+    <path d="M56 194H1144" stroke="#33486B"/>
   </g>
 
   <g id="column-labels" font-size="20" fill="#C7D3E3" text-anchor="middle">
-    <text x="290" y="162">Start at login</text>
-    <text x="470" y="162">Monitor</text>
-    <text x="650" y="162">Variables</text>
-    <text x="830" y="162">Log</text>
-    <text x="1010" y="162">Locator / path</text>
+    <text x="290" y="182">Start at login</text>
+    <text x="470" y="182">Monitor</text>
+    <text x="650" y="182">Variables</text>
+    <text x="830" y="182">Log</text>
+    <text x="1010" y="182">Locator / path</text>
   </g>
 
   <g id="row-labels" font-size="21" fill="#E9EFF8">
-    <text x="56" y="202">1 Install / Fix</text>
-    <text x="56" y="242">2 Show status</text>
-    <text x="56" y="282">3 Stop monitor</text>
-    <text x="56" y="322">4 Full restore</text>
-    <text x="56" y="362">5 Check for updates</text>
+    <text x="56" y="222">1 Install / Fix</text>
+    <text x="56" y="262">2 Show status</text>
+    <text x="56" y="302">3 Stop monitor</text>
+    <text x="56" y="342">4 Full restore</text>
+    <text x="56" y="382">5 Check for updates</text>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="290" y="194" dominant-baseline="central">✓</text>
-    <text x="470" y="194" dominant-baseline="central">✓</text>
-    <text x="830" y="194" dominant-baseline="central">✓</text>
-    <text x="1010" y="194" dominant-baseline="central">✓</text>
-    <text x="290" y="274" dominant-baseline="central">✓</text>
-    <text x="830" y="274" dominant-baseline="central">✓</text>
-    <text x="1010" y="274" dominant-baseline="central">✓</text>
-    <text x="830" y="314" dominant-baseline="central">✓</text>
+    <text x="290" y="214" dominant-baseline="central">✓</text>
+    <text x="470" y="214" dominant-baseline="central">✓</text>
+    <text x="830" y="214" dominant-baseline="central">✓</text>
+    <text x="1010" y="214" dominant-baseline="central">✓</text>
+    <text x="290" y="294" dominant-baseline="central">✓</text>
+    <text x="830" y="294" dominant-baseline="central">✓</text>
+    <text x="1010" y="294" dominant-baseline="central">✓</text>
+    <text x="830" y="334" dominant-baseline="central">✓</text>
   </g>
 
   <g id="by-state" font-size="26" font-weight="700" fill="#C7D3E3" text-anchor="middle">
-    <text x="650" y="194" dominant-baseline="central">±</text>
+    <text x="650" y="214" dominant-baseline="central">±</text>
   </g>
 
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
-    <text x="470" y="280.5">—</text>
-    <text x="650" y="280.5">—</text>
-    <text x="290" y="320.5">—</text>
-    <text x="470" y="320.5">—</text>
-    <text x="650" y="320.5">—</text>
-    <text x="1010" y="320.5">—</text>
+    <text x="470" y="300.5">—</text>
+    <text x="650" y="300.5">—</text>
+    <text x="290" y="340.5">—</text>
+    <text x="470" y="340.5">—</text>
+    <text x="650" y="340.5">—</text>
+    <text x="1010" y="340.5">—</text>
   </g>
 
   <g id="read-only" fill="#7A8CA6">
-    <circle cx="290" cy="234" r="4"/>
-    <circle cx="470" cy="234" r="4"/>
-    <circle cx="650" cy="234" r="4"/>
-    <circle cx="830" cy="234" r="4"/>
-    <circle cx="1010" cy="234" r="4"/>
-    <circle cx="290" cy="354" r="4"/>
-    <circle cx="470" cy="354" r="4"/>
-    <circle cx="650" cy="354" r="4"/>
-    <circle cx="830" cy="354" r="4"/>
-    <circle cx="1010" cy="354" r="4"/>
+    <circle cx="290" cy="254" r="4"/>
+    <circle cx="470" cy="254" r="4"/>
+    <circle cx="650" cy="254" r="4"/>
+    <circle cx="830" cy="254" r="4"/>
+    <circle cx="1010" cy="254" r="4"/>
+    <circle cx="290" cy="374" r="4"/>
+    <circle cx="470" cy="374" r="4"/>
+    <circle cx="650" cy="374" r="4"/>
+    <circle cx="830" cy="374" r="4"/>
+    <circle cx="1010" cy="374" r="4"/>
   </g>
-
-  <text x="56" y="404" font-size="20" fill="#C7D3E3">Variables: corrected on install, cleared on stop. Start at login: kept on stop, removed on uninstall.</text>
-  <text x="56" y="438" font-size="20" fill="#C7D3E3">The log is always kept; full restore asks once whether to delete it too.</text>
-  <text x="56" y="472" font-size="20" fill="#C7D3E3">Status and update stay read only. Update acts only after you agree, and that is a full install.</text>
 </svg>
