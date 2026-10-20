@@ -74,7 +74,7 @@ Mac 跑 `bash mac/envproxy.sh status` 确认。
 # 门禁 1：sh 语法（CI 同款）
 bash -n mac/*.sh mac/lib/*.sh
 # 门禁 2：ps1 语法（本机 PowerShell 5.1；CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
-# 门禁 10：功能自检（纯函数 + hook/归属/注入回收/快照，沙箱跑，不碰用户文件）
+# 门禁 10：功能自检（纯函数 + hook/归属/注入回收/快照 + 跨端行为比对，沙箱跑，不碰用户文件）
 pwsh -NoProfile -File tests/test-win-pure.ps1
 bash mac/envproxy.sh self-test
 # 其余门禁见 .github/workflows/check.yml（权威定义只有那一处），
