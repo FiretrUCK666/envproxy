@@ -231,7 +231,7 @@ For the third case, opening a new window is easiest. If you would rather not, ru
 
 | What you see | Most likely cause | What to do |
 |---|---|---|
-| "Unrecognized switch" or a usage error | A typo, or an abbreviation | Parameters must be written in full; abbreviations are rejected. Compare with the forms listed in the menu |
+| "Unrecognized switch" (Windows) or "unrecognized argument" (Mac) | A typo, or an abbreviation | Parameters must be written in full; abbreviations are rejected. Compare with the forms listed in the menu |
 | The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, run the command in 3.5 |
 | Still cannot use the proxy, and a new window does not help | The monitor is not running | Open the menu and pick 1 (Install / Repair) |
 | "Installation incomplete, missing program files" | The folder was not copied in full, or files were deleted | Download again from the Releases page and unzip over this folder. **Upgrading through Check for updates removes the old files for your platform automatically** |
