@@ -1368,5 +1368,14 @@ Assert-Eq 'help gives a bash form for pinning' $true ($docText -match 'unset HTT
 Assert-Eq 'help gives a PowerShell form for pinning' $true ($docText -match '\$env:ENVPROXY_TERM')
 Assert-Eq 'help warns about the ampersand space trap' $true ($docText -match '空格')
 
+# 状态页必须主动认下"变量指向的端口已经不在"这件事。
+# 不认的话，终端里每条联网命令都会报 ECONNREFUSED 127.0.0.1:xxxx，
+# 而错误信息里没有本工具的名字——用户（和帮他排查的 AI）会去查网络、防火墙、DNS，
+# 唯独查不到这里。这条断言钉住那份"主动认错"的文案还在。
+$statusSrc = (Get-Command Show-Status).Definition
+Assert-Eq 'status page checks whether the injected port is still alive' $true ($statusSrc -match 'BeginConnect')
+Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
+Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

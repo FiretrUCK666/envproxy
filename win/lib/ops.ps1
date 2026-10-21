@@ -267,7 +267,31 @@ function Show-Status {
 
     $cur = Get-EnvProxyValue
     if ($cur) {
-        Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green
+        # 光看"变量有值"不够：变量可能指向一个已经不存在的端口。
+        # 那种情况下终端里每条联网命令都会报 ECONNREFUSED 127.0.0.1:xxxx，
+        # 而错误信息里没有本工具的名字——用户（和帮他排查的 AI）会去查网络、查防火墙、
+        # 查 DNS，唯独查不到这里。所以状态页要主动把这件事认下来。
+        $varPort = 0
+        if ($cur -match "127\.0\.0\.1:(\d+)") { $varPort = [int]$Matches[1] }
+        $varAlive = $true
+        if ($varPort -gt 0) {
+            $varAlive = $false
+            $tc2 = $null
+            try {
+                $tc2 = New-Object Net.Sockets.TcpClient
+                $iar2 = $tc2.BeginConnect("127.0.0.1", $varPort, $null, $null)
+                if ($iar2.AsyncWaitHandle.WaitOne(800)) { $tc2.EndConnect($iar2); $varAlive = $true }
+            } catch {} finally {
+                try { if ($tc2) { $tc2.Close() } } catch {}
+            }
+        }
+        if ($varAlive) {
+            Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green
+        } else {
+            Write-Host ("代理变量 : 指向的端口已不在（{0}）" -f $cur) -ForegroundColor Yellow
+            Write-Host ("           终端里联网会报 ECONNREFUSED 127.0.0.1:{0}，那是这里造成的。" -f $varPort) -ForegroundColor Yellow
+            Write-Host "           等几秒会自动清掉；想立刻清掉就打开菜单选 1（安装 / 修复）。" -ForegroundColor DarkGray
+        }
     } else {
         Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray
         # 上一行说"有代理在监听"、这一行说"没注入变量"，单独看会以为自相矛盾。
@@ -604,9 +628,15 @@ function Get-HelpTopics {
                 '  后两行可能一个「有」一个「无」：翻墙软件在跑、但本工具被你停了，',
                 '  就是这个样子，不是坏了。',
                 '',
-                '日志',
-                '      win\monitor\monitor.log（上限 200KB，只留最近 200 行）',
-                '  看不懂可以不看。反馈问题时附上最后 20 行就行。'
+                '日志和 AI 排查',
+                '       win\monitor\monitor.log（上限 200KB，只留最近 200 行）。看不懂可以不看，'
+                '  反馈时附上最后 20 行就行。'
+                '',
+                '  AI 可能报 ECONNREFUSED 127.0.0.1:端口号。那是变量指向了一个已关闭的端口，',
+                '  不是网络坏了。菜单选 2 看「代理变量」那行，它会直接说清是不是这里的问题。',
+                '',
+                '  本工具只管 HTTP/HTTPS 变量。git、npm、curl、pip、docker 都认；',
+                '  ping、游戏、BT 这类走自己协议的不认——那些要开翻墙软件的 TUN 模式。'
             )
         },
         @{
