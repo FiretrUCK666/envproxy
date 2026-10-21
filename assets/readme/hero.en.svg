@@ -30,7 +30,7 @@
       <circle cx="628" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="646" cy="114.5" r="5" fill="#33486B"/>
       <circle cx="664" cy="114.5" r="5" fill="#33486B"/>
-      <text x="686" y="120.5" font-size="19" fill="#C7D3E3">Status</text>
+      <text x="677" y="120.5" font-size="19" fill="#C7D3E3">Status</text>
       <text x="1120" y="120.5" font-size="18" fill="#94A6BE" text-anchor="end">output excerpt, labels translated</text>
     </g>
 

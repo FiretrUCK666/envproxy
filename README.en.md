@@ -118,7 +118,7 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
-<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; show status and help change nothing; check for updates replaces program files only, then stops the monitor and restarts it">
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; show status and help change nothing; check for updates only when a newer version exists replaces program files and restarts the monitor, and does nothing when already current">
 
 ### Logs
 

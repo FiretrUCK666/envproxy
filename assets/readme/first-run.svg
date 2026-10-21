@@ -40,7 +40,7 @@
     <text x="628" y="240" font-size="20" fill="#C7D3E3">新开的窗口</text>
     <path d="M628 252H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="628" y="276" font-size="22" fill="#34D399">✓</text>
-    <text x="656" y="276" font-size="20" fill="#34D399">立即生效</text>
+    <text x="666" y="276" font-size="20" fill="#34D399">立即生效</text>
   </g>
 
   <text x="56" y="318" font-size="20" fill="#C7D3E3">装完它注册开机自启、启动监控、当场校正一次变量。</text>

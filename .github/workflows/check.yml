@@ -897,6 +897,108 @@ jobs:
             $gb = @(Select-Xml -Xml $b -XPath "//*[local-name()='g' and @id]" | ForEach-Object { $_.Node.id }) -join ','
             if ($ga -ne $gb) { Write-Host ("中英配图分组结构不一致：{0}" -f $f.Name); $fail = 1 }
           }
+          # 图例的间距必须严格相等。判据不是"看着差不多"，而是量出来的几何事实：
+          # 每个图标在自己的格子里居中，所以「图标中心 → 文字起点」对每一项都应相等；
+          # 相邻两项之间「文字右沿 → 下一图标中心」也应相等。
+          # 这条挡住的是一类真实缺陷：横杠用 em dash 字形画会偏下且占满全宽，
+          # 于是它和文字的间距比别的项窄，而且看着像没对齐——肉眼能看出，机器却没查。
+          function Get-TextW([string]$s, [double]$size) {
+            $w = 0.0
+            foreach ($ch in $s.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.55 } }
+            return $w * $size
+          }
+          foreach ($f in $svgs) {
+            $doc = [xml](Get-Content $f.FullName -Raw -Encoding UTF8)
+            $lg = Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='legend']"
+            if (-not $lg) { continue }
+            $nodes = @($lg.Node.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })
+            $iconCenters = @()
+            $labelXs = @()
+            foreach ($n in $nodes) {
+              if ($n.LocalName -eq 'text' -and $n.y -eq '126') { $labelXs += [double]$n.x }
+              elseif ($n.LocalName -eq 'text') { $iconCenters += [double]$n.x }
+              elseif ($n.LocalName -eq 'circle') { $iconCenters += [double]$n.cx }
+              elseif ($n.LocalName -eq 'rect') { $iconCenters += ([double]$n.x + [double]$n.width / 2) }
+            }
+            if ($iconCenters.Count -ne $labelXs.Count -or $labelXs.Count -lt 2) { continue }
+            # 图标 → 文字：应为同一常数
+            $d1 = @()
+            for ($i = 0; $i -lt $labelXs.Count; $i++) { $d1 += [math]::Round($labelXs[$i] - $iconCenters[$i], 1) }
+            if (($d1 | Select-Object -Unique).Count -ne 1) {
+              Write-Host ("{0} 图例的图标与文字间距不一致：{1}" -f $f.Name, ($d1 -join ' '))
+              $fail = 1
+            }
+            # 文字 → 下一图标：也应为同一常数
+            $d2 = @()
+            $labels = @($nodes | Where-Object { $_.LocalName -eq 'text' -and $_.y -eq '126' })
+            for ($i = 0; $i -lt $labels.Count - 1; $i++) {
+              $right = [double]$labels[$i].x + (Get-TextW $labels[$i].InnerText 20)
+              $d2 += [math]::Round($iconCenters[$i + 1] - $right, 0)
+            }
+            if (($d2 | Select-Object -Unique).Count -ne 1) {
+              Write-Host ("{0} 图例的项间距不一致：{1}" -f $f.Name, ($d2 -join ' '))
+              $fail = 1
+            }
+          }
+          # 表格里的标记必须垂直居中在所在行。这一条挡的是真实缺陷：
+          # 用 <text> 画 ± 和 em dash 时，浏览器按字形基线摆，± 偏上、— 偏下，
+          # 而同格的圆点是 <circle cy> 真居中——同一行里三种垂直位置，肉眼一看就乱。
+          # 判据是量出来的几何中心，不是"看着还行"。
+          foreach ($f in $svgs) {
+            $doc = [xml](Get-Content $f.FullName -Raw -Encoding UTF8)
+            # 行中心 = 两条相邻横线之间的中点。横线住在 row-lines 与 grid 两个组里，
+            # 且「日常/维护」那条粗线也是行边界——把两组的横线都收进来再排序，天然就是
+            # 每一行的上下边。不写死任何 y 值：改了行高这条判据自动跟上。
+            $lines = @()
+            foreach ($gid in @('row-lines', 'grid')) {
+              $g = Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='$gid']"
+              if (-not $g) { continue }
+              foreach ($p in $g.Node.ChildNodes) {
+                if ($p.LocalName -ne 'path') { continue }
+                foreach ($mm in [regex]::Matches([string]$p.d, 'M56 (\d+)H1144')) { $lines += [int]$mm.Groups[1].Value }
+              }
+            }
+            $lines = @($lines | Sort-Object -Unique)
+            if ($lines.Count -lt 2) { continue }
+            $bands = @()
+            for ($i = 0; $i -lt $lines.Count - 1; $i++) {
+              # 行高约 40，表头那条带更高；只把像「行」的带当候选
+              $h = $lines[$i + 1] - $lines[$i]
+              if ($h -ge 30 -and $h -le 50) { $bands += ($lines[$i] + $h / 2) }
+            }
+            if ($bands.Count -eq 0) { continue }
+            foreach ($n in (Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='marks']//*" | ForEach-Object { $_.Node })) {
+              $top = $null; $bot = $null
+              if ($n.LocalName -eq 'circle') { $cy = [double]$n.cy; $r = [double]$n.r; $top = $cy - $r; $bot = $cy + $r }
+              elseif ($n.LocalName -eq 'path') {
+                $d = [string]$n.d
+                $ys = @()
+                $parts = [regex]::Matches($d, '[MLHVACZ]|-?\d+\.?\d*') | ForEach-Object { $_.Value }
+                $k = 0
+                while ($k -lt $parts.Count) {
+                  switch ($parts[$k]) {
+                    'M' { $ys += [double]$parts[$k + 2]; $k += 3 }
+                    'L' { $ys += [double]$parts[$k + 2]; $k += 3 }
+                    'V' { $ys += [double]$parts[$k + 1]; $k += 2 }
+                    'H' { $k += 2 }
+                    'A' { $ys += [double]$parts[$k + 6]; $k += 8 }
+                    default { $k += 1 }
+                  }
+                }
+                if ($ys.Count) { $top = ($ys | Measure-Object -Minimum).Minimum; $bot = ($ys | Measure-Object -Maximum).Maximum }
+              }
+              elseif ($n.LocalName -eq 'text' -and $n.'dominant-baseline' -eq 'central') {
+                $cy = [double]$n.y; $size = [double]$n.'font-size'; $top = $cy - $size / 2; $bot = $cy + $size / 2
+              }
+              if ($null -eq $top) { continue }
+              $mid = ($top + $bot) / 2
+              $nearest = ($bands | Sort-Object { [math]::Abs($_ - $mid) })[0]
+              if ([math]::Abs($mid - $nearest) -gt 1.5) {
+                Write-Host ("{0} 有标记没在行里居中：中心 {1}，最近的行中心 {2}" -f $f.Name, [math]::Round($mid, 1), $nearest)
+                $fail = 1
+              }
+            }
+          }
           if ($fail) { exit 1 }
           Write-Host ("配图一致性通过（{0} 个 SVG，中英各引用 {1} 张）" -f $svgs.Count, $sets['README.md'].Count)
 

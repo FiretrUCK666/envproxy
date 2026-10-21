@@ -18,7 +18,7 @@
   <g id="card1" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
     <circle cx="96" cy="156" r="18" fill="#34D399" opacity="0.16"/>
     <text x="96" y="163" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">1</text>
-    <text x="132" y="163" font-size="21" font-weight="700" fill="#E9EFF8">装完之后开的窗口</text>
+    <text x="132" y="163" font-size="20" font-weight="700" fill="#E9EFF8">装完之后开的窗口</text>
     <text x="88" y="212" font-size="19" fill="#C7D3E3">什么都不用做。</text>
     <text x="88" y="242" font-size="19" fill="#C7D3E3">它启动时读到的</text>
     <text x="88" y="272" font-size="19" fill="#C7D3E3">就是当前状态。</text>
@@ -29,7 +29,7 @@
   <g id="card2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
     <circle cx="472" cy="156" r="18" fill="#38BDF8" opacity="0.16"/>
     <text x="472" y="163" font-size="20" font-weight="700" fill="#38BDF8" text-anchor="middle">2</text>
-    <text x="508" y="163" font-size="21" font-weight="700" fill="#E9EFF8">开着，后来代理变了</text>
+    <text x="508" y="163" font-size="20" font-weight="700" fill="#E9EFF8">开着，后来代理变了</text>
     <text x="464" y="212" font-size="19" fill="#C7D3E3">按一次回车。</text>
     <text x="464" y="242" font-size="19" fill="#C7D3E3">运行任意一条命令也行，</text>
     <text x="464" y="272" font-size="19" fill="#C7D3E3">它执行完会重新读一次。</text>
@@ -40,7 +40,7 @@
   <g id="card3" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
     <circle cx="848" cy="156" r="18" fill="#94A6BE" opacity="0.16"/>
     <text x="848" y="163" font-size="20" font-weight="700" fill="#94A6BE" text-anchor="middle">3</text>
-    <text x="884" y="163" font-size="21" font-weight="700" fill="#E9EFF8">装之前就开着的窗口</text>
+    <text x="884" y="163" font-size="20" font-weight="700" fill="#E9EFF8">装之前就开着的窗口</text>
     <text x="840" y="212" font-size="19" fill="#C7D3E3">重新打开一次。</text>
     <text x="840" y="242" font-size="19" fill="#C7D3E3">安装时同步脚本</text>
     <text x="840" y="272" font-size="19" fill="#C7D3E3">没有加载进这个窗口。</text>
