@@ -312,22 +312,17 @@ Unzipping gives roughly this. The folder can be renamed; each package contains o
 
 ```
 EnvProxy\
-  win\                    Windows version
-    打开菜单.cmd         the only file to double-click
-    envproxy.ps1         main program
-    lib\                 libraries (ignore these)
+  win\                   Windows version
+    打开菜单.cmd         the only file you double-click
+    envproxy.ps1         the program
+    lib\                 program library (leave it alone)
     monitor\             created at runtime, holds the log
-  mac\                    Mac version, same layout
-    打开菜单.command      the only file to double-click
-    envproxy.sh          main program
-    locator.sh           locator script template
-    prompt-sync.sh       terminal sync script template
-    lib\  monitor\       same as above
-  README.md               Chinese documentation
-  README.en.md            English documentation (this file)
-  LICENSE                 MIT license
-  VERSION                 version number
-  release-notes\          what changed per version (shown by Check for updates)
+  mac\                   Mac version, same layout, plus two templates:
+    locator.sh           the locator script
+    prompt-sync.sh       the terminal sync script
+  README.md  README.en.md  Chinese and English docs
+  LICENSE  VERSION         license and version
+  release-notes\          what changed per release (shown by Check for updates)
   assets\readme\          images used by the README
 ```
 

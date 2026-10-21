@@ -315,17 +315,12 @@ EnvProxy\
     envproxy.ps1         主程序
     lib\                 程序库（不用管）
     monitor\             运行时自动生成，放日志
-  mac\                    Mac 版，结构一样
-    打开菜单.command     唯一需要双击的文件
-    envproxy.sh          主程序
-    locator.sh           定位脚本模板
-    prompt-sync.sh       终端同步脚本模板
-    lib\  monitor\       同上
-  README.md               中文说明（本文）
-  README.en.md            英文说明
-  LICENSE                 MIT 许可证
-  VERSION                 版本号
-  release-notes\          每版改了什么（选「检查更新」时会显示）
+  mac\                    Mac 版，结构一样，另有两个模板：
+    locator.sh           定位脚本
+    prompt-sync.sh       终端同步脚本
+  README.md  README.en.md  中英文说明
+  LICENSE  VERSION         许可证、版本号
+  release-notes\          每版改了什么（选「检查更新」时显示）
   assets\readme\          README 的配图
 ```
 
