@@ -8,7 +8,7 @@
 # ------------------------------------------------------------------------------
 function Install-EnvProxy {
     Write-Host "======== EnvProxy 安装 ========" -ForegroundColor Cyan
-    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
+    if (Test-IsElevated) { Write-Host "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" -ForegroundColor Yellow }
     # 先说清楚要动什么、不动什么，再说"正在做"——安装要改四处系统设置，
     # 用户在按完编号之后得先知道会发生什么，而不是盯着静止的屏幕猜。
     Write-Host "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
@@ -86,7 +86,7 @@ function Install-EnvProxy {
 
 function Uninstall-EnvProxy([bool]$Purge = $false) {
     Write-Host "======== EnvProxy 卸载（一键恢复原状）========" -ForegroundColor Cyan
-    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
+    if (Test-IsElevated) { Write-Host "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" -ForegroundColor Yellow }
     Stop-Monitor
     Remove-AutoRun
     # 先摘终端同步的钩子块：它引用 $ProxyVarNames，留着会指向一个已经卸载的工具。
@@ -176,7 +176,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     if (Get-MonitorProcess) { $dirty += "监控进程仍在" }
     if ($removeLog -and (Test-Item (Join-Path $MonitorDir "monitor.log"))) { $dirty += "历史日志未能删除" }
     if ($dirty.Count -eq 0) {
-        Write-Host "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。" -ForegroundColor Green
+        Write-Host "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。" -ForegroundColor Green
         if ($removeLog) {
             Write-Host "        历史日志已一并彻底删除。" -ForegroundColor Green
         } else {

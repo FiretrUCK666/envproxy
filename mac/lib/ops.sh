@@ -1027,7 +1027,7 @@ self_test() {
 # ------------------------------------------------------------------------------
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
-    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     # 先说清楚要动什么、不动什么，再说"正在做"——用户在按完编号之后得先知道会发生什么，
     # 而不是盯着静止的屏幕猜。
     echo "会改这 3 处：开机自启、终端配置、后台监控。"
@@ -1046,9 +1046,9 @@ install_envproxy() {
     fi
     echo "[2/3] 正在写终端配置……"
     if insert_shell_hooks; then
-        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 不支持，README 的「这些命令在哪个终端里敲」一节有说明）"
+        echo "[2/3] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
     else
-        echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
+        echo "[2/3] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
     fi
     update_path_record
     echo "[3/3] 正在启动后台监控……"
@@ -1075,7 +1075,7 @@ install_envproxy() {
 uninstall_envproxy() {
     _purge="$1"
     echo "======== EnvProxy 卸载（一键恢复原状）========"
-    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     stop_monitor || true
     remove_autorun
     # prompt-sync.sh 是我们装到固定位置的实现，卸载时一并清掉；
@@ -1135,7 +1135,7 @@ uninstall_envproxy() {
     if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
     if [ $_remove_log -eq 1 ] && [ -f "$LOG_FILE" ]; then _dirty="$_dirty 历史日志未能删除；"; fi
     if [ -z "$_dirty" ]; then
-        echo "[完成] 监控已停、自启动已删、定位器已清、代理变量已清除。"
+        echo "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。"
         if [ $_remove_log -eq 1 ]; then
             echo "        历史日志已一并彻底删除。"
         else
@@ -1204,7 +1204,7 @@ show_status() {
         elif is_source_copy; then
             echo "更新状态 : 源码包（更新入口会先确认用途再动手）"
         elif [ -z "$_local_ver" ]; then
-            echo "更新状态 : 可用菜单 检查更新 升级"
+            echo "更新状态 : 可打开菜单选 检查更新 升级"
         else
             _newer=$(compare_versions "$_local_ver" "$REMOTE_VERSION" || true)
             if [ "$_newer" -gt 0 ] 2>/dev/null; then
