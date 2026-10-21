@@ -14,16 +14,24 @@ function Install-EnvProxy {
     Write-Host "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
     Write-Host "不会动你的其他设置。" -ForegroundColor DarkGray
     Write-Host ""
-    Set-AutoRun
-    # 写完必须读回：装没装上由复读决定，不由"我调用了写入"决定（与自愈路径同一条规矩）。
-    # 杀软拦 Run 键是真实发生过的事，那时不能报"已写入"。
-    $runHave = $null
-    try { $runHave = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName } catch {}
-    if (($runHave -eq (Get-LauncherCommand)) -and (Test-LauncherCurrent)) {
+    # 每一步各自兜住异常：某一处失败不该把后面几步一起带走。
+    # 实测过没有这层保护的后果——Run 键被组策略禁用时，第 1 步抛出的 .NET 异常
+    # 直接终止整个脚本，启动监控、对齐变量、写终端钩子全都没执行，
+    # 而用户看到的是一堆红色异常文本，不是"第 1 步失败、其余继续"的分级报告。
+    $step1Ok = $false
+    try {
+        Set-AutoRun
+        # 写完必须读回：装没装上由复读决定，不由"我调用了写入"决定（与自愈路径同一条规矩）。
+        # 杀软拦 Run 键是真实发生过的事，那时不能报"已写入"。
+        $runHave = $null
+        try { $runHave = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName } catch {}
+        $step1Ok = (($runHave -eq (Get-LauncherCommand)) -and (Test-LauncherCurrent))
+    } catch {}
+    if ($step1Ok) {
         Write-Host "[1/4] 开机自启动：已写入" -ForegroundColor Green
     } else {
-        Write-Host "[1/4] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
-        Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
+        Write-Host "[1/4] 开机自启动：没写成。可能被杀软或组策略拦住了。" -ForegroundColor Yellow
+        Write-Host "      请检查杀软拦截，或再打开一次菜单选 1（安装 / 修复）；仍然不行就把它加进白名单。" -ForegroundColor Yellow
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
@@ -34,9 +42,12 @@ function Install-EnvProxy {
     # （快照只记一次；已经存在时这里是无副作用的空操作。）
     Snapshot-PrevEnv -FirstInstall:$firstInstall
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
+    # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     # 这一步在慢机器上可能花一两秒，先说一声，别让屏幕静止不动。
     Write-Host "[2/4] 正在启动后台监控……" -ForegroundColor DarkGray
-    if (Start-Monitor -Force:$true) {
+    $step2Ok = $false
+    try { $step2Ok = Start-Monitor -Force:$true } catch {}
+    if ($step2Ok) {
         Write-Host "[2/4] 监控进程：已启动" -ForegroundColor Green
     } else {
         Write-Host "[2/4] 监控进程：未能确认运行，原因见下面那两行。" -ForegroundColor Yellow
@@ -45,18 +56,26 @@ function Install-EnvProxy {
     # （不等监控的双轮去抖，"安装"即"一键修复"）
     # 先说要探测，因为这三层验证要连外网，慢的时候差不多一秒。
     Write-Host "[3/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……" -ForegroundColor DarkGray
-    $state = Get-CurrentState
-    Apply-State $state
+    $state = "unknown"
+    try {
+        $state = Get-CurrentState
+        Apply-State $state
+    } catch {
+        # 对齐失败不该把终端同步那一步也带走：那一步与代理状态无关。
+        Write-Host ("[3/4] 环境变量：这一步没做成（" + $_.Exception.Message + "）") -ForegroundColor Yellow
+        $state = "failed"
+    }
     if ($state -eq "unknown") {
         # 端口枚举失败：这一轮不知道状态，一个变量都没动——不能说"已校正"。
         Write-Host "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。" -ForegroundColor Yellow
-    } else {
+    } elseif ($state -ne "failed") {
         Write-Host "[3/4] 环境变量：已按当前状态校正" -ForegroundColor Green
     }
     # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
     # 失败不阻断安装（其余三件事已经做成），但必须如实说清原因，不许报成功。
     Write-Host "[4/4] 正在写终端配置……" -ForegroundColor DarkGray
-    $prof = Install-ShellProfile
+    $prof = $null
+    try { $prof = Install-ShellProfile } catch { $prof = [pscustomobject]@{ Reason = "error"; Path = "" } }
     switch ($prof.Reason) {
         'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 配置文件里写入钩子" -ForegroundColor Green }
         'current'    { Write-Host "[4/4] 终端同步：已是最新" -ForegroundColor Green }
@@ -304,6 +323,24 @@ function Show-Status {
 # "设置 CursorPosition 时出现异常：句柄无效"——它依赖真实控制台缓冲区。
 # 那种环境本来也拿不到终端，清屏毫无意义，还会把错误日志刷脏。
 # 所以只在"真有终端"时清，其余情况老实往下输出。
+# 真的能对着一台终端问问题吗？
+# [Console]::IsInputRedirected 只回答"stdin 是不是重定向到了文件/管道"，
+# 它不回答"有没有可读的终端"。用任务计划或服务方式启动时（CreateProcess 不传 stdin），
+# 这个属性可能报 False，于是代码以为在交互环境里，进了 Read-Host ——
+# 而 Read-Host 在没有键盘的环境里既不返回也不抛异常，进程就那样静默挂住。
+# 所以除了重定向，还要确认输入来源真的是一台终端：WindowWidth 拿得到（拿到说明有控制台缓冲区）。
+# 两个条件都成立才算交互；任一条拿不到就当非交互处理（宁可给全文、不冒险去等键盘）。
+function Test-CanPrompt {
+    try {
+        if (-not (Test-CanPrompt)) { return $false }
+        # 没有控制台缓冲区时访问这个属性会抛异常（"句柄无效"）。
+        $null = [Console]::WindowWidth
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Clear-Screen {
     try {
         if ([Console]::IsOutputRedirected) { return }
@@ -695,7 +732,7 @@ function Format-HelpAll {
 # -All：不导航，直接给全文（非交互、或明确要全文时用）。
 # 交互：先给目录，输编号看主题，0 回目录，m 回主菜单。
 function Show-Help([switch]$All) {
-    if ($All -or [Console]::IsInputRedirected) {
+    if ($All -or -not (Test-CanPrompt)) {
         Write-Host (Format-HelpAll)
         return
     }
@@ -744,7 +781,7 @@ function Show-Menu {
     # 非交互 stdin（管道/重定向）直接退出不进循环：菜单是给人点的，自动化请用开关。
     # 否则管道到 EOF 时 Read-Host 读空会被当成回车，一遍遍重复默认动作停不下来。
     try {
-        if ([Console]::IsInputRedirected) {
+        if (-not (Test-CanPrompt)) {
             Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。" -ForegroundColor Yellow
             return
         }

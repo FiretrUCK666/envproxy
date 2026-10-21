@@ -43,6 +43,27 @@ function Broadcast-EnvironmentChange {
 # 分开是刻意的——状态机在同一轮里可能既删又写，广播一次就够。
 
 # 把 [Environment] 的 User 位置映射到注册表的取值类型。
+# 读 HKCU\Environment 里的原始值（不做环境变量展开）。
+# 为什么不能用 [Environment]::GetEnvironmentVariable(..., "User")：
+# 它返回的是**已展开**的值。用户原有 NO_PROXY 常写成 %USERPROFILE%,internal.corp
+# （企业环境里设例外域名的常见写法），用那个 API 读出来就变成
+# C:\Users\某人,internal.corp，我们再合并写回时，%USERPROFILE% 这个引用就永久没了。
+# 类型还是 REG_EXPAND_SZ，但里面已经没有可展开的东西——用户换用户名或改路径后失效。
+# 这里直接读注册表原文，引用保持原样。
+function Get-UserEnvRaw([string]$Name) {
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+        if ($null -eq $key) { return $null }
+        $v = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $v) { return $null }
+        return [string]$v
+    } catch {
+        return $null
+    } finally {
+        if ($key) { try { $key.Close() } catch {} }
+    }
+}
 # 空值表示"删除这个变量"（SetEnvironmentVariable(...,$null) 的等价写法）。
 function Set-UserEnvRaw([hashtable]$Values) {
     if (-not $Values -or $Values.Count -eq 0) { return }
@@ -68,6 +89,12 @@ function Set-UserEnvRaw([hashtable]$Values) {
             $key.SetValue($n, [string]$v, $kind)
         }
     } catch {
+        # 写失败必须抛出去，不许吞。
+        # 吞掉的后果实测过：需要 5 个变量时只写进 3 个，函数却"成功"返回，
+        # 调用方照常广播并记日志"已注入代理"——用户得到的是半套变量，
+        # 而日志说一切正常。更糟的是下一轮的幂等判据会发现"不齐"，再写再失败再谎报，
+        # 每轮都重复一遍。这正是本项目最怕的"半代理"，必须让调用方看得见。
+        throw
     } finally {
         if ($key) { try { $key.Close() } catch {} }
     }
@@ -98,7 +125,9 @@ function Sync-UserEnvVars([string]$Port) {
     # 只看地址会让"代理值对、但别的变量缺失或漂移"的半代理状态一直无人纠正。
     # 返回是否真的写了东西——调用方据此决定要不要广播（静默时零广播、零写入）。
     $desired = Get-ProxyVarTable $Port
-    $existingNoProxy = [Environment]::GetEnvironmentVariable("NO_PROXY", "User")
+    # 用不展开的读法：用户原有值里的 %USERPROFILE% 这类引用必须原样保留，
+    # 用 GetEnvironmentVariable 会把它展开成字面路径，合并写回后引用就永久丢了。
+    $existingNoProxy = Get-UserEnvRaw "NO_PROXY"
     $desired["NO_PROXY"] = Merge-NoProxy $existingNoProxy $DefaultNoProxy
     $changed = $false
     foreach ($n in $desired.Keys) {
@@ -124,7 +153,9 @@ function Sync-UserEnvVars([string]$Port) {
         }
     } catch {}
     if (-not $changed) { return $false }
-    Write-UserEnvValues -Values $desired
+    # 写失败时返回 $false 而不是抛给上层：调用方（Apply-State / 安装流程）要的是
+    # "这一轮没写成"，好如实报告；抛异常会让安装整个中断，连后面几步都不跑。
+    try { Write-UserEnvValues -Values $desired } catch { return $false }
     return $true
 }
 
@@ -185,8 +216,12 @@ function Remove-UserEnvVars {
         # 它会静默走进一个**没有归属判定**的分支，直接把用户自己设的值删掉。
         # 新增变量时应当在这里显式写一条自己的归属规则，让编译器式的"漏了会报错"变成结构约束。
     }
-    if ($plan.Count -gt 0) { Write-UserEnvValues -Values $plan }
-    if ($drop.Count -gt 0) { Remove-UserEnvNames -Names $drop }
+    # 写失败只影响"清得干不干净"，不该让整个 off 流程崩掉——off 之后监控每轮都会再试。
+    # 与注入路径的区别在这里：注入失败必须让人看见（否则用户以为在翻墙、实际没走代理），清理失败下一轮自愈。
+    try {
+        if ($plan.Count -gt 0) { Write-UserEnvValues -Values $plan }
+        if ($drop.Count -gt 0) { Remove-UserEnvNames -Names $drop }
+    } catch {}
     # 归属记录在这里**不动**：它记的是"我们写下过哪些值"，不是"我们现在是否持有"。
     # 为什么不能在这里清：off 之后，已经开着的窗口里还挂着我们注入的值，钩子唯一的判据
     # 就是这份记录——清掉它，off 就清不掉已开窗口，终端同步这条主功能直接失效。
@@ -217,10 +252,19 @@ function Test-SnapshotRecorded([string]$Name, [string]$Value) {
         $raw = (Get-ItemProperty -Path $PrevEnvRegKey -Name $Name -ErrorAction SilentlyContinue).$Name
         if ($null -eq $raw) { return $false }
         if ($Name -ne "NO_PROXY") { return ($Value -eq [string]$raw) }
-        # NO_PROXY 逐条比：快照里出现的条目一律算使用者的。
+        # NO_PROXY 要逐条比，而且判据必须与 Remove-UserEnvVars 同一套：
+        # 那边是"逐项减掉默认集，快照里本来就有的条目原样留"。
+        # 如果这里改成"任一条目命中就算使用者的"，就会出现
+        # 门槛认为"不是我们的、不用清"，而回收函数照样删掉其中几项——
+        # 两个判据各说各话，正是项目注释反复强调要防的那种残留。
+        # 所以这里同样回答："这个值里还有没有**不在快照里**的条目"。
+        # 有 → 说明我们掺了东西进来（返回 $false，不算使用者原有的）。
+        # 全都在快照里 → 整份都是使用者自己的（返回 $true）。
         $bakSet = Get-NormalizedNoProxyEntries ([string]$raw)
-        foreach ($e in (Get-NormalizedNoProxyEntries $Value)) { if ($bakSet -contains $e) { return $true } }
-        return $false
+        foreach ($e in (Get-NormalizedNoProxyEntries $Value)) {
+            if (-not ($bakSet -contains $e)) { return $false }
+        }
+        return $true
     } catch { return $false }
 }
 

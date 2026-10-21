@@ -148,7 +148,11 @@ if ($env:OS -eq 'Windows_NT') {
         Assert-Eq '快照里有的 NO_PROXY 项判为使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
         Assert-Eq '快照里没有的默认项仍归我们回收' $true (Test-IsOwnedProxyValue 'NO_PROXY' '127.0.0.1')
         Assert-Eq '快照里有的本机代理地址判为使用者的' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:8080')
-        Assert-Eq '快照里没有的本机代理地址仍归我们回收' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7897')
+        # 判据必须与 Remove-UserEnvVars 同一套：那边逐项减默认集、快照里的原样留。
+        # 所以「掺了我们默认项的混合值」要算我们写的（整份都在快照里才算使用者的），
+        # 否则门槛判定「不用清」，回收函数却照样删掉其中几项——两个判据各说各话。
+        Assert-Eq '掺了默认项的混合值算我们写的' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,127.0.0.1,::1')
+        Assert-Eq '全在快照里的值算使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
     } finally {
         foreach ($nm in @('NO_PROXY', 'HTTP_PROXY')) { Remove-ItemProperty -Path $bakKey -Name $nm -ErrorAction SilentlyContinue }
         if ($madeBak) { Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue }
