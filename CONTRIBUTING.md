@@ -51,16 +51,9 @@ EnvProxy 特有的两条：如果问题只在“断开不断内核/节点抖动�
 # 获取代码
 git clone https://github.com/FiretrUCK666/envproxy.git
 cd envproxy
-
-# 改完自检（与 CI 同款；门禁的权威定义只有一处：.github/workflows/check.yml）
-bash -n mac/*.sh mac/lib/*.sh
 ```
 
-`win\` 下每个 `.ps1`（入口与 `lib\` 里的库）的语法检查在 Windows 本机用 PowerShell 语法解析跑
-（`Parser::ParseFile`，见 `AGENTS.md` 的构建与验证节）；改完行为后 Windows 打开菜单选"查看状态"、
-Mac 跑 `bash mac/envproxy.sh status` 确认。
-
-**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy-win.zip`（Windows）/ `EnvProxy-mac.tar.gz`（macOS），由 `git archive`
+验证手段见下一节。**开发副本与安装包副本的区别**：对外分发的是安装包（Release 里的 `EnvProxy-win.zip`（Windows）/ `EnvProxy-mac.tar.gz`（macOS），由 `git archive`
 从标签产出，装什么由 `.gitattributes` 的 `export-ignore` 声明）。本仓库自带 `.git`，属于**开发副本**：
 更新入口（菜单"检查更新" / `bash mac/envproxy.sh update`）认得这一点，只报版本、不改动任何文件，同步上游用
 `git pull`。要验证更新逻辑，把安装包解压到别处当安装副本，在那里面点检查更新——不要指望在本仓库里
@@ -68,29 +61,37 @@ Mac 跑 `bash mac/envproxy.sh status` 确认。
 
 ## 提交前门禁
 
-改完必须全绿才算完成。按顺序：
+改完必须全绿才算完成。**权威定义只有 `.github/workflows/check.yml` 一处**（门禁 1–10），
+下面只列本地最常跑的三条，不复制门禁清单。
+
+**Mac / Linux 上跑**：
 
 ```sh
-# 门禁 1：sh 语法（CI 同款）
+# 门禁 1：sh 语法
 bash -n mac/*.sh mac/lib/*.sh
-# 门禁 2：ps1 语法（CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
-# 门禁 10：功能自检（纯函数 + hook/归属/注入回收/快照 + 跨端行为比对，沙箱跑，不碰用户文件）
-#
-# 用 powershell（系统自带的 5.1）而不是 pwsh，两条都跑：
-#   用户真实跑的是 5.1。而编码红线（硬性规范第 6 条）成立的前提正是「5.1 按 ANSI 读
-#   无 BOM 文件会把中文注释读成乱码、撑破语法」——恰恰是 pwsh 7 不受影响的那件事。
-#   只跑 pwsh 7 的话，丢了 BOM 的文件在本地全绿、到用户机器上整个程序起不来。
-powershell -NoProfile -File tests/test-win-pure.ps1
-pwsh       -NoProfile -File tests/test-win-pure.ps1
+# 门禁 10 的 Mac 侧：功能自检（沙箱跑，不碰你的 ~/.zshrc 与环境变量）
 bash mac/envproxy.sh self-test
-# 其余门禁见 .github/workflows/check.yml（权威定义只有那一处），
-#   本地要单跑某一条，就把那一步的脚本原样粘进 PowerShell。
-# 状态冒烟：Windows 打开菜单选"查看状态"（Mac 跑 bash mac/envproxy.sh status），输出与预期一致
-# 核心改动追加：打开菜单选"安装 / 修复"重载，看一轮状态翻转
 ```
 
-这里的说明与 `AGENTS.md` 构建与验证节指向同一处权威（`check.yml`）；门禁有增减时只改 CI 与 `AGENTS.md`，
-本文件不复制门禁清单（上面那两行只是最常用的本地命令，不是门禁目录）。
+**Windows 上跑**（`win\` 部分的语法与功能自检只能在 Windows 上验）：
+
+```powershell
+# 门禁 2 与门禁 10 的 Windows 侧。两条都跑，不要只跑 pwsh：
+#   用户真实跑的是系统自带的 5.1；而编码红线（硬性规范第 6 条）成立的前提，正是
+#   「5.1 按 ANSI 读无 BOM 文件会把中文注释读成乱码、撑破语法」——这恰恰是 pwsh 7
+#   不受影响的那件事。只跑 pwsh 7，丢了 BOM 的文件在本地会全绿，到用户机器上整个
+#   程序起不来。
+powershell -NoProfile -File tests/test-win-pure.ps1
+pwsh       -NoProfile -File tests/test-win-pure.ps1
+```
+
+两端都要改的改动，两边的命令都得跑。其余门禁（4 分发包、5 文档一致性、6 契约常量、
+8 配图、9 文件模式）也在 `check.yml` 里，本地要单跑某一条，把该步骤的脚本原样粘进
+对应的 shell 即可。
+
+**行为冒烟**（自动门禁看不到的部分）：Windows 打开菜单选"查看状态"，Mac 跑
+`bash mac/envproxy.sh status`，输出与预期一致；改了核心逻辑再选一次"安装 / 修复"
+重载，看一轮状态翻转。
 
 ## 硬性规范
 
