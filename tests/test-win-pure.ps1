@@ -351,8 +351,7 @@ Assert-Eq 'status scan passes -NoLog' $true ($opsSrc -match 'Get-ActiveProxyPort
 
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
-# switches, so every number must resolve and every switch must exist. Names are checked
-# as data (keys and switch words only): this file stays ASCII-only on purpose.
+# switches, so every number must resolve and every switch must exist.
 $menuKeys = @($MenuItems | ForEach-Object { $_.Key })
 Assert-Eq 'menu has seven entries' 7 $menuKeys.Count
 foreach ($k in @('1', '2', '3', '4', '5', '6', '0')) { Assert-Eq ('menu has key ' + $k) $true ($menuKeys -contains $k) }
@@ -362,19 +361,40 @@ foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update', 'Help')) {
 # Asserting only "the function exists" is not enough: help text that says nothing
 # still "exists". These keywords are the load-bearing facts.
 Assert-Eq 'Show-Help is defined' 'Function' (Get-Command Show-Help -ErrorAction SilentlyContinue).CommandType
-$helpTxt = (Show-Help 6>&1 | Out-String)
+# Help is paginated: an index plus one topic per screen. The full text must still be
+# reachable for non-interactive callers, so both shapes have to hold:
+#   - every topic resolves to a body, and the index lists every topic key;
+#   - the concatenation of all topics still carries the load-bearing facts.
+$helpTopics = @(Get-HelpTopics)
+Assert-Eq 'help has topics' $true ($helpTopics.Count -ge 7)
+$helpIdx = Format-HelpIndex
+foreach ($t in $helpTopics) {
+    Assert-Eq ('help topic ' + $t.Key + ' renders') $true ($null -ne (Format-HelpTopic $t.Key))
+    Assert-Eq ('help index lists topic ' + $t.Key) $true ($helpIdx -match ('(?m)^\s*' + [regex]::Escape($t.Key) + '\s{2}'))
+    Assert-Eq ('help topic ' + $t.Key + ' has a title') $true (-not [string]::IsNullOrWhiteSpace($t.Title))
+}
+Assert-Eq 'help topic body is never empty' $true (@($helpTopics | Where-Object { @($_.Lines).Count -eq 0 }).Count -eq 0)
+$helpTxt = (Format-HelpAll)
 Assert-Eq 'help explains the Enter timing' $true ($helpTxt -match '回车')
 Assert-Eq 'help points at install/repair as the catch-all' $true ($helpTxt -match '安装 / 修复')
 Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TERM')
+# Every screen ends with the way back out. Without it a user who lands on a topic
+# has no idea how to leave, which is exactly the "wall of text" problem pagination solves.
+Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '返回目录')
 # A table entry that is never printed is a feature the user cannot reach: the menu once
 # printed a hardcoded list and [6] Help never appeared on screen even though the table
 # had it. Show-Menu bails out under redirected input, so it cannot be exercised here --
-# instead render from the same table the menu renders from and check every key shows.
-$menuOut = (($MenuItems | ForEach-Object {
-    if ($_.Hint) { "  [{0}] {1}（{2}）" -f $_.Key, $_.Name, $_.Hint } else { "  [{0}] {1}" -f $_.Key, $_.Name }
-}) -join "`n")
-foreach ($k in $menuKeys) { Assert-Eq ('menu prints key ' + $k) $true ($menuOut -match ('\[' + [regex]::Escape($k) + '\]')) }
+# instead call the very renderer the menu prints, so this assertion cannot drift away
+# from the real output (a locally rebuilt string would keep passing after a redesign).
+$menuOut = Format-MenuText
+foreach ($k in $menuKeys) { Assert-Eq ('menu prints key ' + $k) $true ($menuOut -match ('(?m)^\s*' + [regex]::Escape($k) + '\s{2}')) }
 Assert-Eq 'every action has a hint' $true (@($MenuItems | Where-Object { $_.Switch }).Count -eq @($MenuItems | Where-Object { $_.Hint }).Count)
+# Grouping is presentation only: every entry belongs to a declared group, and the
+# groups keep their order so the screen reads 日常 -> 维护 -> 退出.
+foreach ($mi in $MenuItems) { Assert-Eq ('menu item ' + $mi.Key + ' has a group') $true ($mi.Group -in @('日常', '维护', '退出')) }
+$menuTextOrder = @()
+foreach ($g in @('日常', '维护', '退出')) { $menuTextOrder += $menuOut.IndexOf($g) }
+Assert-Eq 'menu groups render in order' $true ($menuTextOrder[0] -lt $menuTextOrder[1] -and $menuTextOrder[1] -lt $menuTextOrder[2])
 
 Write-Host '[12] the online update source table'
 # The updater walks an ordered source table and takes the first source that answers, so a broken

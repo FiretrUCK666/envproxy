@@ -304,126 +304,322 @@ function Show-Status {
 # **打印与分派共用下面这张 $MenuItems**：加一项就自动出现在菜单里，不会再出现
 # "表里加了、打印忘了"这种功能明明做了、用户却看不见的缺口。
 # 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
+# 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
 $MenuItems = @(
-    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Hint = "首次安装；觉得不对劲就点它" },
-    @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Hint = "监控、翻墙、变量、版本" },
-    @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Hint = "停掉并恢复直连，下次登录回来" },
-    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Hint = "彻底卸载，回到没装之前" },
-    @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Hint = "有新版先说明，同意才装" },
-    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Hint = "忘了怎么用就点它" },
-    @{ Key = "0"; Name = "退出";       Switch = "" }
+    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Group = "日常"; Hint = "首次安装；觉得不对劲就点它" },
+    @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "监控、翻墙、变量、版本" },
+    @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先说明，同意才装" },
+    @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "停掉并恢复直连，下次登录回来" },
+    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
+    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "分主题查看，不用翻屏" },
+    @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出" }
 )
-function Show-Help {
-    $ver = Get-LocalVersion
-    if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "未知" }
-    $lines = @(
-        "================ EnvProxy 帮助 ================",
-        "",
-        "它做什么",
-        "  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；",
-        "  一关，它们自动恢复直连。不用记任何开关。",
-        "",
-        "它凭什么判断你在翻墙",
-        "  每 2 到 3 秒看一次，但要同时满足三条才算：",
-        "    1. 本机有端口在监听；",
-        "    2. 它确实是代理——发一次 CONNECT 握手，要回 HTTP/1.x 200；",
-        "    3. 它确实连得通外面——通过它访问 7 个不同站点，任意一个通就算。",
-        "  三条全过才写变量，所以本机开着网页服务、开发服务器都不会被误判。",
-        "  它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。",
-        "",
-        "装完会发生什么",
-        "  1. 装完之后打开的窗口：启动时读到的就是当前状态，什么都不用做。",
-        "  2. 装完之后打开、后来代理又变了：按一次回车即可。",
-        "  3. 装之前就打开的窗口：同步代码还没装进去，要重开一个窗口，",
-        "     或在这个窗口里执行下面「常用命令」里的加载命令。",
-        "",
-        "为什么开着的窗口要按一次回车",
-        "  每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，",
-        "  已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、屏幕重新",
-        "  出现光标的时候——你本来就一直在敲命令，所以不用专门做什么。",
-        "",
-        "常用命令（都在你要改的那个窗口里输入，只影响那个窗口）",
-        "",
-        "  先说明：这些命令要在 PowerShell 里敲，不是老式的「命令提示符」(cmd)。",
-        "  日常你接触的窗口基本都是 PowerShell：开始菜单搜 PowerShell、Win+R 输入",
-        "  powershell、Windows Terminal、VS Code 终端，都是。只有手动打开「命令提示符」",
-        "  才是 cmd。看提示符就能分辨：开头有 PS 的是 PowerShell。",
-        "  如果确实在用 cmd，写法不同：",
-        "      set ENVPROXY_TERM=off     固定直连",
-        "      set ENVPROXY_TERM=        改回跟着翻墙软件走",
-        "      set HTTPS_PROXY           查看代理",
-        "",
-        "  让这个窗口固定直连（只管当前窗口，窗口一关就失效）：",
-        "      `$env:ENVPROXY_TERM = 'off'",
-        "  改回跟着翻墙软件走：",
-        "      Remove-Item Env:ENVPROXY_TERM",
-        "  ENVPROXY_TERM 是 EnvProxy 自己的开关变量，只有 'off' 一个值有意义：",
-        "  设上它就表示这个窗口不要跟着翻墙软件变。它不影响翻墙软件本身，",
-        "  只影响你敲命令的这个窗口。",
-        "",
-        "  让这个窗口走公司代理（两步，顺序不能反）：",
-        "      1. 先停掉自动跟随：`$env:ENVPROXY_TERM = 'off'",
-        "      2. 再设公司代理：  `$env:HTTPS_PROXY = 'http://你的地址:端口'",
-        "  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。",
-        "",
-        "  检查现在走不走代理：",
-        "      `$env:HTTPS_PROXY          （有值就是走代理，空的是直连）",
-        "",
-        "  让某一条命令不走代理：",
-        "      curl.exe --noproxy ""*"" 网址",
-        "  Windows 上必须写 curl.exe。PowerShell 把 curl 和 wget 都当成了别名，",
-        "  直接敲会报「参数找不到」。",
-        "  别的工具各有各的写法：",
-        "      git  -c http.proxy= -c https.proxy= clone 仓库地址",
-        "           （等号后留空=这条不用代理；写别的值=改用那个代理）",
-        "      npm  --noproxy=registry.npmjs.org install 包名",
-        "           注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。",
-        "           写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。",
-        "           另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。",
-        "      wget Windows 不自带 wget。自己装过 GNU wget 才写 wget.exe --no-proxy 网址",
-        "           （PowerShell 里的 wget 只是个别名，指向 Invoke-WebRequest，不是真的 wget）",
-        "      docker 没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）",
-        "",
-        "  让已经开着的窗口立刻跟上：",
-        "      . `$PROFILE",
-        "  `$PROFILE 是 PowerShell 每次启动时自动跑的文件，安装时往里面放了一段同步",
-        "  代码，这条命令就是手动跑一次它。PowerShell 5.1 和 7 各有自己的 `$PROFILE，",
-        "  安装时两个都写了，所以你在哪个窗口里敲它，加载的都是对应的那一份。",
-        "  注意：开头的点号和后面的空格都不能少；只对 PowerShell 有效（cmd 和 Git Bash",
-        "  没有这个文件，它们各自的写法见上面 cmd 那一栏）；",
-        "  执行完只影响这一个窗口，别的已开窗口要各自执行或重开；",
-        "  如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到路径」",
-        "  的红字，属正常，重开一个窗口就行。",
-        "",
-        "菜单其它选项",
-        "  [1] 安装 / 修复：首次安装，或者觉得不对劲时都选它。",
-        "  [2] 查看状态：监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。",
-        "  [3] 停止监控：临时停用，下次登录会自己回来。",
-        "  [4] 一键恢复：彻底卸载，回到没装之前。会问你要不要留日志。",
-        "  [5] 检查更新：先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。",
-        "  [6] 帮助：就是这一页。忘了怎么用时看它。",
-        "  [0] 退出菜单，什么都不做。直接按回车等于选 2（查看状态）。",
-        "",
-        "日志在哪",
-        "  win\monitor\monitor.log，上限 200KB，写满只留最近 200 行。",
-        "  卸载时会问你要不要留它。",
-        "",
-        "文件夹里都是什么",
-        "  打开菜单.cmd        唯一需要双击的文件",
-        "  envproxy.ps1        主程序",
-        "  lib\                程序库，不用管",
-        "  monitor\            运行时自动生成，放日志和 pid",
-        "  整个文件夹可以改名、搬走。更新只覆盖程序文件，",
-        "  所以别把你要长期保留的东西放进这个文件夹。",
-        "",
-        "觉得不对劲",
-        "  打开菜单选 1（安装 / 修复）。它能修好大部分问题，重复跑不会多装一份，",
-        "  不会中断网络，也不会丢你的设置。",
-        "",
-        "本机版本 v$ver",
-        "完整说明见项目里的 README。"
+
+# 菜单里名字那一列要按最长的自动对齐：写死宽度会在改文案后错位，
+# 而错位的表格正是"看起来乱"的主要来源。
+function Get-MenuNameWidth {
+    $w = 0
+    foreach ($mi in $MenuItems) {
+        $len = 0
+        foreach ($ch in $mi.Name.ToCharArray()) {
+            # 中文字符在终端里占两格，按 2 计；ASCII 占 1。
+            $len += if ([int]$ch -gt 0x2E80) { 2 } else { 1 }
+        }
+        if ($len -gt $w) { $w = $len }
+    }
+    return $w
+}
+
+# 把一段文字按终端可见宽度补空格（中文按两格算）。
+function Format-MenuCell([string]$Text, [int]$Width) {
+    $len = 0
+    foreach ($ch in $Text.ToCharArray()) { $len += if ([int]$ch -gt 0x2E80) { 2 } else { 1 } }
+    $pad = $Width - $len
+    if ($pad -lt 0) { $pad = 0 }
+    return $Text + (' ' * $pad)
+}
+
+# 渲染整张菜单。打印与测试共用它，保证"表里有什么，屏幕就有什么"。
+function Format-MenuText {
+    $nameW = Get-MenuNameWidth
+    $out = New-Object System.Collections.Generic.List[string]
+    $hl = Get-MonitorProcess
+    $monText = if ($hl) { ("运行中 (PID {0})" -f $hl.ProcessId) } else { "未运行" }
+    $verText = Get-LocalVersion
+    if (-not $verText) { $verText = "未知" }
+    [void]$out.Add("======== EnvProxy 菜单 ========")
+    [void]$out.Add(("  监控 {0}    版本 v{1}" -f $monText, $verText))
+    $groups = @('日常', '维护', '退出')
+    foreach ($g in $groups) {
+        $items = @($MenuItems | Where-Object { $_.Group -eq $g })
+        if ($items.Count -eq 0) { continue }
+        [void]$out.Add("")
+        [void]$out.Add(("  {0}" -f $g))
+        foreach ($mi in $items) {
+            if ($mi.Hint) {
+                $nameCell = Format-MenuCell $mi.Name $nameW
+                [void]$out.Add(("    {0}  {1}   {2}" -f $mi.Key, $nameCell, $mi.Hint))
+            } else {
+                # 没有提示就不补空格：行尾留一串空白，复制出去很难看。
+                [void]$out.Add(("    {0}  {1}" -f $mi.Key, $mi.Name))
+            }
+        }
+    }
+    [void]$out.Add("")
+    [void]$out.Add("  输入编号后回车（直接回车 = 查看状态）")
+    return ($out -join "`n")
+}
+
+# 帮助的内容表：每个主题一屏放得下，进帮助先看目录，选一个只看那一段。
+# 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
+# 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
+# 每条格式：键 / 标题（目录里显示）/ 正文行数组。
+function Get-HelpTopics {
+    return @(
+        @{
+            Key = '1'; Title = '它是什么、怎么判断你在翻墙'
+            Lines = @(
+                '它做什么',
+                '  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；',
+                '  一关，它们自动恢复直连。不用记任何开关。',
+                '',
+                '它凭什么判断你在翻墙',
+                '  每 2 到 3 秒看一次，但要同时满足三条才算：',
+                '    1. 本机有端口在监听；',
+                '    2. 它确实是代理——发一次握手，要回 HTTP/1.x 200；',
+                '    3. 它确实连得通外面——通过它访问 7 个不同站点，任意一个通就算。',
+                '  三条全过才写变量，所以本机开着网页服务、开发服务器都不会被误判。',
+                '  它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。'
+            )
+        },
+        @{
+            Key = '2'; Title = '装完之后会发生什么'
+            Lines = @(
+                '装完之后，按窗口分三种情况',
+                '  1. 装完之后打开的窗口',
+                '     启动时读到的就是当前状态，什么都不用做。',
+                '  2. 装完之后打开、后来代理又变了',
+                '     按一次回车即可。',
+                '  3. 装之前就打开的窗口',
+                '     同步代码还没装进去，要重开一个窗口，',
+                '     或者执行主题 3 里那条加载命令。',
+                '',
+                '为什么开着的窗口要按一次回车',
+                '  每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，',
+                '  已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、屏幕重新',
+                '  出现光标的时候——你本来就一直在敲命令，所以不用专门做什么。'
+            )
+        },
+        @{
+            Key = '3'; Title = '单个窗口怎么接管 / 走公司代理'
+            Lines = @(
+                '这些命令要在 PowerShell 里敲，不是老式的「命令提示符」(cmd)',
+                '  日常你接触的窗口基本都是 PowerShell：开始菜单搜 PowerShell、',
+                '  Win+R 输入 powershell、Windows Terminal、VS Code 终端，都是。',
+                '  只有手动打开「命令提示符」才是 cmd。看提示符就能分辨：',
+                '  开头有 PS 的是 PowerShell。',
+                '',
+                '  如果确实在用 cmd，写法不同：',
+                '      set ENVPROXY_TERM=off     固定直连',
+                '      set ENVPROXY_TERM=        改回跟着翻墙软件走',
+                '      set HTTPS_PROXY           查看代理',
+                '',
+                '让这个窗口固定直连（只管当前窗口，窗口一关就失效）',
+                '      $env:ENVPROXY_TERM = ''off''',
+                '  改回跟着翻墙软件走：',
+                '      Remove-Item Env:ENVPROXY_TERM',
+                '  ENVPROXY_TERM 是 EnvProxy 自己的开关变量，只有 ''off'' 一个值有意义：',
+                '  设上它就表示这个窗口不要跟着翻墙软件变。它不影响翻墙软件本身，',
+                '  只影响你敲命令的这个窗口。',
+                '',
+                '让这个窗口走公司代理（两步，顺序不能反）',
+                '  1. 先停掉自动跟随：$env:ENVPROXY_TERM = ''off''',
+                '  2. 再设公司代理：  $env:HTTPS_PROXY = ''http://你的地址:端口''',
+                '  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。',
+                '',
+                '检查现在走不走代理',
+                '      $env:HTTPS_PROXY          （有值就是走代理，空的是直连）',
+                '',
+                '让已经开着的窗口立刻跟上',
+                '      . $PROFILE',
+                '  $PROFILE 是 PowerShell 每次启动时自动跑的文件，安装时往里面放了一段',
+                '  同步代码，这条命令就是手动跑一次它。PowerShell 5.1 和 7 各有自己的',
+                '  $PROFILE，安装时两个都写了，所以你在哪个窗口里敲它，加载的都是对应的',
+                '  那一份。',
+                '  注意：开头的点号和后面的空格都不能少；只对 PowerShell 有效（cmd 和',
+                '  Git Bash 没有这个文件）；执行完只影响这一个窗口，别的已开窗口要各自',
+                '  执行或重开；如果那个窗口从没装过 EnvProxy，这个文件可能不存在，',
+                '  会看到「找不到路径」的红字，属正常，重开一个窗口就行。'
+            )
+        },
+        @{
+            Key = '4'; Title = '让某一条命令不走代理'
+            Lines = @(
+                '不同工具写法不一样，没有通用的一条命令',
+                '',
+                'curl',
+                '      curl.exe --noproxy "*" 网址',
+                '  Windows 上必须写 curl.exe。PowerShell 把 curl 和 wget 都当成了别名，',
+                '  指向 Invoke-WebRequest，直接敲会报「参数找不到」。',
+                '',
+                'git',
+                '      git -c http.proxy= -c https.proxy= clone 仓库地址',
+                '  等号后留空 = 这条不用代理；写别的值 = 改用那个代理。',
+                '',
+                'npm',
+                '      npm --noproxy=registry.npmjs.org install 包名',
+                '  注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。',
+                '  写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。',
+                '  另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。',
+                '',
+                'wget',
+                '  Windows 不自带 wget。自己装过 GNU wget 才写：',
+                '      wget.exe --no-proxy 网址',
+                '  （PowerShell 里的 wget 只是别名，指向 Invoke-WebRequest，不是真的 wget）',
+                '',
+                'docker',
+                '  没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。'
+            )
+        },
+        @{
+            Key = '5'; Title = '菜单每个选项做什么'
+            Lines = @(
+                '  [1] 安装 / 修复',
+                '      首次安装，或者觉得不对劲时都选它。重复跑不会多装一份。',
+                '  [2] 查看状态',
+                '      监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。',
+                '  [3] 停止监控',
+                '      临时停用，下次登录会自己回来。',
+                '  [4] 一键恢复',
+                '      彻底卸载，回到没装之前。会问你要不要留日志。',
+                '  [5] 检查更新',
+                '      先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。',
+                '  [6] 帮助',
+                '      就是这里。',
+                '  [0] 退出菜单',
+                '      什么都不做。直接按回车等于选 2（查看状态）。'
+            )
+        },
+        @{
+            Key = '6'; Title = '日志在哪、文件夹结构'
+            Lines = @(
+                '日志',
+                '      win\monitor\monitor.log',
+                '  上限 200KB，写满只留最近 200 行。卸载时会问你要不要留它。',
+                '',
+                '文件夹里都是什么',
+                '      打开菜单.cmd        唯一需要双击的文件',
+                '      envproxy.ps1        主程序',
+                '      lib\                程序库，不用管',
+                '      monitor\            运行时自动生成，放日志和 pid',
+                '  整个文件夹可以改名、搬走。更新只覆盖程序文件，',
+                '  所以别把你要长期保留的东西放进这个文件夹。'
+            )
+        },
+        @{
+            Key = '7'; Title = '觉得不对劲怎么办'
+            Lines = @(
+                '大部分问题都可以用「安装 / 修复」解决',
+                '  打开菜单选 1。它不会重复安装，不会中断网络，',
+                '  也不会丢失你自己的设置。',
+                '',
+                '还是不行',
+                '  打开菜单选 2，把状态截图；再选 1 修复一次。',
+                '  反馈时附上 monitor\monitor.log 最后 20 行，能省很多来回。',
+                '',
+                '只想看命令和完整说明',
+                '  完整说明在项目里的 README，',
+                '  其中「常用操作一页纸」一节收了所有命令。'
+            )
+        }
     )
-    foreach ($l in $lines) { Write-Host $l }
+}
+
+# 帮助目录：只列标题，一屏放得下。
+function Format-HelpIndex {
+    $out = New-Object System.Collections.Generic.List[string]
+    [void]$out.Add('================ EnvProxy 帮助 ================')
+    [void]$out.Add('')
+    [void]$out.Add('  想知道什么，就输它的编号：')
+    [void]$out.Add('')
+    foreach ($t in (Get-HelpTopics)) {
+        [void]$out.Add(('    {0}  {1}' -f $t.Key, $t.Title))
+    }
+    [void]$out.Add('')
+    $ver = Get-LocalVersion
+    if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '未知' }
+    [void]$out.Add(('  本机版本 v{0}' -f $ver))
+    [void]$out.Add('')
+    [void]$out.Add('  输入编号后回车    0 = 回主菜单')
+    return ($out -join "`n")
+}
+
+# 单个主题：正文前后各留一行，底部固定给返回方式。
+function Format-HelpTopic([string]$Key) {
+    $t = @(Get-HelpTopics | Where-Object { $_.Key -eq $Key })
+    if ($t.Count -eq 0) { return $null }
+    $t = $t[0]
+    $out = New-Object System.Collections.Generic.List[string]
+    [void]$out.Add(('================ 帮助 {0} · {1} ================' -f $t.Key, $t.Title))
+    [void]$out.Add('')
+    foreach ($l in $t.Lines) { [void]$out.Add($l) }
+    [void]$out.Add('')
+    [void]$out.Add('  0 = 返回目录    1-7 = 看别的主题    m = 回主菜单')
+    return ($out -join "`n")
+}
+
+# 全文：把 7 个主题按顺序拼起来，一个字不少。
+# 非交互调用（-Help 被脚本/管道调用）走这条：调用方要的是一份完整文档，
+# 分页导航对没有终端的场景没有意义。
+function Format-HelpAll {
+    $out = New-Object System.Collections.Generic.List[string]
+    [void]$out.Add((Format-HelpIndex))
+    foreach ($t in (Get-HelpTopics)) {
+        [void]$out.Add('')
+        [void]$out.Add((Format-HelpTopic $t.Key))
+    }
+    return ($out -join "`n")
+}
+
+# 帮助入口。
+# -All：不导航，直接给全文（非交互、或明确要全文时用）。
+# 交互：先给目录，输编号看主题，0 回目录，m 回主菜单。
+function Show-Help([switch]$All) {
+    if ($All -or [Console]::IsInputRedirected) {
+        Write-Host (Format-HelpAll)
+        return
+    }
+    while ($true) {
+        Write-Host ''
+        Write-Host (Format-HelpIndex) -ForegroundColor Cyan
+        $sel = ''
+        try { $sel = "$(Read-Host '看哪个（回车返回）')".Trim() } catch { return }
+        if (-not $sel) { return }
+        if ($sel -eq '0' -or $sel -eq 'm' -or $sel -eq 'M') { return }
+        $body = Format-HelpTopic $sel
+        if (-not $body) {
+            Write-Host ("没有这个编号：{0}（1-7，或 0 返回）" -f $sel) -ForegroundColor Yellow
+            continue
+        }
+        Write-Host ''
+        Write-Host $body -ForegroundColor Cyan
+        Write-Host ''
+        # 看完一个主题以后，直接问"下一个看哪个"，不用退回目录再选一次。
+        $next = ''
+        try { $next = "$(Read-Host '按回车回目录，或直接输下一个编号')".Trim() } catch { return }
+        if (-not $next) { continue }
+        if ($next -eq 'm' -or $next -eq 'M') { return }
+        # 允许连看：把用户刚输的编号当作下一次选择，靠外层循环再判一遍。
+        $again = Format-HelpTopic $next
+        if ($again) {
+            Write-Host ''
+            Write-Host $again -ForegroundColor Cyan
+            Write-Host ''
+            $null = Read-Host '按回车回目录'
+        } else {
+            Write-Host ("没有这个编号：{0}" -f $next) -ForegroundColor Yellow
+        }
+    }
 }
 
 function Show-Menu {
@@ -437,24 +633,9 @@ function Show-Menu {
     } catch {}
     while ($true) {
         Write-Host ""
-        Write-Host "======== EnvProxy 菜单 ========" -ForegroundColor Cyan
-        # 抬头只读瞬时项（监控在不在、本地版本），不做网络探测，不卡菜单。
-        $hm = Get-MonitorProcess
-        $monText = if ($hm) { ("运行中 (PID {0})" -f $hm.ProcessId) } else { "未运行" }
-        $verText = Get-LocalVersion
-        if (-not $verText) { $verText = "未知" }
-        Write-Host ("当前：监控{0}，本地版本 v{1}（详情选 2 查看状态）" -f $monText, $verText) -ForegroundColor DarkGray
-        # 逐项打印 $MenuItems：表是唯一权威，改表即改菜单。
-        foreach ($mi in $MenuItems) {
-            $color = if ($mi.Switch) { "Green" } else { "DarkGray" }
-            if ($mi.Hint) {
-                Write-Host ("  [{0}] {1}（{2}）" -f $mi.Key, $mi.Name, $mi.Hint) -ForegroundColor $color
-            } else {
-                Write-Host ("  [{0}] {1}" -f $mi.Key, $mi.Name) -ForegroundColor $color
-            }
-        }
+        Write-Host (Format-MenuText) -ForegroundColor Cyan
         try {
-            $choice = Read-Host "选一个（回车=查看状态）"
+            $choice = Read-Host "输入编号"
         } catch {
             Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。" -ForegroundColor Yellow
             return
@@ -462,9 +643,12 @@ function Show-Menu {
         # 先 Trim 再判空：纯空格应当与直接回车同义（Mac 侧 tr -d 之后再判空，两端同语义）。
         $choice = "$choice".Trim()
         if (-not $choice) { $choice = "2" }
+        # q 与 0 同义：很多人下意识打 q 想退出，报"没有这个编号"只会让人以为程序坏了。
+        if ($choice -eq 'q' -or $choice -eq 'Q') { $choice = "0" }
         $item = @($MenuItems | Where-Object { $_.Key -eq $choice })
         if (-not $item -or ($item.Count -eq 0)) {
-            Write-Host "没有这个编号，重输一个。" -ForegroundColor Yellow
+            # 只打一行，不重画整张菜单：输错一次就把屏幕刷一遍，会让人分不清刚才看到的是哪一屏。
+            Write-Host ("没有这个编号：{0}（可用的有 1-6 和 0）" -f $choice) -ForegroundColor Yellow
             continue
         }
         if (-not $item[0].Switch) { return }
