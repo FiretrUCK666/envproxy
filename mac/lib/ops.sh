@@ -1028,22 +1028,30 @@ self_test() {
 install_envproxy() {
     echo "======== EnvProxy 安装 (macOS) ========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。"; fi
+    # 先说清楚要动什么、不动什么，再说"正在做"——用户在按完编号之后得先知道会发生什么，
+    # 而不是盯着静止的屏幕猜。
+    echo "会改这 3 处：开机自启、终端配置、后台监控。"
+    echo "不会动你的其他设置。"
+    echo ""
     # 首次安装的判据要在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
     if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
     snapshot_prev_env "$_first" || true
+    echo "[1/3] 正在写开机自启……"
     if set_autorun; then
         echo "[1/3] 开机自启动：已写入（LaunchAgent + 固定定位器）"
     else
         echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
+    echo "[2/3] 正在写终端配置……"
     if insert_shell_hooks; then
         echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 不支持，README 的「这些命令在哪个终端里敲」一节有说明）"
     else
         echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
     fi
     update_path_record
+    echo "[3/3] 正在启动后台监控……"
     if start_monitor 1; then
         echo "[3/3] 监控进程：已启动"
     else
@@ -1054,6 +1062,8 @@ install_envproxy() {
     align_state_once || true
     sleep 1
     echo ""
+    # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
+    echo "正在联网确认有没有新版本……"
     show_status
     echo ""
     echo "提示：之后新开的终端/程序自动获得代理；"
@@ -1231,12 +1241,29 @@ show_status() {
 # 非交互环境（stdin 不是终端）直接退出并提示，不死循环。
 # 帮助：纯打印，不改任何状态。给"忘了怎么用"的时候看。
 # 内容与 Windows 侧 Show-Help 同形（两端同文案，只换命令写法），自检会查关键词。
-show_help() {
-    _hv=$(get_local_version 2>/dev/null || true)
-    [ -z "$_hv" ] && _hv="未知"
-    cat <<HELP
-================ EnvProxy 帮助 ================
+# 帮助的内容表：每个主题一屏放得下，进帮助先看目录，选一个只看那一段。
+# 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
+# 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
+# 每一项用目录（dir）/ 正文（topic 函数）两处拼装，键与标题只写一次。
+HELP_TOPIC_KEYS=(1 2 3 4 5 6 7)
+_help_topic_title() {
+    case "$1" in
+        1) echo "它是什么、怎么判断你在翻墙" ;;
+        2) echo "装完之后会发生什么" ;;
+        3) echo "单个窗口怎么接管 / 走公司代理" ;;
+        4) echo "让某一条命令不走代理" ;;
+        5) echo "菜单每个选项做什么" ;;
+        6) echo "日志在哪、文件夹结构" ;;
+        7) echo "觉得不对劲怎么办" ;;
+        *) echo "" ;;
+    esac
+    return 0
+}
 
+# 单个主题的正文。用 cat 输出，与 Windows 侧 Get-HelpTopics 的 Lines 一一对应。
+_help_topic_body() {
+    case "$1" in
+    1) cat <<'TOPIC'
 它做什么
   翻墙软件一开，终端里的 git / npm / curl 就能翻墙；
   一关，它们自动恢复直连。不用记任何开关。
@@ -1244,29 +1271,34 @@ show_help() {
 它凭什么判断你在翻墙
   每 2 到 3 秒看一次，但要同时满足三条才算：
     1. 本机有端口在监听；
-    2. 它确实是代理——发一次 CONNECT 握手，要回 HTTP/1.x 200；
+    2. 它确实是代理——发一次握手，要回 HTTP/1.x 200；
     3. 它确实连得通外面——通过它访问 7 个不同站点，任意一个通就算。
   三条全过才写变量，所以本机开着网页服务、开发服务器都不会被误判。
   它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
-
-装完会发生什么
-  1. 装完之后打开的窗口：启动时读到的就是当前状态，什么都不用做。
-  2. 装完之后打开、后来代理又变了：按一次回车即可。
-  3. 装之前就打开的窗口：同步代码还没装进去，要重开一个窗口，
-     或在这个窗口里执行下面「常用命令」里的加载命令。
+TOPIC
+    ;;
+    2) cat <<'TOPIC'
+装完之后，按窗口分三种情况
+  1. 装完之后打开的窗口
+     启动时读到的就是当前状态，什么都不用做。
+  2. 装完之后打开、后来代理又变了
+     按一次回车即可。
+  3. 装之前就打开的窗口
+     同步代码还没装进去，要重开一个窗口，
+     或者执行主题 3 里那条加载命令。
 
 为什么开着的窗口要按一次回车
   每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
   已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、屏幕重新
   出现光标的时候——你本来就一直在敲命令，所以不用专门做什么。
+TOPIC
+    ;;
+    3) cat <<'TOPIC'
+Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不会敲错
+  默认是 zsh，bash 也可以。只有 fish 不支持：它不读 .zshenv，
+  语法也不一样。用 fish 的话换 zsh 或 bash。
 
-常用命令（都在你要改的那个窗口里输入，只影响那个窗口）
-
-  先说明：这些命令在 Mac 的「终端」里敲（默认是 zsh，bash 也可以）。
-  Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不会敲错。
-  只有 fish 不支持：它不读 .zshenv，语法也不一样。用 fish 的话换 zsh 或 bash。
-
-  让这个窗口固定直连（只管当前窗口，窗口一关就失效）：
+让这个窗口固定直连（只管当前窗口，窗口一关就失效）
       export ENVPROXY_TERM=off
   改回跟着翻墙软件走：
       unset ENVPROXY_TERM
@@ -1274,88 +1306,204 @@ show_help() {
   设上它就表示这个窗口不要跟着翻墙软件变。它不影响翻墙软件本身，
   只影响你敲命令的这个窗口。
 
-  让这个窗口走公司代理（两步，顺序不能反）：
-      1. 先停掉自动跟随：export ENVPROXY_TERM=off
-      2. 再设公司代理：  export HTTPS_PROXY=http://你的地址:端口
+让这个窗口走公司代理（两步，顺序不能反）
+  1. 先停掉自动跟随：export ENVPROXY_TERM=off
+  2. 再设公司代理：  export HTTPS_PROXY=http://你的地址:端口
   为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。
 
-  检查现在走不走代理：
-      echo \$HTTPS_PROXY          （有值就是走代理，空的是直连）
+检查现在走不走代理
+      echo $HTTPS_PROXY          （有值就是走代理，空的是直连）
 
-  让某一条命令不走代理：
-      curl --noproxy '*' 网址
-  别的工具各有各的写法：
-      git  -c http.proxy= -c https.proxy= clone 仓库地址
-           （等号后留空=这条不用代理；写别的值=改用那个代理）
-      npm  --noproxy=registry.npmjs.org install 包名
-           注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。
-           写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。
-           另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
-      wget --no-proxy 网址
-      docker 没有单条命令的写法，改 Docker 自己的设置（Docker Desktop 里的 Proxies）
-
-  让已经开着的窗口立刻跟上：
+让已经开着的窗口立刻跟上
       . ~/.envproxy/prompt-sync.sh
-  注意：开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效，fish 不支持
-  （fish 不读 .zshenv，语法也不一样）；
+  注意：开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效，fish 不支持；
   执行完只影响这一个窗口，别的已开窗口要各自执行或重开；
-  如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」的错误，
-  属正常，重开一个窗口就行。
+  如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」的
+  错误，属正常，重开一个窗口就行。
+TOPIC
+    ;;
+    4) cat <<'TOPIC'
+不同工具写法不一样，没有通用的一条命令
 
-菜单其它选项
-  [1] 安装 / 修复：首次安装，或者觉得不对劲时都选它。
-  [2] 查看状态：监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。
-  [3] 停止监控：临时停用，下次登录会自己回来。
-  [4] 一键恢复：彻底卸载，回到没装之前。会问你要不要留日志。
-  [5] 检查更新：先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。
-  [6] 帮助：就是这一页。忘了怎么用时看它。
-  [0] 退出菜单，什么都不做。直接按回车等于选 2（查看状态）。
+curl
+      curl --noproxy '*' 网址
 
-日志在哪
-  mac/monitor/monitor.log，上限 200KB，写满只留最近 200 行。
-  卸载时会问你要不要留它。
+git
+      git -c http.proxy= -c https.proxy= clone 仓库地址
+  等号后留空 = 这条不用代理；写别的值 = 改用那个代理。
+
+npm
+      npm --noproxy=registry.npmjs.org install 包名
+  注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。
+  写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。
+  另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
+
+wget
+      wget --no-proxy 网址
+
+docker
+  没有单条命令的写法，改 Docker 自己的设置（Docker Desktop 里的 Proxies）。
+TOPIC
+    ;;
+    5) cat <<'TOPIC'
+  1 安装 / 修复
+      首次安装，或者觉得不对劲时都选它。重复跑不会多装一份。
+  2 查看状态
+      监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。
+  3 停止监控
+      临时停用，下次登录会自己回来。
+  4 一键恢复
+      彻底卸载，回到没装之前。会问你要不要留日志。
+  5 检查更新
+      先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。
+  6 帮助
+      就是这里。
+  0 退出菜单
+      什么都不做。直接按回车等于选 2（查看状态）。
+TOPIC
+    ;;
+    6) cat <<'TOPIC'
+日志
+      mac/monitor/monitor.log
+  上限 200KB，写满只留最近 200 行。卸载时会问你要不要留它。
 
 文件夹里都是什么
-  打开菜单.command     唯一需要双击的文件
-  envproxy.sh          主程序
-  locator.sh           定位脚本模板（安装时复制到 ~/.envproxy/）
-  prompt-sync.sh       终端同步脚本模板（同上）
-  lib/                 程序库，不用管
-  monitor/             运行时自动生成，放日志和 pid
+      打开菜单.command     唯一需要双击的文件
+      envproxy.sh          主程序
+      locator.sh           定位脚本模板（安装时复制到 ~/.envproxy/）
+      prompt-sync.sh       终端同步脚本模板（同上）
+      lib/                 程序库，不用管
+      monitor/             运行时自动生成，放日志和 pid
   整个文件夹可以改名、搬走。更新只覆盖程序文件，
   所以别把你要长期保留的东西放进这个文件夹。
+TOPIC
+    ;;
+    7) cat <<'TOPIC'
+大部分问题都可以用「安装 / 修复」解决
+  打开菜单选 1。它不会重复安装，不会中断网络，
+  也不会丢失你自己的设置。
 
-觉得不对劲
-  打开菜单选 1（安装 / 修复）。它能修好大部分问题，重复跑不会多装一份，
-  不会中断网络，也不会丢你的设置。
+还是不行
+  打开菜单选 2，把状态截图；再选 1 修复一次。
+  反馈时附上 mac/monitor/monitor.log 最后 20 行，能省很多来回。
 
-本机版本 v$_hv
-完整说明见项目里的 README。
-HELP
+只想看命令和完整说明
+  完整说明在项目里的 README，
+  其中「常用操作一页纸」一节收了所有命令。
+TOPIC
+    ;;
+    esac
     return 0
 }
 
-# 菜单表：编号 | 名称 | 说明。打印与分派共用它，加一项就一定会显示出来。
-# 格式固定为 键|名字|提示，提示可以为空但**结尾那个竖线不能省**：
-# 少了它提示会被静默当成名字的副本（菜单照常打印、不报错，用户看到 [0] 退出（退出））。
+# 帮助目录：只列标题，一屏放得下。
+format_help_index() {
+    _hi_hv=$(get_local_version 2>/dev/null || true)
+    [ -z "$_hi_hv" ] && _hi_hv="未知"
+    echo "================ EnvProxy 帮助 ================"
+    echo ""
+    echo "  想知道什么，就输它的编号："
+    echo ""
+    for _hi_k in "${HELP_TOPIC_KEYS[@]}"; do
+        echo "    $_hi_k  $(_help_topic_title "$_hi_k")"
+    done
+    echo ""
+    echo "  本机版本 v$_hi_hv"
+    echo ""
+    echo "  输入编号后回车    0 = 回主菜单"
+}
+
+# 单个主题：正文前后各留一行，底部固定给返回方式。
+format_help_topic() {
+    _ht_title=$(_help_topic_title "$1")
+    [ -z "$_ht_title" ] && return 1
+    echo "================ 帮助 $1 · $_ht_title ================"
+    echo ""
+    _help_topic_body "$1"
+    echo ""
+    echo "  0 = 返回目录    1-7 = 看别的主题    m = 回主菜单"
+    return 0
+}
+
+# 全文：把 7 个主题按顺序拼起来，一个字不少。
+# 非交互调用（help 子命令被脚本/管道调用）走这条：调用方要的是一份完整文档，
+# 分页导航对没有终端的场景没有意义。
+format_help_all() {
+    format_help_index
+    for _ha_k in "${HELP_TOPIC_KEYS[@]}"; do
+        echo ""
+        format_help_topic "$_ha_k"
+    done
+}
+
+# 帮助入口。
+# 交互：先给目录，输编号看主题，0 回目录，m 回主菜单。
+# 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
+show_help() {
+    if [ ! -t 0 ]; then
+        format_help_all
+        return 0
+    fi
+    while true; do
+        echo ""
+        format_help_index
+        printf "看哪个（回车返回）："
+        if ! IFS= read -r _hs_sel; then
+            echo ""
+            return 0
+        fi
+        _hs_sel=$(printf '%s' "$_hs_sel" | tr -d '[:space:]')
+        [ -z "$_hs_sel" ] && return 0
+        case "$_hs_sel" in
+            0|m|M) return 0;;
+        esac
+        if ! format_help_topic "$_hs_sel"; then
+            echo "没有这个编号：$_hs_sel（1-7，或 0 返回）"
+            continue
+        fi
+        printf "按回车回目录，或直接输下一个编号："
+        if ! IFS= read -r _hs_next; then
+            echo ""
+            return 0
+        fi
+        _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
+        if [ -z "$_hs_next" ]; then
+            continue
+        fi
+        case "$_hs_next" in
+            m|M) return 0;;
+        esac
+        if format_help_topic "$_hs_next"; then
+            printf "按回车回目录："
+            IFS= read -r _hs_dummy || true
+        else
+            echo "没有这个编号：$_hs_next"
+        fi
+    done
+}
+
+# 菜单表：编号 | 名称 | 说明 | 分组。打印与分派共用它，加一项就一定会显示出来。
+# 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
+# 格式固定为 键|名字|提示|分组，四个字段三条竖线；提示可以为空但**竖线不能少**：
+# 少了它字段会静默错位（菜单照常打印、不报错，用户看到的却是错的内容）。
 # 所以下面带一道加载期校验，格式不对就当场报错，不给"看起来正常"的机会。
 MENU_ITEMS=(
-    '1|安装 / 修复|首次安装；觉得不对劲就点它'
-    '2|查看状态|监控、翻墙、变量、版本'
-    '3|停止监控|停掉并恢复直连，下次登录回来'
-    '4|一键恢复|彻底卸载，回到没装之前'
-    '5|检查更新|有新版先说明，同意才装'
-    '6|帮助|忘了怎么用就点它'
-    '0|退出|'
+    '1|安装 / 修复|首次安装；觉得不对劲就点它|日常'
+    '2|查看状态|监控、翻墙、变量、版本|日常'
+    '5|检查更新|有新版先说明，同意才装|日常'
+    '3|停止监控|停掉并恢复直连，下次登录回来|维护'
+    '4|一键恢复|彻底卸载，回到没装之前|维护'
+    '6|帮助|分主题查看，不用翻屏|维护'
+    '0|退出||退出'
 )
 
-# 加载期校验：每条必须恰好两个竖线，且键与名字非空。不合格就报错（不静默降级）。
+# 加载期校验：每条必须恰好三个竖线，且键与名字、分组非空。不合格就报错（不静默降级）。
 _menu_items_valid() {
     for _mv in "${MENU_ITEMS[@]}"; do
         # 数竖线：把非竖线字符全删掉，剩下的长度就是个数
         _bars=$(printf '%s' "$_mv" | tr -cd '|' | wc -c | tr -d ' ')
-        if [ "$_bars" -ne 2 ]; then
-            printf '菜单表格式错误（%s 个竖线，应为 2）：%s\n' "$_bars" "$_mv" >&2
+        if [ "$_bars" -ne 3 ]; then
+            printf '菜单表格式错误（%s 个竖线，应为 3）：%s\n' "$_bars" "$_mv" >&2
             return 1
         fi
         case "${_mv%%|*}" in
@@ -1365,10 +1513,83 @@ _menu_items_valid() {
         case "$_mvname" in
             '') printf '菜单表格式错误（名字为空）：%s\n' "$_mv" >&2; return 1 ;;
         esac
+        _mvgrp=${_mv##*|}
+        case "$_mvgrp" in
+            '') printf '菜单表格式错误（分组为空）：%s\n' "$_mv" >&2; return 1 ;;
+        esac
     done
     return 0
 }
 _menu_items_valid || return 1 2>/dev/null || exit 1
+
+# 显示宽度：中文占两格，ASCII 占一格。菜单的名字列按最长的自动对齐，
+# 写死宽度会在改文案后错位，而错位的表格正是"看起来乱"的主要来源。
+#
+# 算法：先数总字节数和 ASCII 字节数。
+# UTF-8 里一个汉字占 3 个字节（在终端占 2 格），ASCII 占 1 字节（占 1 格），
+# 所以 显示宽度 = 字节数 - 非 ASCII 字节数 + (非 ASCII 字节数 / 3) * 2。
+# 用纯 bash 算术，不依赖 awk 的 locale 行为——那个在不同系统上表现不一致。
+_menu_cell_width() {
+    _mcw_s="$1"
+    _mcw_all=$(printf '%s' "$_mcw_s" | wc -c)
+    _mcw_ascii=$(printf '%s' "$_mcw_s" | LC_ALL=C tr -dc '\000-\177' | wc -c)
+    _mcw_multi=$((_mcw_all - _mcw_ascii))
+    # 多字节字节数 / 3 得到汉字个数（本项目文案里没有 2 字节或 4 字节字符）
+    _mcw_han=$((_mcw_multi / 3))
+    _mcw_rest=$((_mcw_multi - _mcw_han * 3))
+    printf '%s' $((_mcw_ascii + _mcw_han * 2 + _mcw_rest))
+}
+
+# 把文字补齐到指定宽度（按上面的显示宽度算）。
+_menu_cell_pad() {
+    _mcp_text="$1"
+    _mcp_width="$2"
+    _mcp_len=$(_menu_cell_width "$_mcp_text")
+    _mcp_pad=$((_mcp_width - _mcp_len))
+    [ "$_mcp_pad" -lt 0 ] && _mcp_pad=0
+    printf '%s%*s' "$_mcp_text" "$_mcp_pad" ''
+}
+
+# 渲染整张菜单。打印与测试共用它：表里有什么，屏幕就有什么。
+format_menu_text() {
+    _fmt_w=0
+    for _fi in "${MENU_ITEMS[@]}"; do
+        _frest=${_fi#*|}
+        _fname=${_frest%%|*}
+        _fw=$(_menu_cell_width "$_fname")
+        [ "$_fw" -gt "$_fmt_w" ] && _fmt_w="$_fw"
+    done
+    _fhpid=$(get_monitor_pid || true)
+    _fhver=$(get_local_version || true)
+    [ -z "$_fhver" ] && _fhver="未知"
+    if [ -n "$_fhpid" ]; then _fhmon="运行中 (PID $_fhpid)"; else _fhmon="未运行"; fi
+    echo "======== EnvProxy 菜单 (macOS) ========"
+    echo "  监控 $_fhmon    版本 v$_fhver"
+    for _fg in 日常 维护 退出; do
+        _fgfirst=1
+        for _fi in "${MENU_ITEMS[@]}"; do
+            _frest=${_fi#*|}
+            _fname=${_frest%%|*}
+            _frest2=${_frest#*|}
+            _fhint=${_frest2%%|*}
+            _fgrp=${_fi##*|}
+            [ "$_fgrp" != "$_fg" ] && continue
+            if [ "$_fgfirst" = "1" ]; then
+                echo ""
+                echo "  $_fg"
+                _fgfirst=0
+            fi
+            _fkey=${_fi%%|*}
+            if [ -n "$_fhint" ]; then
+                echo "    $_fkey  $(_menu_cell_pad "$_fname" "$_fmt_w")   $_fhint"
+            else
+                echo "    $_fkey  $_fname"
+            fi
+        done
+    done
+    echo ""
+    echo "  输入编号后回车（直接回车 = 查看状态）"
+}
 
 show_menu() {
     if [ ! -t 0 ]; then
@@ -1377,27 +1598,8 @@ show_menu() {
     fi
     while true; do
         echo ""
-        echo "======== EnvProxy 菜单 (macOS) ========"
-        # 抬头只读瞬时项（监控在不在、本地版本），不做网络探测，不卡菜单。
-        _hm=$(get_monitor_pid || true)
-        _hver=$(get_local_version || true)
-        [ -z "$_hver" ] && _hver="未知"
-        if [ -n "$_hm" ]; then _hmon="运行中 (PID $_hm)"; else _hmon="未运行"; fi
-        echo "当前：监控$_hmon，本地版本 v$_hver（详情选 2 查看状态）"
-        # 打印与分派共用这一张表：加一项就自动出现在菜单里，
-        # 不会再出现"表里加了、打印忘了"这种用户看不见功能的缺口。
-        for _mi in "${MENU_ITEMS[@]}"; do
-            _mk=${_mi%%|*}
-            _mrest=${_mi#*|}
-            _mn=${_mrest%%|*}
-            _mh=${_mrest#*|}
-            if [ -n "$_mh" ]; then
-                echo "  [$_mk] $_mn（$_mh）"
-            else
-                echo "  [$_mk] $_mn"
-            fi
-        done
-        printf "选一个（回车=查看状态）："
+        format_menu_text
+        printf "输入编号："
         if ! IFS= read -r _choice; then
             echo ""
             echo "菜单需要双击 打开菜单.command 使用。"
@@ -1406,6 +1608,10 @@ show_menu() {
         # 首尾空格不算输错（与 Windows 侧 .Trim() 同语义）。
         _choice=$(printf '%s' "$_choice" | tr -d '[:space:]')
         [ -z "$_choice" ] && _choice="2"
+        # q 与 0 同义：很多人下意识打 q 想退出，报"没有这个编号"只会让人以为程序坏了。
+        case "$_choice" in
+            q|Q) _choice="0";;
+        esac
         case "$_choice" in
             1) _msub="install";;
             2) _msub="status";;
@@ -1414,7 +1620,8 @@ show_menu() {
             5) _msub="update";;
             6) show_help; continue;;
             0) return 0;;
-            *) echo "没有这个编号，重输一个。"; continue;;
+            # 只打一行，不重画整张菜单：输错一次就把屏幕刷一遍，会让人分不清刚才看到的是哪一屏。
+            *) echo "没有这个编号：$_choice（可用的有 1-6 和 0）"; continue;;
         esac
         # 子进程跑完整子命令：与入口子命令走的是同一条路（含锁、确认、复检）。
         /bin/bash "$SCRIPT_PATH" "$_msub" || echo "启动失败（退出码 $?）。"
