@@ -62,7 +62,9 @@ Two need a restart: it was already open before you installed EnvProxy, or it run
 2. Unzip anywhere; the folder can be renamed. Open `win` and double-click **`打开菜单.cmd`** (Mac: open `mac`, double-click **`打开菜单.command`**), pick **`1 Install / Repair`**
 3. When you see the monitor started message, you are done
 
-Installing does five things: it saves the current values of any variables with the same names (used to restore them on uninstall), registers automatic start at login, adds a script to your terminal's startup configuration (on Windows that is PowerShell's `$PROFILE`, written to both the 5.1 and the 7 location; on Mac it is the shell rc files), starts the monitor, and corrects the environment variables once. Progress is reported step by step on screen: four steps on both platforms, matching the four places listed above.
+Installing does four things: it saves your current variable values (restored on uninstall), registers start at login, adds a small sync script to your terminal's startup configuration, and starts the monitor plus corrects the variables once.
+
+Progress is reported step by step on screen: four steps on both platforms, matching those four.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the package for your platform, double-click the menu and choose 1 Install / Repair, see the monitor started message; below, a side by side comparison: a window opened after the install takes effect right away, and a window that was open before also catches up once you reopen it or load the sync script by hand">
 
@@ -113,6 +115,8 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | 6 | What each menu item does |
 | 7 | Installed but still cannot reach the internet / status looks wrong |
 | 8 | Still not working / I want to remove it |
+
+Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
 <img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; show status and help change nothing; check for updates replaces program files only, then stops the monitor and restarts it">
 
@@ -264,13 +268,19 @@ The order matches the menu: four everyday items first, then the two upkeep ones.
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
 
-The full form (identical in cmd and PowerShell):
+Go into the folder that holds the program first. **Skipping this gives "file not found"**, because the program lives under `win\` and `mac\`.
+
+Windows (cmd or PowerShell):
 
 ```
+cd win
 powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status
 ```
 
+macOS (Terminal):
+
 ```
+cd mac
 bash envproxy.sh status
 ```
 
@@ -425,11 +435,13 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 
 | Limit | Reason | Effect |
 |---|---|---|
-| **Pure TUN mode is not handled** | It listens on no local port, so there is no port to judge | All traffic already goes through it in that mode, so no extra setting is needed. It cannot be told apart from a corporate VPN, and a wrong decision would remove your only proxy path, so it is left alone |
+| **Pure TUN mode is not handled** | No local port to judge | Its traffic already goes through the app, so nothing is needed |
 | **System proxy settings are not modified** | Doing so would affect browsers and other programs | Only user-level environment variables are written, and you can confirm in system settings that nothing else was touched |
-| **Already-running programs are not changed** | A program reads the environment variables once, at startup | Windows already open need one Enter press; this is how the operating system works, see section 0 |
+| **Already-running programs are not changed** | Variables are read once, at startup | Windows opened earlier need one Enter press (section 0) |
 | **Tools that need their own proxy configuration are out of scope** | They do not read these variables | Maven, Gradle, Docker and others are covered by the collapsed table in section 5 |
 | **No interface** | Zero dependencies is the install premise | There is only a menu: no tray icon and no window |
+
+Why pure TUN mode is left alone: it cannot be told apart from a corporate VPN. A wrong decision there would remove your only proxy path, so it is better to do nothing.
 
 Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
 
