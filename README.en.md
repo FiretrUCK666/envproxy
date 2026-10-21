@@ -252,14 +252,14 @@ All three must hold before any variable is written. A web server on your machine
 
 It does not rely on brands, process names or port numbers — those only speed up scanning; the decision always goes through these three.
 
-<img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 4 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 5 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are left intact">
+<img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 6 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 8 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are left intact">
 
 **Deciding "up" is more cautious than "down"**: one failed probe is not a disconnect — it takes 10 seconds of continuous failure and at least 3 probes. One success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
 
 | Action | Takes effect in |
 |---|---|
-| Starting the proxy app | 4-10 seconds |
-| Quitting the proxy app entirely | about 5 seconds |
+| Starting the proxy app | about 6-10 seconds |
+| Quitting the proxy app entirely | about 8 seconds |
 | Disconnecting only, without quitting | about 15–50 seconds |
 | Reconnecting after a drop | about 10–25 seconds |
 
