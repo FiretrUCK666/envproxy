@@ -1608,7 +1608,6 @@ _menu_items_valid() {
     done
     return 0
 }
-_menu_items_valid || return 1 2>/dev/null || exit 1
 
 # 按编号从表里取出子命令。空表示退出项。取不到返回非零（调用方据此报"没有这个编号"）。
 _menu_switch_for() {
@@ -1740,6 +1739,12 @@ show_menu_colored() {
 show_menu() {
     if [ ! -t 0 ]; then
         echo "菜单需要双击 打开菜单.command 使用，管道调用请直接用 install/status/stop/uninstall/update/help 子命令。"
+        return 1
+    fi
+    # 表格式校验放在这里，不放加载期：放加载期时表一写错，整个程序还没定义完
+    # 函数就 exit 了，用户看到的是"双击没反应"，连原因都没有。
+    if ! _menu_items_valid; then
+        echo "菜单数据损坏，无法显示。请重新下载安装包解压覆盖这个文件夹。"
         return 1
     fi
     while true; do
