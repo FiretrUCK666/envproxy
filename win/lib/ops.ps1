@@ -349,7 +349,7 @@ $MenuItems = @(
     @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先说明，同意才装" },
     @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "停掉并恢复直连，下次登录回来" },
     @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
-    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "分主题查看，不用翻屏" },
+    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "有 7 条，一屏一条" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出" }
 )
 
