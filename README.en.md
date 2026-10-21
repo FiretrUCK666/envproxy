@@ -84,19 +84,24 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 
 | Pick | What it does | What it affects |
 |---|---|---|
-| **1** | Install / Repair. Use it for a first install, or whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
+| **Everyday** | | |
+| **1** | Install / Repair. Use it the first time, and whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
 | **2** | Show status: monitor, proxy, environment variables, version | Read-only, changes nothing |
-| **3** | Stop the monitor. Temporary; it returns at next login | Monitor process + environment variables |
-| **4** | Full restore. Complete uninstall, back to before installing | Everything (log optionally kept) |
-| **5** | Check for updates. Explains first, installs only if you agree | Program files only |
-| **6** | Help. Read it when you forget how something works | Prints text only, changes nothing |
+| **3** | Check for updates. Explains what changed first, installs only if you agree | Program files only |
+| **4** | Help. Read it when you forget how something works | Prints text only, changes nothing |
+| **Upkeep** | | |
+| **5** | Stop the monitor. Temporary; it returns at next login | Monitor process + environment variables |
+| **6** | Full restore. Complete uninstall, back to before installing | Everything (log optionally kept) |
+| **Quit** | | |
 | **0** | Quit the menu | Nothing |
+
+The numbers run top to bottom and are grouped by how often you need them, so there is nothing to memorise.
 
 **Pressing Enter directly means show status**, the item you look at most. The menu header shows whether the monitor is running and the current version, so you do not need to go in.
 
 The menu and help use only two actions: **type a number** to do that thing, **press Enter** to go back one level. There are no other keys to remember.
 
-Pick `6` for help: seven entries, one screen each, chosen by what you are stuck on.
+Pick `4` for help: one entry answers one question, chosen by what you are stuck on.
 
 | No. | One entry answers one question |
 |---|---|
@@ -105,8 +110,8 @@ Pick `6` for help: seven entries, one screen each, chosen by what you are stuck 
 | 3 | I want to set up one window differently |
 | 4 | I want one command to skip the proxy |
 | 5 | What each menu item does |
-| 6 | Where do I look when something is wrong |
-| 7 | Still not working |
+| 6 | Installed but still cannot reach the internet / status looks wrong |
+| 7 | Still not working / I want to remove it |
 
 <img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; check for updates replaces program files only">
 
