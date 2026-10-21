@@ -224,6 +224,10 @@ jobs:
       - name: 门禁 4：分发包内容
         shell: pwsh
         run: |
+          # 读 git 输出的中文文件名前必须先统一编码：中文 Windows 上默认按 ANSI(GBK) 解码，
+          # 中文名会变成乱码（例如 win/打开菜单.cmd 读成 win/鎵撳紑鑿滃崟.cmd），
+          # 于是"路径不存在"这类断言在中文机器上永远为真。门禁必须与本机语言无关。
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           # git archive 产出的安装包：顶层的集合必须与预期一致，且不含运行时目录。
           $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
           $tar = Join-Path $tmp 'envproxy-shipset.tar'
@@ -295,6 +299,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
+          # 本门禁要把 git 里的文件名与 README 正文里的路径逐字比对，必须先把解码统一到 UTF-8：
+          # 中文 Windows 上默认按 ANSI(GBK) 解码，中文名成乱码，比对必然失败（假红）。
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           function Get-Anchor([string]$t) {
             $s = $t.ToLower() -replace '`',''
             $s = $s -replace '[^\p{L}\p{Nd}\s\-_]',''
@@ -834,6 +841,9 @@ jobs:
           # macOS 靠可执行位双击运行，Windows 侧相反。模式丢了只会在用户机器上炸，
           # 本地编辑器与 git 都不会提醒——所以按 git 索引逐条查。
           # 同样写死 core.quotepath=false：转义后的中文名走不到上面的正则，会被静默跳过（虚假通过）。
+          # 还要把解码统一到 UTF-8：中文 Windows 默认按 ANSI(GBK) 解码，中文名成乱码，
+          # 正则匹配不到，同样会被静默跳过（还是虚假通过，只是原因不同）。
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $fail = 0
           foreach ($line in (git -c core.quotepath=false ls-files -s)) {
             $p = $line -split '\s+'
