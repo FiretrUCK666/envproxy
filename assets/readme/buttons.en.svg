@@ -34,10 +34,10 @@
   <g id="row-labels" font-size="21" fill="#E9EFF8">
     <text x="56" y="222">1 Install / Repair</text>
     <text x="56" y="262">2 Show status</text>
-    <text x="56" y="302">3 Stop monitor</text>
-    <text x="56" y="342">4 Full restore</text>
-    <text x="56" y="382">5 Check for updates</text>
-    <text x="56" y="422">6 Help</text>
+    <text x="56" y="302">3 Check for updates</text>
+    <text x="56" y="342">4 Help</text>
+    <text x="56" y="382">5 Stop monitor</text>
+    <text x="56" y="422">6 Full restore</text>
   </g>
 
   <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
@@ -49,23 +49,23 @@
     <text x="470" y="214" dominant-baseline="central">✓</text>
     <text x="830" y="214" dominant-baseline="central">✓</text>
     <text x="1010" y="214" dominant-baseline="central">✓</text>
-    <text x="290" y="294" dominant-baseline="central">✓</text>
-    <text x="830" y="294" dominant-baseline="central">✓</text>
-    <text x="1010" y="294" dominant-baseline="central">✓</text>
-    <text x="830" y="334" dominant-baseline="central">✓</text>
+    <text x="290" y="374" dominant-baseline="central">✓</text>
+    <text x="830" y="374" dominant-baseline="central">✓</text>
+    <text x="1010" y="374" dominant-baseline="central">✓</text>
+    <text x="830" y="414" dominant-baseline="central">✓</text>
   </g>
 
   <g id="by-state" font-size="26" font-weight="700" fill="#C7D3E3" text-anchor="middle">
-    <text x="650" y="214" dominant-baseline="central">±</text>
+    <text x="650" y="214">±</text>
   </g>
 
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
-    <text x="470" y="300.5">—</text>
-    <text x="650" y="300.5">—</text>
-    <text x="290" y="340.5">—</text>
-    <text x="470" y="340.5">—</text>
-    <text x="650" y="340.5">—</text>
-    <text x="1010" y="340.5">—</text>
+    <text x="470" y="374" dominant-baseline="central">—</text>
+    <text x="650" y="374" dominant-baseline="central">—</text>
+    <text x="290" y="414" dominant-baseline="central">—</text>
+    <text x="470" y="414" dominant-baseline="central">—</text>
+    <text x="650" y="414" dominant-baseline="central">—</text>
+    <text x="1010" y="414" dominant-baseline="central">—</text>
   </g>
 
   <g id="read-only" fill="#7A8CA6">
@@ -74,15 +74,15 @@
     <circle cx="650" cy="254" r="4"/>
     <circle cx="830" cy="254" r="4"/>
     <circle cx="1010" cy="254" r="4"/>
-    <circle cx="290" cy="374" r="4"/>
-    <circle cx="470" cy="374" r="4"/>
-    <circle cx="650" cy="374" r="4"/>
-    <circle cx="830" cy="374" r="4"/>
-    <circle cx="1010" cy="374" r="4"/>
-    <circle cx="290" cy="414" r="4"/>
-    <circle cx="470" cy="414" r="4"/>
-    <circle cx="650" cy="414" r="4"/>
-    <circle cx="830" cy="414" r="4"/>
-    <circle cx="1010" cy="414" r="4"/>
+    <circle cx="290" cy="294" r="4"/>
+    <circle cx="470" cy="294" r="4"/>
+    <circle cx="650" cy="294" r="4"/>
+    <circle cx="830" cy="294" r="4"/>
+    <circle cx="1010" cy="294" r="4"/>
+    <circle cx="290" cy="334" r="4"/>
+    <circle cx="470" cy="334" r="4"/>
+    <circle cx="650" cy="334" r="4"/>
+    <circle cx="830" cy="334" r="4"/>
+    <circle cx="1010" cy="334" r="4"/>
   </g>
 </svg>

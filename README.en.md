@@ -72,7 +72,7 @@ If something goes wrong, open the menu and pick **`1 Install / Repair`**. It fix
 
 ### Updating
 
-Open the menu and pick **`5 Check for updates`**. It reports the latest version number and what changed, and installs only after you agree.
+Open the menu and pick **`3 Check for updates`**. It reports the latest version number and what changed, and installs only after you agree.
 
 - **Updating does not need the proxy running**: most networks connect as they are. If it reports it cannot connect, toggle your proxy app once and retry.
 - **Checksums are verified before installing**: they are compared before installation, and nothing is installed if they do not match. A broken install is more trouble than no install. When an older release carries no checksum, or the file was just downloaded and antivirus still holds it open, this step is skipped and the install continues.

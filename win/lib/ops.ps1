@@ -210,7 +210,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         Write-Host "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。" -ForegroundColor Green
     } else {
         Write-Host ("[未完成] 以下残留请手动处理：{0}" -f ($dirty -join "；")) -ForegroundColor Yellow
-        Write-Host "        可再打开菜单选 一键恢复，或手动删除上述位置。" -ForegroundColor Yellow
+        Write-Host "        可再打开菜单选 6（一键恢复），或手动删除上述位置。" -ForegroundColor Yellow
     }
 }
 
@@ -335,7 +335,7 @@ function Show-Status {
         } elseif (Test-SourceCopy) {
             Write-Host "更新状态 : 源码包（更新入口会先确认用途再动手）" -ForegroundColor Yellow
         } elseif (-not $localVer) {
-            Write-Host "更新状态 : 可打开菜单选 检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 可打开菜单选 3（检查更新）升级" -ForegroundColor Yellow
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
             Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
         } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
@@ -382,12 +382,12 @@ function Clear-Screen {
 # 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
 # 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
 $MenuItems = @(
-    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Group = "日常"; Hint = "首次安装；觉得不对劲就点它" },
-    @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "监控、翻墙、变量、版本" },
-    @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先说明，同意才装" },
-    @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "停掉并恢复直连，下次登录回来" },
-    @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
-    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "忘了怎么用就看它" },
+    @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Group = "日常"; Hint = "第一次用选它；觉得不对劲也选它" },
+    @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "现在什么情况，一眼看清" },
+    @{ Key = "3"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先告诉改了什么，同意才装" },
+    @{ Key = "4"; Name = "帮助";       Switch = "Help";      Group = "日常"; Hint = "忘了怎么用就看它" },
+    @{ Key = "5"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "先停掉，下次开机自己回来" },
+    @{ Key = "6"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出" }
 )
 
@@ -527,31 +527,31 @@ function Get-HelpTopics {
         @{
             Key = '3'; Title = '我要单独设置某个窗口'; Short = '窗口'
             Lines = @(
-                '命令都在「你要改的那个窗口」里敲，只影响那个窗口。',
-                '  只有 PowerShell 会自动跟随；cmd 和 Git Bash 没有这个机制。',
+                '一、固定直连（这个窗口不再自动跟随）',
+                '  PowerShell 输入：',
+                '      $env:ENVPROXY_TERM = ''off''',
+                '  cmd 输入这两行，& 两边不能留空格：',
+                '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=',
+                '      set NODE_USE_ENV_PROXY=',
+                '  Git Bash 输入：',
+                '      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
                 '',
-                '一、固定直连（这个窗口不再自动跟随）。PowerShell 输入：',
-                '    $env:ENVPROXY_TERM = ''off''',
-                'cmd 和 Git Bash 没这个开关，要把 5 个变量清掉。Git Bash 输入：',
-                '    unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
-                'cmd 输入下面两行（& 两边不能留空格，留了会得到一个只含空格的值）：',
-                '    set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=',
-                '    set NODE_USE_ENV_PROXY=',
+                '二、恢复自动跟随',
+                '  PowerShell 输入：',
+                '      Remove-Item Env:ENVPROXY_TERM',
+                '  cmd 和 Git Bash 没有开关可取消，重开窗口就是自动跟随。',
                 '',
-                '二、恢复自动跟随。PowerShell 输入，cmd 和 Git Bash 重开窗口：',
-                '    Remove-Item Env:ENVPROXY_TERM',
+                '三、走公司代理（先固定直连，再设地址，顺序不能反）',
+                '  PowerShell 输入：',
+                '      $env:HTTPS_PROXY = ''http://127.0.0.1:7890''',
+                '  cmd 输入：',
+                '      set HTTPS_PROXY=http://127.0.0.1:7890',
+                '  Git Bash 输入：',
+                '      export HTTPS_PROXY=http://127.0.0.1:7890',
                 '',
-                '三、走公司代理（两步，顺序不能反）：1. 先按上面固定直连。',
-                '  2. 再设地址。三种终端各自输入：',
-                '       PowerShell  $env:HTTPS_PROXY = ''http://127.0.0.1:7890''',
-                '       cmd         set HTTPS_PROXY=http://127.0.0.1:7890',
-                '       Git Bash    export HTTPS_PROXY=http://127.0.0.1:7890',
-                '  不停掉自动跟随的话，翻墙软件一有变化就会覆盖你刚设的地址。',
-                '',
-                '四、看走不走代理（有值就是走，空的是直连）',
-                '     PowerShell  $env:HTTPS_PROXY',
-                '     cmd         set HTTPS_PROXY',
-                '     Git Bash    echo $HTTPS_PROXY'
+                '四、看现在走不走代理（有值就是走，空的是直连）',
+                '  PowerShell：$env:HTTPS_PROXY    cmd：set HTTPS_PROXY',
+                '  Git Bash：echo $HTTPS_PROXY'
             )
         },
         @{
@@ -585,27 +585,20 @@ function Get-HelpTopics {
         @{
             Key = '5'; Title = '菜单每一项是干什么的'; Short = '菜单'
             Lines = @(
-                '这些编号是在主菜单里敲的（不是在这里）。',
+                '这些编号要在主菜单里敲，不是在帮助里敲。',
                 '',
-                '日常',
-                '  1  安装 / 修复',
-                '      首次安装，或者觉得不对劲时都选它。重复跑不会多装一份。',
-                '  2  查看状态',
-                '      监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。',
-                '  5  检查更新',
-                '      先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。',
+                '日常（平时只会用到这四个）',
+                '  1  安装 / 修复    第一次用选它；觉得不对劲也选它',
+                '  2  查看状态      现在什么情况，一眼看清',
+                '  3  检查更新      有新版先告诉你改了什么，同意才装',
+                '  4  帮助          就是这里',
                 '',
-                '维护',
-                '  3  停止监控',
-                '      临时停用，下次登录会自己回来。',
-                '  4  一键恢复',
-                '      彻底卸载，回到没装之前。会问你要不要留日志。',
-                '  6  帮助',
-                '      就是这里。',
+                '维护（要动它之前才用）',
+                '  5  停止监控      先停掉，下次开机自己回来',
+                '  6  一键恢复      彻底卸载，回到没装之前',
                 '',
                 '退出',
-                '  0  退出菜单',
-                '      什么都不做。直接按回车等于选 2（查看状态）。'
+                '  0  退出          什么都不做。直接按回车等于选 2'
             )
         },
         @{
@@ -648,7 +641,7 @@ function Get-HelpTopics {
                 '  最后 20 行，能省很多来回。',
                 '',
                 '想彻底删掉它',
-                '  菜单选 4（一键恢复）。会问你要不要留日志。',
+                '  菜单选 6（一键恢复）。会问你要不要留日志。',
                 '',
                 '不开菜单也能用（适合写脚本，或远程连过来）',
                 '      -Install    -Status     -Stop        -Uninstall',
