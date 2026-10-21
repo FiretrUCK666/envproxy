@@ -686,8 +686,11 @@ function Invoke-EntryChild([string[]]$EntryArgs) {
         & $exe '-NoProfile' '-ExecutionPolicy' 'Bypass' '-File' $entryPath @EntryArgs 2>$null | Out-Null
         return $LASTEXITCODE
     }
-    $outFile = Join-Path $env:TEMP ("ep-entry-out-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
-    $errFile = Join-Path $env:TEMP ("ep-entry-err-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
+    # 临时目录用 .NET 的 GetTempPath：Linux 上没有 $env:TEMP（那是 Windows 才有的变量），
+    # 直接写 $env:TEMP 会让 Join-Path 收到 null，整个自检在这一步就崩掉。
+    $tmpDir = [System.IO.Path]::GetTempPath()
+    $outFile = Join-Path $tmpDir ("ep-entry-out-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
+    $errFile = Join-Path $tmpDir ("ep-entry-err-" + [Guid]::NewGuid().ToString('N').Substring(0,8) + ".txt")
     try {
         # 每个参数都要自己带引号：Start-Process 把参数数组用空格拼成一条命令行，
         # 不加引号时空参数会被整个吞掉（"空参数要报用法错误"这条就永远测不到）。
@@ -933,7 +936,7 @@ Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来�
 # 以及"标记不配对时绝不猜"。沙箱里用两个临时文件当两个版本的 profile——
 # Windows 5.1 与 7 的落点不同，两处都要写，这条正是要测的。
 Write-Host '[13] 终端同步：$PROFILE 钩子块（多落点）'
-$profSbox = Join-Path $env:TEMP ("ep_prof_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+$profSbox = Join-Path ([System.IO.Path]::GetTempPath()) ("ep_prof_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $profSbox -Force -ErrorAction SilentlyContinue | Out-Null
 $fakeProfile  = Join-Path $profSbox 'ps51_profile.ps1'
 $fakeProfile7 = Join-Path $profSbox 'pwsh7_profile.ps1'
@@ -1000,14 +1003,23 @@ try {
     # 这是最容易被写坏的东西：GBK 被当 UTF-8 读会变乱码、BOM 每轮叠加一层。
     # 行尾也要保住：WriteAllLines 固定用 Environment.NewLine（CRLF），会把 LF 的
     # profile 静默改成 CRLF——夹具只写 CRLF 时这条永远测不出来，所以这里带上 LF。
-    $encCases = @(
-        @{ Name = 'GBK';       Enc = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage); Nl = "`r`n" },
-        @{ Name = 'UTF8-BOM';  Enc = (New-Object System.Text.UTF8Encoding($true));                       Nl = "`r`n" },
-        @{ Name = 'UTF8';      Enc = (New-Object System.Text.UTF8Encoding($false));                      Nl = "`r`n" },
-        @{ Name = 'UTF8-LF';   Enc = (New-Object System.Text.UTF8Encoding($false));                      Nl = "`n" },
-        @{ Name = 'UTF8BOM-LF';Enc = (New-Object System.Text.UTF8Encoding($true));                       Nl = "`n" },
-        @{ Name = 'UTF16-LE';  Enc = (New-Object System.Text.UnicodeEncoding($false, $true));            Nl = "`r`n" }
-    )
+    #
+    # GBK 用例写死代码页 936，不用 CurrentCulture 的 ANSICodePage：
+    # 那个值跟着运行环境走（CI 的 ubuntu 上是 1252，编不了中文，中文会变成 "?"），
+    # 于是这条用例在非中文环境下测的其实是"1252 能不能往返"——看起来红，但和 GBK 无关。
+    $gbk = $null
+    try { $gbk = [System.Text.Encoding]::GetEncoding(936) } catch { }
+    $encCases = @()
+    if ($gbk) {
+        $encCases += @{ Name = 'GBK'; Enc = $gbk; Nl = "`r`n" }
+    } else {
+        Write-Host '  SKIP GBK 用例：这个平台没有代码页 936（非中文环境），无从构造 GBK 文件'
+    }
+    $encCases += @{ Name = 'UTF8-BOM';  Enc = (New-Object System.Text.UTF8Encoding($true));            Nl = "`r`n" }
+    $encCases += @{ Name = 'UTF8';      Enc = (New-Object System.Text.UTF8Encoding($false));           Nl = "`r`n" }
+    $encCases += @{ Name = 'UTF8-LF';   Enc = (New-Object System.Text.UTF8Encoding($false));           Nl = "`n" }
+    $encCases += @{ Name = 'UTF8BOM-LF';Enc = (New-Object System.Text.UTF8Encoding($true));            Nl = "`n" }
+    $encCases += @{ Name = 'UTF16-LE';  Enc = (New-Object System.Text.UnicodeEncoding($false, $true)); Nl = "`r`n" }
     $userLine = '# 我的 PowerShell 配置'
     foreach ($c in $encCases) {
         $fp = Join-Path $profSbox ("enc_" + $c.Name + ".ps1")
@@ -1041,7 +1053,12 @@ try {
 
 # 终端同步的**行为**验证：钩子块生成出来以后，改注册表能不能让当前会话跟着变。
 # 这一步是"敲回车就跟上"的核心机制，只检查文本里有没有 prompt 是不够的。
+# 它读写的全是 Windows 注册表，Linux 上没有这一层（CI 的 ubuntu 上要跳过，
+# 不是"失败"——Mac 侧对应行为由 mac/envproxy.sh self-test 自己覆盖）。
 Write-Host '[14] 终端同步：钩子的真实行为'
+if ($env:OS -ne 'Windows_NT') {
+    Write-Host '  SKIP 这一步验证的是 Windows 注册表侧的钩子行为，非 Windows 平台跳过'
+} else {
 $hookSBox = Join-Path ([System.IO.Path]::GetTempPath()) ("ep_hook_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $hookSBox -Force -ErrorAction SilentlyContinue | Out-Null
 $hookFile = Join-Path $hookSBox 'hook.ps1'
@@ -1196,6 +1213,7 @@ try {
     Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
     Remove-Item Env:__EnvProxyPromptWrapped -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $hookSBox -ErrorAction SilentlyContinue
+}
 }
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }

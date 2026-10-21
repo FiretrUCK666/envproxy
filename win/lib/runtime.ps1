@@ -330,13 +330,35 @@ function Get-TextFileEncoding([string]$Path) {
         if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { return (New-Object System.Text.UTF8Encoding($true)) }
         if ($b.Length -ge 2 -and $b[0] -eq 0xFF -and $b[1] -eq 0xFE) { return (New-Object System.Text.UnicodeEncoding($false, $true)) }
         if ($b.Length -ge 2 -and $b[0] -eq 0xFE -and $b[1] -eq 0xFF) { return (New-Object System.Text.UnicodeEncoding($true, $true)) }
-        # 无 BOM：严格 UTF-8 能解就是 UTF-8，否则按系统 ANSI。
+        # 无 BOM：严格 UTF-8 能解就是 UTF-8，否则按 ANSI 处理。
         # 不能用 Encoding::Default——它在 .NET Framework 上是 ANSI、在 .NET Core 上是 UTF-8。
         try {
             $strict = New-Object System.Text.UTF8Encoding($false, $true)
             [void]$strict.GetString($b)
         } catch {
-            try { return [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage) } catch {}
+            # 不是 UTF-8，就是某个 ANSI 代码页。这里不能只用 CurrentCulture 的 ANSICodePage：
+            # 那个值是"当前系统"的代码页（英文 Windows 与 CI 的 Linux 都是 1252），
+            # 而文件可能是中文系统写的 936。用 1252 去解 936 的字节，中文变乱码，
+            # 于是"我们的块在不在"判错、安装报 verify-failed。
+            #
+            # 顺序很关键：多字节代码页在前，单字节兜底在后。
+            # 单字节编码（1252 这类）把任意字节都映到一个字符，往返永远"一致"——
+            # 先试它就会把 936 的中文解成一堆怪符号还自认为成功，探不出来。
+            # 所以只有多字节代码页都解不干净时，才退回单字节。
+            $multibyte = @(936, 950, 932, 949, 51932, 20932)
+            $singlebyte = @()
+            try { $singlebyte += [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage } catch {}
+            $singlebyte += @(1252, 1251, 850)
+            foreach ($cp in ($multibyte + $singlebyte)) {
+                if (-not $cp) { continue }
+                try {
+                    $e = [System.Text.Encoding]::GetEncoding([int]$cp)
+                    $s = $e.GetString($b)
+                    # 往返一致才算"这个代码页能正确解释这段字节"。
+                    $back = $e.GetBytes($s)
+                    if (($back -join ',') -eq ($b -join ',')) { return $e }
+                } catch {}
+            }
         }
     } catch {}
     return (New-Object System.Text.UTF8Encoding($false))
@@ -406,53 +428,32 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
         # 这是用户自己长期维护的文件——它可能是 GBK（中文系统的记事本默认），
         # 也可能带 BOM。按固定编码写回会把用户原有的中文全部写成乱码且无法恢复。
         # 文件不存在时（首次创建）才用 UTF-8 无 BOM。
-        $enc = New-Object System.Text.UTF8Encoding($false)
+        #
+        # 探测只认 Get-TextFileEncoding 这一处：写回与读回必须是同一套判据。
+        # 各自实现一套的结果就是"写进去用 A 编码、读回来用 B 编码"——
+        # 中文变问号、复检必然 verify-failed，而且症状看起来像"安装坏了"。
+        $enc = Get-TextFileEncoding $Path
         $hasBom = $false
         if (Test-Path -LiteralPath $Path) {
             try {
                 $old = [System.IO.File]::ReadAllBytes($Path)
-                if ($old.Length -ge 3 -and $old[0] -eq 0xEF -and $old[1] -eq 0xBB -and $old[2] -eq 0xBF) {
-                    $hasBom = $true
-                    $enc = New-Object System.Text.UTF8Encoding($true)
-                } elseif ($old.Length -ge 2 -and $old[0] -eq 0xFF -and $old[1] -eq 0xFE) {
-                    $enc = New-Object System.Text.UnicodeEncoding($false, $true)
-                } elseif ($old.Length -ge 2 -and $old[0] -eq 0xFE -and $old[1] -eq 0xFF) {
-                    $enc = New-Object System.Text.UnicodeEncoding($true, $true)
-                } else {
-                    # 没有 BOM：可能是 UTF-8，也可能是系统 ANSI（中文系统即 GBK）。
-                    # 用严格 UTF-8 解码试探——能完整解出来就当 UTF-8，否则按 ANSI 处理。
-                    # 注意不能用 [System.Text.Encoding]::Default 拿 ANSI：
-                    # 那在 .NET Framework(5.1) 上是 ANSI，在 .NET Core(pwsh 7) 上却是 UTF-8，
-                    # 同一段代码两个宿主行为不同。而这文件的读者可能是任意一个宿主，
-                    # 所以必须显式按系统代码页（ACP）取，两个宿主才一致。
-                    try {
-                        $strict = New-Object System.Text.UTF8Encoding($false, $true)
-                        [void]$strict.GetString($old)
-                    } catch {
-                        try {
-                            $acp = [System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage
-                            $enc = [System.Text.Encoding]::GetEncoding($acp)
-                        } catch {
-                            # 取不到 ANSI 就宁可不动：写坏用户配置比不写更糟。
-                            return $false
-                        }
-                    }
-                }
+                $hasBom = ($old.Length -ge 3 -and $old[0] -eq 0xEF -and $old[1] -eq 0xBB -and $old[2] -eq 0xBF)
             } catch {}
         }
-        # 行尾沿用原文件：WriteAllLines 固定用 Environment.NewLine（Windows 上是 CRLF），
-        # 会把 LF 的 profile 静默改成 CRLF——功能不坏，但污染用户的 diff 和仓库行尾约定。
+        # 行尾沿用原文件：WriteAllLines 固定用 Environment.NewLine，会把 LF 的 profile
+        # 静默改成 CRLF（Windows 上）或把 CRLF 改成 LF（Linux 上）——两种都污染用户的
+        # diff 和行尾约定。所以要探测原文件自己的行尾，而不是跟着运行平台走。
         # 判断必须**先按已探测到的编码解码再找换行**，不能直接扫原始字节：
         # UTF-16 里每个字符占两字节，字节序列中的 13/10 各自独立出现，按字节扫会误判成 LF。
+        # 只有文件不存在（首次创建）时才用平台默认。
         $nl = [Environment]::NewLine
         if (Test-Path -LiteralPath $Path) {
             try {
                 $probe = $enc.GetString([System.IO.File]::ReadAllBytes($Path))
                 if ($probe.IndexOf("`n") -ge 0) {
-                    $loneLf = [regex]::IsMatch($probe, "(?<!`r)`n")
-                    $hasCrlf = $probe.IndexOf("`r`n") -ge 0
-                    # 有纯 LF 且没有 CRLF 才是 LF 文件；两者都有时按 CRLF 保持现状。
-                    if ($loneLf -and -not $hasCrlf) { $nl = "`n" }
+                    # 出现 CRLF 就按 CRLF；全是裸 LF 才按 LF。两者都有时按 CRLF 保持现状。
+                    if ($probe.IndexOf("`r`n") -ge 0) { $nl = "`r`n" }
+                    elseif ([regex]::IsMatch($probe, "(?<!`r)`n")) { $nl = "`n" }
                 }
             } catch {}
         }
