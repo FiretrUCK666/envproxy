@@ -100,16 +100,24 @@ if (-not $target -or -not (Test-Path -LiteralPath $target)) {
     # 清完必须广播：Explorer 在登录时已按旧注册表建好环境块，不广播则它之后起的
     # 每个终端都继续继承死变量。保持静默（登录路径不打扰用户）。
     $cleared = $false
+    $drop = @()
     foreach ($n in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
         $v = [Environment]::GetEnvironmentVariable($n, "User")
-        if ($v -like "http://127.0.0.1:*") {
-            [Environment]::SetEnvironmentVariable($n, $null, "User")
-            $cleared = $true
-        }
+        if ($v -like "http://127.0.0.1:*") { $drop += $n }
     }
-    if ([Environment]::GetEnvironmentVariable("NODE_USE_ENV_PROXY", "User") -eq "1") {
-        [Environment]::SetEnvironmentVariable("NODE_USE_ENV_PROXY", $null, "User")
-        $cleared = $true
+    if ([Environment]::GetEnvironmentVariable("NODE_USE_ENV_PROXY", "User") -eq "1") { $drop += "NODE_USE_ENV_PROXY" }
+    # 直接写注册表，不走 [Environment]::SetEnvironmentVariable：后者每删一个变量都要同步
+    # 等一次 WM_SETTINGCHANGE 广播结束（单个约 11 秒）。这条路径在登录时为用户清残留，
+    # 让他为了删 4 个变量干等近一分钟是不可接受的；广播在下面统一发一次即可。
+    if ($drop.Count -gt 0) {
+        try {
+            $ek = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+            if ($null -ne $ek) {
+                foreach ($n in $drop) { try { $ek.DeleteValue($n, $false) } catch {} }
+                $ek.Close()
+                $cleared = $true
+            }
+        } catch {}
     }
     if ($cleared) { Send-LocatorBroadcast }
     exit

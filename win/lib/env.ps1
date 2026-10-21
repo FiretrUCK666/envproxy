@@ -27,6 +27,68 @@ function Broadcast-EnvironmentChange {
     } catch {}
 }
 
+# --- 用户级环境变量的唯一写入口 -------------------------------------------------
+# 为什么不用 [Environment]::SetEnvironmentVariable(..., "User")：
+#   它每写一个变量都要同步等一次 WM_SETTINGCHANGE 广播结束（实测单个约 11 秒，
+#   5 个变量 56 秒、删 6 个 67 秒）。而本项目的契约是"整批写完之后统一广播一次"，
+#   于是前面每一次等待都是纯粹的浪费——首次安装之所以要卡一分钟，根子就在这里。
+#   直接写 HKCU\Environment 是同一件事的另一条路，实测 5 个变量连带删除只要 10 毫秒。
+#
+# 它还有两个实实在在的好处：
+#   1) 保留原值类型。SetEnvironmentVariable 一律按 REG_SZ 写回，把 REG_EXPAND_SZ
+#      的 %USERPROFILE% 这类引用永久展开成字面路径；直接写可以原样保持类型。
+#   2) 批量打开一次键，写 N 个变量只付一次打开开销。
+#
+# 广播不在这里做：调用方写完一批之后再调一次 Broadcast-EnvironmentChange。
+# 分开是刻意的——状态机在同一轮里可能既删又写，广播一次就够。
+
+# 把 [Environment] 的 User 位置映射到注册表的取值类型。
+# 空值表示"删除这个变量"（SetEnvironmentVariable(...,$null) 的等价写法）。
+function Set-UserEnvRaw([hashtable]$Values) {
+    if (-not $Values -or $Values.Count -eq 0) { return }
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+        if ($null -eq $key) { return }
+        foreach ($n in $Values.Keys) {
+            $v = $Values[$n]
+            if ($null -eq $v) {
+                try { $key.DeleteValue($n, $false) } catch {}
+                continue
+            }
+            # 原值若是 REG_EXPAND_SZ 就按 REG_EXPAND_SZ 写回，其余按 REG_SZ。
+            # 读不到旧类型（新变量）时用 REG_SZ——与 SetEnvironmentVariable 的默认一致。
+            $kind = [Microsoft.Win32.RegistryValueKind]::String
+            try {
+                $oldKind = $key.GetValueKind($n)
+                if ($oldKind -eq [Microsoft.Win32.RegistryValueKind]::ExpandString) {
+                    $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+                }
+            } catch {}
+            $key.SetValue($n, [string]$v, $kind)
+        }
+    } catch {
+    } finally {
+        if ($key) { try { $key.Close() } catch {} }
+    }
+}
+
+# 批量写入一组代理变量（名 => 值）。值传 $null 表示删除该变量。
+# 这是"写用户级环境变量"的唯一通道：库内任何地方都不许再直接调
+# [Environment]::SetEnvironmentVariable(..., "User")——那会退回到每次等广播的老路。
+# 调用方负责在整批写完之后调一次 Broadcast-EnvironmentChange。
+function Write-UserEnvValues([hashtable]$Values) {
+    Set-UserEnvRaw -Values $Values
+}
+
+# 批量删除一组变量（名 => $null 的语法糖，调用处读起来更清楚）。
+function Remove-UserEnvNames([string[]]$Names) {
+    if (-not $Names -or $Names.Count -eq 0) { return }
+    $t = @{}
+    foreach ($n in $Names) { $t[$n] = $null }
+    Set-UserEnvRaw -Values $t
+}
+
 function Get-EnvProxyValue {
     return [Environment]::GetEnvironmentVariable($ProxyVarNames[0], "User")
 }
@@ -62,9 +124,7 @@ function Sync-UserEnvVars([string]$Port) {
         }
     } catch {}
     if (-not $changed) { return $false }
-    foreach ($n in $desired.Keys) {
-        [Environment]::SetEnvironmentVariable($n, $desired[$n], "User")
-    }
+    Write-UserEnvValues -Values $desired
     return $true
 }
 
@@ -76,6 +136,9 @@ function Remove-UserEnvVars {
     # 环境变量是用户级共享资源，用户或别的工具可能把这两项用于自己的用途；
     # 值不是我们写的那一个，就说明不是我们的东西，一律不动。
     $ours = $DefaultNoProxy
+    # 先算出每一项该变成什么，最后一次性写入：判断逻辑与写入动作分开，
+    # 既不重复付注册表打开的开销，也让"到底动了哪些变量"在一处看得全。
+    $plan = @{}
     foreach ($n in $ProxyVarNames) {
         $cur = [Environment]::GetEnvironmentVariable($n, "User")
         if (-not $cur) { continue }
@@ -101,22 +164,22 @@ function Remove-UserEnvVars {
                 if ($oursSet -contains $key) { continue }                   # 我们加的，摘掉
                 $keep += $t
             }
-            if ($keep.Count -eq 0) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
-            else { [Environment]::SetEnvironmentVariable($n, ($keep -join ','), "User") }
+            $plan[$n] = if ($keep.Count -eq 0) { $null } else { ($keep -join ',') }
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") {
-            if (Test-IsOwnedProxyValue $n $cur) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            if (Test-IsOwnedProxyValue $n $cur) { $plan[$n] = $null }
             continue
         }
         if ($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
             # 归属判定：形状上是本机地址、且安装快照里本来没有它，才是我们写下的。
             # 用户自己挂的 mitmproxy（http://127.0.0.1:8080）同样有快照，一律不动。
-            if (Test-IsOwnedProxyValue $n $cur) { [Environment]::SetEnvironmentVariable($n, $null, "User") }
+            if (Test-IsOwnedProxyValue $n $cur) { $plan[$n] = $null }
             continue
         }
-        [Environment]::SetEnvironmentVariable($n, $null, "User")
+        $plan[$n] = $null
     }
+    if ($plan.Count -gt 0) { Write-UserEnvValues -Values $plan }
     # 归属记录在这里**不动**：它记的是"我们写下过哪些值"，不是"我们现在是否持有"。
     # 为什么不能在这里清：off 之后，已经开着的窗口里还挂着我们注入的值，钩子唯一的判据
     # 就是这份记录——清掉它，off 就清不掉已开窗口，终端同步这条主功能直接失效。
@@ -218,6 +281,7 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
 function Restore-PrevEnv {
     try {
         if (-not (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue)) { return }
+        $plain = @{}
         foreach ($n in $ProxyVarNames) {
             $bak = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
             if ($null -ne $bak) {
@@ -225,10 +289,12 @@ function Restore-PrevEnv {
                 if ($kindName -eq "ExpandString") {
                     Set-ItemProperty -Path "HKCU:\Environment" -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
                 } else {
-                    [Environment]::SetEnvironmentVariable($n, $bak, "User")
+                    $plain[$n] = $bak
                 }
             }
         }
+        # 非 ExpandString 的那些一次性写回：来源明确是"字符串"，不必再猜原类型。
+        if ($plain.Count -gt 0) { Write-UserEnvValues -Values $plain }
         Remove-Item -LiteralPath $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue
     } catch {}
 }
