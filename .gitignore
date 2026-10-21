@@ -26,3 +26,6 @@ mac/monitor/.op.lock.tmp.*
 *.zip
 *.tar.gz
 dist/
+
+# 临时工作目录（子代理走查、本地草稿），不入库
+_*/

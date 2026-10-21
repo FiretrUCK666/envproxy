@@ -94,7 +94,21 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 
 **Pressing Enter directly means show status**, the item you look at most. The menu header shows whether the monitor is running and the current version, so you do not need to go in.
 
-<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install affects program files, start at login, the terminal sync script and environment variables; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; check for updates replaces program files only">
+The menu and help use only two actions: **type a number** to do that thing, **press Enter** to go back one level. There are no other keys to remember.
+
+Pick `6` for help: seven entries, one screen each, chosen by what you are stuck on.
+
+| No. | One entry answers one question |
+|---|---|
+| 1 | What is this for |
+| 2 | What do I do after installing |
+| 3 | I want to set up one window differently |
+| 4 | I want one command to skip the proxy |
+| 5 | What each menu item does |
+| 6 | Where do I look when something is wrong |
+| 7 | Still not working |
+
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; check for updates replaces program files only">
 
 ### Logs
 
