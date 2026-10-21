@@ -1062,7 +1062,7 @@ install_envproxy() {
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     # 先说清楚要动什么、不动什么，再说"正在做"——用户在按完编号之后得先知道会发生什么，
     # 而不是盯着静止的屏幕猜。
-    echo "会改这 3 处：开机自启、终端配置、后台监控。"
+    echo "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
     echo "不会动你的其他设置。"
     echo ""
     # 首次安装的判据要在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
@@ -1184,11 +1184,21 @@ show_status() {
     echo "======== EnvProxy 状态 (macOS) ========"
     _m=$(get_monitor_pid || true)
     if [ -n "$_m" ]; then echo "监控进程 : 运行中 (PID $_m)"; else echo "监控进程 : 未运行"; fi
-    if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then
-        echo "开机自启 : 已启用"
-    else
-        if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
-    fi
+      # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
+      # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
+      # 状态页却仍报"已启用"。判据要和"能不能真的启动"一致：注册在，且那个文件真的存在。
+      # 与 Windows 侧同口径（那边查的是 Run 键指向的脚本是否存在）。
+      if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then
+          if [ -f "$LOCATOR_PATH" ]; then
+              echo "开机自启 : 已启用"
+          else
+              echo "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
+              echo "           记录指向：$LOCATOR_PATH"
+              echo "           打开菜单选 1（安装 / 修复）可以重建。"
+          fi
+      else
+          if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
+      fi
     # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
     # 只枚举一次（枚举两次之间状态可能变，两次结论可能自相矛盾）；
     # 深度与 Windows 侧一致：都只做快扫（全端口扫留给监控与诊断入口）。
@@ -1455,7 +1465,7 @@ format_help_topic() {
     echo ""
     _help_topic_body "$1"
     echo ""
-    echo "  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单"
+    echo "  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单"
     return 0
 }
 
@@ -1537,7 +1547,7 @@ show_help_topic_colored() {
         fi
     done
     echo ""
-    printf '\033[90m%s\033[0m\n' "  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单"
+    printf '\033[90m%s\033[0m\n' "  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单"
     return 0
 }
 
@@ -1779,9 +1789,12 @@ show_menu() {
         echo "菜单数据损坏，无法显示。请重新下载安装包解压覆盖这个文件夹。"
         return 1
     fi
+    _repaint=1
     while true; do
-        # 每一轮先清屏：菜单始终占着同一块地方，不会一行行往下堆。
-        clear_screen_safe
+        # 清屏只在"屏幕内容确实要换"时做（$repaint 控制）。输错编号那一轮不清屏：
+        # 清了就把刚打的提示抹掉了，用户只看到屏幕闪一下又回到一模一样的菜单，
+        # 会以为程序没反应——提示等于白打。
+        if [ "$_repaint" = "1" ]; then clear_screen_safe; _repaint=0; fi
         show_menu_colored
         printf "输入编号："
         if ! IFS= read -r _choice; then

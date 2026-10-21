@@ -653,7 +653,7 @@ function Format-HelpTopic([string]$Key) {
     [void]$out.Add('')
     foreach ($l in $t.Lines) { [void]$out.Add($l) }
     [void]$out.Add('')
-    [void]$out.Add('  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单')
+    [void]$out.Add('  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单')
     return ($out -join "`n")
 }
 
@@ -682,7 +682,7 @@ function Show-HelpTopicColored([string]$Key) {
     Write-Host ''
     foreach ($l in $t.Lines) { Write-HelpLine $l }
     Write-Host ''
-    Write-Host '  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单' -ForegroundColor DarkGray
+    Write-Host '  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单' -ForegroundColor DarkGray
     return $true
 }
 
@@ -745,13 +745,16 @@ function Show-Menu {
     # 否则管道到 EOF 时 Read-Host 读空会被当成回车，一遍遍重复默认动作停不下来。
     try {
         if ([Console]::IsInputRedirected) {
-            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update 开关。" -ForegroundColor Yellow
+            Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。" -ForegroundColor Yellow
             return
         }
     } catch {}
+    # 清屏只在"屏幕内容确实要换"时做（由 $repaint 控制）。输错编号那一轮不清屏：
+    # 清了就把刚打的提示抹掉了，用户只看到屏幕闪一下又回到一模一样的菜单，
+    # 会以为程序没反应——提示等于白打。
+    $repaint = $true
     while ($true) {
-        # 每一轮先清屏：菜单始终占着同一块地方，不会一行行往下堆。
-        Clear-Screen
+        if ($repaint) { Clear-Screen; $repaint = $false }
         Show-MenuColored
         try {
             $choice = Read-Host "输入编号"
