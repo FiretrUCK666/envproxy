@@ -104,11 +104,9 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 ## 3. Everyday commands on one page
 
-**None of this is required reading.** Once installed, the terminal follows the proxy app on its own — you do not type a single command.
+**None of this is required reading.** Once installed, the terminal follows the proxy app on its own; you do not type a single command. Stopping the monitor, uninstalling, checking for updates and seeing status are all in the menu, one double-click away.
 
-**Most of what you might want is in the menu already**: stop the monitor, uninstall, check for updates, see status. Double-click and pick a number; no typing. This section covers only the few things the menu cannot do — handling one particular window differently from the rest.
-
-Skip the whole section if it does not make sense; it does not affect normal use. If something feels wrong, open the menu and pick 1.
+This section covers what the menu cannot do: handling one particular window differently from the rest. Skip it if it does not make sense; it does not affect normal use.
 
 ### Which terminal these commands belong in
 
@@ -142,14 +140,14 @@ Type each command **in the window you want to change**. It **affects that window
 
 ### 3.1 Keep one window on a direct connection
 
-While the proxy app is running, to make one window skip the proxy:
+The proxy app is running, but you want one window to go direct:
 
 | | Command |
 |---|---|
 | Windows (PowerShell) | `$env:ENVPROXY_TERM = 'off'` |
 | Mac | `export ENVPROXY_TERM=off` |
 
-This window stays direct until you close it. To go back to automatic:
+This applies to the current window only, and ends when you close it. To have it follow the proxy app again:
 
 | | Command |
 |---|---|
@@ -158,14 +156,14 @@ This window stays direct until you close it. To go back to automatic:
 
 ### 3.2 Give one window a corporate proxy
 
-**Order matters: pin the window first, then set the proxy.**
+**Two steps, in this order.**
 
 | Step | Windows (PowerShell) | Mac |
 |---|---|---|
-| 1. Pin it | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
-| 2. Set the proxy | `$env:HTTPS_PROXY = 'http://your-host:port'` | `export HTTPS_PROXY=http://your-host:port` |
+| 1. Stop following the proxy app | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
+| 2. Set the corporate proxy | `$env:HTTPS_PROXY = 'http://your-host:port'` | `export HTTPS_PROXY=http://your-host:port` |
 
-Why pin first: without it, any update the proxy app makes to this window overwrites your address.
+Why step 1 comes first: otherwise the next change the proxy app makes overwrites the address you just set.
 
 Values you set are never deleted. A corporate proxy, a capture tool, another port — anything that differs from what we wrote stays as it is.
 
@@ -192,14 +190,14 @@ Tools differ; there is no single universal command.
 
 Four traps, all confirmed by testing:
 
-- **`curl` and `wget` are both aliases in PowerShell, and both resolve to `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`. (PowerShell 7 has neither alias, so this only applies to the built-in 5.1.)
-- **`npm`'s `--noproxy` only takes host names; `*` does nothing.** It does not complain and the request still goes through the proxy — you think you bypassed it and you did not. Write the host, for example `--noproxy=registry.npmjs.org`.
-- **`npm --no-proxy` is read as `--proxy=false`**, which is neither "ignored" nor what you want when skipping the proxy. Use `--noproxy=<host>`.
+- **`curl` and `wget` are aliases in PowerShell, both pointing at `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`. This applies to the built-in 5.1 only; PowerShell 7 has neither alias.
+- **npm's `--noproxy` takes host names only; `*` does nothing.** It does not complain and the request still goes through the proxy, so you think you bypassed it. Write the actual host.
+- **`npm --no-proxy` is read as `--proxy=false`**, which is not the same as skipping the proxy. Use `--noproxy=<host>`.
 - **`git`'s `-c http.proxy=` must be left empty.** Empty means "no proxy for this one command"; any other value means "use that proxy instead".
 
-One more: npm reads `HTTPS_PROXY` but not `HTTP_PROXY`. EnvProxy writes both, so npm works; but if you set only `HTTP_PROXY` yourself, npm will not use a proxy.
+npm reads `HTTPS_PROXY` but not `HTTP_PROXY`. EnvProxy writes both, so npm works; if you set only `HTTP_PROXY` yourself, npm will not use a proxy.
 
-These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the environment variables EnvProxy wrote.
+These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the variables EnvProxy wrote.
 
 ### 3.5 Make an already-open window catch up
 
@@ -218,9 +216,9 @@ For the third case, opening a new window is easiest. If you would rather not, ru
 | Windows (PowerShell) | `. $PROFILE` |
 | Mac | `. ~/.envproxy/prompt-sync.sh` |
 
-**What these commands are**: `$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs it by hand. On Mac that file is the sync script, same idea.
+`$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs that code by hand. On Mac the command points at the sync script, same idea.
 
-**Four things to note**:
+Four things to note:
 
 - The leading `.` and the space after it are both required. `.` means "run this file in the current window".
 - Works for PowerShell on Windows and zsh or bash on Mac. fish on Mac is not supported.
@@ -259,7 +257,7 @@ It does not rely on brands, process names or port numbers — those only speed u
 
 <img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 6 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 8 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are left intact">
 
-**Deciding "up" is more cautious than "down"**: one failed probe is not a disconnect — it takes 10 seconds of continuous failure and at least 3 probes. One success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
+**Deciding "disconnected" is far more cautious than deciding "connected"**: one failed probe is not a disconnect; it takes 10 seconds of continuous failure and at least 3 probes. A single success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
 
 | Action | Takes effect in |
 |---|---|
@@ -426,7 +424,18 @@ See the folder structure in section 8. Mac has two extra template files: `locato
 The first four limits for Windows apply here too (TUN, system proxy, running programs, tools needing their own configuration), and the fifth takes the Mac form, since Mac has no interface either. Two more:
 
 - **The `launchctl` environment is cleared at login and reboot**: the monitor therefore writes it again every 30 rounds, so it returns by itself after a restart.
-- **`~/.envproxy/` is a fixed location**: after installing it holds these files. `locator.sh` is the locator script. `prompt-sync.sh` is the terminal sync script, referenced by one line in the rc files. `path.conf` records the project path. `proxy.env` holds the environment variables for the terminal path and the current state. `owned.env` records the values we wrote, so that clearing removes only those. `prev.env` is the original values saved at install time, used to restore them on uninstall. There are also the launchd output redirection files. The project folder can be moved elsewhere and is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` you chose to keep.
+- **`~/.envproxy/` is a fixed location**, holding these files after installing:
+
+| File | Purpose |
+|---|---|
+| `locator.sh` | the locator script |
+| `prompt-sync.sh` | the terminal sync script, referenced by one line in the rc files |
+| `path.conf` | records the project path |
+| `proxy.env` | the environment variables for the terminal path and the current state |
+| `owned.env` | the values we wrote, so clearing removes only those |
+| `prev.env` | the original values saved at install time, restored on uninstall |
+
+There are also the launchd output redirection files. The project folder can be moved elsewhere and is located again at the next login; a backup folder is never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` you chose to keep.
 
 ### 12.7 Setting it up for a friend or a new Mac
 

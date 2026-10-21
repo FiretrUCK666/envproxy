@@ -1059,7 +1059,7 @@ install_envproxy() {
     echo "提示：之后新开的终端/程序自动获得代理；"
     echo "      已经开着的窗口敲一下回车就会跟上，退出翻墙软件后同样。"
     echo "      想让某个窗口固定直连：在它里面执行 export ENVPROXY_TERM=off"
-    echo "      （恢复自动：unset ENVPROXY_TERM）。"
+    echo "      （改回跟着翻墙软件走：unset ENVPROXY_TERM）。"
 }
 
 uninstall_envproxy() {
@@ -1266,17 +1266,18 @@ show_help() {
   Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不会敲错。
   只有 fish 不支持：它不读 .zshenv，语法也不一样。用 fish 的话换 zsh 或 bash。
 
-  让这个窗口固定直连：
+  让这个窗口固定直连（只管当前窗口，窗口一关就失效）：
       export ENVPROXY_TERM=off
-  恢复自动：
+  改回跟着翻墙软件走：
       unset ENVPROXY_TERM
   ENVPROXY_TERM 是 EnvProxy 自己的开关变量，只有 'off' 一个值有意义：
-  设上它就表示这个窗口不要跟着翻墙软件变，取消就恢复自动跟随。
-  它不影响翻墙软件本身，只影响你敲命令的这个窗口。
+  设上它就表示这个窗口不要跟着翻墙软件变。它不影响翻墙软件本身，
+  只影响你敲命令的这个窗口。
 
-  让这个窗口走公司代理（顺序不能反，先锁定再设代理）：
-      export ENVPROXY_TERM=off
-      export HTTPS_PROXY=http://你的地址:端口
+  让这个窗口走公司代理（两步，顺序不能反）：
+      1. 先停掉自动跟随：export ENVPROXY_TERM=off
+      2. 再设公司代理：  export HTTPS_PROXY=http://你的地址:端口
+  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。
 
   检查现在走不走代理：
       echo \$HTTPS_PROXY          （有值就是走代理，空的是直连）
