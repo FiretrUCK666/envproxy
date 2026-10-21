@@ -693,6 +693,10 @@ self_test() {
     _selftest_assert_eq "帮助讲了'安装 / 修复'这条万能修复" "1" "$_lh2"
     case "$_ht" in *ENVPROXY_TERM*) _lh3=1;; *) _lh3=0;; esac
     _selftest_assert_eq "帮助给了逐窗口接管的命令" "1" "$_lh3"
+    # 帮助页也要认 q 和 0：菜单里它们是退出，刚学会的人进到帮助再按就被判成
+    # "没有这一条"，会以为帮助坏了。这条钉住两端行为一致。
+    if grep -qE '^[[:space:]]*q\|Q\|0\)' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null; then _lq=1; else _lq=0; fi
+    _selftest_assert_eq "帮助页认 q 和 0（与菜单同义）" "1" "$_lq"
     # 屏幕形状：和 Windows 侧同一类防护。文案层的坏法（整屏超长、重复行、
     # 超宽行、写死绝对路径、命令残缺）靠"关键词还在不在"查不出来，只能量形状。
     # 两端各有一份，改文案时两边一起被守住——这是"行为改动双侧同改"的落地。
@@ -1729,6 +1733,13 @@ show_help() {
             fi
             return 0
         fi
+        # q 和 0 与「直接回车」同义：菜单里 q/0 都是退出，刚在菜单学会按 q 的人，
+        # 进到帮助再按就被判成"没有这一条"，会以为帮助坏了。不写进屏幕，只是别拒绝他。
+        case "$_hs_sel" in
+            q|Q|0)
+                if [ -n "$_hs_cur" ]; then _hs_cur=""; continue; fi
+                return 0;;
+        esac
         # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         if ! _help_key_valid "$_hs_sel"; then
             echo "没有这一条：$_hs_sel（$(format_help_key_range)）"
