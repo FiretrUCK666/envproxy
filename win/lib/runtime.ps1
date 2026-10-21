@@ -700,6 +700,10 @@ function Get-MonitorProcessFromPidFile {
 function Get-MonitorProcess {
     $fromFile = Get-MonitorProcessFromPidFile
     if ($fromFile) { return $fromFile }
+    # Get-CimInstance 是 Windows 专有的命令：Linux/macOS 上的 pwsh 没有它。
+    # 本项目的测试会在 ubuntu 上跑这份代码（门禁 10），退不回来就会抛异常、
+    # 整份自检中断在这里。非 Windows 上直接当作"没有命令行线索"。
+    if ($env:OS -ne "Windows_NT") { return $null }
     return Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
             $_.ProcessId -ne $PID -and
