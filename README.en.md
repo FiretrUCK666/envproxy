@@ -136,7 +136,7 @@ To tell them apart, look at the prompt: one starting with `PS` is PowerShell, su
 
 On Mac that is the Terminal app, zsh by default, using the `export` column. **fish on Mac is not supported**; use zsh or bash.
 
-**On Windows with Git Bash installed**: it uses bash syntax, so take the cmd column below and write `export` instead — the same as the Mac column.
+**On Windows with Git Bash installed**: it inherits the Windows environment variables, so "the terminal can go through the proxy" works automatically — nothing to do. But **the per-window pin to a direct connection does not work in Git Bash**: EnvProxy only writes the sync code into the PowerShell profiles, and nothing in Git Bash reads it. To skip the proxy in a Git Bash window, `export` the specific variables instead, following the Mac column.
 
 Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 

@@ -136,7 +136,7 @@ Windows 上你日常接触的窗口基本都是 PowerShell，不用担心：
 
 Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
 
-**Windows 上装了 Git Bash 的话**：它用的是 bash 语法，把下面 cmd 那一列改成 `export` 就行，和 Mac 那一列一致。
+**Windows 上装了 Git Bash 的话**：它继承 Windows 的环境变量，所以"能翻墙"这条自动成立，不用管。但**「让这个窗口固定直连」那个开关在 Git Bash 里不生效**——EnvProxy 只往 PowerShell 的配置里写同步代码，Git Bash 里没有东西读它。要在 Git Bash 里绕过代理，用 `export` 写具体变量，写法同 Mac 那一列。
 
 下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**。Windows 和 Mac 写法不同，别抄错行。
 

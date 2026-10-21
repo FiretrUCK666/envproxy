@@ -16,6 +16,9 @@ win/monitor/stop.flag
 mac/monitor/monitor.log
 mac/monitor/monitor.pid
 mac/monitor/stop.flag
+# 操作锁（mac 侧用文件锁；正常退出会自己删，被 kill -9 或断电时会留下）
+mac/monitor/.op.lock
+mac/monitor/.op.lock.tmp.*
 
 # temp / local bundles (README ships the folder via USB/drive/zip)
 *.tmp

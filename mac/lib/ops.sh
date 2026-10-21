@@ -1039,7 +1039,7 @@ install_envproxy() {
         echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
     if insert_shell_hooks; then
-        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 暂不支持，见 README 第 4 节）"
+        echo "[2/3] 终端集成：已写入 shell hook（zsh/bash，新开终端生效；fish 不支持，README 的「这些命令在哪个终端里敲」一节有说明）"
     else
         echo "[2/3] 终端集成：写入失败，请检查 ~/.zshenv 是否可写"
     fi
