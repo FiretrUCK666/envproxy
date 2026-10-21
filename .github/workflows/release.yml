@@ -59,8 +59,33 @@ jobs:
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
           mkdir -p dist
           # 只有分平台包：完整内容减去另一平台目录；更新入口按平台各取各的包。
-          git archive --format=zip    -o dist/EnvProxy-win.zip "$TAG" win README.md README.en.md LICENSE VERSION release-notes assets || { echo "打 Win 包失败"; exit 1; }
-          git archive --format=tar.gz -o dist/EnvProxy-mac.tar.gz "$TAG" mac README.md README.en.md LICENSE VERSION release-notes assets || { echo "打 Mac 包失败"; exit 1; }
+          # 打包范围现场从 .gitattributes 的 export-ignore 推导，不在这里另写一份清单：
+          # 同一份规则抄两处，新增顶层目录时漏改一处就会打出少内容的包，而且很难发现。
+          # 推导方式：仓库顶层减去所有被 export-ignore 挡掉的条目，再去掉另一平台目录。
+          ignets=$(grep -oE '^/[^[:space:]]+[[:space:]]+export-ignore' .gitattributes | sed 's|^/||; s/[[:space:]]*export-ignore$//')
+          # 顶层条目 = 顶层目录 + 顶层文件，各自只取一次（ls-tree 不带 -r 时两者混在一起，直接取全部再去斜杠）
+          tops=$(git ls-tree --name-only "$TAG" | sed 's|/$||')
+          keep=""
+          for t in $tops; do
+            skip=0
+            for g in $ignets; do
+              case "$g" in
+                */) gg=${g%/}; [ "$t" = "$gg" ] && skip=1 ;;
+                *) [ "$t" = "$g" ] && skip=1 ;;
+              esac
+            done
+            [ "$skip" = "1" ] && continue
+            keep="$keep $t"
+          done
+          echo "打包范围（.gitattributes 推导）：$keep"
+          # 两个平台各自去掉对方目录。
+          win_list=""; mac_list=""
+          for t in $keep; do
+            [ "$t" = "mac" ] || win_list="$win_list $t"
+            [ "$t" = "win" ] || mac_list="$mac_list $t"
+          done
+          git archive --format=zip    -o dist/EnvProxy-win.zip "$TAG" $win_list || { echo "打 Win 包失败"; exit 1; }
+          git archive --format=tar.gz -o dist/EnvProxy-mac.tar.gz "$TAG" $mac_list || { echo "打 Mac 包失败"; exit 1; }
           ls -l dist
 
       - name: 校验安装包（与仓库逐字节一致、编码红线在容器里没被改）

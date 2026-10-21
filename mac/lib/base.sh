@@ -116,7 +116,7 @@ is_owned_proxy_value() {
     # 文本的情况也算进来，而且依赖分隔符形式，格式一改保护就静默失效。
     if [ -f "$PREV_ENV" ]; then
         _iov_want=$(printf '%s' "$1")
-        for _iov_v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+        for _iov_v in $PROXY_ADDR_VAR_NAMES; do
             _iov_have=$(_snapshot_value_of "$_iov_v")
             [ -n "$_iov_have" ] && [ "$_iov_have" = "$_iov_want" ] && return 1
         done

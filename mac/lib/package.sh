@@ -222,7 +222,34 @@ install_package() {
                 [ -n "$_pf" ] || continue
                 [ -f "$_pstage/backup/$_pf" ] && cp -p "$_pstage/backup/$_pf" "$_pdest/$_pf" 2>/dev/null
             done
-            echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
+            # 回滚也要复读：上面的复制全部带 `|| true`，不回读就敢说"已回滚"是假话。
+            # Windows 侧 package.ps1 早写过这条教训（入口被占用时 VERSION 会先变新、
+            # 旧入口留在原地，更新入口于是认为本地比线上新，用户再也收不到新版）。
+            # 逐字节比一遍，有不一致就改口径为"回滚未完成"，别让用户以为已经好了。
+            _pbad="$_pstage/rollback-未还原清单.$$"
+            : > "$_pbad" 2>/dev/null || _pbad="/tmp/envproxy-rollback-未还原清单.$$"
+            for _pd in $_peff; do
+                _pb="$_pstage/backup/$_pd"
+                [ -d "$_pb" ] || continue
+                (cd "$_pb" && find . -type f 2>/dev/null | sed 's|^\./||') | while IFS= read -r _r; do
+                    [ -f "$_pdest/$_pd/$_r" ] || { printf '%s\n' "$_pd/$_r" >> "$_pbad"; continue; }
+                    cmp -s "$_pb/$_r" "$_pdest/$_pd/$_r" 2>/dev/null || printf '%s\n' "$_pd/$_r" >> "$_pbad"
+                done
+            done
+            _pkg_root_files | while IFS= read -r _pf; do
+                [ -n "$_pf" ] || continue
+                [ -f "$_pstage/backup/$_pf" ] || continue
+                [ -f "$_pdest/$_pf" ] || { printf '%s\n' "$_pf" >> "$_pbad"; continue; }
+                cmp -s "$_pstage/backup/$_pf" "$_pdest/$_pf" 2>/dev/null || printf '%s\n' "$_pf" >> "$_pbad"
+            done
+            if [ -s "$_pbad" ]; then
+                echo "更新失败：写入安装区失败，且回滚未完成——以下文件没能还原："
+                sed 's/^/    /' "$_pbad"
+                echo "请到 Releases 页面重新下载安装包，解压后覆盖这个文件夹（或在菜单里选 安装 / 修复）。"
+                rm -f "$_pbad" 2>/dev/null || true
+            else
+                echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
+            fi
         else
             echo "更新失败：文件写入失败。请打开菜单选"安装 / 修复"后重试。"
         fi

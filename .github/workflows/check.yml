@@ -480,16 +480,38 @@ jobs:
           } else { $fail = 1 }
           $macNames = @([regex]::Matches($sh, "(?m)^\s*printf 'export ([A-Za-z_]+)=") | ForEach-Object { $_.Groups[1].Value })
           if ($macNames.Count -ne 9) { Write-Host ("macOS 变量数不是 9：{0}" -f $macNames.Count); $fail = 1 }
-          # 变量名单散在五处用法里（写 proxy.env、launchctl setenv、幂等核对、快照、回收），
-          # 契约明令"注入/删除/复查清单不许分家写"。这里把所有循环清单并起来比集合：
-          # 少一个（例如把 ALL_PROXY 从回收清单里删掉）或多一个拼错的名字，都当场失败。
-          $mac8 = @('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy')
-          $loops = @([regex]::Matches($sh, 'for [A-Za-z_]+ in ([A-Za-z_ ]+); do') | ForEach-Object { $_.Groups[1].Value })
-          $loopNames = @($loops | ForEach-Object { $_ -split '\s+' } | Where-Object { $_ -match '(_PROXY|_proxy)$' } | Sort-Object -Unique)
-          $outside = @($loopNames | Where-Object { $mac8 -notcontains $_ })
-          if ($outside.Count) { Write-Host ("变量循环清单里出现契约外的名字：" + ($outside -join ' ')); $fail = 1 }
-          $absent = @($mac8 | Where-Object { $loopNames -notcontains $_ })
-          if ($absent.Count) { Write-Host ("以下变量没有出现在任何循环清单里（注入/删除/复查有一套分家了）：" + ($absent -join ' ')); $fail = 1 }
+          # 变量名单必须只有一个定义处，所有循环都遍历它。
+          # 早先这里是"把所有 for 循环里的字面名并起来比集合"——那证明不了它声称的事：
+          # 只要别处还有一个含该名的循环，把 ALL_PROXY 从回收清单里删掉也能通过。
+          # 现在改成两条更硬的断言：
+          #   a) 常量定义正确（PROXY_VAR_NAMES 9 个、地址 6 个、NO_PROXY 2 个）；
+          #   b) 不再有任何 for 循环手抄变量名——手抄就当场失败。
+          # 这样"改名只改一处"从承诺变成机制：谁再手抄一份，门禁立刻红。
+          $mac9 = @('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy', 'NO_PROXY', 'no_proxy', 'NODE_USE_ENV_PROXY')
+          $macAddr = @('HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy', 'ALL_PROXY', 'all_proxy')
+          # 定义行要精确锚定行首，否则 PROXY_VAR_NAMES 会同时匹配上 NO_PROXY_VAR_NAMES。
+          $pvn = Grab $sh '(?m)^PROXY_VAR_NAMES="([^"]*)"' 'macOS 变量总表'
+          $pav = Grab $sh '(?m)^PROXY_ADDR_VAR_NAMES="([^"]*)"' 'macOS 地址变量表'
+          $npv = Grab $sh '(?m)^NO_PROXY_VAR_NAMES="([^"]*)"' 'macOS NO_PROXY 变量表'
+          if (-not $pvn -or -not $pav -or -not $npv) { $fail = 1 }
+          else {
+            $pvnSet = @($pvn -split '\s+' | Where-Object { $_ } | Sort-Object)
+            $pavSet = @($pav -split '\s+' | Where-Object { $_ } | Sort-Object)
+            $npvSet = @($npv -split '\s+' | Where-Object { $_ } | Sort-Object)
+            if ((($pvnSet) -join ',') -ne ((@($mac9) | Sort-Object) -join ',')) { Write-Host ("PROXY_VAR_NAMES 内容与契约不符：" + ($pvnSet -join ' ')); $fail = 1 }
+            if ((($pavSet) -join ',') -ne ((@($macAddr) | Sort-Object) -join ',')) { Write-Host ("PROXY_ADDR_VAR_NAMES 内容与契约不符：" + ($pavSet -join ' ')); $fail = 1 }
+            if ((($npvSet) -join ',') -ne 'NO_PROXY,no_proxy') { Write-Host ("NO_PROXY_VAR_NAMES 内容与契约不符：" + ($npvSet -join ' ')); $fail = 1 }
+          }
+          # lib\ 下的循环体里不许再出现字面变量名：必须遍历上面的常量。
+          # locator.sh 是独立的登录期脚本（不加载任何库，必须自带清单），不在本条约束内，
+          # 所以只扫 lib\ ——否则会把它当成违规，逼着它去加载库，反而破坏它"能独立跑"的前提。
+          $libSh = (@(Get-ChildItem 'mac/lib' -Filter *.sh -File | Sort-Object Name | ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
+          $literalLoops = @([regex]::Matches($libSh, '(?m)^\s*for [A-Za-z_]+ in (?:[A-Za-z_ ]*\b(?:HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|NODE_USE_ENV_PROXY)\b[A-Za-z_ ]*); do'))
+          if ($literalLoops.Count) {
+            Write-Host ("lib\ 里有 for 循环手抄了变量名（应改为遍历 PROXY_VAR_NAMES / PROXY_ADDR_VAR_NAMES / NO_PROXY_VAR_NAMES）：")
+            foreach ($m in $literalLoops) { Write-Host ("  " + $m.Value.Trim()) }
+            $fail = 1
+          }
           $lowerCount = @($macNames | Where-Object { $_ -ceq $_.ToLower() }).Count
           if ($lowerCount -ne 4) { Write-Host ("macOS 侧小写拼写应恰为 4 个，实际 {0}" -f $lowerCount); $fail = 1 }
           # NO_PROXY 默认值：两侧一致、含裸写 ::1、不含方括号

@@ -7,7 +7,7 @@ about: 报告 EnvProxy 的问题
 
 ## 版本
 
-（进 `win` 双击 `4-查看状态`，把"本地版本"那一行贴上来；Mac 对应 `mac` 下的同名文件。也可以直接看根目录的 `VERSION` 文件）
+（在装好 EnvProxy 的那个文件夹里双击 `打开菜单.cmd`（Mac 是 `打开菜单.command`），选 `2` 查看状态，把"本地版本"那一行贴上来。也可以直接看根目录的 `VERSION` 文件）
 
 ## 环境
 
@@ -24,8 +24,8 @@ about: 报告 EnvProxy 的问题
 
 ## 报错文本
 
-（原样粘贴 `4-查看状态` 的完整输出，不要转述；另附 `win\monitor\monitor.log` 最近的相关行——Mac 是 `mac/monitor/monitor.log`）
+（原样粘贴"查看状态"的完整输出，不要转述；另附 `win\monitor\monitor.log` 最近的相关行——Mac 是 `mac/monitor/monitor.log`）
 
 ## 已尝试
 
-（点过 1-安装万能修复吗？结果如何）
+（打开菜单选 `1`（安装 / 修复）重跑一次了吗？结果如何）

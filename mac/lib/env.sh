@@ -120,7 +120,7 @@ write_off_sentinel() {
             # 一律写成 ${VAR-}：使用者可能开着 set -u / setopt nounset，
             # 裸写 $VAR 在变量未定义时会直接报 "unbound variable"，
             # 而这段是在他们的 shell 提示符里执行的——报错会打断他们的输入。
-            for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+            for _v in $PROXY_ADDR_VAR_NAMES; do
                 printf '[ "${%s-}" = "%s" ] && unset %s\n' "$_v" "$_oh" "$_v"
             done
             # NO_PROXY / no_proxy 是我们与使用者条目合并出来的，不按整值认领（会误删他的条目），
@@ -144,7 +144,7 @@ env_vars_in_sync() {
     _http="http://127.0.0.1:$_port"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
     _npq=$(shell_escape_sq "$_np")
-    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+    for _v in $PROXY_ADDR_VAR_NAMES; do
         grep -qxF "export $_v=\"$_http\"" "$PROXY_ENV" 2>/dev/null || return 1
     done
     grep -qxF "export NO_PROXY=$_npq" "$PROXY_ENV" 2>/dev/null || return 1
@@ -212,14 +212,14 @@ snapshot_prev_env() {
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     _sntmp="$PREV_ENV.tmp.$$"
     {
-        for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+        for _v in $PROXY_ADDR_VAR_NAMES; do
             _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
             snapshot_skip_value "$_v" "$_cur" "$_sn_first" && _cur=""
             case "$_cur" in *"
 "*) _cur="";; esac
             printf '%s\t%s\n' "$_v" "$_cur"
         done
-        for _v in NO_PROXY no_proxy; do
+        for _v in $NO_PROXY_VAR_NAMES; do
             _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
             case "$_cur" in *"
 "*) _cur="";; esac
@@ -263,7 +263,7 @@ remove_user_env_vars() {
     _rmv_mode="${1:-purge}"
     # 安装时的原值快照另存（见 snapshot_prev_env），卸载时由 restore_prev_env 还原。
     _ours_default="$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')"
-    for _v in no_proxy NO_PROXY; do
+    for _v in $NO_PROXY_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
         _keep=""
@@ -293,7 +293,7 @@ remove_user_env_vars() {
     else
         rm -f "$PROXY_ENV" 2>/dev/null || true
     fi
-    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+    for _v in $PROXY_ADDR_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
         is_owned_proxy_value "$_cur" || continue
@@ -312,11 +312,11 @@ proxy_vars_present() {
     # 必须与 remove_user_env_vars 回收同一批变量（6 个代理变量），不是只看 HTTP_PROXY：
     # 只判两个的话，一旦只剩 HTTPS_PROXY/ALL_PROXY 这类残留，判据说"没痕迹"→ 不清理 →
     # 状态页报"直连"而实际还挂着代理，正是要防的那种半代理。
-    for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+    for _v in $PROXY_ADDR_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         if is_owned_proxy_value "$_cur"; then return 0; fi
     done
-    for _v in NO_PROXY no_proxy; do
+    for _v in $NO_PROXY_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
         _old=$IFS; IFS=','
