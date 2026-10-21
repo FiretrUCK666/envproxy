@@ -384,14 +384,16 @@ Assert-Eq 'help points at install/repair as the catch-all' $true ($helpTxt -matc
 Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TERM')
 # Every screen ends with the way back out. Without it a user who lands on a topic
 # has no idea how to leave, which is exactly the "wall of text" problem pagination solves.
-Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '返回目录')
+Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '直接回车')
 # Next/previous navigation wraps around instead of dead-ending: pressing n on the last
-# topic lands on the first one, so "n" always does something.
-$navKeys = @($helpTopics | ForEach-Object { $_.Key })
-Assert-Eq 'n from the first topic goes to the second' $navKeys[1] (Resolve-HelpNav 'n' $navKeys[0])
-Assert-Eq 'n from the last topic wraps to the first' $navKeys[0] (Resolve-HelpNav 'n' $navKeys[$navKeys.Count - 1])
-Assert-Eq 'p from the first topic wraps to the last' $navKeys[$navKeys.Count - 1] (Resolve-HelpNav 'p' $navKeys[0])
-Assert-Eq 'a plain digit is not a navigation word' $null (Resolve-HelpNav '2' $navKeys[0])
+# 交互只有两种操作：输数字、直接回车。屏幕上不能出现 n / p / m / a 这类字母导航——
+# 用户记不住哪个键管哪件事，而这正是之前被抱怨的地方。
+# 这条钉住的是「文案里不许再出现字母导航」，不是措辞本身。
+$topicText = (Format-HelpTopic '1')
+Assert-Eq 'a topic screen offers no letter keys' $false ($topicText -match 'n = |p = |m = |a 看')
+$indexText = (Format-HelpIndex)
+Assert-Eq 'the help index offers no letter keys' $false ($indexText -match 'n = |p = |m = |a 看')
+Assert-Eq 'the help index says what Enter does' $true ($indexText -match '直接回车')
 # Every line gets a colour role so the screen has hierarchy instead of one grey wall.
 # Roles are derived from the line shape, so each shape must be recognised.
 $roleSeen = @{}

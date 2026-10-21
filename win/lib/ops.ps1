@@ -412,7 +412,7 @@ function Show-MenuColored {
         }
     }
     Write-Host ''
-    Write-Host '  输入编号后回车（直接回车 = 查看状态）' -ForegroundColor DarkGray
+    Write-Host '  输编号后回车执行    直接回车 = 查看状态' -ForegroundColor DarkGray
 }
 
 # 渲染整张菜单（纯文本）。打印与测试共用内容，保证"表里有什么，屏幕就有什么"。
@@ -442,7 +442,7 @@ function Format-MenuText {
         }
     }
     [void]$out.Add("")
-    [void]$out.Add("  输入编号后回车（直接回车 = 查看状态）")
+    [void]$out.Add("  输编号后回车执行    直接回车 = 查看状态")
     return ($out -join "`n")
 }
 
@@ -453,7 +453,7 @@ function Format-MenuText {
 function Get-HelpTopics {
     return @(
         @{
-            Key = '1'; Title = '它是什么、怎么判断你在翻墙'
+            Key = '1'; Title = '这是干什么用的'
             Lines = @(
                 '它做什么',
                 '  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；',
@@ -469,7 +469,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '2'; Title = '装完之后会发生什么'
+            Key = '2'; Title = '装完之后要我做什么'
             Lines = @(
                 '装完之后，按窗口分三种情况',
                 '  1. 装完之后打开的窗口',
@@ -487,32 +487,33 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '3'; Title = '单个窗口怎么接管 / 走公司代理'
+            Key = '3'; Title = '我要单独设置某个窗口'
             Lines = @(
-                '这些命令要在 PowerShell 里敲（开头有 PS 的就是）。日常窗口基本都是；',
-                '  只有手动开「命令提示符」才是 cmd，那里的写法不同：',
-                '      set ENVPROXY_TERM=off     固定直连',
-                '      set ENVPROXY_TERM=        改回跟着翻墙软件走',
-                '      set HTTPS_PROXY           查看代理',
+                '下面每条命令都在「你要改的那个窗口」里敲，只影响那一个窗口。',
+                '  怎么看自己在哪个窗口：提示符以 PS 开头就是 PowerShell（绝大多数情况）；',
+                '  提示符是 C:\ 开头、没有 PS 的，是老式的「命令提示符」(cmd)。',
                 '',
-                '让这个窗口固定直连（只管当前窗口，窗口一关就失效）',
-                '      $env:ENVPROXY_TERM = ''off''',
-                '  改回跟着翻墙软件走：',
-                '      Remove-Item Env:ENVPROXY_TERM',
-                '  ENVPROXY_TERM 是 EnvProxy 自己的开关，只有 ''off'' 有意义，只影响这个窗口。',
+                '一、让这个窗口固定直连',
+                '      PowerShell：$env:ENVPROXY_TERM = ''off''',
+                '      命令提示符：set ENVPROXY_TERM=off',
+                '  窗口一关就失效。想改回来：',
+                '      PowerShell：Remove-Item Env:ENVPROXY_TERM',
+                '      命令提示符：set ENVPROXY_TERM=',
                 '',
-                '让这个窗口走公司代理（两步，顺序不能反）',
-                '  1. 先停掉自动跟随：$env:ENVPROXY_TERM = ''off''',
-                '  2. 再设公司代理：  $env:HTTPS_PROXY = ''http://你的地址:端口''',
+                '二、让这个窗口走公司代理（两步，顺序不能反）',
+                '二、让这个窗口走公司代理（两步，顺序不能反）',
+                '  1. 先停掉自动跟随：`off = ''off''',
+                '  2. 再设公司代理：  ` = ''http://你的地址:端口''',
+                '  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。',
                 '  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。',
                 '',
-                '检查现在走不走代理',
+                '三、看看现在走不走代理',
                 '      $env:HTTPS_PROXY          （有值就是走代理，空的是直连）',
                 '',
-                '让已经开着的窗口立刻跟上',
+                '四、让已经开着的窗口立刻跟上',
                 '      . $PROFILE',
-                '  $PROFILE 是 PowerShell 每次启动时自动执行的文件，安装时往里面放了一段',
-                '  同步代码，这条命令就是手动执行一次它。5.1 和 7 各有自己的，两个都写了。',
+                '  `C:\Users\FiretrUCK\Documents\PowerShell\Microsoft.PowerShell_profile.ps1 是 PowerShell 启动时自动执行的文件，安装时往里面放了一段同步'
+                '  代码，这条命令就是手动执行一次它（5.1 和 7 各有一份，两个都写了）。四点注意：',
                 '  四点注意：',
                 '    1. 开头的点号和后面的空格都不能少',
                 '    2. 只对 PowerShell 有效（cmd 和 Git Bash 没有这个文件）',
@@ -522,7 +523,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '4'; Title = '让某一条命令不走代理'
+            Key = '4'; Title = '我要让某条命令不走代理'
             Lines = @(
                 '不同工具写法不一样，没有通用的一条命令',
                 '',
@@ -551,7 +552,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '5'; Title = '菜单每个选项做什么'
+            Key = '5'; Title = '菜单每一项是干什么的'
             Lines = @(
                 '  [1] 安装 / 修复',
                 '      首次安装，或者觉得不对劲时都选它。重复跑不会多装一份。',
@@ -570,7 +571,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '日志在哪、文件夹结构'
+            Key = '6'; Title = '出问题了我该看哪里'
             Lines = @(
                 '日志',
                 '      win\monitor\monitor.log',
@@ -586,7 +587,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '7'; Title = '觉得不对劲怎么办'
+            Key = '7'; Title = '还是不行怎么办'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
                 '  打开菜单选 1。它不会重复安装，不会中断网络，',
@@ -609,8 +610,9 @@ function Format-HelpIndex {
     $out = New-Object System.Collections.Generic.List[string]
     [void]$out.Add('================ EnvProxy 帮助 ================')
     [void]$out.Add('')
-    [void]$out.Add('  想知道什么，就输它的编号：')
-    [void]$out.Add('')
+    # 这里原来写「想知道什么，就输它的编号」，和底部提示重复了一遍；
+    # 换成一句真正有用的话：告诉他这 7 条是按「我遇到什么」排的。
+    [void]$out.Add('  按你遇到的问题挑一条：')
     foreach ($t in (Get-HelpTopics)) {
         [void]$out.Add(('    {0}  {1}' -f $t.Key, $t.Title))
     }
@@ -619,7 +621,7 @@ function Format-HelpIndex {
     if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '未知' }
     [void]$out.Add(('  本机版本 v{0}' -f $ver))
     [void]$out.Add('')
-    [void]$out.Add('  输入编号后回车    0 = 回主菜单')
+    [void]$out.Add('  输编号查看    直接回车 = 回主菜单')
     return ($out -join "`n")
 }
 
@@ -670,22 +672,8 @@ function Format-HelpTopic([string]$Key) {
     [void]$out.Add('')
     foreach ($l in $t.Lines) { [void]$out.Add($l) }
     [void]$out.Add('')
-    [void]$out.Add('  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单')
+    [void]$out.Add('  输编号看别的    直接回车 = 回目录')
     return ($out -join "`n")
-}
-
-# 把 n / p 这类导航词翻译成目标主题的键。
-# 有了它，用户不用记"我现在在第几个"，直接按 n 就能翻到下一篇。
-# 到头绕回去（环形），避免"按了没反应"的困惑。
-# 参数名不能用 $Input：那是 PowerShell 的自动变量，赋值会被静默忽略。
-function Resolve-HelpNav([string]$Nav, [string]$CurrentKey) {
-    $keys = @(Get-HelpTopics | ForEach-Object { $_.Key })
-    if ($keys.Count -eq 0) { return $null }
-    $idx = [array]::IndexOf($keys, $CurrentKey)
-    if ($idx -lt 0) { $idx = 0 }
-    if ($Nav -eq 'n' -or $Nav -eq 'N') { return $keys[($idx + 1) % $keys.Count] }
-    if ($Nav -eq 'p' -or $Nav -eq 'P') { return $keys[($idx - 1 + $keys.Count) % $keys.Count] }
-    return $null
 }
 
 # 带配色地把一个主题打到屏幕上。
@@ -699,7 +687,7 @@ function Show-HelpTopicColored([string]$Key) {
     Write-Host ''
     foreach ($l in $t.Lines) { Write-HelpLine $l }
     Write-Host ''
-    Write-Host '  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单' -ForegroundColor DarkGray
+    Write-Host '  输编号看别的    直接回车 = 回目录' -ForegroundColor DarkGray
     return $true
 }
 
@@ -718,50 +706,38 @@ function Format-HelpAll {
 
 # 帮助入口。
 # -All：不导航，直接给全文（非交互、或明确要全文时用）。
-# 交互：先给目录，输编号看主题，0 回目录，m 回主菜单。
+# 交互只有两种操作，和菜单完全一样：
+#   输数字 = 去看那一条；直接回车 = 回上一级。
+# 不用 n / p / m / a 这些字母：用户记不住哪个键管哪件事，
+# 而"输编号"和"按回车"不需要学。7 条一轮翻页的需求本来也不强。
 function Show-Help([switch]$All) {
     if ($All -or -not (Test-CanPrompt)) {
         Write-Host (Format-HelpAll)
         return
     }
     while ($true) {
-        # 目录与主题各占一屏：切换时清屏，屏幕上永远只有当前这一页。
         Clear-Screen
         Write-Host (Format-HelpIndex) -ForegroundColor Cyan
         $sel = ''
-        try { $sel = "$(Read-Host '看哪个（回车返回；a 看全部）')".Trim() } catch { return }
+        try { $sel = "$(Read-Host '输编号，或直接回车')".Trim() } catch { return }
+        # 直接回车 = 回主菜单（帮助的上一级就是菜单）。
         if (-not $sel) { return }
-        if ($sel -eq '0' -or $sel -eq 'm' -or $sel -eq 'M') { return }
-        # a = 一次看完所有主题。交互界面也要留这个出口：想从头读一遍、
-        # 或者想往上翻回看的人，没有它只能一页页按 n。
-        if ($sel -eq 'a' -or $sel -eq 'A') {
-            Clear-Screen
-            Write-Host (Format-HelpAll)
-            $null = Read-Host '按回车回目录'
-            continue
-        }
         Clear-Screen
-        if (-not (Show-HelpTopicColored $sel)) {
-            Write-Host ("没有这个编号：{0}（1-7，或 0 返回）" -f $sel) -ForegroundColor Yellow
-            $null = Read-Host '按回车回目录'
+        if (Show-HelpTopicColored $sel) {
+            # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
+            # 这里只等一个输入；回车就回目录，数字就继续看下一条。
+            $next = ''
+            try { $next = "$(Read-Host '输编号，或直接回车')".Trim() } catch { return }
+            if (-not $next) { continue }
+            Clear-Screen
+            if (-not (Show-HelpTopicColored $next)) {
+                Write-Host ("没有这一条：{0}（有 1-7）" -f $next) -ForegroundColor Yellow
+                $null = Read-Host '按回车回目录'
+            }
             continue
         }
-        # 看完一个主题以后，直接问下一个看哪个，不用退回目录再选一次。
-        # 允许连看，也允许按 n / p 前后翻：用户不用记"我在第几个"。
-        $cur = $sel
-        while ($true) {
-            $next = ''
-            try { $next = "$(Read-Host '按回车回目录；n 下一个；p 上一个；或直接输编号')".Trim() } catch { return }
-            if (-not $next) { break }
-            if ($next -eq 'm' -or $next -eq 'M' -or $next -eq '0') { return }
-            $nav = Resolve-HelpNav $next $cur
-            if ($nav) { $next = $nav }
-            Clear-Screen
-            if (Show-HelpTopicColored $next) { $cur = $next; continue }
-            Write-Host ("没有这个编号：{0}" -f $next) -ForegroundColor Yellow
-            $null = Read-Host '按回车回目录'
-            break
-        }
+        Write-Host ("没有这一条：{0}（有 1-7）" -f $sel) -ForegroundColor Yellow
+        $null = Read-Host '按回车回目录'
     }
 }
 

@@ -84,7 +84,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 
 | Pick | What it does | What it affects |
 |---|---|---|
-| **1** | Install / Repair. Use it for a first install, or whenever something feels wrong | Program files + start at login + terminal sync script + environment variables |
+| **1** | Install / Repair. Use it for a first install, or whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
 | **2** | Show status: monitor, proxy, environment variables, version | Read-only, changes nothing |
 | **3** | Stop the monitor. Temporary; it returns at next login | Monitor process + environment variables |
 | **4** | Full restore. Complete uninstall, back to before installing | Everything (log optionally kept) |

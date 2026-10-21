@@ -1305,13 +1305,13 @@ show_status() {
 HELP_TOPIC_KEYS=(1 2 3 4 5 6 7)
 _help_topic_title() {
     case "$1" in
-        1) echo "它是什么、怎么判断你在翻墙" ;;
-        2) echo "装完之后会发生什么" ;;
-        3) echo "单个窗口怎么接管 / 走公司代理" ;;
-        4) echo "让某一条命令不走代理" ;;
-        5) echo "菜单每个选项做什么" ;;
-        6) echo "日志在哪、文件夹结构" ;;
-        7) echo "觉得不对劲怎么办" ;;
+        1) echo "这是干什么用的" ;;
+        2) echo "装完之后要我做什么" ;;
+        3) echo "我要单独设置某个窗口" ;;
+        4) echo "我要让某条命令不走代理" ;;
+        5) echo "菜单每一项是干什么的" ;;
+        6) echo "出问题了我该看哪里" ;;
+        7) echo "还是不行怎么办" ;;
         *) echo "" ;;
     esac
     return 0
@@ -1354,21 +1354,22 @@ TOPIC
 Mac 只有一个终端（默认 zsh，bash 也行），不会像 Windows 那样敲错窗口。
   fish 不支持：它不读 .zshenv，语法也不一样，用 fish 的话换 zsh 或 bash。
 
-让这个窗口固定直连（只管当前窗口，窗口一关就失效）
-      export ENVPROXY_TERM=off
-  改回跟着翻墙软件走：
-      unset ENVPROXY_TERM
-  ENVPROXY_TERM 是 EnvProxy 自己的开关，只有 'off' 有意义，只影响这个窗口。
+下面四条命令都在「你要改的那个窗口」里敲，只影响那一个窗口。
 
-让这个窗口走公司代理（两步，顺序不能反）
+一、让这个窗口固定直连
+      export ENVPROXY_TERM=off
+  窗口一关就失效。想改回来：
+      unset ENVPROXY_TERM
+
+二、让这个窗口走公司代理（两步，顺序不能反）
   1. 先停掉自动跟随：export ENVPROXY_TERM=off
   2. 再设公司代理：  export HTTPS_PROXY=http://你的地址:端口
   为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。
 
-检查现在走不走代理
+三、看看现在走不走代理
       echo $HTTPS_PROXY          （有值就是走代理，空的是直连）
 
-让已经开着的窗口立刻跟上
+四、让已经开着的窗口立刻跟上
       . ~/.envproxy/prompt-sync.sh
   四点注意：
     1. 开头的点号和后面的空格都不能少
@@ -1458,7 +1459,7 @@ format_help_index() {
     [ -z "$_hi_hv" ] && _hi_hv="未知"
     echo "================ EnvProxy 帮助 ================"
     echo ""
-    echo "  想知道什么，就输它的编号："
+    echo "  按你遇到的问题挑一条："
     echo ""
     for _hi_k in "${HELP_TOPIC_KEYS[@]}"; do
         echo "    $_hi_k  $(_help_topic_title "$_hi_k")"
@@ -1466,7 +1467,7 @@ format_help_index() {
     echo ""
     echo "  本机版本 v$_hi_hv"
     echo ""
-    echo "  输入编号后回车    0 = 回主菜单"
+    echo "  输编号查看    直接回车 = 回主菜单"
 }
 
 # 单个主题：正文前后各留一行，底部固定给返回方式。
@@ -1477,30 +1478,7 @@ format_help_topic() {
     echo ""
     _help_topic_body "$1"
     echo ""
-    echo "  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单"
-    return 0
-}
-
-# 把 n / p 翻译成目标主题的键。到头绕回去（环形），避免"按了没反应"的困惑。
-resolve_help_nav() {
-    _rhn_nav="$1"
-    _rhn_cur="$2"
-    _rhn_total=${#HELP_TOPIC_KEYS[@]}
-    [ "$_rhn_total" -le 0 ] && return 1
-    # 找当前位置
-    _rhn_idx=-1
-    _rhn_i=0
-    for _rhn_k in "${HELP_TOPIC_KEYS[@]}"; do
-        if [ "$_rhn_k" = "$_rhn_cur" ]; then _rhn_idx=$_rhn_i; break; fi
-        _rhn_i=$((_rhn_i + 1))
-    done
-    [ "$_rhn_idx" -lt 0 ] && _rhn_idx=0
-    case "$_rhn_nav" in
-        n|N) _rhn_next=$(( (_rhn_idx + 1) % _rhn_total ));;
-        p|P) _rhn_next=$(( (_rhn_idx - 1 + _rhn_total) % _rhn_total ));;
-        *) return 1;;
-    esac
-    echo "${HELP_TOPIC_KEYS[$_rhn_next]}"
+    echo "  输编号看别的    直接回车 = 回目录"
     return 0
 }
 
@@ -1561,7 +1539,7 @@ show_help_topic_colored() {
         fi
     done
     echo ""
-    printf '\033[90m%s\033[0m\n' "  回车 = 返回目录    n = 下一个    p = 上一个    0 或 m = 回主菜单"
+    printf '\033[90m%s\033[0m\n' "  输编号看别的    直接回车 = 回目录"
     return 0
 }
 
@@ -1579,65 +1557,49 @@ format_help_all() {
 # 帮助入口。
 # 交互：先给目录，输编号看主题，0 回目录，n/p 前后翻，m 回主菜单。
 # 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
+# 帮助入口。
+# 交互只有两种操作，和菜单完全一样：
+#   输数字 = 去看那一条；直接回车 = 回上一级。
+# 不用 n / p / m / a 这些字母：用户记不住哪个键管哪件事，
+# 而"输编号"和"按回车"不需要学。7 条一轮翻页的需求本来也不强。
 show_help() {
     if [ ! -t 0 ]; then
         format_help_all
         return 0
     fi
     while true; do
-        # 目录与主题各占一屏：切换时清屏，屏幕上永远只有当前这一页。
         clear_screen_safe
         format_help_index
-        printf "看哪个（回车返回；a 看全部）："
+        printf "输编号，或直接回车："
         if ! IFS= read -r _hs_sel; then
             echo ""
             return 0
         fi
         _hs_sel=$(printf '%s' "$_hs_sel" | tr -d '[:space:]')
+        # 直接回车 = 回主菜单（帮助的上一级就是菜单）。
         [ -z "$_hs_sel" ] && return 0
-        # a = 一次看完所有主题。交互界面也要留这个出口：想从头读一遍、
-        # 或者想往上翻回看的人，没有它只能一页页按 n。
-        case "$_hs_sel" in
-            a|A)
-                clear_screen_safe
-                format_help_all
-                printf "按回车回目录："
-                IFS= read -r _hs_dummy || true
-                continue;;
-            0|m|M) return 0;;
-        esac
         clear_screen_safe
-        if ! show_help_topic_colored "$_hs_sel"; then
-            echo "没有这个编号：$_hs_sel（1-7，或 0 返回）"
-            printf "按回车回目录："
-            IFS= read -r _hs_dummy || true
-            continue
-        fi
-        # 看完一个主题后直接问下一个，不用退回目录；n/p 前后翻。
-        _hs_cur="$_hs_sel"
-        while true; do
-            printf "按回车回目录；n 下一个；p 上一个；或直接输编号："
+        if show_help_topic_colored "$_hs_sel"; then
+            # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
+            # 这里只等一个输入；回车就回目录，数字就继续看下一条。
+            printf "输编号，或直接回车："
             if ! IFS= read -r _hs_next; then
                 echo ""
                 return 0
             fi
             _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
-            [ -z "$_hs_next" ] && break
-            case "$_hs_next" in
-                0|m|M) return 0;;
-            esac
-            _hs_nav=$(resolve_help_nav "$_hs_next" "$_hs_cur" || true)
-            [ -n "$_hs_nav" ] && _hs_next="$_hs_nav"
+            [ -z "$_hs_next" ] && continue
             clear_screen_safe
-            if show_help_topic_colored "$_hs_next"; then
-                _hs_cur="$_hs_next"
-                continue
+            if ! show_help_topic_colored "$_hs_next"; then
+                echo "没有这一条：$_hs_next（有 1-7）"
+                printf "按回车回目录："
+                IFS= read -r _hs_dummy || true
             fi
-            echo "没有这个编号：$_hs_next"
-            printf "按回车回目录："
-            IFS= read -r _hs_dummy || true
-            break
-        done
+            continue
+        fi
+        echo "没有这一条：$_hs_sel（有 1-7）"
+        printf "按回车回目录："
+        IFS= read -r _hs_dummy || true
     done
 }
 
@@ -1745,7 +1707,7 @@ format_menu_text() {
         done
     done
     echo ""
-    echo "  输入编号后回车（直接回车 = 查看状态）"
+    echo "  输编号后回车执行    直接回车 = 查看状态"
 }
 
 # 带配色地打菜单。与 format_menu_text 分工：那个返回纯文本（非交互与测试用），
@@ -1799,7 +1761,7 @@ show_menu_colored() {
         done
     done
     echo ""
-    printf '\033[90m%s\033[0m\n' "  输入编号后回车（直接回车 = 查看状态）"
+    printf '\033[90m%s\033[0m\n' "  输编号后回车执行    直接回车 = 查看状态"
 }
 
 show_menu() {
