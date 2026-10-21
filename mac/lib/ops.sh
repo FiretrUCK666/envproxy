@@ -1206,7 +1206,7 @@ show_status() {
     _crc=0
     _cands=$(find_candidate_ports 0) || _crc=$?
     if [ "$_crc" -ne 0 ]; then
-        echo "翻墙代理 : 读不出来（端口枚举失败，这一轮不知道有没有代理在运行）"
+        echo "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
     else
         _port=$(printf '%s' "$_cands" | awk '{print $1}')
         if [ -n "$_port" ]; then
