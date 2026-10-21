@@ -632,6 +632,17 @@ function Remove-OneShellProfile([string]$path) {
     while ($keep.Count -gt 0 -and [string]::IsNullOrWhiteSpace($keep[$keep.Count - 1])) {
         $keep.RemoveAt($keep.Count - 1)
     }
+    # 摘完若什么都不剩，说明这个文件里原本只有我们那一块（或者本来就是空的）。
+    # 再擦成空文件就是"卸载回到安装前"没做到位：装之前它不存在，卸完却多一个空文件。
+    # 只在确实为空时删除，用户自己写过内容的一个字节都不动。
+    if ($keep.Count -eq 0) {
+        try {
+            Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+            return @{ Ok = $true; Reason = 'removed-empty'; Path = $path }
+        } catch {
+            # 删不掉就退回"写空文件"：留一个空文件也强过报错让人没法收尾。
+        }
+    }
     if (-not (Write-TextAtomic -Path $path -Lines @($keep))) {
         return @{ Ok = $false; Reason = 'write-failed'; Path = $path }
     }

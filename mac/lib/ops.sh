@@ -1198,13 +1198,24 @@ uninstall_envproxy() {
 show_status() {
     echo "======== EnvProxy 状态 (macOS) ========"
     _m=$(get_monitor_pid || true)
-    if [ -n "$_m" ]; then echo "监控进程 : 运行中 (PID $_m)"; else echo "监控进程 : 未运行"; fi
       # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
       # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
       # 状态页却仍报"已启用"。判据要和"能不能真的启动"一致：注册在，且那个文件真的存在。
       # 与 Windows 侧同口径（那边查的是 Run 键指向的脚本是否存在）。
+      _autorun_ok=0
+      if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" && [ -f "$LOCATOR_PATH" ]; then
+          _autorun_ok=1
+      fi
+    if [ -n "$_m" ]; then
+        echo "监控进程 : 运行中 (PID $_m)"
+    else
+        echo "监控进程 : 未运行"
+        # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
+        # 不说清这一点，用户会看到"自启已启用"和"监控未运行"并列，以为装坏了。
+        [ "$_autorun_ok" = "1" ] && echo "           （已按你的选择停止，下次登录会自动恢复）"
+    fi
       if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then
-          if [ -f "$LOCATOR_PATH" ]; then
+          if [ "$_autorun_ok" = "1" ]; then
               echo "开机自启 : 已启用"
           else
               echo "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
@@ -1572,40 +1583,36 @@ show_help() {
         format_help_all
         return 0
     fi
+    # $_hs_cur 为空 = 当前在目录页；非空 = 正在看那一条。
+    # 用一种状态表达两页，换主题时才不会跳回目录。
+    _hs_cur=""
     while true; do
-        clear_screen_safe
-        format_help_index
+        if [ -z "$_hs_cur" ]; then
+            clear_screen_safe
+            format_help_index
+        fi
         printf "输编号，或直接回车："
         if ! IFS= read -r _hs_sel; then
             echo ""
             return 0
         fi
         _hs_sel=$(printf '%s' "$_hs_sel" | tr -d '[:space:]')
-        # 直接回车 = 回主菜单（帮助的上一级就是菜单）。
-        [ -z "$_hs_sel" ] && return 0
-        # 先查表、有效才清屏：输错时把目录留在屏幕上，用户还能照着挑。
-        # 这与菜单屏一致（输错不重画、错误压在菜单下），不该一屏一个做法。
+        if [ -z "$_hs_sel" ]; then
+            # 回车：在主题里回目录，在目录里回主菜单。
+            if [ -n "$_hs_cur" ]; then
+                _hs_cur=""
+                continue
+            fi
+            return 0
+        fi
+        # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         if ! _help_key_valid "$_hs_sel"; then
             echo "没有这一条：$_hs_sel（有 1-7）"
             continue
         fi
         clear_screen_safe
-        show_help_topic_colored "$_hs_sel" || continue
-        # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
-        # 这里只等一个输入；回车就回目录，数字就继续看下一条。
-        printf "输编号，或直接回车："
-        if ! IFS= read -r _hs_next; then
-            echo ""
-            return 0
-        fi
-        _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
-        [ -z "$_hs_next" ] && continue
-        if ! _help_key_valid "$_hs_next"; then
-            echo "没有这一条：$_hs_next（有 1-7）"
-            continue
-        fi
-        clear_screen_safe
-        show_help_topic_colored "$_hs_next" >/dev/null 2>&1
+        show_help_topic_colored "$_hs_sel"
+        _hs_cur="$_hs_sel"
     done
 }
 
@@ -1792,13 +1799,12 @@ show_menu() {
         echo "菜单数据损坏，无法显示。请重新下载安装包解压覆盖这个文件夹。"
         return 1
     fi
-    _repaint=1
+    # 两轮两种画法：重画整张菜单（首次进入、子命令结束后），或者什么都不画
+    # （输错编号那一轮）。之前用布尔量只能表达"清不清屏"，所以输错时仍会重画
+    # 整张菜单，连错几次屏幕就滚得找不到位置——而注释里承诺的恰恰相反。
+    _mode="menu"
     while true; do
-        # 清屏只在"屏幕内容确实要换"时做（$repaint 控制）。输错编号那一轮不清屏：
-        # 清了就把刚打的提示抹掉了，用户只看到屏幕闪一下又回到一模一样的菜单，
-        # 会以为程序没反应——提示等于白打。
-        if [ "$_repaint" = "1" ]; then clear_screen_safe; _repaint=0; fi
-        show_menu_colored
+        if [ "$_mode" = "menu" ]; then clear_screen_safe; show_menu_colored; fi
         printf "输入编号："
         if ! IFS= read -r _choice; then
             echo ""
@@ -1816,8 +1822,10 @@ show_menu() {
         _msub_ok=1
         if _msub=$(_menu_switch_for "$_choice"); then _msub_ok=0; fi
         if [ "$_msub_ok" = "1" ]; then
-            # 只打一行，不重画整张菜单：输错一次就把屏幕刷一遍，会让人分不清刚才看到的是哪一屏。
+            # 输错只补一行，菜单本身留在原位：重画一遍会让屏幕不停往下滚，
+            # 连错几次就再也找不到自己在哪了（ADHD 用户尤其受不了）。
             echo "没有这个编号：$_choice（可用的有 1-6 和 0）"
+            _mode="none"
             continue
         fi
         # 空子命令 = 退出项。
@@ -1825,6 +1833,7 @@ show_menu() {
         # 帮助留在本进程里跑：它要回到菜单，起子进程就回不来了。
         if [ "$_msub" = "help" ]; then
             show_help
+            _mode="menu"
             continue
         fi
         # 子进程跑完整子命令：与入口子命令走的是同一条路（含锁、确认、复检）。
@@ -1832,8 +1841,6 @@ show_menu() {
         # 子命令跑完，等用户看一眼再回菜单：否则清屏会立刻把它的输出抹掉。
         printf "按回车回菜单："
         IFS= read -r _dummy || true
-        # 复位清屏标志。用户已经看完了子命令输出，下一轮该清屏重画菜单。
-        # 不复位的话这个标志只降不升，之后每一轮都往同一屏上叠，屏幕越滚越长。
-        _repaint=1
+        _mode="menu"
     done
 }

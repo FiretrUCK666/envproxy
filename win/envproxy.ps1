@@ -213,7 +213,7 @@ if ($Stop) {
     if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
     Stop-Monitor
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
-    Apply-State "off"
+    $null = Apply-State "off"
     Write-Host "代理变量已清除，当前恢复直连。" -ForegroundColor Cyan
     # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
     # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），

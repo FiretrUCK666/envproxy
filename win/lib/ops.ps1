@@ -127,7 +127,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 反过来会把用户原值里与默认集重合的项（如 localhost）当成"我们加的"剥掉，快照保护落空。
     # 走 Apply-State 而不是裸调 Remove-UserEnvVars：拿写变量锁、判据与写入同源、写完广播。
     # 裸调会绕过锁，与监控自愈并发时可能留下半套变量。
-    Apply-State "off"
+    $null = Apply-State "off"
     # 复检用的期望值先抄一份：Restore 会删掉快照键，抄晚了就没处可查了。
     # 有快照的名字以"与快照一致"为准（用户原值里若含 localhost 这类与默认集重合的项，
     # 它既不是残留也不能删）；没快照的名字才按"有无我们的痕迹"判。
@@ -221,17 +221,25 @@ function Show-Status {
     Write-Host "======== EnvProxy 状态 ========" -ForegroundColor Cyan
 
     $m = Get-MonitorProcess
-    if ($m) { Write-Host ("监控进程 : 运行中 (PID {0})" -f $m.ProcessId) -ForegroundColor Green }
-    else    { Write-Host "监控进程 : 未运行" -ForegroundColor Yellow }
-
     $run = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
+    # 自启是否真的会生效：值在，且它指向的脚本真的存在。
+    # 只看"值非空"会说谎——卸载不彻底或手工删过文件夹时，登录时什么都不会起来。
+    $autoRunOk = $false
+    $launcher = ""
+    if ($run -match '-File\s+"?([^"]+\.ps1)"?') { $launcher = $Matches[1] }
+    if ($launcher -and (Test-Path -LiteralPath $launcher)) { $autoRunOk = $true }
+
+    if ($m) {
+        Write-Host ("监控进程 : 运行中 (PID {0})" -f $m.ProcessId) -ForegroundColor Green
+    } else {
+        Write-Host "监控进程 : 未运行" -ForegroundColor Yellow
+        # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
+        # 不说清这一点，用户会看到"自启已启用"和"监控未运行"并列，以为装坏了。
+        if ($autoRunOk) { Write-Host "           （已按你的选择停止，下次登录会自动恢复）" -ForegroundColor DarkGray }
+    }
+
     if ($run) {
-        # 只看"值非空"会说谎：卸载不彻底或手工删过文件夹时，Run 键指向的启动器
-        # 已经不在了，登录时什么都不会起来，状态页却仍报"已启用"。
-        # 判据要和"能不能真的启动"一致：值在，且它指向的脚本真的存在。
-        $launcher = ""
-        if ($run -match '-File\s+"?([^"]+\.ps1)"?') { $launcher = $Matches[1] }
-        if ($launcher -and (Test-Path -LiteralPath $launcher)) {
+        if ($autoRunOk) {
             Write-Host "开机自启 : 已启用" -ForegroundColor Green
         } else {
             Write-Host "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）" -ForegroundColor Yellow
@@ -716,30 +724,37 @@ function Show-Help([switch]$All) {
         Write-Host (Format-HelpAll)
         return
     }
+    # $cur 为空 = 当前在目录页；非空 = 正在看那一条。
+    # 用一种状态表达两页：换主题时才不会跳回目录，也不用嵌套循环把逻辑写两遍。
+    $cur = ''
     while ($true) {
-        Clear-Screen
-        Write-Host (Format-HelpIndex) -ForegroundColor Cyan
+        if (-not $cur) {
+            Clear-Screen
+            Write-Host (Format-HelpIndex) -ForegroundColor Cyan
+        }
         $sel = ''
         try { $sel = "$(Read-Host '输编号，或直接回车')".Trim() } catch { return }
-        # 直接回车 = 回主菜单（帮助的上一级就是菜单）。
-        if (-not $sel) { return }
-        Clear-Screen
-        if (Show-HelpTopicColored $sel) {
-            # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
-            # 这里只等一个输入；回车就回目录，数字就继续看下一条。
-            $next = ''
-            try { $next = "$(Read-Host '输编号，或直接回车')".Trim() } catch { return }
-            if (-not $next) { continue }
-            Clear-Screen
-            if (-not (Show-HelpTopicColored $next)) {
-                Write-Host ("没有这一条：{0}（有 1-7）" -f $next) -ForegroundColor Yellow
-                $null = Read-Host '按回车回目录'
-            }
+        if (-not $sel) {
+            # 回车：在主题里回目录，在目录里回主菜单。
+            if ($cur) { $cur = ''; continue }
+            return
+        }
+        # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
+        # 与菜单屏一致（输错不重画），不该一屏一个做法。
+        if (-not (Test-HelpKey $sel)) {
+            Write-Host ("没有这一条：{0}（有 1-7）" -f $sel) -ForegroundColor Yellow
             continue
         }
-        Write-Host ("没有这一条：{0}（有 1-7）" -f $sel) -ForegroundColor Yellow
-        $null = Read-Host '按回车回目录'
+        Clear-Screen
+        [void](Show-HelpTopicColored $sel)
+        $cur = $sel
     }
+}
+
+# 这个编号有没有对应的帮助主题。输错时用它来决定"要不要清屏"：
+# 无效就保留当前屏（用户还要照着挑），有效才换屏。
+function Test-HelpKey([string]$Key) {
+    return [bool]@(Get-HelpTopics | Where-Object { $_.Key -eq $Key }).Count
 }
 
 function Show-Menu {
@@ -751,13 +766,12 @@ function Show-Menu {
             return
         }
     } catch {}
-    # 清屏只在"屏幕内容确实要换"时做（由 $repaint 控制）。输错编号那一轮不清屏：
-    # 清了就把刚打的提示抹掉了，用户只看到屏幕闪一下又回到一模一样的菜单，
-    # 会以为程序没反应——提示等于白打。
-    $repaint = $true
+    # 两轮两种画法：重画整张菜单（首次进入、子命令结束后），或者什么都不画
+    # （输错编号那一轮）。之前用布尔量只能表达"清不清屏"，所以输错时仍会重画
+    # 整张菜单，连错几次屏幕就滚得找不到位置——而注释里承诺的恰恰相反。
+    $mode = "menu"
     while ($true) {
-        if ($repaint) { Clear-Screen; $repaint = $false }
-        Show-MenuColored
+        if ($mode -eq "menu") { Clear-Screen; Show-MenuColored }
         try {
             $choice = Read-Host "输入编号"
         } catch {
@@ -771,8 +785,10 @@ function Show-Menu {
         if ($choice -eq 'q' -or $choice -eq 'Q') { $choice = "0" }
         $item = @($MenuItems | Where-Object { $_.Key -eq $choice })
         if (-not $item -or ($item.Count -eq 0)) {
-            # 只打一行，不重画整张菜单：输错一次就把屏幕刷一遍，会让人分不清刚才看到的是哪一屏。
+            # 输错只补一行，菜单本身留在原位：重画一遍会让屏幕不停往下滚，
+            # 连错几次就再也找不到自己在哪了（ADHD 用户尤其受不了）。
             Write-Host ("没有这个编号：{0}（可用的有 1-6 和 0）" -f $choice) -ForegroundColor Yellow
+            $mode = "none"
             continue
         }
         if (-not $item[0].Switch) { return }
@@ -785,8 +801,6 @@ function Show-Menu {
         }
         # 子命令跑完先停一下：下一轮开头就要清屏，不等一下就把它刚打印的内容抹掉了。
         try { $null = Read-Host '按回车回菜单' } catch { return }
-        # 复位清屏标志。用户已经看完了子命令输出，下一轮该清屏重画菜单。
-        # 不复位的话这个标志只降不升，之后每一轮都往同一屏上叠，屏幕越滚越长。
-        $repaint = $true
+        $mode = "menu"
     }
 }
