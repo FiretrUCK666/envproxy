@@ -777,5 +777,7 @@ function Show-Menu {
         } catch {
             Write-Host ("启动失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
         }
+        # 子命令跑完先停一下：下一轮开头就要清屏，不等一下就把它刚打印的内容抹掉了。
+        try { $null = Read-Host '按回车回菜单' } catch { return }
     }
 }
