@@ -873,14 +873,25 @@ jobs:
           # 归属判定、注入核对回收往返、快照还原。失败返回非零。
           # 输出留在内存里就够了：不往仓库目录写临时文件（那会污染工作区，
           # 也可能被误提交）。要留档就用 CI 的日志。
+          # 先把环境打出来：远端失败时，宿主版本、工作目录、bash 位置这三样决定排查方向。
+          Write-Host ("宿主: {0}" -f $PSVersionTable.PSVersion.ToString())
+          Write-Host ("工作目录: {0}" -f (Get-Location).Path)
+          $bashPath = (Get-Command bash -ErrorAction SilentlyContinue).Source
+          Write-Host ("bash: {0}" -f $(if ($bashPath) { $bashPath } else { '找不到' }))
+          # Windows 上 bash 可能指向 WSL 的空壳（没装发行版时跑什么都说找不到文件）。
+          # 那不是 Mac 自检真的失败，说清楚能省掉一次误判。
+          if ($env:OS -eq 'Windows_NT') {
+            Write-Host '提示：Windows 上跑 Mac 自检需要可用的 bash（Git Bash 或装了发行版的 WSL）。'
+            Write-Host '      若 bash 指向 C:\WINDOWS\system32\bash.exe 且没有发行版，这一步会失败。'
+          }
           $winOut = pwsh -NoProfile -File tests/test-win-pure.ps1
           $winRc = $LASTEXITCODE
           $winOut | Write-Host
-          if ($winRc -ne 0) { Write-Host 'Win 功能自检失败'; exit 1 }
+          if ($winRc -ne 0) { Write-Host ("Win 功能自检失败，退出码 {0}" -f $winRc); exit 1 }
           $macOut = bash mac/envproxy.sh self-test
           $macRc = $LASTEXITCODE
           $macOut | Write-Host
-          if ($macRc -ne 0) { Write-Host 'Mac 功能自检失败'; exit 1 }
+          if ($macRc -ne 0) { Write-Host ("Mac 功能自检失败，退出码 {0}" -f $macRc); exit 1 }
           # 资产解析契约：同一个应答，两边必须给出同一个结论。
           # 文本层面的门禁看不出这种漂移：同一个应答，
           # 一边继续更新、一边说"这一版没提供安装包"（冤枉维护者）。
@@ -938,12 +949,16 @@ jobs:
         shell: powershell
         run: |
           # 用户真实环境是系统自带的 5.1：入口与每个库都要在 5.1 下解析一遍。
+          Write-Host ("宿主: PowerShell {0}" -f $PSVersionTable.PSVersion.ToString())
+          Write-Host ("工作目录: {0}" -f (Get-Location).Path)
+          Write-Host ("看到 {0} 个 ps1" -f @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse).Count)
           foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
             $tokens = $null; $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
             if ($errs.Count) { Write-Host ("{0} 在 5.1 下解析失败：" -f $f.Name); $errs | ForEach-Object { Write-Host $_.Message }; exit 1 }
           }
+          # 自检的输出逐行打出来：只报一句"失败"时，远端根本看不出是哪条断言挂了。
           powershell -NoProfile -File tests/test-win-pure.ps1
-          if ($LASTEXITCODE -ne 0) { Write-Host 'Win 功能自检（5.1）失败'; exit 1 }
+          $rc = $LASTEXITCODE
+          if ($rc -ne 0) { Write-Host ("Win 功能自检（5.1）失败，退出码 {0}" -f $rc); exit 1 }
           Write-Host '5.1 语法与功能自检通过'
-          Write-Host ("PowerShell {0} 解析通过" -f $PSVersionTable.PSVersion.ToString())
