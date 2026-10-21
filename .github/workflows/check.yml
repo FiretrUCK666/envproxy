@@ -233,7 +233,10 @@ jobs:
           $tar = Join-Path $tmp 'envproxy-shipset.tar'
           git archive --format=tar -o $tar HEAD
           if ($LASTEXITCODE -ne 0) { Write-Host 'git archive 失败'; exit 1 }
-          $entries = @(& tar -tf $tar)
+          # 读包内容一律 cd 进临时目录、只用文件名：GNU tar 会把 "C:\..." 里的 C: 当成远程主机
+          # （报 Cannot connect to C:），于是 Windows 上这条门禁永远读到空列表、误报"内容不一致"。
+          # CI 跑在 Linux 上不会踩到，但本地在 Windows 上就没法复跑这条门禁了。
+          $entries = @(Push-Location $tmp; try { & tar -tf 'envproxy-shipset.tar' } finally { Pop-Location })
           $tops = @($entries | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
           $expect = @('LICENSE','README.en.md','README.md','VERSION','assets','mac','release-notes','win')
           $diff = Compare-Object $expect $tops
@@ -363,7 +366,10 @@ jobs:
           Remove-Item $tar -Force -ErrorAction SilentlyContinue
           git archive --format=tar -o $tar HEAD
           if ($LASTEXITCODE -ne 0) { Write-Host 'git archive 失败，无法比对安装包内容'; exit 1 }
-          $tops = @(& tar -tf $tar | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
+          # 读包内容一律 cd 进临时目录、只用文件名：GNU tar 会把 "C:\..." 里的 C: 当成远程主机
+          # （报 Cannot connect to C:），于是 Windows 上读到空列表、误报"内容为空"。
+          $tops = @(Push-Location $tmp; try { & tar -tf 'envproxy-docset.tar' } finally { Pop-Location }) |
+                  ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique
           if ($tops.Count -eq 0) { Write-Host '安装包内容为空，比对无意义（门禁不通过）'; exit 1 }
           foreach ($f in 'README.md','README.en.md') {
             $lines = Get-Content $f -Encoding UTF8
