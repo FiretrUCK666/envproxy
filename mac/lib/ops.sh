@@ -1622,9 +1622,9 @@ TOPIC
     4) cat <<'TOPIC'
 先做第 3 条（固定直连），再设地址。顺序反了等于没设。
 
-一、设地址（7890 是例子，换成你自己的端口）
+一、设地址（换成公司给的）
   终端输入：
-      export HTTPS_PROXY=http://127.0.0.1:7890
+      export HTTPS_PROXY=http://你的地址:端口
 
 二、看现在走不走代理（有值 = 走，空的 = 直连）
   终端输入：
@@ -1654,7 +1654,7 @@ wget
       wget --no-proxy https://example.com
 
 docker
-  没有单条命令的写法，改 Docker 自己的设置（Docker Desktop 里的 Proxies）。
+  没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
 TOPIC
     ;;
     6) _help_menu_lines
@@ -1663,7 +1663,7 @@ TOPIC
 连不上网，按这个顺序查
   1. 在那个窗口里看变量有没有值。终端输入：
        echo $HTTPS_PROXY
-     空的就是没注入——多半窗口在装之前就开着。
+     空的就是没注入，重开一个窗口就好。
 
   2. 有值还是连不上：看菜单顶上「监控」是不是未运行。
      未运行就选 1（安装 / 修复）。
@@ -1671,16 +1671,16 @@ TOPIC
   3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
      你自己清过变量，npm 就不走了。
 
-状态页那四行怎么读
-  监控进程    后台程序在不在跑。
-  开机自启    下次登录会不会自动起来（和上面那行是两件事）。
-  翻墙代理    本机有没有翻墙软件在监听端口。
-  代理变量    这个工具往终端里设代理了没有。
-  后两行可能一「有」一「无」：翻墙软件在跑、工具被你停了，不是坏了。
+状态页怎么读
+  监控进程  后台程序在不在跑
+  开机自启  下次登录会不会自动起来
+  翻墙代理  本机有没有翻墙软件在监听端口
+  代理变量  这个工具往终端里设代理了没有
+  后两行一「有」一「无」= 翻墙在跑、工具被你停了，不是坏了。
+  其余几行是系统代理、版本号、更新状态。
 
 日志和 AI 排查
-  日志在 mac/monitor/monitor.log，反馈时附最后 20 行就行。
-
+  日志在 mac/monitor/monitor.log，反馈附最后 20 行。
   AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，
   不是网络坏了。菜单选 2 看「代理变量」那行会直接说清。
   它只管 HTTP/HTTPS 变量；ping、游戏、BT 这类走自己协议的
@@ -1699,9 +1699,8 @@ TOPIC
   菜单选 6（一键恢复）。会问你要不要留日志。
 
 不开菜单也能用（适合写脚本，或远程连过来）
-      install    status     stop        uninstall
-      update     help       menu        uninstall --purge
-  --purge 表示连日志一起删。完整写法：
+  开关：install  status  stop  uninstall  update  help  menu
+  --purge 连日志一起删，只配 uninstall 用。完整写法：
       bash envproxy.sh status
 TOPIC
     ;;

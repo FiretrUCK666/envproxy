@@ -17,7 +17,7 @@
 
     <rect x="430" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="454" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 2</text>
-    <text x="454" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">Menu, 1: "Install / Repair"</text>
+    <text x="454" y="170.5" dominant-baseline="central" font-size="21" font-weight="700" fill="#E9EFF8">Menu &gt; 1 Install / Repair</text>
 
     <rect x="804" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="828" y="140.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">STEP 3</text>

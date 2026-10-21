@@ -1377,6 +1377,54 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
+# A green line means "you can copy this whole line and run it". That claim has to be
+# TRUE, because colour is the only thing telling the reader which lines are commands.
+# Two ways it has been false before:
+#   - one command split across two green lines (copying the first half leaves the
+#     variables half-cleared, the exact state this project exists to prevent);
+#   - a bare list of switch names, green because it is indented ASCII, but pasting
+#     it fails with "unrecognised switch" because the launcher is missing.
+# So: every green line's first token must be a real program, and no green line may
+# contain a lone trailing command fragment.
+$cmdFirstTokens = @{}
+foreach ($t2 in $helpTopics) {
+    foreach ($l in $t2.Lines) {
+        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
+        $first = ($l.Trim() -split '\s+')[0]
+        if (-not $cmdFirstTokens.ContainsKey($first)) { $cmdFirstTokens[$first] = $l.Trim() }
+    }
+}
+# The set is deliberately small and explicit: help only ever shows this many tools.
+# `$env:NAME = 'value'` is an assignment statement, so a green line may start with a
+# variable reference too. Keep the list explicit: help must not silently start
+# showing a tool nobody reviewed.
+$allowed = @('powershell', 'set', 'unset', 'export', 'Remove-Item', 'curl', 'curl.exe',
+             'git', 'npm', 'wget', 'wget.exe', 'echo', '.')
+foreach ($first in $cmdFirstTokens.Keys) {
+    $isAssignment = $first -match '^\$env:[A-Za-z_][A-Za-z0-9_]*$'
+    Assert-Eq ('a green line starts with a real program: ' + $first) $true (($allowed -contains $first) -or $isAssignment)
+}
+# A green line that is nothing but flags is not a command, it is a cheat sheet.
+foreach ($t2 in $helpTopics) {
+    foreach ($l in $t2.Lines) {
+        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
+        $trim = $l.Trim()
+        Assert-Eq ('a green line is not just a list of switches: ' + $trim) $false ($trim -match '^-{1,2}\w+(\s+-{1,2}\w+)+$')
+    }
+}
+# No command may be split mid-way: a green line ending in '=' or '&' would mean the
+# rest of it is on the next line, and copying it alone silently does half the job.
+foreach ($t2 in $helpTopics) {
+    foreach ($l in $t2.Lines) {
+        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
+        $trim = $l.TrimEnd()
+        # `set VAR=` is a complete command (it clears the variable), so a trailing
+        # '=' is fine. A trailing '&' is not: it means "and then something", which
+        # is on another line -- that is the split-command defect.
+        Assert-Eq ('a green command is not left unfinished: ' + $trim) $false ($trim -match '&$')
+    }
+}
+
 # The "you can type X" hint must never name a key that does not exist. Taking the
 # first and last key and printing a span does exactly that after a row is removed:
 # 1..6 minus 4 still read as "1-6", and typing 4 answers "no such number".

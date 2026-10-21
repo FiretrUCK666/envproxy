@@ -29,7 +29,7 @@
   <g id="card2" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
     <circle cx="472" cy="156" r="18" fill="#38BDF8" opacity="0.16"/>
     <text x="472" y="163" font-size="20" font-weight="700" fill="#38BDF8" text-anchor="middle">2</text>
-    <text x="508" y="163" font-size="21" font-weight="700" fill="#E9EFF8">Open, proxy changed later</text>
+    <text x="508" y="163" font-size="20" font-weight="700" fill="#E9EFF8">Changed after opening</text>
     <text x="464" y="212" font-size="19" fill="#C7D3E3">Press Enter once.</text>
     <text x="464" y="242" font-size="19" fill="#C7D3E3">Any command works too;</text>
     <text x="464" y="272" font-size="19" fill="#C7D3E3">it reads again afterwards.</text>
@@ -44,7 +44,7 @@
     <text x="840" y="212" font-size="19" fill="#C7D3E3">Reopen it once.</text>
     <text x="840" y="242" font-size="19" fill="#C7D3E3">The sync script was</text>
     <text x="840" y="272" font-size="19" fill="#C7D3E3">never loaded into it.</text>
-    <text x="840" y="326" font-size="17" fill="#94A6BE">To avoid reopening, run the load command</text>
+    <text x="840" y="326" font-size="17" fill="#94A6BE">To skip reopening, load the script</text>
     <text x="840" y="352" font-size="17" fill="#38BDF8">once; it is in section 3.5.</text>
   </g>
 </svg>

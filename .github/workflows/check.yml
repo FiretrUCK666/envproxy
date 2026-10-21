@@ -811,6 +811,47 @@ jobs:
               $fail = 1
             }
           }
+          # 英文图里不许残留中文。这类残留靠人眼看不见：一张图十几行字，翻译时漏一行，
+          # 读的人只会在自己恰好看到那一行时才发现；而它是「配图没翻译完」的直接证据。
+          # 中文图里有英文是正常的（命令、路径、变量名），所以只查 .en.svg 一侧。
+          $cjk = [regex]'[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]'
+          foreach ($f in $svgs) {
+            if ($f.Name -notmatch '\.en\.svg$') { continue }
+            $t = Get-Content $f.FullName -Raw -Encoding UTF8
+            foreach ($m in [regex]::Matches($t, '>(?<body>[^<]*)<')) {
+              $body = $m.Groups['body'].Value.Trim()
+              if ($body -and $cjk.IsMatch($body)) {
+                Write-Host ("英文配图里有中文：{0} -> {1}" -f $f.Name, $body)
+                $fail = 1
+              }
+            }
+          }
+          # 文字不许越出画布右侧。英文标题比中文长，同样的 x 起点会顶出去，
+          # 被裁掉的部分在浏览器里直接看不见——不报错，只是少了字。
+          function Measure-TextWidth([string]$s, [double]$size) {
+            $w = 0.0
+            foreach ($ch in $s.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.5 } }
+            return $w * $size
+          }
+          foreach ($f in $svgs) {
+            $t = Get-Content $f.FullName -Raw -Encoding UTF8
+            $doc = [xml]$t
+            $vb = $doc.svg.viewBox -split '\s+'
+            $canvasW = [double]$vb[2]
+            foreach ($node in (Select-Xml -Xml $doc -XPath "//*[local-name()='text']" | ForEach-Object { $_.Node })) {
+              $body = $node.InnerText
+              if ([string]::IsNullOrWhiteSpace($body)) { continue }
+              if (-not $node.x) { continue }
+              $x = [double]$node.x
+              $size = if ($node.'font-size') { [double]$node.'font-size' } else { 16.0 }
+              $w = Measure-TextWidth $body $size
+              $right = if ($node.'text-anchor' -eq 'middle') { $x + $w / 2 } elseif ($node.'text-anchor' -eq 'end') { $x } else { $x + $w }
+              if ($right -gt $canvasW - 2) {
+                Write-Host ("{0} 有文字越出画布右侧：{1}（到 ~{2}，画布宽 {3}）" -f $f.Name, $body, [int]$right, $canvasW)
+                $fail = 1
+              }
+            }
+          }
           $sets = @{}
           foreach ($f in 'README.md', 'README.en.md') {
             $t = Get-Content $f -Raw -Encoding UTF8
