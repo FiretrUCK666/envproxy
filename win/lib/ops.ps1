@@ -712,9 +712,17 @@ function Show-Help([switch]$All) {
         Clear-Screen
         Write-Host (Format-HelpIndex) -ForegroundColor Cyan
         $sel = ''
-        try { $sel = "$(Read-Host '看哪个（回车返回）')".Trim() } catch { return }
+        try { $sel = "$(Read-Host '看哪个（回车返回；a 看全部）')".Trim() } catch { return }
         if (-not $sel) { return }
         if ($sel -eq '0' -or $sel -eq 'm' -or $sel -eq 'M') { return }
+        # a = 一次看完所有主题。交互界面也要留这个出口：想从头读一遍、
+        # 或者想往上翻回看的人，没有它只能一页页按 n。
+        if ($sel -eq 'a' -or $sel -eq 'A') {
+            Clear-Screen
+            Write-Host (Format-HelpAll)
+            $null = Read-Host '按回车回目录'
+            continue
+        }
         Clear-Screen
         if (-not (Show-HelpTopicColored $sel)) {
             Write-Host ("没有这个编号：{0}（1-7，或 0 返回）" -f $sel) -ForegroundColor Yellow

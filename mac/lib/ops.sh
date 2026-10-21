@@ -1574,14 +1574,22 @@ show_help() {
         # 目录与主题各占一屏：切换时清屏，屏幕上永远只有当前这一页。
         clear_screen_safe
         format_help_index
-        printf "看哪个（回车返回）："
+        printf "看哪个（回车返回；a 看全部）："
         if ! IFS= read -r _hs_sel; then
             echo ""
             return 0
         fi
         _hs_sel=$(printf '%s' "$_hs_sel" | tr -d '[:space:]')
         [ -z "$_hs_sel" ] && return 0
+        # a = 一次看完所有主题。交互界面也要留这个出口：想从头读一遍、
+        # 或者想往上翻回看的人，没有它只能一页页按 n。
         case "$_hs_sel" in
+            a|A)
+                clear_screen_safe
+                format_help_all
+                printf "按回车回目录："
+                IFS= read -r _hs_dummy || true
+                continue;;
             0|m|M) return 0;;
         esac
         clear_screen_safe
