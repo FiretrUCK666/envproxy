@@ -125,93 +125,109 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 本节讲的是菜单做不到的：单独处理某一个窗口。看不懂可以整节跳过，不影响正常使用。
 
-### 这些命令在哪个终端里敲
+### 先分清你在哪个终端
 
-用的是 **PowerShell**，不是老式的「命令提示符」（cmd）。看提示符就能分辨：开头有 `PS` 的是 PowerShell，比如 `PS C:\Users\你的名字>`。
+三种终端，同一件事写法不同。看提示符判断：
 
-日常窗口基本都是 PowerShell：开始菜单搜 PowerShell、Win+R 输入 `powershell`、Windows Terminal、VS Code 终端，都是。
+| 提示符长这样 | 你是 | 举例 |
+|---|---|---|
+| `PS C:\...>` | PowerShell | 开始菜单搜 PowerShell、Windows Terminal、VS Code 终端 |
+| `C:\...>` | cmd（命令提示符） | 手动打开「命令提示符」 |
+| `名字@主机 $` | Git Bash（Windows）或 Mac 终端 | Git Bash、macOS 的「终端」App |
 
-**cmd 和 Git Bash 也能用**，差别只有一个：它们没有自动跟随，代理状态变了不会自己更新。所以要固定直连时，得自己把变量清掉。
+**一个关键区别**：只有 PowerShell 和 Mac 终端装了「自动跟随」——安装时不进它们的配置文件放了一小段代码，每次回到提示符就照当前状态调一次。**cmd 和 Git Bash 里没有这段代码**，所以状态变了不会自己更新，要你手动处理。
 
-| 我想 | PowerShell | cmd | Git Bash |
-|---|---|---|---|
-| 让这个窗口固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
-| 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | 重开这个窗口 | 重开这个窗口 |
-| 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
+### 3.1 让这个窗口固定直连 / 恢复自动
 
-PowerShell 有一句开关就能搞定，因为安装时往它的配置文件放了一小段代码，每次回到提示符就照当前状态调一次。cmd 和 Git Bash 没有这种入口，所以只能直接改变量——改完窗口一关就失效，和 PowerShell 的开关效果一样。
+| 操作 | PowerShell | cmd | Git Bash | Mac 终端 |
+|---|---|---|---|---|
+| 固定直连 | `$env:ENVPROXY_TERM = 'off'` | 清掉 5 个变量，见下 | 清掉 5 个变量，见下 | `export ENVPROXY_TERM=off` |
+| 恢复自动 | `Remove-Item Env:ENVPROXY_TERM` | 重开窗口 | 重开窗口 | `unset ENVPROXY_TERM` |
+| 查看现在走不走代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
-`&` 两边不要留空格。留了会得到一个只含空格的值——看着像清掉了，实际还在，请求照样走代理。
+「清掉 5 个变量」，cmd 里是这样（一行一条，**等号后面什么都不写**）：
 
-Mac 上就是「终端」这个 App，默认 zsh，命令看 Git Bash 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
+```
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set ALL_PROXY=
+set NO_PROXY=
+set NODE_USE_ENV_PROXY=
+```
 
-### 3.1 三种常用操作
+也可以写在一行，`&` 两边**不能有空格**——有空格会留下一个只含空格的值，看着像清掉了，请求照样走代理：
 
-下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**，窗口一关就失效。
+```
+set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
+```
 
-**让这个窗口走公司代理：两步，顺序不能反。**
+Git Bash 里是一条：
 
-1. 先固定直连（见上面那张表，按你在哪个终端选一列）
-2. 再设公司地址
+```
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY
+```
+
+为什么 PowerShell 只要一句：它的那段代码看到 `ENVPROXY_TERM=off` 会自己把 5 个变量清掉。cmd 和 Git Bash 没有那段代码，所以你自己清，效果一样。窗口一关就失效。
+
+### 3.2 让这个窗口走公司代理
+
+两步，顺序不能反：**先固定直连**（上一节），**再设公司地址**。
 
 | | 设公司代理 |
 |---|---|
 | PowerShell | `$env:HTTPS_PROXY = 'http://你的地址:端口'` |
 | cmd | `set HTTPS_PROXY=http://你的地址:端口` |
-| Mac / Git Bash | `export HTTPS_PROXY=http://你的地址:端口` |
+| Git Bash / Mac | `export HTTPS_PROXY=http://你的地址:端口` |
 
 为什么必须先停掉：不停的话，翻墙软件一有变化就会把你刚设的地址覆盖掉。你自己设的值不会被删——只要和我们写入的不一样，公司代理、抓包工具、别的端口都原样留着。
 
-### 3.2 让某一条命令不走代理
+### 3.3 让某一条命令不走代理
 
-不同工具写法不一样，没有通用的一条命令。
+不同工具写法不一样，也没有通用的一条命令。
 
-| 工具 | Windows（PowerShell） | Mac |
-|---|---|---|
-| `curl` | `curl.exe --noproxy "*" 网址` | `curl --noproxy '*' 网址` |
-| `git` | `git -c http.proxy= -c https.proxy= clone 仓库地址` | 同左 |
-| `npm` | `npm --noproxy=registry.npmjs.org install 包名` | 同左 |
-| `wget` | 系统不自带，装过才有 `wget.exe --no-proxy 网址` | `wget --no-proxy 网址` |
-| `docker` | 改 Docker 自己的设置，没有单条命令的写法 | 同左 |
+| 工具 | PowerShell | cmd | Git Bash / Mac |
+|---|---|---|---|
+| `curl` | `curl.exe --noproxy "*" 网址` | `curl --noproxy "*" 网址` | `curl --noproxy '*' 网址` |
+| `git` | `git -c http.proxy= -c https.proxy= clone 仓库地址` | 同左 | 同左 |
+| `npm` | `npm --noproxy=registry.npmjs.org install 包名` | 同左 | 同左 |
+| `wget` | 系统不自带；装过才有 `wget.exe --no-proxy 网址` | 同左 | `wget --no-proxy 网址` |
+| `docker` | 改 Docker 自己的设置，没有单条命令的写法 | 同左 | 同左 |
 
-四个坑，都是实测出来的：
+三个坑，都是实测出来的：
 
-- **PowerShell 里 `curl` 和 `wget` 是别名，都指向 `Invoke-WebRequest`**。直接敲会报「参数找不到」，所以 curl 要写 `curl.exe`。这条只对系统自带的 5.1 成立，PowerShell 7 没有这两个别名。
-- **npm 的 `--noproxy` 只认域名，写 `*` 没用**。它不报错，请求照样走代理，你会以为绕过了。要写具体的域名。
+- **只有 PowerShell 5.1 里 `curl` 和 `wget` 是别名**，指向 `Invoke-WebRequest`，直接敲会报「参数找不到」，所以那里要写 `curl.exe`。**cmd 和 PowerShell 7 里 `curl` 就是真的 curl.exe**，正常写就行。
+- **npm 的 `--noproxy` 只认域名，写 `*` 没用**。它不报错，请求照样走代理，你会以为绕过了。要写具体域名。
 - **`npm --no-proxy` 会被当成 `--proxy=false`**，和「不走代理」不是一回事。用 `--noproxy=域名`。
-- **`git` 的 `-c http.proxy=` 后面必须留空**。留空是「这条命令不用代理」，写别的值就是「改用那个代理」。
 
-npm 只认 `HTTPS_PROXY`，不认 `HTTP_PROXY`。EnvProxy 两个都写，所以 npm 能正常走；你自己只设 `HTTP_PROXY` 的话，npm 是不走代理的。
+另外：`git` 的 `-c http.proxy=` 后面必须留空，留空是「这条命令不用代理」，写别的值就是「改用那个代理」。npm 只认 `HTTPS_PROXY`，不认 `HTTP_PROXY`——EnvProxy 两个都写，所以 npm 能正常走。
 
 这些参数都是各工具自己的，不是 EnvProxy 提供的。不加这些参数时，它们读的才是 EnvProxy 写入的变量。
 
-### 3.3 让已经开着的窗口立刻跟上
-
-先看你是哪种情况：
+### 3.4 让已经开着的窗口立刻跟上
 
 | 你的窗口 | 会怎样 | 要做什么 |
 |---|---|---|
 | 装完之后打开的 | 自动就是对的 | 什么都不用做 |
-| 装完之后打开的，但代理后来变了 | 手里还是旧状态 | 按一次回车 |
-| 装之前就打开的 | 同步代码从没装进去 | 重开一个，或执行下面的命令 |
+| 装完之后打开的，但代理后来变了 | 手里还是旧状态 | 按一次回车（PowerShell）/ 重开（cmd） |
+| 装之前就打开的 | 同步代码从没装进去 | 重开一个 |
 
-第三种情况，重开窗口最省事。不想重开，就在那个窗口里执行一次：
+**cmd 和 Git Bash 只能重开窗口**：它们的环境变量在启动那一刻复制一份，之后没有任何命令能让它重新读一遍。
+
+PowerShell 和 Mac 终端不想重开的话，在那个窗口里执行一次：
 
 | | 命令 |
 |---|---|
-| Windows（PowerShell） | `. $PROFILE` |
-| Mac | `. ~/.envproxy/prompt-sync.sh` |
-
-`$PROFILE` 是 PowerShell 每次启动时自动运行的文件，安装时往里面放了一段同步代码，这条命令就是手动运行一次。Mac 那条指向同步脚本，作用相同。
+| PowerShell | `. $PROFILE` |
+| Mac 终端 | `. ~/.envproxy/prompt-sync.sh` |
 
 四点要注意：
 
 - 开头的 `.` 和后面的空格都不能少。`.` 的意思是「在当前窗口里执行这个文件」。
-- 只对 PowerShell（Windows）和 zsh、bash（Mac）有效。Mac 上的 fish 不支持。
+- 只对 PowerShell 和 zsh、bash 有效。Mac 上的 fish 不支持。
 - 只影响这一个窗口。其他已开着的窗口要各自执行，或者直接重开。
 - 如果这个窗口里从来没装过 EnvProxy，`$PROFILE` 指向的文件可能不存在，会看到「找不到路径」的红字。这是正常的，重开一个窗口就行。
 
-### 3.4 不开菜单也能用（写脚本、远程连接）
+### 3.5 不开菜单也能用（写脚本、远程连接）
 
 菜单适合双击着用。写脚本、或者通过远程连接上来没有图形界面时，用命令行开关。命令和菜单里的编号一一对应。
 
@@ -223,11 +239,11 @@ npm 只认 `HTTPS_PROXY`，不认 `HTTP_PROXY`。EnvProxy 两个都写，所以 
 | 一键恢复（同菜单 4） | `-Uninstall` | `uninstall` |
 | 检查更新（同菜单 5） | `-Update` | `update` |
 | 看帮助（同菜单 6） | `-Help` | `help` |
-| 打开菜单（同菜单 0 之外） | `-Menu` | `menu` |
+| 打开菜单 | `-Menu` | `menu` |
 
 `-Purge`（Mac 是 `--purge`）只配一键恢复用，表示连日志一起删。`-Yes`（Mac 是 `--yes`）只配检查更新用，表示不再问「要不要装」。
 
-完整写法：
+完整写法（cmd 和 PowerShell 都一样，只是开头的程序名相同）：
 
 ```
 powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status
@@ -238,6 +254,7 @@ bash envproxy.sh status
 ```
 
 **参数必须写全，不支持缩写**。`-Instal` 少一个字母会被拒绝——这是故意的，否则敲错一个字母就变成真安装。
+
 ## 4. 出问题了按这个顺序查
 
 **按顺序排查，上一步试完再往下走。**

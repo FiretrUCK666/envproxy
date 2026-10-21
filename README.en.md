@@ -118,97 +118,113 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 ## 3. Everyday commands on one page
 
-**None of this is required reading.** Once installed, the terminal follows the proxy app on its own; you do not type a single command. Stopping the monitor, uninstalling, checking for updates and seeing status are all in the menu, one double-click away.
+**This section is optional.** After installing, the proxy app switching on and off is all you need — the terminal follows along without any command. Stopping the monitor, uninstalling, checking for updates and showing status are all in the menu, two clicks away.
 
-This section covers what the menu cannot do: handling one particular window differently from the rest. Skip it if it does not make sense; it does not affect normal use.
+This section covers what the menu cannot do: handling one particular window. Skip all of it if you like; nothing else depends on it.
 
-### Which terminal these commands belong in
+### First, which terminal are you in
 
-They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
-They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
+Same task, different syntax across three terminals. Read the prompt:
 
-Almost every window you touch day to day is PowerShell: Start menu search for PowerShell, Win+R and type `powershell`, Windows Terminal, the VS Code terminal.
+| Prompt looks like | You are in | Examples |
+|---|---|---|
+| `PS C:\...>` | PowerShell | Start menu search, Windows Terminal, VS Code terminal |
+| `C:\...>` | cmd (Command Prompt) | Opening Command Prompt by hand |
+| `name@host $` | Git Bash (Windows) or the Mac Terminal | Git Bash, macOS Terminal app |
 
-**cmd and Git Bash work too.** They differ in one way: they have no auto-follow, so the proxy state does not update itself. To pin a window to a direct connection, clear the variables yourself.
+**One key difference**: only PowerShell and the Mac Terminal get "auto-follow" — the installer drops a small piece of code into their profile that re-checks the state every time the prompt comes back. **cmd and Git Bash have no such code**, so a state change does not reach them by itself; you handle it by hand.
 
-| I want to | PowerShell | cmd | Git Bash |
-|---|---|---|---|
-| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
-| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | Reopen the window | Reopen the window |
-| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
+### 3.1 Pin this window to a direct connection / go back to automatic
 
-PowerShell needs one switch because the installer drops a small piece of code into its profile, and that code re-checks the state every time the prompt comes back. cmd and Git Bash have no such entry point, so you change the variables directly. Either way it ends when the window closes.
+| Action | PowerShell | cmd | Git Bash | Mac Terminal |
+|---|---|---|---|---|
+| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | clear the five variables, below | clear the five variables, below | `export ENVPROXY_TERM=off` |
+| Go back to automatic | `Remove-Item Env:ENVPROXY_TERM` | reopen the window | reopen the window | `unset ENVPROXY_TERM` |
+| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
-Do not put spaces around `&`. A space leaves a value containing just that space — it looks cleared but the request still goes through the proxy.
+Clearing the five variables, in cmd (one per line, **nothing after the equals sign**):
 
-On Mac that is the Terminal app, zsh by default, using the Git Bash column. **fish on Mac is not supported**; use zsh or bash.
+```
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set ALL_PROXY=
+set NO_PROXY=
+set NODE_USE_ENV_PROXY=
+```
 
-### 3.1 Three everyday actions
+You can also put them on one line, but **no spaces around `&`** — a space leaves a value containing just that space, which looks cleared while requests still go through the proxy:
 
-Every command below goes in **the window you want to change**. It affects **that window only** and ends when you close it.
+```
+set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
+```
 
-**To send this window through a corporate proxy: two steps, in this order.**
+In Git Bash it is one line:
 
-1. Pin it to a direct connection first (the table above, pick your terminal's column)
-2. Then set the corporate address
+```
+unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY
+```
+
+Why PowerShell needs only one switch: that snippet of code sees `ENVPROXY_TERM=off` and clears the five variables itself. cmd and Git Bash have no such code, so you clear them yourself; the result is identical, and either way it ends when the window closes.
+
+### 3.2 Send this window through a corporate proxy
+
+Two steps, in this order: **pin to direct first** (previous section), **then set the corporate address**.
 
 | | Set the corporate proxy |
 |---|---|
 | PowerShell | `$env:HTTPS_PROXY = 'http://your-host:port'` |
 | cmd | `set HTTPS_PROXY=http://your-host:port` |
-| Mac / Git Bash | `export HTTPS_PROXY=http://your-host:port` |
+| Git Bash / Mac | `export HTTPS_PROXY=http://your-host:port` |
 
 Why stop first: otherwise the next change the proxy app makes overwrites the address you just set. Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
-### 3.2 Make one command skip the proxy
 
-Tools differ; there is no single universal command.
+### 3.3 Make one command skip the proxy
 
-| Tool | Windows (PowerShell) | Mac |
-|---|---|---|
-| `curl` | `curl.exe --noproxy "*" URL` | `curl --noproxy '*' URL` |
-| `git` | `git -c http.proxy= -c https.proxy= clone <repo>` | same |
-| `npm` | `npm --noproxy=registry.npmjs.org install <pkg>` | same |
-| `wget` | not shipped with Windows; if installed, `wget.exe --no-proxy <url>` | `wget --no-proxy <url>` |
-| `docker` | change Docker's own settings; no per-command flag | same |
+Tools differ, and there is no single universal command.
 
-Four traps, all confirmed by testing:
+| Tool | PowerShell | cmd | Git Bash / Mac |
+|---|---|---|---|
+| `curl` | `curl.exe --noproxy "*" URL` | `curl --noproxy "*" URL` | `curl --noproxy '*' URL` |
+| `git` | `git -c http.proxy= -c https.proxy= clone REPO` | same | same |
+| `npm` | `npm --noproxy=registry.npmjs.org install PKG` | same | same |
+| `wget` | not bundled; if installed, `wget.exe --no-proxy URL` | same | `wget --no-proxy URL` |
+| `docker` | change Docker's own settings; no per-command flag | same | same |
 
-- **`curl` and `wget` are aliases in PowerShell, both pointing at `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`. This applies to the built-in 5.1 only; PowerShell 7 has neither alias.
-- **npm's `--noproxy` takes host names only; `*` does nothing.** It does not complain and the request still goes through the proxy, so you think you bypassed it. Write the actual host.
-- **`npm --no-proxy` is read as `--proxy=false`**, which is not the same as skipping the proxy. Use `--noproxy=<host>`.
-- **`git`'s `-c http.proxy=` must be left empty.** Empty means "no proxy for this one command"; any other value means "use that proxy instead".
+Three traps, all measured:
 
-npm reads `HTTPS_PROXY` but not `HTTP_PROXY`. EnvProxy writes both, so npm works; if you set only `HTTP_PROXY` yourself, npm will not use a proxy.
+- **Only in PowerShell 5.1 are `curl` and `wget` aliases** pointing at `Invoke-WebRequest`, so typing them there fails with "parameter not found" and you must write `curl.exe`. **In cmd and in PowerShell 7, `curl` is the real curl.exe**, so the plain form works.
+- **npm's `--noproxy` accepts domains only; `*` does nothing.** It does not complain, requests still go through the proxy, and you think you bypassed it. Use a real domain.
+- **`npm --no-proxy` is read as `--proxy=false`**, which is not the same as "skip the proxy". Use `--noproxy=domain`.
 
-These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the variables EnvProxy wrote.
+Also: `git`'s `-c http.proxy=` must be left empty — empty means "this command skips the proxy", any other value means "use that proxy instead". npm reads only `HTTPS_PROXY`, not `HTTP_PROXY`; EnvProxy writes both, so npm works, but if you set only `HTTP_PROXY` yourself npm will not be proxied.
 
-### 3.3 Make an already-open window catch up
+These flags belong to each tool, not to EnvProxy. Without them, the tools read the variables EnvProxy wrote.
 
-First see which case you are in:
+### 3.4 Make an already-open window catch up
 
 | Your window | What happens | What to do |
 |---|---|---|
-| Opened after installing | Correct automatically | Nothing |
-| Opened after installing, proxy changed later | Still holds the old state | Press Enter once |
-| Opened before installing | The sync code was never loaded | Open a new one, or run the command below |
+| Opened after install | Already correct | Nothing |
+| Opened after install, but the proxy changed later | Still holds the old state | Press Enter once (PowerShell) / reopen (cmd) |
+| Opened before install | The sync code was never installed | Reopen it |
 
-For the third case, opening a new window is easiest. If you would rather not, run this once in the old one:
+**cmd and Git Bash can only reopen the window**: they copy the environment at start-up, and no command afterwards makes them read it again.
+
+If you would rather not reopen in PowerShell or the Mac Terminal, run this once in that window:
 
 | | Command |
 |---|---|
-| Windows (PowerShell) | `. $PROFILE` |
-| Mac | `. ~/.envproxy/prompt-sync.sh` |
+| PowerShell | `. $PROFILE` |
+| Mac Terminal | `. ~/.envproxy/prompt-sync.sh` |
 
-`$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs that code by hand. On Mac the command points at the sync script, same idea.
-
-Four things to note:
+Four things to watch:
 
 - The leading `.` and the space after it are both required. `.` means "run this file in the current window".
-- Works for PowerShell on Windows and zsh or bash on Mac. fish on Mac is not supported.
-- It affects that one window only. Other open windows need the same command, or just reopen them.
-- If EnvProxy was never installed for that window, the file `$PROFILE` points at may not exist and you will see a red "cannot find path" error. That is normal; just open a new window.
+- Applies to PowerShell and to zsh or bash. fish on Mac is not supported.
+- Affects that one window only. Other open windows each need it, or just reopen them.
+- If EnvProxy was never installed from that window, the file `$PROFILE` points at may not exist and you will see red "cannot find path" text. That is normal; reopen a window.
 
-### 3.4 Use it without the menu (scripts, remote sessions)
+### 3.5 Use it without the menu (scripts, remote sessions)
 
 The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line switches. They match the menu numbers one to one.
 
@@ -224,7 +240,7 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
 
-The full form:
+The full form (identical in cmd and PowerShell):
 
 ```
 powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status

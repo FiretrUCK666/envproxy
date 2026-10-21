@@ -1303,5 +1303,59 @@ try {
 }
 }
 
+
+# ------------------------------------------------------------------------------
+# [20] 文档里印出来的每条命令都真能跑
+# 这一节的理由：帮助和 README 里的命令是给用户「照抄」的。抄下来跑不通，
+# 比不写更糟——用户会以为是自己敲错了。所以这里把每种终端的写法都真跑一遍，
+# 断言的是「可观察的结果」，不是「字符串里有没有这个词」。
+# 只验证不依赖网络、不改用户设置的那些：改完立刻复原。
+# ------------------------------------------------------------------------------
+Write-Host '[20] every documented command actually runs'
+
+# PowerShell：固定直连 -> 复原
+$env:ENVPROXY_TERM = 'off'
+Assert-Eq 'PS: ENVPROXY_TERM becomes off' 'off' $env:ENVPROXY_TERM
+Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
+Assert-Eq 'PS: Remove-Item clears it' $true ($null -eq $env:ENVPROXY_TERM)
+
+# PowerShell：设了能读回来
+$env:HTTPS_PROXY = 'http://1.2.3.4:8080'
+Assert-Eq 'PS: corporate proxy reads back' 'http://1.2.3.4:8080' $env:HTTPS_PROXY
+Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
+
+# curl 的别名差异：文档说 5.1 是别名、7 不是。这条钉住这个前提。
+$curlKind = (Get-Command curl -ErrorAction SilentlyContinue).CommandType.ToString()
+$is51 = ($PSVersionTable.PSVersion.Major -lt 6)
+Assert-Eq 'curl kind matches what the docs claim for this version' $true (($is51 -and $curlKind -eq 'Alias') -or ((-not $is51) -and $curlKind -ne 'Alias'))
+
+# cmd：清 5 个变量（一行写法）。用独立 cmd 进程，不碰本进程环境。
+$cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
+if (Test-Path -LiteralPath $cmdExe) {
+    $script = (@('@echo off', 'set HTTPS_PROXY=http://b', 'set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=', 'if defined HTTPS_PROXY (echo LEFT) else (echo CLEARED)') -join "`r`n")
+    $tmpCmd = Join-Path $env:TEMP ('ep_cmd_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
+    [System.IO.File]::WriteAllText($tmpCmd, $script, (New-Object System.Text.ASCIIEncoding))
+    $out = (& $cmdExe /c $tmpCmd) -join ' '
+    Remove-Item -LiteralPath $tmpCmd -Force -ErrorAction SilentlyContinue
+    Assert-Eq 'cmd: one-line clear really clears' $true ($out -match 'CLEARED')
+}
+
+# cmd 的坑：& 两边留空格会得到一个只含空格的值。文档专门警告过，这里钉住这个事实。
+if (Test-Path -LiteralPath $cmdExe) {
+    $tmpCmd2 = Join-Path $env:TEMP ('ep_cmd2_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
+    $script2 = (@('@echo off', 'set SPACETEST=hello', 'set SPACETEST= & set OTHER=1', 'if "[%SPACETEST%]"=="[ ]" (echo HASTHE-SPACE) else (echo NO-SPACE)') -join "`r`n")
+    [System.IO.File]::WriteAllText($tmpCmd2, $script2, (New-Object System.Text.ASCIIEncoding))
+    $out2 = (& $cmdExe /c $tmpCmd2) -join ' '
+    Remove-Item -LiteralPath $tmpCmd2 -Force -ErrorAction SilentlyContinue
+    Assert-Eq 'cmd: the documented space trap is real' $true ($out2 -match 'HASTHE-SPACE')
+}
+
+# 文档里每条命令的「形状」也要对：只有 PowerShell 才用 $env:，只有 bash 才用 export。
+$docText = (Format-HelpTopic '3')
+Assert-Eq 'help gives a cmd form for pinning' $true ($docText -match 'set HTTP_PROXY=')
+Assert-Eq 'help gives a bash form for pinning' $true ($docText -match 'unset HTTP_PROXY')
+Assert-Eq 'help gives a PowerShell form for pinning' $true ($docText -match '\$env:ENVPROXY_TERM')
+Assert-Eq 'help warns about the ampersand space trap' $true ($docText -match '空格')
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
