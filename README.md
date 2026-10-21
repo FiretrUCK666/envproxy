@@ -134,7 +134,9 @@ Windows 上你日常接触的窗口基本都是 PowerShell，不用担心：
 | 恢复自动 | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
 | 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
 
-Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。
+Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
+
+**Windows 上装了 Git Bash 的话**：它用的是 bash 语法，把下面 cmd 那一列改成 `export` 就行，和 Mac 那一列一致。
 
 下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**。Windows 和 Mac 写法不同，别抄错行。
 

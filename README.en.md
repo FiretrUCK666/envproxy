@@ -134,7 +134,9 @@ To tell them apart, look at the prompt: one starting with `PS` is PowerShell, su
 | Back to automatic | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
 | Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
 
-On Mac that is the Terminal app, zsh by default, using the `export` column.
+On Mac that is the Terminal app, zsh by default, using the `export` column. **fish on Mac is not supported**; use zsh or bash.
+
+**On Windows with Git Bash installed**: it uses bash syntax, so take the cmd column below and write `export` instead — the same as the Mac column.
 
 Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 
