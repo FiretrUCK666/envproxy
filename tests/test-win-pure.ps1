@@ -1377,5 +1377,61 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
+# ------------------------------------------------------------------------------
+# [21] README 抄了一份菜单表和帮助目录，必须是代码的镜像
+# 这一节的理由：README 不能引用代码，只能把菜单编号和帮助标题抄一份。这一份
+# 一旦和代码脱节，后果比"文档旧了"严重：用户照 README 的编号去敲，敲到的是
+# 另一件事（想检查更新，结果卸载了）。这类错误没人会当场发现——文档看着很正常。
+# 所以这里把两份表逐行对回代码：名字必须一字不差（中文那份直接就是代码里的字符串），
+# 编号顺序也必须一致。英文那份只比编号与行数，标题是另一种语言，比不了字面。
+# ------------------------------------------------------------------------------
+Write-Host '[21] README mirrors the menu and help tables'
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+# 按表头认表，不按周围的散文认：散文措辞会改，表头是这张表自己的身份。
+# $Headers 里任一命中即算这张表。取到表头后往下读到第一个空行为止。
+function Get-TableByHeader([string[]]$Lines, [string[]]$Headers) {
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -notmatch '^\|') { continue }
+        $cells = @($Lines[$i] -split '\|' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        foreach ($h in $Headers) { if ($cells -contains $h) {
+            $rows = @()
+            for ($k = $i + 2; $k -lt $Lines.Count; $k++) {
+                if ($Lines[$k] -notmatch '^\|') { break }
+                $rows += $Lines[$k]
+            }
+            return $rows
+        } }
+    }
+    return @()
+}
+foreach ($pair in @(@('README.md', $false), @('README.en.md', $true))) {
+    $docPath = Join-Path $repoRoot $pair[0]
+    if (-not (Test-Path -LiteralPath $docPath)) {
+        Assert-Eq ($pair[0] + ' exists') $true $false
+        continue
+    }
+    $docLines = [System.IO.File]::ReadAllLines($docPath, [System.Text.Encoding]::UTF8)
+    $menuRows = @(Get-TableByHeader $docLines @('菜单项', 'Menu item'))
+    $helpRows = @(Get-TableByHeader $docLines @('编号', 'No.'))
+    $docMenuKeys = @($menuRows | ForEach-Object { [regex]::Match($_, '^\|\s*\*\*(\d)').Groups[1].Value } | Where-Object { $_ })
+    $docHelpKeys = @($helpRows | ForEach-Object { [regex]::Match($_, '^\|\s*(\d)\s*\|').Groups[1].Value } | Where-Object { $_ })
+    $codeMenuKeys = @($MenuItems | ForEach-Object { $_.Key })
+    $codeHelpKeys = @(Get-HelpTopics | ForEach-Object { $_.Key })
+    Assert-Eq ($pair[0] + ' menu table lists every menu key in code order') ($codeMenuKeys -join ',') ($docMenuKeys -join ',')
+    Assert-Eq ($pair[0] + ' help table lists every help topic in code order') ($codeHelpKeys -join ',') ($docHelpKeys -join ',')
+    # 编号对上了，还要对名字：编号和名字各自正确、但配错了对，照样把人指到另一个动作上。
+    # 只有中文 README 能逐字比——它的名字就是代码里的同一个字符串。
+    if ($pair[0] -eq 'README.md') {
+        foreach ($mi in $MenuItems) {
+            $want = '**' + $mi.Key + ' ' + $mi.Name + '**'
+            Assert-Eq ('README names menu key ' + $mi.Key + ' as ' + $mi.Name) $true ([bool]($menuRows -match [regex]::Escape($want)))
+        }
+        foreach ($t in (Get-HelpTopics)) {
+            $want = '| ' + $t.Key + ' | ' + $t.Title + ' |'
+            Assert-Eq ('README names help topic ' + $t.Key + ' as ' + $t.Title) $true ([bool]($helpRows -match [regex]::Escape($want)))
+        }
+    }
+}
+
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

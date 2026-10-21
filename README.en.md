@@ -42,7 +42,7 @@ Almost always nothing. Of the rows below, only the middle one needs anything fro
 |---|---|---|
 | **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
 | **Opened after installing, proxy changed later** | It needs to read again | Press Enter once |
-| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run 3.3 |
+| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run the command in 3.4 |
 
 ### Why an open window needs one Enter press
 
@@ -82,18 +82,18 @@ Open the menu and pick **`3 Check for updates`**. It reports the latest version 
 
 Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes the number you pick to the real program; it does not modify any file itself.
 
-| Pick | What it does | What it affects |
+| Menu item | What it does | What it affects |
 |---|---|---|
 | **Everyday** | | |
-| **1** | Install / Repair. Use it the first time, and whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
-| **2** | Show status: monitor, proxy, environment variables, version | Read-only, changes nothing |
-| **3** | Check for updates. Explains what changed first, installs only if you agree | Program files only |
-| **4** | Help. Read it when you forget how something works | Prints text only, changes nothing |
+| **1 Install / Repair** | Use it the first time, and whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
+| **2 Show status** | Monitor, proxy, environment variables, version | Read-only, changes nothing |
+| **3 Check for updates** | Explains what changed first, installs only if you agree | Program files only |
+| **4 Help** | Read it when you forget how something works | Prints text only, changes nothing |
 | **Upkeep** | | |
-| **5** | Stop the monitor. Temporary; it returns at next login | Monitor process + environment variables |
-| **6** | Full restore. Complete uninstall, back to before installing | Everything (log optionally kept) |
+| **5 Stop the monitor** | Temporary; it returns at next login | Monitor process + environment variables |
+| **6 Full restore** | Complete uninstall, back to before installing | Everything (log optionally kept) |
 | **Quit** | | |
-| **0** | Quit the menu | Nothing |
+| **0 Quit** | Closes the menu | Nothing |
 
 The numbers run top to bottom and are grouped by how often you need them, so there is nothing to memorise.
 
@@ -107,11 +107,12 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 |---|---|
 | 1 | What is this for |
 | 2 | What do I do after installing |
-| 3 | I want to set up one window differently |
-| 4 | I want one command to skip the proxy |
-| 5 | What each menu item does |
-| 6 | Installed but still cannot reach the internet / status looks wrong |
-| 7 | Still not working / I want to remove it |
+| 3 | Pin this window to a direct connection / go back to automatic |
+| 4 | Send this window through a corporate proxy |
+| 5 | Make one command skip the proxy |
+| 6 | What each menu item does |
+| 7 | Installed but still cannot reach the internet / status looks wrong |
+| 8 | Still not working / I want to remove it |
 
 <img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; check for updates replaces program files only">
 
@@ -123,31 +124,33 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 ## 3. Everyday commands on one page
 
-**This section is optional.** After installing, the proxy app switching on and off is all you need — the terminal follows along without any command. Stopping the monitor, uninstalling, checking for updates and showing status are all in the menu, two clicks away.
+**This section is optional.** The proxy app switching on and off is all you normally need — the terminal follows along without any command. This section covers only what the menu cannot do: handling one particular window. Skip it entirely if you like.
 
-This section covers what the menu cannot do: handling one particular window. Skip all of it if you like; nothing else depends on it.
-
-### First, which terminal are you in
-
-Same task, different syntax across three terminals. Read the prompt:
+First, work out which terminal you are in. The syntax differs completely:
 
 | Prompt looks like | You are in | Examples |
 |---|---|---|
 | `PS C:\...>` | PowerShell | Start menu search, Windows Terminal, VS Code terminal |
 | `C:\...>` | cmd (Command Prompt) | Opening Command Prompt by hand |
-| `name@host $` | Git Bash (Windows) or the Mac Terminal | Git Bash, macOS Terminal app |
+| `name@host $` | Git Bash / Mac Terminal | Git Bash, macOS Terminal app |
 
-**One key difference**: only PowerShell and the Mac Terminal get "auto-follow" — the installer drops a small piece of code into their profile that re-checks the state every time the prompt comes back. **cmd and Git Bash have no such code**, so a state change does not reach them by itself; you handle it by hand.
+**Only PowerShell and the Mac Terminal auto-follow.** The installer drops a small piece of code into their profile that re-checks the state every time the prompt comes back. cmd and Git Bash have no such code, so a state change never reaches them by itself.
 
 ### 3.1 Pin this window to a direct connection / go back to automatic
 
-| Action | PowerShell | cmd | Git Bash | Mac Terminal |
-|---|---|---|---|---|
-| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | clear the five variables, below | clear the five variables, below | `export ENVPROXY_TERM=off` |
-| Go back to automatic | `Remove-Item Env:ENVPROXY_TERM` | reopen the window | reopen the window | `unset ENVPROXY_TERM` |
-| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` | `echo $HTTPS_PROXY` |
+**PowerShell** — that code sees `off` and clears the five variables itself, so one line is enough:
 
-Clearing the five variables, in cmd (one per line, **nothing after the equals sign**):
+```
+$env:ENVPROXY_TERM = 'off'
+```
+
+**cmd** — no such code, so you clear them yourself. No spaces around `&`: a space leaves a value containing just that space, which looks cleared while requests still go through the proxy.
+
+```
+set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
+```
+
+If that line feels long, do one per line instead, stopping at the equals sign — all five are needed:
 
 ```
 set HTTP_PROXY=
@@ -157,31 +160,45 @@ set NO_PROXY=
 set NODE_USE_ENV_PROXY=
 ```
 
-You can also put them on one line, but **no spaces around `&`** — a space leaves a value containing just that space, which looks cleared while requests still go through the proxy:
-
-```
-set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
-```
-
-In Git Bash it is one line:
+**Git Bash** — one line:
 
 ```
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY
 ```
 
-Why PowerShell needs only one switch: that snippet of code sees `ENVPROXY_TERM=off` and clears the five variables itself. cmd and Git Bash have no such code, so you clear them yourself; the result is identical, and either way it ends when the window closes.
+**Going back to automatic:** in PowerShell use `Remove-Item Env:ENVPROXY_TERM`. cmd and Git Bash have no switch to unset — reopening the window is the way back. Closing the window also discards every change above.
 
 ### 3.2 Send this window through a corporate proxy
 
-Two steps, in this order: **pin to direct first** (previous section), **then set the corporate address**.
+Two steps, **in this order**: pin to direct in 3.1 first, then set the address. Without stopping auto-follow, the next change the proxy app makes overwrites the address you just set.
 
-| | Set the corporate proxy |
-|---|---|
-| PowerShell | `$env:HTTPS_PROXY = 'http://your-host:port'` |
-| cmd | `set HTTPS_PROXY=http://your-host:port` |
-| Git Bash / Mac | `export HTTPS_PROXY=http://your-host:port` |
+Replace `your-host:port` with what your company gave you. The port is on the proxy app's "port" or "LAN port" line.
 
-Why stop first: otherwise the next change the proxy app makes overwrites the address you just set. Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
+**PowerShell**:
+
+```
+$env:HTTPS_PROXY = 'http://your-host:port'
+```
+
+**cmd**:
+
+```
+set HTTPS_PROXY=http://your-host:port
+```
+
+**Git Bash / Mac**:
+
+```
+export HTTPS_PROXY=http://your-host:port
+```
+
+Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
+
+**Check which one is in effect** (a value means through the proxy, empty means direct):
+
+| PowerShell | cmd | Git Bash / Mac |
+|---|---|---|
+| `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
 ### 3.3 Make one command skip the proxy
 
@@ -266,7 +283,7 @@ bash envproxy.sh status
 | What you see | Most likely cause | What to do |
 |---|---|---|
 | "Unrecognized switch" (Windows) or "unrecognized argument" (Mac) | A typo, or an abbreviation | Parameters must be written in full; abbreviations are rejected. Compare with the forms listed in the menu |
-| The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, run the command in 3.3 |
+| The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, run the command in 3.4 |
 | Still cannot use the proxy, and a new window does not help | The monitor is not running | Open the menu and pick 1 (Install / Repair) |
 | "Installation incomplete, missing program files" | The folder was not copied in full, or files were deleted | Download again from the Releases page and unzip over this folder. **Upgrading through Check for updates removes the old files for your platform automatically** |
 | Environment variables reappear after being removed | The node itself is unstable, and the monitor writes what it observes | Expected. If it keeps happening the node is poor; switch to another |

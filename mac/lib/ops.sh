@@ -1378,16 +1378,17 @@ show_status() {
 # 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
 # 每一项用目录（dir）/ 正文（topic 函数）两处拼装，键与标题只写一次。
-HELP_TOPIC_KEYS=(1 2 3 4 5 6 7)
+HELP_TOPIC_KEYS=(1 2 3 4 5 6 7 8)
 _help_topic_short() {
     case "$1" in
         1) echo "用处" ;;
         2) echo "装完" ;;
         3) echo "窗口" ;;
-        4) echo "命令" ;;
-        5) echo "菜单" ;;
-        6) echo "连不上" ;;
-        7) echo "不行" ;;
+        4) echo "代理" ;;
+        5) echo "命令" ;;
+        6) echo "菜单" ;;
+        7) echo "连不上" ;;
+        8) echo "不行" ;;
         *) echo "" ;;
     esac
     return 0
@@ -1444,11 +1445,12 @@ _help_topic_title() {
     case "$1" in
         1) echo "这是干什么用的" ;;
         2) echo "装完之后要我做什么" ;;
-        3) echo "我要单独设置某个窗口" ;;
-        4) echo "我要让某条命令不走代理" ;;
-        5) echo "菜单每一项是干什么的" ;;
-        6) echo "装了还是连不上网 / 状态不对" ;;
-        7) echo "还是不行 / 想删掉它" ;;
+        3) echo "这个窗口固定直连 / 恢复自动" ;;
+        4) echo "这个窗口走公司代理" ;;
+        5) echo "我要让某条命令不走代理" ;;
+        6) echo "菜单每一项是干什么的" ;;
+        7) echo "装了还是连不上网 / 状态不对" ;;
+        8) echo "还是不行 / 想删掉它" ;;
         *) echo "" ;;
     esac
     return 0
@@ -1483,6 +1485,7 @@ TOPIC
   3. 装之前就已经开着的窗口
      同步代码还没装进去。输入下面这条，或者重开窗口：
          . ~/.envproxy/prompt-sync.sh
+     开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效。
 
 为什么要按一次回车
   每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
@@ -1491,56 +1494,55 @@ TOPIC
 TOPIC
     ;;
     3) cat <<'TOPIC'
-Mac 只有一个终端（默认 zsh，bash 也行）。fish 不支持：它不读 .zshenv。
-
-一、让这个窗口固定直连（不再自动跟随）
+一、固定直连（这个窗口不再自动跟随）
+  终端输入：
       export ENVPROXY_TERM=off
-  窗口一关就失效。想恢复自动跟随，输入：
+  窗口一关就失效。只有 zsh 和 bash 管用，fish 不读它。
+
+二、恢复自动跟随
+  终端输入：
       unset ENVPROXY_TERM
-
-二、走公司代理（两步，顺序不能反）
-  1. 先按上面固定直连。
-  2. 再设地址，输入：
-      export HTTPS_PROXY=http://127.0.0.1:7890
-  不停掉自动跟随的话，翻墙软件一有变化就会覆盖你刚设的地址。
-
-三、看这个窗口现在走不走代理
-      echo $HTTPS_PROXY
-
-四、让已经开着的窗口立刻跟上，输入：
-      . ~/.envproxy/prompt-sync.sh
-  四点注意：
-    1. 开头的点号和后面的空格都不能少
-    2. 只对 zsh 和 bash 有效（fish 不支持）
-    3. 只影响这一个窗口，别的已开窗口要各自执行，或者重开
-    4. 从没装过 EnvProxy 的窗口里这个文件不存在，看到「找不到」是正常的。
-       重开窗口就行。
 TOPIC
     ;;
     4) cat <<'TOPIC'
+先做第 3 条（固定直连），再设地址。顺序反了等于没设。
+
+一、设地址（7890 是例子，换成你自己的端口）
+  终端输入：
+      export HTTPS_PROXY=http://127.0.0.1:7890
+
+二、看现在走不走代理（有值 = 走，空的 = 直连）
+  终端输入：
+      echo $HTTPS_PROXY
+
+端口去哪找：翻墙软件的「端口」或「局域网端口」那一栏。
+你手设的值不会被删，只清和工具写入值相同的那些。
+TOPIC
+    ;;
+    5) cat <<'TOPIC'
 不同工具写法不一样，没有通用的一条命令
 
 curl
-      curl --noproxy '*' 网址
+      curl --noproxy '*' https://example.com
 
 git
-      git -c http.proxy= -c https.proxy= clone 仓库地址
+      git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
   等号后留空 = 这条不用代理；写别的值 = 改用那个代理。
 
 npm
-      npm --noproxy=registry.npmjs.org install 包名
+      npm --noproxy=registry.npmjs.org install typescript
   注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。
   写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。
   另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
 
 wget
-      wget --no-proxy 网址
+      wget --no-proxy https://example.com
 
 docker
   没有单条命令的写法，改 Docker 自己的设置（Docker Desktop 里的 Proxies）。
 TOPIC
     ;;
-    5) cat <<'TOPIC'
+    6) cat <<'TOPIC'
 这些编号要在主菜单里敲，不是在帮助里敲。
 
 日常（平时只会用到这四个）
@@ -1557,35 +1559,35 @@ TOPIC
   0  退出          什么都不做。直接按回车等于选 2
 TOPIC
     ;;
-    6) cat <<'TOPIC'
+    7) cat <<'TOPIC'
 连不上网，按这个顺序查
-  1. 先在那个窗口里看变量有没有值：echo $HTTPS_PROXY
-     空的就是没注入——多半是那个窗口在装之前就开着了，重开一个窗口。
-  2. 有值还是连不上：看菜单顶上的「监控」是不是未运行。
-     未运行就选 1（安装 / 修复）。
-  3. npm 不认 HTTP_PROXY，只认 HTTPS_PROXY。EnvProxy 两个都写，
-     但你要是自己清过变量，npm 就不走了。
+  1. 在那个窗口里看变量有没有值。终端输入：
+       echo $HTTPS_PROXY
+     空的就是没注入——多半是窗口在装之前就开着了，重开一个。
 
-状态页那几行怎么读
-  监控进程    本工具的后台程序在不在跑。
+  2. 有值还是连不上：看菜单顶上「监控」是不是未运行。
+     未运行就选 1（安装 / 修复）。
+
+  3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。EnvProxy 两个都写，
+     你自己清过变量它就不走了。
+
+状态页那四行怎么读
+  监控进程    后台程序在不在跑。
   开机自启    下次登录会不会自动起来（和上面那行是两件事）。
   翻墙代理    本机有没有翻墙软件在监听端口。
-  代理变量    这个工具有没有往终端里设代理。
+  代理变量    有没有往终端里设代理。
   后两行可能一个「有」一个「无」：翻墙软件在跑、但本工具被你停了，
   就是这个样子，不是坏了。
 
 日志和 AI 排查
-       mac/monitor/monitor.log（上限 200KB，只留最近 200 行）。看不懂可以不看，
-  反馈时附上最后 20 行就行。
-
-  AI 可能报 ECONNREFUSED 127.0.0.1:端口号。那是变量指向了一个已关闭的端口，
-  不是网络坏了。菜单选 2 看「代理变量」那行，它会直接说清是不是这里的问题。
-
+  日志在 mac/monitor/monitor.log，反馈时附上最后 20 行就行。
+  AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了一个已关闭的端口，
+  不是网络坏了。菜单选 2 看「代理变量」那行会直接说清。
   本工具只管 HTTP/HTTPS 变量。git、npm、curl、pip、docker 都认；
-  ping、游戏、BT 这类走自己协议的不认——那些要开翻墙软件的 TUN 模式。
+  ping、游戏、BT 走自己协议的不认——那些要开翻墙软件的 TUN 模式。
 TOPIC
     ;;
-    7) cat <<'TOPIC'
+    8) cat <<'TOPIC'
 大部分问题都可以用「安装 / 修复」解决
   打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。
 
@@ -1603,6 +1605,7 @@ TOPIC
       bash envproxy.sh status
 TOPIC
     ;;
+
     esac
     return 0
 }

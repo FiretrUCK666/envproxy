@@ -532,37 +532,57 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '3'; Title = '我要单独设置某个窗口'; Short = '窗口'
+            Key = '3'; Title = '这个窗口固定直连 / 恢复自动'; Short = '窗口'
             Lines = @(
                 '一、固定直连（这个窗口不再自动跟随）',
                 '  PowerShell 输入：',
                 '      $env:ENVPROXY_TERM = ''off''',
-                '  cmd 输入这两行，& 两边不能留空格：',
+                '',
+                '  cmd 输入（& 两边不能有空格）：',
                 '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=',
                 '      set NODE_USE_ENV_PROXY=',
+                '',
                 '  Git Bash 输入：',
                 '      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
                 '',
                 '二、恢复自动跟随',
                 '  PowerShell 输入：',
                 '      Remove-Item Env:ENVPROXY_TERM',
-                '  cmd 和 Git Bash 没有开关可取消，重开窗口就是自动跟随。',
                 '',
-                '三、走公司代理（先固定直连，再设地址，顺序不能反）',
-                '  PowerShell 输入：',
-                '      $env:HTTPS_PROXY = ''http://127.0.0.1:7890''',
-                '  cmd 输入：',
-                '      set HTTPS_PROXY=http://127.0.0.1:7890',
-                '  Git Bash 输入：',
-                '      export HTTPS_PROXY=http://127.0.0.1:7890',
-                '',
-                '四、看现在走不走代理（有值就是走，空的是直连）',
-                '  PowerShell：$env:HTTPS_PROXY    cmd：set HTTPS_PROXY',
-                '  Git Bash：echo $HTTPS_PROXY'
+                '  cmd 和 Git Bash 没有这个开关，重开窗口就是自动跟随。'
             )
         },
         @{
-            Key = '4'; Title = '我要让某条命令不走代理'; Short = '命令'
+            Key = '4'; Title = '这个窗口走公司代理'; Short = '代理'
+            Lines = @(
+                '先做第 3 条（固定直连），再设地址。顺序反了等于没设。',
+                '',
+                '一、设地址（7890 是例子，换成你自己的端口）',
+                '  PowerShell 输入：',
+                '      $env:HTTPS_PROXY = ''http://127.0.0.1:7890''',
+                '',
+                '  cmd 输入：',
+                '      set HTTPS_PROXY=http://127.0.0.1:7890',
+                '',
+                '  Git Bash 输入：',
+                '      export HTTPS_PROXY=http://127.0.0.1:7890',
+                '',
+                '二、看现在走不走代理（有值 = 走，空的 = 直连）',
+                '  PowerShell 输入：',
+                '      $env:HTTPS_PROXY',
+                '',
+                '  cmd 输入：',
+                '      set HTTPS_PROXY',
+                '',
+                '  Git Bash 输入：',
+                '      echo $HTTPS_PROXY',
+                '',
+                '端口去哪找：翻墙软件的「端口」或「局域网端口」那一栏。',
+                '你手设的值不会被删，只清和工具写入值相同的那些。'
+            )
+        },
+        @{
+            Key = '5'; Title = '我要让某条命令不走代理'; Short = '命令'
             Lines = @(
                 '不同工具写法不一样，没有通用的一条命令',
                 '',
@@ -590,7 +610,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '5'; Title = '菜单每一项是干什么的'; Short = '菜单'
+            Key = '6'; Title = '菜单每一项是干什么的'; Short = '菜单'
             Lines = @(
                 '这些编号要在主菜单里敲，不是在帮助里敲。',
                 '',
@@ -609,7 +629,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
+            Key = '7'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
             Lines = @(
                 '连不上网，按这个顺序查',
                 '  1. 在那个窗口里看变量有没有值。PowerShell 输入：',
@@ -637,8 +657,9 @@ function Get-HelpTopics {
                 '  本工具只管 HTTP/HTTPS 变量。git、npm、curl、pip、docker 都认；',
                 '  ping、游戏、BT 这类走自己协议的不认——那些要开翻墙软件的 TUN 模式。'
             )
-        },     @{
-            Key = '7'; Title = '还是不行 / 想删掉它'; Short = '不行'
+        },
+        @{
+            Key = '8'; Title = '还是不行 / 想删掉它'; Short = '不行'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
                 '  打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。',
