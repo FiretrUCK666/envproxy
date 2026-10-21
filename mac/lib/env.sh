@@ -248,6 +248,20 @@ restore_prev_env() {
     return 0
 }
 
+# 把 NO_PROXY 的一个条目归类，两个调用方必须走这同一个判据：
+#   0 = 我们加的默认项（该摘掉）
+#   1 = 快照里本来就有的（使用者的，原样留）
+#   2 = 其余（使用者的，原样留）
+# 为什么必须共用：回收变量（remove_user_env_vars）与判断"该不该清理"
+# （proxy_vars_present）如果各写一遍，判据一旦有一份不同，就会出现
+# "状态页说直连、实际还挂着代理"的半代理——正是这个项目最怕的状态。
+# 顺序也是判据的一部分：快照优先于默认集，使用者原有的条目哪怕正好等于
+# 默认项也不许摘。
+classify_no_proxy_entry() {
+    if no_proxy_entry_in_snapshot "$1"; then return 1; fi
+    if is_default_no_proxy_entry "$1"; then return 0; fi
+    return 2
+}
 remove_user_env_vars() {
     # 只回收**本工具自己写下的**东西。
     #
@@ -274,9 +288,9 @@ remove_user_env_vars() {
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
-            # 快照里本来就有的条目是使用者的，哪怕它正好等于默认项也不许减。
-            if no_proxy_entry_in_snapshot "$_pt"; then _keep="${_keep:+$_keep,}$_pt"; continue; fi
-            if is_default_no_proxy_entry "$_pt"; then continue; fi
+            # 分类交给共用判据：快照里本来就有的、以及我们没加过的条目都原样留。
+            classify_no_proxy_entry "$_pt"; _cn=$?
+            [ "$_cn" -eq 0 ] && continue
             _keep="${_keep:+$_keep,}$_pt"
         done
         IFS=$_old
@@ -326,9 +340,9 @@ proxy_vars_present() {
         for _p in $_cur; do
             _pt=$(printf '%s' "$_p" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
             [ -n "$_pt" ] || continue
-            # 与 remove_user_env_vars 同口径：快照里本来就有的条目不算我们的痕迹。
-            if no_proxy_entry_in_snapshot "$_pt"; then continue; fi
-            if is_default_no_proxy_entry "$_pt"; then
+            # 与 remove_user_env_vars 同一个分类判据：只有我们自己加的项才算痕迹。
+            classify_no_proxy_entry "$_pt"; _cn=$?
+            if [ "$_cn" -eq 0 ]; then
                 IFS=$_old; [ "$_had_f" -eq 1 ] || set +f
                 return 0
             fi
