@@ -1531,6 +1531,8 @@ _help_line_color() {
 # 带配色地打一个主题。与 format_help_topic 分工：那个给纯文本（非交互与测试用），
 # 这个负责上色。两者读同一份内容，不会出现"屏幕上有、文档里没有"。
 show_help_topic_colored() {
+    # 同 show_menu_colored：没终端就不上色，直接给纯文本。
+    if [ ! -t 1 ]; then format_help_topic "$1"; return $?; fi
     _sht_title=$(_help_topic_title "$1")
     [ -z "$_sht_title" ] && return 1
     printf '\033[36m%s\033[0m\n' "================ 帮助 $1 · $_sht_title ================"
@@ -1735,6 +1737,9 @@ format_menu_text() {
 # 带配色地打菜单。与 format_menu_text 分工：那个返回纯文本（非交互与测试用），
 # 这个负责上色。两者读同一份 MENU_ITEMS，不会出现"屏幕上有、测试里没有"。
 show_menu_colored() {
+    # stdout 不是终端就退回纯文本：管道/重定向时转义序列会原样写进日志（实测 ^[[36m），
+    # 既弄脏日志也没法给人看。纯文本版本本来就为这种场合准备（也在自检里被断言）。
+    if [ ! -t 1 ]; then format_menu_text; return 0; fi
     _smc_w=0
     for _smc_i in "${MENU_ITEMS[@]}"; do
         _smc_rest=${_smc_i#*|}
