@@ -758,8 +758,8 @@ self_test() {
         _sr=$(format_help_topic "$_sk")
         # 1) 一屏放得下：超出的部分会被终端切掉，常被切掉的正是底部的"怎么退出"。
         _sn=$(printf '%s\n' "$_sr" | wc -l | tr -d ' ')
-        if [ "$_sn" -le 30 ]; then _s1=1; else _s1=0; fi
-        _selftest_assert_eq "主题 $_sk 在 30 行内" "1" "$_s1"
+        if [ "$_sn" -le "$HELP_MAX_LINES" ]; then _s1=1; else _s1=0; fi
+        _selftest_assert_eq "主题 $_sk 在 $HELP_MAX_LINES 行内" "1" "$_s1"
         # 2) 相邻两行一模一样 = 编辑留下的重复段。
         _s2=1
         _sprev=""

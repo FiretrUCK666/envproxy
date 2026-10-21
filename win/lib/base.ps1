@@ -72,6 +72,12 @@ $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_U
 # 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
 $DefaultNoProxy = "localhost,127.0.0.1,::1"
 
+# 帮助每一屏的行数上限。超过这个数，终端会把底部的「怎么退出」切掉——
+# 用户会以为帮助卡死，其实只是没画出来。30 这个数字的来历：常见终端 24-30 行，
+# 留出提示符与命令回显后剩这么多；它与 Mac 侧 HELP_MAX_LINES 必须一致，
+# 门禁 6 核对。改这里就是改「帮助一屏能放多少」，不是调样式。
+$HelpMaxLines = 30
+
 # 是否跑在提权身份下：提权后 HKCU 指向管理员的配置，装/停/卸动的都是"另一个人"的状态。
 # 只做提醒不拦截——机器上只有一个日常用户时，提醒一句就够了。
 function Test-IsElevated {

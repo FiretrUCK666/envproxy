@@ -553,6 +553,7 @@ function Get-HelpTopics {
                 '  3. 装之前就已经开着的窗口',
                 '     同步代码还没装进去。PowerShell 输入下面这条，或者重开窗口：',
                 '         . $PROFILE',
+                '',
                 '     cmd 和 Git Bash 没有这个办法，重开窗口就行。',
                 '',
                 '为什么要按一次回车',

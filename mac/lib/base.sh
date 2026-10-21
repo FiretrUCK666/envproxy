@@ -19,6 +19,10 @@ ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"
 # 也就是说方括号属于 URL 字面量的写法，在 NO_PROXY 里是写错了位置。
 DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
 
+# 帮助每一屏的行数上限。超过这个数，终端会把底部的「怎么退出」切掉——
+# 用户会以为帮助卡死，其实只是没画出来。与 Windows 侧 $HelpMaxLines 必须一致。
+HELP_MAX_LINES=30
+
 # 变量事实源（写/核/收/判四处共用，口径不再分家）：代理变量 6 个（大小写双写）
 # + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
 OWNED_HTTP_PREFIX="http://127.0.0.1:"

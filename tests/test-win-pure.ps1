@@ -407,7 +407,9 @@ foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r +
 foreach ($t in $helpTopics) {
     $rendered = @((Format-HelpTopic $t.Key) -split "`n")
     # 1) 一屏放得下：超出的部分会被终端切掉，而被切掉的常常是底部的「怎么退出」。
-    Assert-Eq ('topic ' + $t.Key + ' renders within 30 lines') $true ($rendered.Count -le 30)
+    # 上限来自 base 层的具名常量，不在这里写死数字：写死的话，改常量时测试
+    # 还在守旧值，两处会悄悄分叉。
+    Assert-Eq ('topic ' + $t.Key + ' renders within ' + $HelpMaxLines + ' lines') $true ($rendered.Count -le $HelpMaxLines)
     # 2) 相邻两行一模一样 = 编辑时留下的重复段，用户会以为屏幕坏了。
     $dupFound = $false
     for ($i = 1; $i -lt $rendered.Count; $i++) {
