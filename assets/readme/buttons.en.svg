@@ -7,22 +7,21 @@
 
   <g id="heading">
     <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">What each menu item affects</text>
-    <text x="56" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
-    <text x="84" y="126" font-size="20" fill="#94A6BE">kept</text>
-    <text x="164" y="126" font-size="26" font-weight="700" fill="#94A6BE">—</text>
-    <text x="202" y="126" font-size="20" fill="#94A6BE">cleared</text>
-    <circle cx="300" cy="119.5" r="4" fill="#7A8CA6"/>
-    <text x="312" y="126" font-size="20" fill="#94A6BE">read-only</text>
-    <text x="432" y="126" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
-    <text x="456" y="126" font-size="20" fill="#94A6BE">state-dependent</text>
+  </g>
+  <g id="legend">
+    <text x="64" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
+    <text x="98" y="126" font-size="20" fill="#94A6BE">kept</text>
+    <text x="192" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="226" y="126" font-size="20" fill="#94A6BE">cleared</text>
+    <circle cx="364" cy="119.5" r="4" fill="#7A8CA6"/>
+    <text x="387" y="126" font-size="20" fill="#94A6BE">read-only</text>
+    <text x="536" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#C7D3E3">±</text>
+    <text x="570" y="126" font-size="20" fill="#94A6BE">state-dependent</text>
+    <text x="785" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
+    <text x="819" y="126" font-size="20" fill="#94A6BE">stopped, then restarted</text>
   </g>
 
-  <g id="legend2">
-    <text x="700" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
-    <text x="728" y="126" font-size="20" fill="#94A6BE">stopped, then restarted on the new version</text>
-  </g>
-
-  <g id="grid" fill="none" stroke-width="1.5">
+<g id="grid" fill="none" stroke-width="1.5">
     <path d="M200 156V434M380 156V434M560 156V434M740 156V434M920 156V434M1100 156V434" stroke="#2A3B58"/>
     <path d="M56 156H1144M56 434H1144" stroke="#2A3B58"/>
     <path d="M56 194H1144M56 354H1144" stroke="#33486B"/>

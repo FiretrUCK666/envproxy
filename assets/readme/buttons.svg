@@ -7,22 +7,21 @@
 
   <g id="heading">
     <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">菜单每个选项影响什么</text>
-    <text x="56" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
-    <text x="84" y="126" font-size="20" fill="#94A6BE">保留</text>
-    <text x="164" y="126" font-size="26" font-weight="700" fill="#94A6BE">—</text>
-    <text x="202" y="126" font-size="20" fill="#94A6BE">清掉</text>
-    <circle cx="290" cy="119.5" r="4" fill="#7A8CA6"/>
-    <text x="302" y="126" font-size="20" fill="#94A6BE">只读不动</text>
-    <text x="422" y="126" font-size="22" font-weight="700" fill="#C7D3E3">±</text>
-    <text x="446" y="126" font-size="20" fill="#94A6BE">看当前有没有在翻墙</text>
+  </g>
+  <g id="legend">
+    <text x="64" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#34D399">✓</text>
+    <text x="98" y="126" font-size="20" fill="#94A6BE">保留</text>
+    <text x="188" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#94A6BE">—</text>
+    <text x="222" y="126" font-size="20" fill="#94A6BE">清掉</text>
+    <circle cx="323" cy="119.5" r="4" fill="#7A8CA6"/>
+    <text x="346" y="126" font-size="20" fill="#94A6BE">只读不动</text>
+    <text x="476" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#C7D3E3">±</text>
+    <text x="510" y="126" font-size="20" fill="#94A6BE">看当前有没有在翻墙</text>
+    <text x="740" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
+    <text x="774" y="126" font-size="20" fill="#94A6BE">停掉再用新版本重启</text>
   </g>
 
-  <g id="legend2">
-    <text x="700" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
-    <text x="728" y="126" font-size="20" fill="#94A6BE">停掉再用新版本重启</text>
-  </g>
-
-  <g id="grid" fill="none" stroke-width="1.5">
+<g id="grid" fill="none" stroke-width="1.5">
     <path d="M200 156V434M380 156V434M560 156V434M740 156V434M920 156V434M1100 156V434" stroke="#2A3B58"/>
     <path d="M56 156H1144M56 434H1144" stroke="#2A3B58"/>
     <path d="M56 194H1144M56 354H1144" stroke="#33486B"/>
