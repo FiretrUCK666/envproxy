@@ -42,7 +42,6 @@ function Broadcast-EnvironmentChange {
 # 广播不在这里做：调用方写完一批之后再调一次 Broadcast-EnvironmentChange。
 # 分开是刻意的——状态机在同一轮里可能既删又写，广播一次就够。
 
-# 把 [Environment] 的 User 位置映射到注册表的取值类型。
 # 读 HKCU\Environment 里的原始值（不做环境变量展开）。
 # 为什么不能用 [Environment]::GetEnvironmentVariable(..., "User")：
 # 它返回的是**已展开**的值。用户原有 NO_PROXY 常写成 %USERPROFILE%,internal.corp
@@ -50,6 +49,28 @@ function Broadcast-EnvironmentChange {
 # C:\Users\某人,internal.corp，我们再合并写回时，%USERPROFILE% 这个引用就永久没了。
 # 类型还是 REG_EXPAND_SZ，但里面已经没有可展开的东西——用户换用户名或改路径后失效。
 # 这里直接读注册表原文，引用保持原样。
+
+# 读安装快照里的原始值（不做环境变量展开）。
+# 为什么不能用 Get-ItemProperty：它对 REG_EXPAND_SZ 同样会展开——实测快照里存的
+# %USERPROFILE%\abc 读出来是 C:\Users\某人\abc。快照的用途正是"原样存、原样还"，
+# 一旦读的时候被展开，还原回去的就是一张写死的路径，用户换用户名后就失效。
+function Get-PrevEnvRaw([string]$Name) {
+    $key = $null
+    try {
+        # $PrevEnvRegKey 是 PowerShell 提供程序路径（HKCU:\Software\...），
+        # 转成 .NET 的键路径再用 DoNotExpandEnvironmentNames 读原文。
+        $sub = $PrevEnvRegKey -replace '^HKCU:\\', ''
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, $false)
+        if ($null -eq $key) { return $null }
+        $v = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $v) { return $null }
+        return [string]$v
+    } catch {
+        return $null
+    } finally {
+        if ($key) { try { $key.Close() } catch {} }
+    }
+}
 function Get-UserEnvRaw([string]$Name) {
     $key = $null
     try {
@@ -131,7 +152,11 @@ function Sync-UserEnvVars([string]$Port) {
     $desired["NO_PROXY"] = Merge-NoProxy $existingNoProxy $DefaultNoProxy
     $changed = $false
     foreach ($n in $desired.Keys) {
-        if ([Environment]::GetEnvironmentVariable($n, "User") -ne $desired[$n]) { $changed = $true; break }
+        # 比较两边都要用不展开的读法，否则永远不相等：desired 里的 NO_PROXY 是用
+        # Get-UserEnvRaw 取原文再合并出来的（可能含 %USERPROFILE%），而 GetEnvironmentVariable
+        # 读出来是展开后的字面路径。两者一比较就恒不相等，于是每轮都判"要写"、
+        # 每轮都多一次同步广播。实测连跑 4 轮全部返回 True，正是这个原因。
+        if ((Get-UserEnvRaw $n) -ne $desired[$n]) { $changed = $true; break }
     }
     # 归属记录**先写**，再判断要不要改环境变量。
     # 这两件事必须解耦：升级安装时代理正开着、端口没变，"值已齐全"于是提前 return，
@@ -174,8 +199,9 @@ function Remove-UserEnvVars {
     $plan = @{}
     $drop = @()
     foreach ($n in $ProxyVarNames) {
-        $cur = [Environment]::GetEnvironmentVariable($n, "User")
-        if (-not $cur) { continue }
+        # 用不展开的读法：用户值里的 %USERPROFILE% 这类引用必须原样保留。用 GetEnvironmentVariable
+        # 读出来已被展开，写回时引用就永久丢了（与注入方向同一个病）。
+        $cur = Get-UserEnvRaw $n
         if ($n -eq "NO_PROXY") {
             # 只回收我们加进去的那几项：从当前值里逐项减掉默认集，剩下的原样写回（保留用户的写法与顺序），
             # 减空了才删变量。不能按"整份等于默认集"判断——用户原本就有 NO_PROXY 时，我们加的那几项
@@ -185,7 +211,8 @@ function Remove-UserEnvVars {
             $bakSet = @()
             try {
                 if (Test-RegKey $PrevEnvRegKey) {
-                    $rawBak = (Get-ItemProperty -Path $PrevEnvRegKey -Name "NO_PROXY" -ErrorAction SilentlyContinue)."NO_PROXY"
+                    # 快照也要不展开地读：Get-ItemProperty 对 REG_EXPAND_SZ 同样会展开。
+                    $rawBak = Get-PrevEnvRaw "NO_PROXY"
                     if ($rawBak) { $bakSet = Get-NormalizedNoProxyEntries ([string]$rawBak) }
                 }
             } catch {}
@@ -351,11 +378,16 @@ function Restore-PrevEnv {
 }
 
 # 把状态应用到系统（幂等：整套变量都已就位就什么都不做）
+# 返回值说明这一步有没有做成：
+#   $true  = 状态已经对齐（可能本来就齐，也可能是这次写好的）
+#   $false = 尝试写了但失败（调用方必须如实报告，不许说"已校正"）
+# 之前没有返回值，安装流程只能一律打"已按当前状态校正"——把写失败也说成成功，
+# 用户以为在走代理、实际是半套变量。
 function Apply-State([string]$state) {
     # "unknown" = 这一轮不知道（端口枚举失败），不是"不在翻墙"。
     # 绝不能拿它去写变量：状态串的下标解析会把它当成 "on:<端口>"，
     # 于是把代理地址写成 http://127.0.0.1:nown。
-    if (-not $state -or $state -eq "unknown") { return }
+    if (-not $state -or $state -eq "unknown") { return $true }
     # 全局互斥：安装入口与监控主循环可能同一时刻各校正一次（点"安装"时两者都在跑），
     # 没有这把锁就会出现"两边都判定要写 → 重复写 + 重复广播"。锁只覆盖"判断 + 写入"这段，
     # 拿到锁的一方写完，另一方进来时看到已就位，自然什么都不做。
@@ -366,6 +398,7 @@ function Apply-State([string]$state) {
         $gate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
         $held = $gate.WaitOne(5000)
     } catch { $held = $false }
+    $appliedOk = $true
     try {
         if ($state -eq "off") {
             if (Test-ProxyVarsPresent) {
@@ -376,15 +409,22 @@ function Apply-State([string]$state) {
         } else {
             $port = $state.Substring(3)
             $want = "http://127.0.0.1:$port"
-            if (Sync-UserEnvVars $port) {
+            if (-not (Sync-UserEnvVars $port)) {
+                # Sync-UserEnvVars 返回 false 有两种情况：本来就齐（正常）、或者写失败。
+                # 靠"值到底齐了没有"再确认一次，才能区分这两者。
+                $appliedOk = ((Get-UserEnvRaw "HTTPS_PROXY") -eq $want)
+            } else {
                 Broadcast-EnvironmentChange
                 Write-MonitorLog "检测到本地代理端口 $port -> 已注入代理 $want"
             }
         }
+    } catch {
+        $appliedOk = $false
     } finally {
         if ($gate) {
             try { if ($held) { $gate.ReleaseMutex() } } catch {}
             try { $gate.Dispose() } catch {}
         }
     }
+    return $appliedOk
 }

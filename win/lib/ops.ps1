@@ -57,18 +57,25 @@ function Install-EnvProxy {
     # 先说要探测，因为这三层验证要连外网，慢的时候差不多一秒。
     Write-Host "[3/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……" -ForegroundColor DarkGray
     $state = "unknown"
+    $appliedOk = $true
     try {
         $state = Get-CurrentState
-        Apply-State $state
+        $appliedOk = Apply-State $state
     } catch {
         # 对齐失败不该把终端同步那一步也带走：那一步与代理状态无关。
-        Write-Host ("[3/4] 环境变量：这一步没做成（" + $_.Exception.Message + "）") -ForegroundColor Yellow
         $state = "failed"
+        $appliedOk = $false
     }
     if ($state -eq "unknown") {
         # 端口枚举失败：这一轮不知道状态，一个变量都没动——不能说"已校正"。
         Write-Host "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。" -ForegroundColor Yellow
-    } elseif ($state -ne "failed") {
+    } elseif ($state -eq "failed") {
+        Write-Host "[3/4] 环境变量：这一步没做成，原因见上面那行。其余步骤不受影响。" -ForegroundColor Yellow
+    } elseif (-not $appliedOk) {
+        # 写失败必须如实说，不能说"已校正"——用户会以为在走代理，实际是半套变量。
+        Write-Host "[3/4] 环境变量：没写进去。可能被杀软或组策略拦住了。" -ForegroundColor Yellow
+        Write-Host "      再打开一次菜单选 1（安装 / 修复）重试；仍然不行请反馈。" -ForegroundColor Yellow
+    } else {
         Write-Host "[3/4] 环境变量：已按当前状态校正" -ForegroundColor Green
     }
     # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
@@ -820,5 +827,8 @@ function Show-Menu {
         }
         # 子命令跑完先停一下：下一轮开头就要清屏，不等一下就把它刚打印的内容抹掉了。
         try { $null = Read-Host '按回车回菜单' } catch { return }
+        # 复位清屏标志。用户已经看完了子命令输出，下一轮该清屏重画菜单。
+        # 不复位的话这个标志只降不升，之后每一轮都往同一屏上叠，屏幕越滚越长。
+        $repaint = $true
     }
 }
