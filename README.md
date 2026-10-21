@@ -128,13 +128,15 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 日常窗口基本都是 PowerShell：开始菜单搜 PowerShell、Win+R 输入 `powershell`、Windows Terminal、VS Code 终端，都是。只有手动打开「命令提示符」才是 cmd，那里的命令会报错。
 
-**如果你确实在用 cmd**，对应的写法不一样：
+**如果你确实在用 cmd**，只有「查看代理」在 cmd 里有效：
 
 | 目的 | PowerShell | cmd |
 |---|---|---|
-| 固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set ENVPROXY_TERM=off` |
-| 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
+| 固定直连 | `$env:ENVPROXY_TERM = 'off'` | 不支持，请改用 PowerShell |
+| 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | 不支持，请改用 PowerShell |
 | 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+
+固定直连的开关由写进 PowerShell 配置文件的同步代码读取，cmd 不读那个文件，所以 `set ENVPROXY_TERM=off` 在 cmd 里不会有任何效果——这一个窗口请改用 PowerShell。
 
 Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
 

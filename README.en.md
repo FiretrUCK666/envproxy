@@ -128,13 +128,15 @@ They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell th
 
 Almost every window you touch day to day is PowerShell: Start menu search for PowerShell, Win+R and type `powershell`, Windows Terminal, the VS Code terminal. Only opening Command Prompt by hand gives you cmd, and these commands fail there.
 
-**If you really are in cmd**, the syntax is different:
+**If you really are using cmd**, only "check the proxy" works there:
 
-| Purpose | PowerShell | cmd |
+| Goal | PowerShell | cmd |
 |---|---|---|
-| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | `set ENVPROXY_TERM=off` |
-| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
+| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | Not supported, use PowerShell |
+| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | Not supported, use PowerShell |
 | Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+
+The pin switch is read by the sync code written into your PowerShell profile. cmd does not read that file, so `set ENVPROXY_TERM=off` has no effect in cmd. Use PowerShell for that window.
 
 On Mac that is the Terminal app, zsh by default, using the `export` column. **fish on Mac is not supported**; use zsh or bash.
 

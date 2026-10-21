@@ -385,7 +385,6 @@ Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TE
 # Every screen ends with the way back out. Without it a user who lands on a topic
 # has no idea how to leave, which is exactly the "wall of text" problem pagination solves.
 Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '直接回车')
-# Next/previous navigation wraps around instead of dead-ending: pressing n on the last
 # 交互只有两种操作：输数字、直接回车。屏幕上不能出现 n / p / m / a 这类字母导航——
 # 用户记不住哪个键管哪件事，而这正是之前被抱怨的地方。
 # 这条钉住的是「文案里不许再出现字母导航」，不是措辞本身。
@@ -399,6 +398,41 @@ Assert-Eq 'the help index says what Enter does' $true ($indexText -match '直接
 $roleSeen = @{}
 foreach ($t in $helpTopics) { foreach ($l in $t.Lines) { $roleSeen[(Get-HelpLineRole $l)] = $true } }
 foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r) }
+# 屏幕形状：这一类坏法（命令被转义吃掉、混进开发机路径、行太长折行、
+# 同一句写两遍、整屏超出终端高度）靠"关键字还在不在"是查不出来的——
+# 坏行里往往还含有别的行的关键字，于是断言照样全绿。
+# 所以直接量屏幕上会出现的形状，一次挡住一整类。
+foreach ($t in $helpTopics) {
+    # 1) 一屏一条是这版帮助的设计承诺：超过 30 行的部分会被终端切掉，
+    #    而被切掉的常常是底部的「怎么退出」。
+    $lines = @($t.Lines)
+    Assert-Eq ('topic ' + $t.Key + ' fits on one screen') $true ($lines.Count -le 30)
+    # 2) 相邻两行一模一样 = 编辑时留下的重复段，用户会以为屏幕坏了。
+    $dupFound = $false
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -ne '' -and $lines[$i] -eq $lines[$i - 1]) { $dupFound = $true; break }
+    }
+    Assert-Eq ('topic ' + $t.Key + ' has no duplicated line') $false $dupFound
+    # 3) 每行不能超 80 显示列：超了终端会硬折行，看起来像排版坏了。
+    #    这条同时会抓住"混进绝对路径"——开发机的 profile 路径有 100 多列。
+    $tooWide = ''
+    foreach ($ln in $lines) {
+        $w = 0
+        foreach ($ch in $ln.ToCharArray()) { $w += if ([int]$ch -gt 0x2E80) { 2 } else { 1 } }
+        if ($w -gt 80) { $tooWide = $ln; break }
+    }
+    Assert-Eq ('topic ' + $t.Key + ' has no line wider than 80 columns') '' $tooWide
+    Assert-Eq ('topic ' + $t.Key + ' has no line wider than 80 columns') '' $tooWide
+    # 5) 不许混进本机的绝对路径：那一屏是给别人看的，写死 C:\Users\某人 只会让人困惑，
+    #    而且换台机器就失准。C:\Users\FiretrUCK\Documents\PowerShell\Microsoft.PowerShell_profile.ps1 这类环境自带变量才是正确写法。
+    $absPath = ''
+    foreach ($ln in $lines) { if ($ln -match '[A-Za-z]:\\Users\\|/Users/') { $absPath = $ln; break } }
+    Assert-Eq ('topic ' + $t.Key + ' has no hardcoded home path') '' $absPath
+    # 4) 命令必须是完整的：三种写法各有特征前缀，被转义吃掉时会只剩 `` 或 `off。
+    #    这里只钉"不许出现半个变量名"这一种坏法，写法本身不管。
+    Assert-Eq ('topic ' + $t.Key + ' has no truncated variable') $false ((@($lines | Where-Object { $_ -match '`(off|on)?\s*=' })).Count -gt 0)
+}
+
 # A table entry that is never printed is a feature the user cannot reach: the menu once
 # printed a hardcoded list and [6] Help never appeared on screen even though the table
 # had it. Show-Menu bails out under redirected input, so it cannot be exercised here --

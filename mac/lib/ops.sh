@@ -1403,18 +1403,25 @@ docker
 TOPIC
     ;;
     5) cat <<'TOPIC'
+这些编号是在主菜单里敲的（不是在这里）。
+
+日常
   1 安装 / 修复
       首次安装，或者觉得不对劲时都选它。重复跑不会多装一份。
   2 查看状态
       监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。
+  5 检查更新
+      先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。
+
+维护
   3 停止监控
       临时停用，下次登录会自己回来。
   4 一键恢复
       彻底卸载，回到没装之前。会问你要不要留日志。
-  5 检查更新
-      先告诉你有新版和改了什么，同意才装。升级不用开翻墙软件。
   6 帮助
       就是这里。
+
+退出
   0 退出菜单
       什么都不做。直接按回车等于选 2（查看状态）。
 TOPIC
@@ -1555,13 +1562,11 @@ format_help_all() {
 }
 
 # 帮助入口。
-# 交互：先给目录，输编号看主题，0 回目录，n/p 前后翻，m 回主菜单。
-# 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
-# 帮助入口。
 # 交互只有两种操作，和菜单完全一样：
 #   输数字 = 去看那一条；直接回车 = 回上一级。
 # 不用 n / p / m / a 这些字母：用户记不住哪个键管哪件事，
 # 而"输编号"和"按回车"不需要学。7 条一轮翻页的需求本来也不强。
+# 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
 show_help() {
     if [ ! -t 0 ]; then
         format_help_all
@@ -1578,29 +1583,39 @@ show_help() {
         _hs_sel=$(printf '%s' "$_hs_sel" | tr -d '[:space:]')
         # 直接回车 = 回主菜单（帮助的上一级就是菜单）。
         [ -z "$_hs_sel" ] && return 0
-        clear_screen_safe
-        if show_help_topic_colored "$_hs_sel"; then
-            # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
-            # 这里只等一个输入；回车就回目录，数字就继续看下一条。
-            printf "输编号，或直接回车："
-            if ! IFS= read -r _hs_next; then
-                echo ""
-                return 0
-            fi
-            _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
-            [ -z "$_hs_next" ] && continue
-            clear_screen_safe
-            if ! show_help_topic_colored "$_hs_next"; then
-                echo "没有这一条：$_hs_next（有 1-7）"
-                printf "按回车回目录："
-                IFS= read -r _hs_dummy || true
-            fi
+        # 先查表、有效才清屏：输错时把目录留在屏幕上，用户还能照着挑。
+        # 这与菜单屏一致（输错不重画、错误压在菜单下），不该一屏一个做法。
+        if ! _help_key_valid "$_hs_sel"; then
+            echo "没有这一条：$_hs_sel（有 1-7）"
             continue
         fi
-        echo "没有这一条：$_hs_sel（有 1-7）"
-        printf "按回车回目录："
-        IFS= read -r _hs_dummy || true
+        clear_screen_safe
+        show_help_topic_colored "$_hs_sel" || continue
+        # 看过一条以后，屏幕上已经写着「输编号看别的 / 直接回车回目录」，
+        # 这里只等一个输入；回车就回目录，数字就继续看下一条。
+        printf "输编号，或直接回车："
+        if ! IFS= read -r _hs_next; then
+            echo ""
+            return 0
+        fi
+        _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
+        [ -z "$_hs_next" ] && continue
+        if ! _help_key_valid "$_hs_next"; then
+            echo "没有这一条：$_hs_next（有 1-7）"
+            continue
+        fi
+        clear_screen_safe
+        show_help_topic_colored "$_hs_next" >/dev/null 2>&1
     done
+}
+
+# 这个编号有没有对应的帮助主题。输错时用它来决定"要不要清屏"：
+# 无效就保留当前屏（用户还要照着挑），有效才换屏。
+_help_key_valid() {
+    case "$1" in
+        1|2|3|4|5|6|7) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # 菜单表：编号 | 名称 | 说明 | 分组 | 子命令。打印与分派共用它，加一项就一定会显示出来。
