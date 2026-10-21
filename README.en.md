@@ -125,47 +125,38 @@ This section covers what the menu cannot do: handling one particular window diff
 ### Which terminal these commands belong in
 
 They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
+They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
 
-Almost every window you touch day to day is PowerShell: Start menu search for PowerShell, Win+R and type `powershell`, Windows Terminal, the VS Code terminal. Only opening Command Prompt by hand gives you cmd, and these commands fail there.
+Almost every window you touch day to day is PowerShell: Start menu search for PowerShell, Win+R and type `powershell`, Windows Terminal, the VS Code terminal.
 
-**If you really are using cmd**, only "check the proxy" works there:
+**cmd and Git Bash work too.** They differ in one way: they have no auto-follow, so the proxy state does not update itself. To pin a window to a direct connection, clear the variables yourself.
 
-| Goal | PowerShell | cmd |
-|---|---|---|
-| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | Not supported, use PowerShell |
-| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | Not supported, use PowerShell |
-| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+| I want to | PowerShell | cmd | Git Bash |
+|---|---|---|---|
+| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY= & set HTTPS_PROXY= & set ALL_PROXY= & set NO_PROXY= & set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
+| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | Reopen the window | Reopen the window |
+| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
-The pin switch is read by the sync code written into your PowerShell profile. cmd does not read that file, so `set ENVPROXY_TERM=off` has no effect in cmd. Use PowerShell for that window.
+PowerShell needs one switch because the installer drops a small piece of code into its profile, and that code re-checks the state every time the prompt comes back. cmd and Git Bash have no such entry point, so you change the variables directly. Either way it ends when the window closes.
 
-On Mac that is the Terminal app, zsh by default, using the `export` column. **fish on Mac is not supported**; use zsh or bash.
-
-**On Windows with Git Bash installed**: it inherits the Windows environment variables, so "the terminal can go through the proxy" works automatically — nothing to do. But **the per-window pin to a direct connection does not work in Git Bash**: EnvProxy only writes the sync code into the PowerShell profiles, and nothing in Git Bash reads it. To skip the proxy in a Git Bash window, `export` the specific variables instead, following the Mac column.
-
+On Mac that is the Terminal app, zsh by default, using the Git Bash column. **fish on Mac is not supported**; use zsh or bash.
 
 ### 3.1 Three everyday actions
 
-Every command below goes in **the window you want to change**, and affects **that window only**.
-
-| I want to | Windows (PowerShell) | Mac |
-|---|---|---|
-| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
-| Make it follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | `unset ENVPROXY_TERM` |
-| See whether it is proxied right now | `$env:HTTPS_PROXY` | `echo $HTTPS_PROXY` |
-
-Pinning applies to the current window only and ends when you close it. For the check, a value means proxied and empty means direct.
+Every command below goes in **the window you want to change**. It affects **that window only** and ends when you close it.
 
 **To send this window through a corporate proxy: two steps, in this order.**
 
-Stop following the proxy app first (row one above), then set the proxy:
+1. Pin it to a direct connection first (the table above, pick your terminal's column)
+2. Then set the corporate address
 
-| | Command |
+| | Set the corporate proxy |
 |---|---|
-| Windows (PowerShell) | `$env:HTTPS_PROXY = 'http://your-host:port'` |
-| Mac | `export HTTPS_PROXY=http://your-host:port` |
+| PowerShell | `$env:HTTPS_PROXY = 'http://your-host:port'` |
+| cmd | `set HTTPS_PROXY=http://your-host:port` |
+| Mac / Git Bash | `export HTTPS_PROXY=http://your-host:port` |
 
 Why stop first: otherwise the next change the proxy app makes overwrites the address you just set. Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
-
 ### 3.2 Make one command skip the proxy
 
 Tools differ; there is no single universal command.

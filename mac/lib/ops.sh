@@ -1314,6 +1314,44 @@ show_status() {
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
 # 每一项用目录（dir）/ 正文（topic 函数）两处拼装，键与标题只写一次。
 HELP_TOPIC_KEYS=(1 2 3 4 5 6 7)
+_help_topic_short() {
+    case "$1" in
+        1) echo "用处" ;;
+        2) echo "装完" ;;
+        3) echo "窗口" ;;
+        4) echo "命令" ;;
+        5) echo "菜单" ;;
+        6) echo "排错" ;;
+        7) echo "不行" ;;
+        *) echo "" ;;
+    esac
+    return 0
+}
+
+# 主题页底部那一行：把全部编号和短名并排列出来，当前这条用方括号标。
+# 为什么需要它：用户在主题里只看到「输编号看别的」，却不知道别的编号是几号——
+# 那句话等于白说。列出来既回答了"编号是什么"，也顺手回答了"还有哪几条"。
+# 编号与短名都从 HELP_TOPIC_KEYS 取，加一条主题时这里自动跟上。
+format_help_nav_line() {
+    _hnl_cur="$1"
+    _hnl_out="  "
+    for _hnl_k in "${HELP_TOPIC_KEYS[@]}"; do
+        if [ "$_hnl_k" = "$_hnl_cur" ]; then
+            _hnl_out="$_hnl_out[$_hnl_k]$(_help_topic_short "$_hnl_k")  "
+        else
+            _hnl_out="$_hnl_out$_hnl_k $(_help_topic_short "$_hnl_k")  "
+        fi
+    done
+    printf "%s\n" "${_hnl_out%  }"
+}
+
+# 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
+format_help_key_range() {
+    _hkr_n=${#HELP_TOPIC_KEYS[@]}
+    if [ "$_hkr_n" -eq 0 ]; then echo "没有可用的编号"; return 0; fi
+    if [ "$_hkr_n" -eq 1 ]; then echo "只有 ${HELP_TOPIC_KEYS[0]}"; return 0; fi
+    echo "有 ${HELP_TOPIC_KEYS[0]}-${HELP_TOPIC_KEYS[$((_hkr_n - 1))]}"
+}
 _help_topic_title() {
     case "$1" in
         1) echo "这是干什么用的" ;;
@@ -1496,6 +1534,7 @@ format_help_topic() {
     echo ""
     _help_topic_body "$1"
     echo ""
+    format_help_nav_line "$1"
     echo "  输编号看别的    直接回车 = 回目录"
     return 0
 }
@@ -1557,11 +1596,12 @@ show_help_topic_colored() {
         fi
     done
     echo ""
+    printf '\033[90m%s\033[0m\n' "$(format_help_nav_line "$1")"
     printf '\033[90m%s\033[0m\n' "  输编号看别的    直接回车 = 回目录"
     return 0
 }
 
-# 全文：把 7 个主题按顺序拼起来，一个字不少。
+# 全文：把所有主题按顺序拼起来，一个字不少。
 # 非交互调用（help 子命令被脚本/管道调用）走这条：调用方要的是一份完整文档，
 # 分页导航对没有终端的场景没有意义。
 format_help_all() {
@@ -1576,7 +1616,7 @@ format_help_all() {
 # 交互只有两种操作，和菜单完全一样：
 #   输数字 = 去看那一条；直接回车 = 回上一级。
 # 不用 n / p / m / a 这些字母：用户记不住哪个键管哪件事，
-# 而"输编号"和"按回车"不需要学。7 条一轮翻页的需求本来也不强。
+# 而"输编号"和"按回车"不需要学。条目不多，一屏列得下，也就没有翻页的必要。
 # 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
 show_help() {
     if [ ! -t 0 ]; then
@@ -1607,7 +1647,7 @@ show_help() {
         fi
         # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         if ! _help_key_valid "$_hs_sel"; then
-            echo "没有这一条：$_hs_sel（有 1-7）"
+            echo "没有这一条：$_hs_sel（$(format_help_key_range)）"
             continue
         fi
         clear_screen_safe
@@ -1637,7 +1677,7 @@ MENU_ITEMS=(
     '5|检查更新|有新版先说明，同意才装|日常|update'
     '3|停止监控|停掉并恢复直连，下次登录回来|维护|stop'
     '4|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
-    '6|帮助|有 7 条，一屏一条|维护|help'
+    '6|帮助|忘了怎么用就看它|维护|help'
     '0|退出||退出|'
 )
 # 加载期校验：每条必须恰好四条竖线，且键、名字、分组非空。不合格就报错（不静默降级）。

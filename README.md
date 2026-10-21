@@ -97,7 +97,7 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 菜单和帮助里的操作只有两种：**输编号**做那件事，**直接回车**退回上一级。不用记别的键。
 
-选 `6` 进帮助，一共 7 条，一屏一条，按你遇到的问题挑：
+选 `6` 进帮助，按你遇到的问题挑：
 
 | 编号 | 一条回答一个问题 |
 |---|---|
@@ -109,7 +109,10 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 | 6 | 出问题了我该看哪里 |
 | 7 | 还是不行怎么办 |
 
+进去以后底部会列出全部编号，你在哪一条一眼就看得到。
+
 <img src="./assets/readme/buttons.svg" width="100%" alt="菜单每个选项影响哪些部分：安装会改开机启动、终端同步脚本、环境变量和后台监控；查看状态只读取；停止只清除监控和环境变量；一键恢复全部清除只留日志；检查更新只替换程序文件">
+
 ### 日志
 
 `monitor\monitor.log`（Mac 是 `mac/monitor/monitor.log`）记录它做过的判断。上限 200KB，写满之后只保留最近 200 行。
@@ -126,44 +129,37 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 用的是 **PowerShell**，不是老式的「命令提示符」（cmd）。看提示符就能分辨：开头有 `PS` 的是 PowerShell，比如 `PS C:\Users\你的名字>`。
 
-日常窗口基本都是 PowerShell：开始菜单搜 PowerShell、Win+R 输入 `powershell`、Windows Terminal、VS Code 终端，都是。只有手动打开「命令提示符」才是 cmd，那里的命令会报错。
+日常窗口基本都是 PowerShell：开始菜单搜 PowerShell、Win+R 输入 `powershell`、Windows Terminal、VS Code 终端，都是。
 
-**如果你确实在用 cmd**，只有「查看代理」在 cmd 里有效：
+**cmd 和 Git Bash 也能用**，差别只有一个：它们没有自动跟随，代理状态变了不会自己更新。所以要固定直连时，得自己把变量清掉。
 
-| 目的 | PowerShell | cmd |
-|---|---|---|
-| 固定直连 | `$env:ENVPROXY_TERM = 'off'` | 不支持，请改用 PowerShell |
-| 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | 不支持，请改用 PowerShell |
-| 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+| 我想 | PowerShell | cmd | Git Bash |
+|---|---|---|---|
+| 让这个窗口固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY= & set HTTPS_PROXY= & set ALL_PROXY= & set NO_PROXY= & set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
+| 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | 重开这个窗口 | 重开这个窗口 |
+| 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
-固定直连的开关由写进 PowerShell 配置文件的同步代码读取，cmd 不读那个文件，所以 `set ENVPROXY_TERM=off` 在 cmd 里不会有任何效果——这一个窗口请改用 PowerShell。
+PowerShell 有一句开关就能搞定，因为安装时往它的配置文件放了一小段代码，每次回到提示符就照当前状态调一次。cmd 和 Git Bash 没有这种入口，所以只能直接改变量——改完窗口一关就失效，和 PowerShell 的开关效果一样。
 
-Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
-
-**Windows 上装了 Git Bash 的话**：它继承 Windows 的环境变量，所以"能翻墙"这条自动成立，不用管。但**「让这个窗口固定直连」那个开关在 Git Bash 里不生效**——EnvProxy 只往 PowerShell 的配置里写同步代码，Git Bash 里没有东西读它。要在 Git Bash 里绕过代理，用 `export` 写具体变量，写法同 Mac 那一列。
+Mac 上就是「终端」这个 App，默认 zsh，命令看 Git Bash 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
 
 ### 3.1 三种常用操作
 
-下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**。
-
-| 我想 | Windows（PowerShell） | Mac |
-|---|---|---|
-| 让这个窗口固定直连 | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
-| 让它重新跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | `unset ENVPROXY_TERM` |
-| 看现在走不走代理 | `$env:HTTPS_PROXY` | `echo $HTTPS_PROXY` |
-
-「固定直连」只管当前窗口，窗口一关就失效。查看代理有值就是走代理，空的就是直连。
+下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**，窗口一关就失效。
 
 **让这个窗口走公司代理：两步，顺序不能反。**
 
-先停掉自动跟随（同上表第一行），再设代理：
+1. 先固定直连（见上面那张表，按你在哪个终端选一列）
+2. 再设公司地址
 
-| | 命令 |
+| | 设公司代理 |
 |---|---|
-| Windows（PowerShell） | `$env:HTTPS_PROXY = 'http://你的地址:端口'` |
-| Mac | `export HTTPS_PROXY=http://你的地址:端口` |
+| PowerShell | `$env:HTTPS_PROXY = 'http://你的地址:端口'` |
+| cmd | `set HTTPS_PROXY=http://你的地址:端口` |
+| Mac / Git Bash | `export HTTPS_PROXY=http://你的地址:端口` |
 
 为什么必须先停掉：不停的话，翻墙软件一有变化就会把你刚设的地址覆盖掉。你自己设的值不会被删——只要和我们写入的不一样，公司代理、抓包工具、别的端口都原样留着。
+
 ### 3.2 让某一条命令不走代理
 
 不同工具写法不一样，没有通用的一条命令。

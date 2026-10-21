@@ -356,7 +356,7 @@ $MenuItems = @(
     @{ Key = "5"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先说明，同意才装" },
     @{ Key = "3"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "停掉并恢复直连，下次登录回来" },
     @{ Key = "4"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
-    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "有 7 条，一屏一条" },
+    @{ Key = "6"; Name = "帮助";       Switch = "Help";      Group = "维护"; Hint = "忘了怎么用就看它" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出" }
 )
 
@@ -460,7 +460,7 @@ function Format-MenuText {
 function Get-HelpTopics {
     return @(
         @{
-            Key = '1'; Title = '这是干什么用的'
+            Key = '1'; Title = '这是干什么用的'; Short = '用处'
             Lines = @(
                 '它做什么',
                 '  翻墙软件一开，终端里的 git / npm / curl 就能翻墙；',
@@ -476,7 +476,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '2'; Title = '装完之后要我做什么'
+            Key = '2'; Title = '装完之后要我做什么'; Short = '装完'
             Lines = @(
                 '装完之后，按窗口分三种情况',
                 '  1. 装完之后打开的窗口',
@@ -494,38 +494,37 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '3'; Title = '我要单独设置某个窗口'
+            Key = '3'; Title = '我要单独设置某个窗口'; Short = '窗口'
             Lines = @(
-                '下面每条命令都在「你要改的那个窗口」里敲，只影响那一个窗口。',
-                '  看提示符分辨：开头有 PS 就是 PowerShell（绝大多数情况），没有的是 cmd。',
+                '下面每条命令都在「你要改的那个窗口」里敲，只影响那个窗口。',
+                '  先看提示符：有 PS 开头就是 PowerShell；没有就是 cmd 或 Git Bash。',
                 '',
                 '一、让这个窗口固定直连',
-                '      $env:ENVPROXY_TERM = ''off''',
-                '  窗口一关就失效。想改回来：Remove-Item Env:ENVPROXY_TERM',
+                '  PowerShell：$env:ENVPROXY_TERM = ''off''',
+                '  cmd 或 Git Bash 没有自动跟随，直接清掉这 5 个变量：',
+                '      set HTTP_PROXY= & set HTTPS_PROXY= & set ALL_PROXY= & set NO_PROXY=',
+                '      set NODE_USE_ENV_PROXY=',
+                '  窗口一关就失效。改回来：PowerShell 用 Remove-Item Env:ENVPROXY_TERM，',
+                '  其余终端重开一个窗口即可。',
                 '',
                 '二、让这个窗口走公司代理（两步，顺序不能反）',
-                '  1. 先停掉自动跟随：$env:ENVPROXY_TERM = ''off''',
-                '  2. 再设公司代理：  $env:HTTPS_PROXY = ''http://你的地址:端口''',
+                '  1. 先按上面固定直连',
+                '  2. 再设公司地址：$env:HTTPS_PROXY = ''http://你的地址:端口''',
+                '      Git Bash 用 export 写同名变量。',
                 '  为什么必须先停掉：不停的话，翻墙软件一有变化就会覆盖你刚设的地址。',
                 '',
                 '三、看看现在走不走代理',
-                '      $env:HTTPS_PROXY          （有值就是走代理，空的是直连）',
+                '      PowerShell：$env:HTTPS_PROXY        cmd：set HTTPS_PROXY',
+                '      Mac / Git Bash：echo $HTTPS_PROXY   有值就是走代理，空的是直连',
                 '',
                 '四、让已经开着的窗口立刻跟上',
-                '      . $PROFILE',
-                '  $PROFILE 是 PowerShell 启动时自动执行的文件，安装时往里面放了一段同步',
-                '  代码，这条命令就是手动执行一次它。四点注意：',
-                '    1. 开头的点号和后面的空格都不能少',
-                '    2. 只对 PowerShell 有效（cmd 和 Git Bash 没有这个文件）',
-                '    3. 只影响这一个窗口，别的已开窗口要各自执行，或者重开',
-                '    4. 那个窗口从没装过 EnvProxy 时，这个文件可能不存在，会看到',
-                '       「找不到路径」的红字。这是正常的，重开一个窗口就行。',
-                '',
-                '  固定直连的开关只在 PowerShell 里生效，cmd 窗口请改用 PowerShell。'
+                '      PowerShell：. $PROFILE',
+                '  只有 PowerShell 有这东西（安装时往它的配置文件写了段代码）。',
+                '  点号和空格都不能少；报「找不到路径」说明那窗口没装过，重开就行。'
             )
         },
         @{
-            Key = '4'; Title = '我要让某条命令不走代理'
+            Key = '4'; Title = '我要让某条命令不走代理'; Short = '命令'
             Lines = @(
                 '不同工具写法不一样，没有通用的一条命令',
                 '',
@@ -554,7 +553,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '5'; Title = '菜单每一项是干什么的'
+            Key = '5'; Title = '菜单每一项是干什么的'; Short = '菜单'
             Lines = @(
                 '这些编号是在主菜单里敲的（不是在这里）。',
                 '',
@@ -580,7 +579,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '出问题了我该看哪里'
+            Key = '6'; Title = '出问题了我该看哪里'; Short = '排错'
             Lines = @(
                 '日志',
                 '      win\monitor\monitor.log',
@@ -596,7 +595,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '7'; Title = '还是不行怎么办'
+            Key = '7'; Title = '还是不行怎么办'; Short = '不行'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
                 '  打开菜单选 1。它不会重复安装，不会中断网络，',
@@ -620,7 +619,7 @@ function Format-HelpIndex {
     [void]$out.Add('================ EnvProxy 帮助 ================')
     [void]$out.Add('')
     # 这里原来写「想知道什么，就输它的编号」，和底部提示重复了一遍；
-    # 换成一句真正有用的话：告诉他这 7 条是按「我遇到什么」排的。
+    # 换成一句真正有用的话：告诉他这些条目是按「我遇到什么」排的。
     [void]$out.Add('  按你遇到的问题挑一条：')
     foreach ($t in (Get-HelpTopics)) {
         [void]$out.Add(('    {0}  {1}' -f $t.Key, $t.Title))
@@ -672,6 +671,27 @@ function Write-HelpLine([string]$Line) {
 }
 
 # 单个主题：正文前后各留一行，底部固定给返回方式。
+# 主题页底部那一行：把全部编号和短名并排列出来，当前这条用方括号标。
+# 为什么需要它：用户在主题里只看到「输编号看别的」，却不知道别的编号是几号——
+# 那句话等于白说。列出编号既回答了"编号是什么"，也顺手回答了"还有哪几条"。
+# 编号与短名都从表里取，加一条主题时这里自动跟上，不会留下写死的旧数字。
+# 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
+function Format-HelpKeyRange {
+    $keys = @(Get-HelpTopics | ForEach-Object { $_.Key })
+    if ($keys.Count -eq 0) { return '没有可用的编号' }
+    if ($keys.Count -eq 1) { return '只有 ' + $keys[0] }
+    return ('有 ' + $keys[0] + '-' + $keys[$keys.Count - 1])
+}
+
+function Format-HelpNavLine([string]$CurrentKey) {
+    $parts = @()
+    foreach ($t in (Get-HelpTopics)) {
+        $label = if ($t.Key -eq $CurrentKey) { '[' + $t.Key + ']' + $t.Short } else { $t.Key + ' ' + $t.Short }
+        $parts += $label
+    }
+    return ('  ' + ($parts -join '  '))
+}
+
 function Format-HelpTopic([string]$Key) {
     $t = @(Get-HelpTopics | Where-Object { $_.Key -eq $Key })
     if ($t.Count -eq 0) { return $null }
@@ -681,6 +701,7 @@ function Format-HelpTopic([string]$Key) {
     [void]$out.Add('')
     foreach ($l in $t.Lines) { [void]$out.Add($l) }
     [void]$out.Add('')
+    [void]$out.Add((Format-HelpNavLine $t.Key))
     [void]$out.Add('  输编号看别的    直接回车 = 回目录')
     return ($out -join "`n")
 }
@@ -696,11 +717,12 @@ function Show-HelpTopicColored([string]$Key) {
     Write-Host ''
     foreach ($l in $t.Lines) { Write-HelpLine $l }
     Write-Host ''
-    Write-Host '  输编号看别的    直接回车 = 回目录' -ForegroundColor DarkGray
+    Write-Host ((Format-HelpNavLine $t.Key))
+    Write-Host '  输编号看别的    直接回车 = 回目录'
     return $true
 }
 
-# 全文：把 7 个主题按顺序拼起来，一个字不少。
+# 全文：把所有主题按顺序拼起来，一个字不少。
 # 非交互调用（-Help 被脚本/管道调用）走这条：调用方要的是一份完整文档，
 # 分页导航对没有终端的场景没有意义。
 function Format-HelpAll {
@@ -718,7 +740,7 @@ function Format-HelpAll {
 # 交互只有两种操作，和菜单完全一样：
 #   输数字 = 去看那一条；直接回车 = 回上一级。
 # 不用 n / p / m / a 这些字母：用户记不住哪个键管哪件事，
-# 而"输编号"和"按回车"不需要学。7 条一轮翻页的需求本来也不强。
+# 而"输编号"和"按回车"不需要学。条目不多，一屏列得下，也就没有翻页的必要。
 function Show-Help([switch]$All) {
     if ($All -or -not (Test-CanPrompt)) {
         Write-Host (Format-HelpAll)
@@ -742,7 +764,7 @@ function Show-Help([switch]$All) {
         # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         # 与菜单屏一致（输错不重画），不该一屏一个做法。
         if (-not (Test-HelpKey $sel)) {
-            Write-Host ("没有这一条：{0}（有 1-7）" -f $sel) -ForegroundColor Yellow
+            Write-Host ("没有这一条：{0}（{1}）" -f $sel, (Format-HelpKeyRange)) -ForegroundColor Yellow
             continue
         }
         Clear-Screen

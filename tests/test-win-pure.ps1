@@ -405,8 +405,11 @@ foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r +
 foreach ($t in $helpTopics) {
     # 1) 一屏一条是这版帮助的设计承诺：超过 30 行的部分会被终端切掉，
     #    而被切掉的常常是底部的「怎么退出」。
-    $lines = @($t.Lines)
-    Assert-Eq ('topic ' + $t.Key + ' fits on one screen') $true ($lines.Count -le 30)
+    # 1) 一屏一条是这版帮助的设计承诺：超过终端高度的部分会被切掉，
+    #    而被切掉的常常是底部的「怎么退出」。这里量的是**真实渲染结果**而不是正文：
+    #    标题、空行、导航行、提示行都占屏幕，只数正文会漏掉它们（此前正是这么漏的）。
+    $rendered = @((Format-HelpTopic $t.Key) -split "`n")
+    Assert-Eq ('topic ' + $t.Key + ' renders within 30 lines') $true ($rendered.Count -le 30)
     # 2) 相邻两行一模一样 = 编辑时留下的重复段，用户会以为屏幕坏了。
     $dupFound = $false
     for ($i = 1; $i -lt $lines.Count; $i++) {
