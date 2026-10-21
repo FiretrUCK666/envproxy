@@ -1421,7 +1421,89 @@ format_help_topic() {
     echo ""
     _help_topic_body "$1"
     echo ""
-    echo "  0 = 返回目录    1-7 = 看别的主题    m = 回主菜单"
+    echo "  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单"
+    return 0
+}
+
+# 把 n / p 翻译成目标主题的键。到头绕回去（环形），避免"按了没反应"的困惑。
+resolve_help_nav() {
+    _rhn_nav="$1"
+    _rhn_cur="$2"
+    _rhn_total=${#HELP_TOPIC_KEYS[@]}
+    [ "$_rhn_total" -le 0 ] && return 1
+    # 找当前位置
+    _rhn_idx=-1
+    _rhn_i=0
+    for _rhn_k in "${HELP_TOPIC_KEYS[@]}"; do
+        if [ "$_rhn_k" = "$_rhn_cur" ]; then _rhn_idx=$_rhn_i; break; fi
+        _rhn_i=$((_rhn_i + 1))
+    done
+    [ "$_rhn_idx" -lt 0 ] && _rhn_idx=0
+    case "$_rhn_nav" in
+        n|N) _rhn_next=$(( (_rhn_idx + 1) % _rhn_total ));;
+        p|P) _rhn_next=$(( (_rhn_idx - 1 + _rhn_total) % _rhn_total ));;
+        *) return 1;;
+    esac
+    echo "${HELP_TOPIC_KEYS[$_rhn_next]}"
+    return 0
+}
+
+# 屏幕刷新：菜单与帮助都是"一屏一页"，切换时清屏。
+# 只在真有终端时清：没有终端时 clear 会往输出里塞控制字符，把日志刷脏。
+clear_screen_safe() {
+    [ -t 1 ] || return 0
+    clear 2>/dev/null || true
+}
+
+# 判断一行该用什么颜色。只看行的形状，文案改了配色自动跟上。
+#   顶格且短 -> 小标题（青）
+#   缩进 4 格以上且像命令 -> 命令（绿）
+#   以 注意/为什么/必须 开头 -> 提醒（黄）
+#   其余 -> 正文（默认色，终端里就是灰白）
+_help_line_color() {
+    _hlc_line="$1"
+    [ -z "$_hlc_line" ] && { echo ""; return 0; }
+    # 数前导空格
+    _hlc_ind=0
+    _hlc_rest="$_hlc_line"
+    while [ "${_hlc_rest# }" != "$_hlc_rest" ]; do
+        _hlc_ind=$((_hlc_ind + 1))
+        _hlc_rest="${_hlc_rest# }"
+    done
+    if [ "$_hlc_ind" -eq 0 ]; then
+        # 顶格短句 = 小标题
+        if [ ${#_hlc_rest} -le 30 ]; then echo "36"; else echo ""; fi
+        return 0
+    fi
+    case "$_hlc_rest" in
+        注意*|为什么*|必须*|别*|不要*|小心*) echo "33"; return 0;;
+    esac
+    if [ "$_hlc_ind" -ge 4 ]; then
+        case "$_hlc_rest" in
+            [A-Za-z\$./\\]*|*--*|*=*) echo "32"; return 0;;
+        esac
+    fi
+    echo "90"
+    return 0
+}
+
+# 带配色地打一个主题。与 format_help_topic 分工：那个给纯文本（非交互与测试用），
+# 这个负责上色。两者读同一份内容，不会出现"屏幕上有、文档里没有"。
+show_help_topic_colored() {
+    _sht_title=$(_help_topic_title "$1")
+    [ -z "$_sht_title" ] && return 1
+    printf '\033[36m%s\033[0m\n' "================ 帮助 $1 · $_sht_title ================"
+    echo ""
+    _help_topic_body "$1" | while IFS= read -r _sht_l; do
+        _sht_c=$(_help_line_color "$_sht_l")
+        if [ -z "$_sht_c" ]; then
+            printf '%s\n' "$_sht_l"
+        else
+            printf '\033[%sm%s\033[0m\n' "$_sht_c" "$_sht_l"
+        fi
+    done
+    echo ""
+    printf '\033[90m%s\033[0m\n' "  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单"
     return 0
 }
 
@@ -1437,7 +1519,7 @@ format_help_all() {
 }
 
 # 帮助入口。
-# 交互：先给目录，输编号看主题，0 回目录，m 回主菜单。
+# 交互：先给目录，输编号看主题，0 回目录，n/p 前后翻，m 回主菜单。
 # 非交互：直接给全文（与 Windows 侧 Show-Help -All 同一判据）。
 show_help() {
     if [ ! -t 0 ]; then
@@ -1445,7 +1527,8 @@ show_help() {
         return 0
     fi
     while true; do
-        echo ""
+        # 目录与主题各占一屏：切换时清屏，屏幕上永远只有当前这一页。
+        clear_screen_safe
         format_help_index
         printf "看哪个（回车返回）："
         if ! IFS= read -r _hs_sel; then
@@ -1457,28 +1540,38 @@ show_help() {
         case "$_hs_sel" in
             0|m|M) return 0;;
         esac
-        if ! format_help_topic "$_hs_sel"; then
+        clear_screen_safe
+        if ! show_help_topic_colored "$_hs_sel"; then
             echo "没有这个编号：$_hs_sel（1-7，或 0 返回）"
-            continue
-        fi
-        printf "按回车回目录，或直接输下一个编号："
-        if ! IFS= read -r _hs_next; then
-            echo ""
-            return 0
-        fi
-        _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
-        if [ -z "$_hs_next" ]; then
-            continue
-        fi
-        case "$_hs_next" in
-            m|M) return 0;;
-        esac
-        if format_help_topic "$_hs_next"; then
             printf "按回车回目录："
             IFS= read -r _hs_dummy || true
-        else
-            echo "没有这个编号：$_hs_next"
+            continue
         fi
+        # 看完一个主题后直接问下一个，不用退回目录；n/p 前后翻。
+        _hs_cur="$_hs_sel"
+        while true; do
+            printf "按回车回目录；n 下一个；p 上一个；或直接输编号："
+            if ! IFS= read -r _hs_next; then
+                echo ""
+                return 0
+            fi
+            _hs_next=$(printf '%s' "$_hs_next" | tr -d '[:space:]')
+            [ -z "$_hs_next" ] && break
+            case "$_hs_next" in
+                0|m|M) return 0;;
+            esac
+            _hs_nav=$(resolve_help_nav "$_hs_next" "$_hs_cur" || true)
+            [ -n "$_hs_nav" ] && _hs_next="$_hs_nav"
+            clear_screen_safe
+            if show_help_topic_colored "$_hs_next"; then
+                _hs_cur="$_hs_next"
+                continue
+            fi
+            echo "没有这个编号：$_hs_next"
+            printf "按回车回目录："
+            IFS= read -r _hs_dummy || true
+            break
+        done
     done
 }
 
@@ -1591,14 +1684,66 @@ format_menu_text() {
     echo "  输入编号后回车（直接回车 = 查看状态）"
 }
 
+# 带配色地打菜单。与 format_menu_text 分工：那个返回纯文本（非交互与测试用），
+# 这个负责上色。两者读同一份 MENU_ITEMS，不会出现"屏幕上有、测试里没有"。
+show_menu_colored() {
+    _smc_w=0
+    for _smc_i in "${MENU_ITEMS[@]}"; do
+        _smc_rest=${_smc_i#*|}
+        _smc_name=${_smc_rest%%|*}
+        _smc_fw=$(_menu_cell_width "$_smc_name")
+        [ "$_smc_fw" -gt "$_smc_w" ] && _smc_w="$_smc_fw"
+    done
+    _smc_pid=$(get_monitor_pid || true)
+    _smc_ver=$(get_local_version || true)
+    [ -z "$_smc_ver" ] && _smc_ver="未知"
+    printf '\033[36m%s\033[0m\n' "======== EnvProxy 菜单 (macOS) ========"
+    if [ -n "$_smc_pid" ]; then
+        printf '\033[90m  监控 运行中 (PID %s)    版本 v%s\033[0m\n' "$_smc_pid" "$_smc_ver"
+    else
+        printf '\033[90m  监控 未运行    版本 v%s\033[0m\n' "$_smc_ver"
+    fi
+    for _smc_g in 日常 维护 退出; do
+        _smc_first=1
+        for _smc_i in "${MENU_ITEMS[@]}"; do
+            _smc_rest=${_smc_i#*|}
+            _smc_name=${_smc_rest%%|*}
+            _smc_rest2=${_smc_rest#*|}
+            _smc_hint=${_smc_rest2%%|*}
+            _smc_grp=${_smc_i##*|}
+            [ "$_smc_grp" != "$_smc_g" ] && continue
+            if [ "$_smc_first" = "1" ]; then
+                echo ""
+                printf '\033[36m  %s\033[0m\n' "$_smc_g"
+                _smc_first=0
+            fi
+            _smc_key=${_smc_i%%|*}
+            # 编号亮色（要敲的东西），名字白，说明灰：三层区分让"敲哪个"一眼看出来。
+            case "$_smc_key" in
+                0) _smc_kc=90;;
+                *) _smc_kc=32;;
+            esac
+            if [ -n "$_smc_hint" ]; then
+                printf '\033[%sm    %s\033[0m  \033[97m%s\033[0m   \033[90m%s\033[0m\n' \
+                    "$_smc_kc" "$_smc_key" "$(_menu_cell_pad "$_smc_name" "$_smc_w")" "$_smc_hint"
+            else
+                printf '\033[%sm    %s\033[0m  \033[97m%s\033[0m\n' "$_smc_kc" "$_smc_key" "$_smc_name"
+            fi
+        done
+    done
+    echo ""
+    printf '\033[90m%s\033[0m\n' "  输入编号后回车（直接回车 = 查看状态）"
+}
+
 show_menu() {
     if [ ! -t 0 ]; then
         echo "菜单需要双击 打开菜单.command 使用，管道调用请直接用 install/status/stop/uninstall/update/help 子命令。"
         return 1
     fi
     while true; do
-        echo ""
-        format_menu_text
+        # 每一轮先清屏：菜单始终占着同一块地方，不会一行行往下堆。
+        clear_screen_safe
+        show_menu_colored
         printf "输入编号："
         if ! IFS= read -r _choice; then
             echo ""
@@ -1625,5 +1770,8 @@ show_menu() {
         esac
         # 子进程跑完整子命令：与入口子命令走的是同一条路（含锁、确认、复检）。
         /bin/bash "$SCRIPT_PATH" "$_msub" || echo "启动失败（退出码 $?）。"
+        # 子命令跑完，等用户看一眼再回菜单：否则清屏会立刻把它的输出抹掉。
+        printf "按回车回菜单："
+        IFS= read -r _dummy || true
     done
 }

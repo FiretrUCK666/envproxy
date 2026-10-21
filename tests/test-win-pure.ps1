@@ -381,6 +381,18 @@ Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TE
 # Every screen ends with the way back out. Without it a user who lands on a topic
 # has no idea how to leave, which is exactly the "wall of text" problem pagination solves.
 Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '返回目录')
+# Next/previous navigation wraps around instead of dead-ending: pressing n on the last
+# topic lands on the first one, so "n" always does something.
+$navKeys = @($helpTopics | ForEach-Object { $_.Key })
+Assert-Eq 'n from the first topic goes to the second' $navKeys[1] (Resolve-HelpNav 'n' $navKeys[0])
+Assert-Eq 'n from the last topic wraps to the first' $navKeys[0] (Resolve-HelpNav 'n' $navKeys[$navKeys.Count - 1])
+Assert-Eq 'p from the first topic wraps to the last' $navKeys[$navKeys.Count - 1] (Resolve-HelpNav 'p' $navKeys[0])
+Assert-Eq 'a plain digit is not a navigation word' $null (Resolve-HelpNav '2' $navKeys[0])
+# Every line gets a colour role so the screen has hierarchy instead of one grey wall.
+# Roles are derived from the line shape, so each shape must be recognised.
+$roleSeen = @{}
+foreach ($t in $helpTopics) { foreach ($l in $t.Lines) { $roleSeen[(Get-HelpLineRole $l)] = $true } }
+foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r) }
 # A table entry that is never printed is a feature the user cannot reach: the menu once
 # printed a hardcoded list and [6] Help never appeared on screen even though the table
 # had it. Show-Menu bails out under redirected input, so it cannot be exercised here --

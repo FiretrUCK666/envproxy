@@ -298,6 +298,19 @@ function Show-Status {
 # ------------------------------------------------------------------------------
 # 8. 菜单（唯一双击入口"打开菜单"背后：编号→现有开关，不新增行为）
 # ------------------------------------------------------------------------------
+# 屏幕刷新：菜单与帮助都是"一屏一页"，切换页面时先清屏再画。
+#
+# 为什么必须带判断：Clear-Host 在输出被重定向时（管道、日志、CI）会抛
+# "设置 CursorPosition 时出现异常：句柄无效"——它依赖真实控制台缓冲区。
+# 那种环境本来也拿不到终端，清屏毫无意义，还会把错误日志刷脏。
+# 所以只在"真有终端"时清，其余情况老实往下输出。
+function Clear-Screen {
+    try {
+        if ([Console]::IsOutputRedirected) { return }
+        Clear-Host
+    } catch {}
+}
+
 # 菜单只做三件事：打印、读编号、起子进程跑对应开关后回到菜单。
 # 每个动作都走一遍入口开关的完整路径（含操作锁）：菜单自己不拿锁、不碰变量不碰文件，
 # 所以菜单里的 bug 最多影响菜单显示，动不了安装区。
@@ -339,7 +352,45 @@ function Format-MenuCell([string]$Text, [int]$Width) {
     return $Text + (' ' * $pad)
 }
 
-# 渲染整张菜单。打印与测试共用它，保证"表里有什么，屏幕就有什么"。
+# 带配色地把菜单打到屏幕上。
+# 与 Format-MenuText 的分工：那个返回纯文本（给测试和非交互用），这个负责上色。
+# 两者读同一张 $MenuItems，所以不会出现"屏幕上有、测试里没有"。
+function Show-MenuColored {
+    $nameW = Get-MenuNameWidth
+    $hl = Get-MonitorProcess
+    $verText = Get-LocalVersion
+    if (-not $verText) { $verText = "未知" }
+    Write-Host "======== EnvProxy 菜单 ========" -ForegroundColor Cyan
+    # 抬头是状态提要，用灰：它是背景信息，不该和可点的编号抢注意力。
+    if ($hl) {
+        Write-Host ("  监控 运行中 (PID {0})    版本 v{1}" -f $hl.ProcessId, $verText) -ForegroundColor DarkGray
+    } else {
+        Write-Host ("  监控 未运行    版本 v{0}" -f $verText) -ForegroundColor DarkGray
+    }
+    foreach ($g in @('日常', '维护', '退出')) {
+        $items = @($MenuItems | Where-Object { $_.Group -eq $g })
+        if ($items.Count -eq 0) { continue }
+        Write-Host ''
+        Write-Host ("  $g") -ForegroundColor Cyan
+        foreach ($mi in $items) {
+            # 编号用亮色（这是用户要敲的东西），名字白色，说明灰色。
+            # 三层区分让"敲哪个"一眼看出来，不用逐行读完整行。
+            $keyColor = if ($mi.Switch) { 'Green' } else { 'DarkGray' }
+            Write-Host ('    {0}' -f $mi.Key) -ForegroundColor $keyColor -NoNewline
+            if ($mi.Hint) {
+                $nameCell = Format-MenuCell $mi.Name $nameW
+                Write-Host ('  {0}' -f $nameCell) -ForegroundColor White -NoNewline
+                Write-Host ('   {0}' -f $mi.Hint) -ForegroundColor Gray
+            } else {
+                Write-Host ('  {0}' -f $mi.Name) -ForegroundColor White
+            }
+        }
+    }
+    Write-Host ''
+    Write-Host '  输入编号后回车（直接回车 = 查看状态）' -ForegroundColor DarkGray
+}
+
+# 渲染整张菜单（纯文本）。打印与测试共用内容，保证"表里有什么，屏幕就有什么"。
 function Format-MenuText {
     $nameW = Get-MenuNameWidth
     $out = New-Object System.Collections.Generic.List[string]
@@ -554,6 +605,43 @@ function Format-HelpIndex {
     return ($out -join "`n")
 }
 
+# 判断一行在屏幕上该用什么颜色。
+# 判据只看行自己的形状，不依赖调用方声明：文案改动时配色自动跟上，不会脱节。
+#   顶格且不以符号开头 -> 小标题（青色加粗感）
+#   缩进 4 格以上且像是命令 -> 命令（绿色，用户可能要照抄）
+#   含"注意/为什么/必须先" -> 提醒（黄色）
+#   其余 -> 正文（灰色）
+# 判错最多是颜色不理想，不会丢内容，也不会报错。
+function Get-HelpLineRole([string]$Line) {
+    if ([string]::IsNullOrWhiteSpace($Line)) { return 'blank' }
+    $indent = 0
+    foreach ($ch in $Line.ToCharArray()) { if ($ch -eq ' ') { $indent++ } else { break } }
+    $body = $Line.Trim()
+    # 顶格的一行短句是小标题（不是句子：没有句号、逗号结尾通常也不长）
+    if ($indent -eq 0) {
+        if ($body.Length -le 30 -and $body -notmatch '[。；，]$') { return 'heading' }
+        return 'text'
+    }
+    if ($body -match '^(注意|为什么|必须|别|不要|小心)') { return 'warn' }
+    # 命令：缩进 4 格以上，且像命令行（英文开头，或含 = / -- 这类参数特征）
+    if ($indent -ge 4 -and ($body -match '^[A-Za-z$./\\]' -or $body -match '--|=\S')) { return 'cmd' }
+    if ($body -match '^(\d+\.|\[|\d+ \s)') { return 'item' }
+    return 'text'
+}
+
+# 按角色给一行配色输出。
+function Write-HelpLine([string]$Line) {
+    $role = Get-HelpLineRole $Line
+    switch ($role) {
+        'heading' { Write-Host $Line -ForegroundColor Cyan }
+        'cmd'     { Write-Host $Line -ForegroundColor Green }
+        'warn'    { Write-Host $Line -ForegroundColor Yellow }
+        'item'    { Write-Host $Line -ForegroundColor White }
+        'blank'   { Write-Host '' }
+        default   { Write-Host $Line -ForegroundColor Gray }
+    }
+}
+
 # 单个主题：正文前后各留一行，底部固定给返回方式。
 function Format-HelpTopic([string]$Key) {
     $t = @(Get-HelpTopics | Where-Object { $_.Key -eq $Key })
@@ -564,8 +652,37 @@ function Format-HelpTopic([string]$Key) {
     [void]$out.Add('')
     foreach ($l in $t.Lines) { [void]$out.Add($l) }
     [void]$out.Add('')
-    [void]$out.Add('  0 = 返回目录    1-7 = 看别的主题    m = 回主菜单')
+    [void]$out.Add('  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单')
     return ($out -join "`n")
+}
+
+# 把 n / p 这类导航词翻译成目标主题的键。
+# 有了它，用户不用记"我现在在第几个"，直接按 n 就能翻到下一篇。
+# 到头绕回去（环形），避免"按了没反应"的困惑。
+# 参数名不能用 $Input：那是 PowerShell 的自动变量，赋值会被静默忽略。
+function Resolve-HelpNav([string]$Nav, [string]$CurrentKey) {
+    $keys = @(Get-HelpTopics | ForEach-Object { $_.Key })
+    if ($keys.Count -eq 0) { return $null }
+    $idx = [array]::IndexOf($keys, $CurrentKey)
+    if ($idx -lt 0) { $idx = 0 }
+    if ($Nav -eq 'n' -or $Nav -eq 'N') { return $keys[($idx + 1) % $keys.Count] }
+    if ($Nav -eq 'p' -or $Nav -eq 'P') { return $keys[($idx - 1 + $keys.Count) % $keys.Count] }
+    return $null
+}
+
+# 带配色地把一个主题打到屏幕上。
+# 与 Format-HelpTopic 的区别：那个返回纯文本（给非交互和测试用），
+# 这个负责上色（给人看）。两者共用同一份内容，不会出现"屏幕上有、文档里没有"。
+function Show-HelpTopicColored([string]$Key) {
+    $t = @(Get-HelpTopics | Where-Object { $_.Key -eq $Key })
+    if ($t.Count -eq 0) { return $false }
+    $t = $t[0]
+    Write-Host ('================ 帮助 {0} · {1} ================' -f $t.Key, $t.Title) -ForegroundColor Cyan
+    Write-Host ''
+    foreach ($l in $t.Lines) { Write-HelpLine $l }
+    Write-Host ''
+    Write-Host '  0 = 返回目录    n = 下一个    p = 上一个    m = 回主菜单' -ForegroundColor DarkGray
+    return $true
 }
 
 # 全文：把 7 个主题按顺序拼起来，一个字不少。
@@ -590,34 +707,34 @@ function Show-Help([switch]$All) {
         return
     }
     while ($true) {
-        Write-Host ''
+        # 目录与主题各占一屏：切换时清屏，屏幕上永远只有当前这一页。
+        Clear-Screen
         Write-Host (Format-HelpIndex) -ForegroundColor Cyan
         $sel = ''
         try { $sel = "$(Read-Host '看哪个（回车返回）')".Trim() } catch { return }
         if (-not $sel) { return }
         if ($sel -eq '0' -or $sel -eq 'm' -or $sel -eq 'M') { return }
-        $body = Format-HelpTopic $sel
-        if (-not $body) {
+        Clear-Screen
+        if (-not (Show-HelpTopicColored $sel)) {
             Write-Host ("没有这个编号：{0}（1-7，或 0 返回）" -f $sel) -ForegroundColor Yellow
+            $null = Read-Host '按回车回目录'
             continue
         }
-        Write-Host ''
-        Write-Host $body -ForegroundColor Cyan
-        Write-Host ''
-        # 看完一个主题以后，直接问"下一个看哪个"，不用退回目录再选一次。
-        $next = ''
-        try { $next = "$(Read-Host '按回车回目录，或直接输下一个编号')".Trim() } catch { return }
-        if (-not $next) { continue }
-        if ($next -eq 'm' -or $next -eq 'M') { return }
-        # 允许连看：把用户刚输的编号当作下一次选择，靠外层循环再判一遍。
-        $again = Format-HelpTopic $next
-        if ($again) {
-            Write-Host ''
-            Write-Host $again -ForegroundColor Cyan
-            Write-Host ''
-            $null = Read-Host '按回车回目录'
-        } else {
+        # 看完一个主题以后，直接问下一个看哪个，不用退回目录再选一次。
+        # 允许连看，也允许按 n / p 前后翻：用户不用记"我在第几个"。
+        $cur = $sel
+        while ($true) {
+            $next = ''
+            try { $next = "$(Read-Host '按回车回目录；n 下一个；p 上一个；或直接输编号')".Trim() } catch { return }
+            if (-not $next) { break }
+            if ($next -eq 'm' -or $next -eq 'M' -or $next -eq '0') { return }
+            $nav = Resolve-HelpNav $next $cur
+            if ($nav) { $next = $nav }
+            Clear-Screen
+            if (Show-HelpTopicColored $next) { $cur = $next; continue }
             Write-Host ("没有这个编号：{0}" -f $next) -ForegroundColor Yellow
+            $null = Read-Host '按回车回目录'
+            break
         }
     }
 }
@@ -632,8 +749,9 @@ function Show-Menu {
         }
     } catch {}
     while ($true) {
-        Write-Host ""
-        Write-Host (Format-MenuText) -ForegroundColor Cyan
+        # 每一轮先清屏：菜单始终占着同一块地方，不会一行行往下堆。
+        Clear-Screen
+        Show-MenuColored
         try {
             $choice = Read-Host "输入编号"
         } catch {
