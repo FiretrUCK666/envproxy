@@ -315,7 +315,7 @@ The rule is: **when unsure, do nothing.**
 - **Almost no overhead once stable**: each port is probed at most once every 15 seconds, reading only response headers, under 1KB each time.
 - **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold it probes every 5 seconds, returning to 15 once the conclusion is settled.
 - **No residue after uninstalling**: variables, start at login, the locator script and the sync block are all removed, leaving only the log if you kept it.
-- **Almost no delay at the prompt**: it reads one local file before each prompt and starts no external process.
+- **Delay at the prompt is imperceptible**: before each prompt it reads the local state once (the registry on Windows, `proxy.env` on Mac) and starts no external process at all.
 
 ## 8. What is in the folder
 
