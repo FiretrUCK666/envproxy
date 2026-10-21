@@ -71,12 +71,6 @@ $script:UpdateExitCode = 0
 
 # 这个进程能不能跟人对话？
 # 判据：标准输入被重定向就没人能回答（后台任务、计划任务、CI 都是这样）。
-function Test-Interactive {
-    try { if ([Console]::IsInputRedirected) { return $false } } catch { return $false }
-    try { if (-not $Host.UI.RawUI) { return $false } } catch { return $false }
-    return $true
-}
-
 function Get-UpdateFailureKind([int]$StatusCode, [string]$RateLimitRemaining = "") {
     if ($StatusCode -eq 404 -or $StatusCode -eq 410) { return "missing" }
     if ($StatusCode -eq 429) { return "quota" }
@@ -916,7 +910,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     }
     # 非交互环境（没有能提问的控制台）：问不到人，就别白下一个包。
     # 先问再下载：反过来会白烧一次 GitHub 配额和一份安装包。
-    if (-not $AutoYes -and -not (Test-Interactive)) {
+    if (-not $AutoYes -and -not (Test-CanPrompt)) {
         Write-Host ("发现新版本 {0}，但当前环境没法提问（没有可交互的控制台），未做任何改动。" -f $remote.Tag) -ForegroundColor Yellow
         Write-Host "要更新请在能交互的终端里运行，或加 -Yes 跳过确认。" -ForegroundColor Yellow
         $script:UpdateExitCode = 1

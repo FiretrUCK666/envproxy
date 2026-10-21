@@ -329,25 +329,6 @@ function Show-Status {
 # 为什么必须带判断：Clear-Host 在输出被重定向时（管道、日志、CI）会抛
 # "设置 CursorPosition 时出现异常：句柄无效"——它依赖真实控制台缓冲区。
 # 那种环境本来也拿不到终端，清屏毫无意义，还会把错误日志刷脏。
-# 所以只在"真有终端"时清，其余情况老实往下输出。
-# 真的能对着一台终端问问题吗？
-# [Console]::IsInputRedirected 只回答"stdin 是不是重定向到了文件/管道"，
-# 它不回答"有没有可读的终端"。用任务计划或服务方式启动时（CreateProcess 不传 stdin），
-# 这个属性可能报 False，于是代码以为在交互环境里，进了 Read-Host ——
-# 而 Read-Host 在没有键盘的环境里既不返回也不抛异常，进程就那样静默挂住。
-# 所以除了重定向，还要确认输入来源真的是一台终端：WindowWidth 拿得到（拿到说明有控制台缓冲区）。
-# 两个条件都成立才算交互；任一条拿不到就当非交互处理（宁可给全文、不冒险去等键盘）。
-function Test-CanPrompt {
-    try {
-        if ([Console]::IsInputRedirected) { return $false }
-        # 没有控制台缓冲区时访问这个属性会抛异常（"句柄无效"）。
-        $null = [Console]::WindowWidth
-        return $true
-    } catch {
-        return $false
-    }
-}
-
 function Clear-Screen {
     try {
         if ([Console]::IsOutputRedirected) { return }

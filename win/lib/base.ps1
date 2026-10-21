@@ -212,3 +212,21 @@ function Compare-Versions([string]$A, [string]$B) {
     }
     return 0
 }
+
+# 真的能对着一台终端问问题吗？
+# 为什么放在 base 层：ops（菜单/帮助）和 update（更新前确认）都要问这个问题，
+# 而 update 在 ops 之前加载，调不到 ops 里的函数。放这里两边都能用，判据也只有一份。
+# 为什么不用 [Console]::IsInputRedirected 单独判断：它只回答"stdin 是不是重定向到了
+# 文件/管道"，不回答"有没有可读的终端"。用任务计划或服务方式启动时（CreateProcess
+# 不传 stdin），进程可能被判成交互，于是进了 Read-Host —— 而那个环境下 Read-Host
+# 既不返回也不抛异常，进程静默挂死。所以还要确认控制台缓冲区真的存在。
+function Test-CanPrompt {
+    try {
+        if ([Console]::IsInputRedirected) { return $false }
+        # 没有控制台缓冲区时访问这个属性会抛异常（"句柄无效"）。
+        $null = [Console]::WindowWidth
+        return $true
+    } catch {
+        return $false
+    }
+}
