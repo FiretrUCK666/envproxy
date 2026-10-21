@@ -50,7 +50,7 @@ If you are not sure, open the menu and pick `6 Help`. It splits into seven topic
 
 ## 0. What happens after installing
 
-Almost always nothing. Only the last row below needs action.
+Almost always nothing. Of the rows below, only the middle one needs anything from you, and that is at most one Enter press.
 
 | Your situation | What happens | What you do |
 |---|---|---|

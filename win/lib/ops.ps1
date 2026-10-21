@@ -20,7 +20,7 @@ function Install-EnvProxy {
     $runHave = $null
     try { $runHave = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName } catch {}
     if (($runHave -eq (Get-LauncherCommand)) -and (Test-LauncherCurrent)) {
-        Write-Host "[1/4] 开机自启动：已写入（固定定位器架构）" -ForegroundColor Green
+        Write-Host "[1/4] 开机自启动：已写入" -ForegroundColor Green
     } else {
         Write-Host "[1/4] 开机自启动：写入后读回不一致，可能被杀软拦住。" -ForegroundColor Yellow
         Write-Host "      请检查杀软拦截，或再打开一次菜单选 安装；仍然不行就把它加进白名单。" -ForegroundColor Yellow
@@ -493,14 +493,15 @@ function Get-HelpTopics {
                 '',
                 '让已经开着的窗口立刻跟上',
                 '      . $PROFILE',
-                '  $PROFILE 是 PowerShell 每次启动时自动跑的文件，安装时往里面放了一段',
-                '  同步代码，这条命令就是手动跑一次它。PowerShell 5.1 和 7 各有自己的',
+                '  $PROFILE 是 PowerShell 每次启动时自动执行的文件，安装时往里面放了一段',
+                '  同步代码，这条命令就是手动执行一次它。PowerShell 5.1 和 7 各有自己的',
                 '  $PROFILE，安装时两个都写了，所以你在哪个窗口里敲它，加载的都是对应的',
-                '  那一份。',
-                '  注意：开头的点号和后面的空格都不能少；只对 PowerShell 有效（cmd 和',
-                '  Git Bash 没有这个文件）；执行完只影响这一个窗口，别的已开窗口要各自',
-                '  执行或重开；如果那个窗口从没装过 EnvProxy，这个文件可能不存在，',
-                '  会看到「找不到路径」的红字，属正常，重开一个窗口就行。'
+                '  那一份。四点注意：',
+                '    1. 开头的点号和后面的空格都不能少',
+                '    2. 只对 PowerShell 有效（cmd 和 Git Bash 没有这个文件）',
+                '    3. 只影响这一个窗口，别的已开窗口要各自执行，或者重开',
+                '    4. 如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到',
+                '       「找不到路径」的红字。这是正常的，重开一个窗口就行。'
             )
         },
         @{

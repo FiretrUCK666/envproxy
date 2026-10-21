@@ -1040,7 +1040,7 @@ install_envproxy() {
     snapshot_prev_env "$_first" || true
     echo "[1/3] 正在写开机自启……"
     if set_autorun; then
-        echo "[1/3] 开机自启动：已写入（LaunchAgent + 固定定位器）"
+        echo "[1/3] 开机自启动：已写入"
     else
         echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
@@ -1316,10 +1316,12 @@ Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不
 
 让已经开着的窗口立刻跟上
       . ~/.envproxy/prompt-sync.sh
-  注意：开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效，fish 不支持；
-  执行完只影响这一个窗口，别的已开窗口要各自执行或重开；
-  如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」的
-  错误，属正常，重开一个窗口就行。
+  四点注意：
+    1. 开头的点号和后面的空格都不能少
+    2. 只对 zsh 和 bash 有效（fish 不支持）
+    3. 只影响这一个窗口，别的已开窗口要各自执行，或者重开
+    4. 如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」
+       的错误。这是正常的，重开一个窗口就行。
 TOPIC
     ;;
     4) cat <<'TOPIC'
@@ -1576,52 +1578,52 @@ show_help() {
 }
 
 # 菜单表：编号 | 名称 | 说明 | 分组。打印与分派共用它，加一项就一定会显示出来。
+# 菜单表：编号 | 名称 | 说明 | 分组 | 子命令。打印与分派共用它，加一项就一定会显示出来。
 # 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
-# 格式固定为 键|名字|提示|分组，四个字段三条竖线；提示可以为空但**竖线不能少**：
-# 少了它字段会静默错位（菜单照常打印、不报错，用户看到的却是错的内容）。
-# 所以下面带一道加载期校验，格式不对就当场报错，不给"看起来正常"的机会。
+# 子命令为空表示"不跑任何东西"（退出项）。分派直接读这一列，
+# 不许再另写一份 case——两份清单必然漂移，症状是"表里加了、点了没反应"。
+# 格式固定为五个字段、四条竖线；少一条竖线字段会静默错位（菜单照常打印、不报错，
+# 用户看到的却是错的内容）。所以下面带一道加载期校验，格式不对就当场报错。
 MENU_ITEMS=(
-    '1|安装 / 修复|首次安装；觉得不对劲就点它|日常'
-    '2|查看状态|监控、翻墙、变量、版本|日常'
-    '5|检查更新|有新版先说明，同意才装|日常'
-    '3|停止监控|停掉并恢复直连，下次登录回来|维护'
-    '4|一键恢复|彻底卸载，回到没装之前|维护'
-    '6|帮助|分主题查看，不用翻屏|维护'
-    '0|退出||退出'
+    '1|安装 / 修复|首次安装；觉得不对劲就点它|日常|install'
+    '2|查看状态|监控、翻墙、变量、版本|日常|status'
+    '5|检查更新|有新版先说明，同意才装|日常|update'
+    '3|停止监控|停掉并恢复直连，下次登录回来|维护|stop'
+    '4|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
+    '6|帮助|分主题查看，不用翻屏|维护|help'
+    '0|退出||退出|'
 )
-
-# 加载期校验：每条必须恰好三个竖线，且键与名字、分组非空。不合格就报错（不静默降级）。
+# 加载期校验：每条必须恰好四条竖线，且键、名字、分组非空。不合格就报错（不静默降级）。
 _menu_items_valid() {
     for _mv in "${MENU_ITEMS[@]}"; do
         # 数竖线：把非竖线字符全删掉，剩下的长度就是个数
         _bars=$(printf '%s' "$_mv" | tr -cd '|' | wc -c | tr -d ' ')
-        if [ "$_bars" -ne 3 ]; then
-            printf '菜单表格式错误（%s 个竖线，应为 3）：%s\n' "$_bars" "$_mv" >&2
+        if [ "$_bars" -ne 4 ]; then
+            printf '菜单表格式错误（%s 个竖线，应为 4）：%s\n' "$_bars" "$_mv" >&2
             return 1
         fi
         case "${_mv%%|*}" in
             '') printf '菜单表格式错误（键为空）：%s\n' "$_mv" >&2; return 1 ;;
-        esac
-        _mvname=${_mv#*|}; _mvname=${_mvname%%|*}
-        case "$_mvname" in
-            '') printf '菜单表格式错误（名字为空）：%s\n' "$_mv" >&2; return 1 ;;
-        esac
-        _mvgrp=${_mv##*|}
-        case "$_mvgrp" in
-            '') printf '菜单表格式错误（分组为空）：%s\n' "$_mv" >&2; return 1 ;;
         esac
     done
     return 0
 }
 _menu_items_valid || return 1 2>/dev/null || exit 1
 
-# 显示宽度：中文占两格，ASCII 占一格。菜单的名字列按最长的自动对齐，
-# 写死宽度会在改文案后错位，而错位的表格正是"看起来乱"的主要来源。
-#
-# 算法：先数总字节数和 ASCII 字节数。
-# UTF-8 里一个汉字占 3 个字节（在终端占 2 格），ASCII 占 1 字节（占 1 格），
-# 所以 显示宽度 = 字节数 - 非 ASCII 字节数 + (非 ASCII 字节数 / 3) * 2。
-# 用纯 bash 算术，不依赖 awk 的 locale 行为——那个在不同系统上表现不一致。
+# 按编号从表里取出子命令。空表示退出项。取不到返回非零（调用方据此报"没有这个编号"）。
+_menu_switch_for() {
+    _msf_key="$1"
+    for _msf_i in "${MENU_ITEMS[@]}"; do
+        _msf_k=${_msf_i%%|*}
+        [ "$_msf_k" != "$_msf_key" ] && continue
+        _msf_rest=${_msf_i#*|}
+        _msf_rest=${_msf_rest#*|}
+        _msf_rest=${_msf_rest#*|}
+        printf '%s' "${_msf_rest#*|}"
+        return 0
+    done
+    return 1
+}
 _menu_cell_width() {
     _mcw_s="$1"
     _mcw_all=$(printf '%s' "$_mcw_s" | wc -c)
@@ -1757,17 +1759,21 @@ show_menu() {
         case "$_choice" in
             q|Q) _choice="0";;
         esac
-        case "$_choice" in
-            1) _msub="install";;
-            2) _msub="status";;
-            3) _msub="stop";;
-            4) _msub="uninstall";;
-            5) _msub="update";;
-            6) show_help; continue;;
-            0) return 0;;
+        # 分派从表里读子命令，不另写一份 case：两份清单必然漂移。
+        _msub_ok=1
+        if _msub=$(_menu_switch_for "$_choice"); then _msub_ok=0; fi
+        if [ "$_msub_ok" = "1" ]; then
             # 只打一行，不重画整张菜单：输错一次就把屏幕刷一遍，会让人分不清刚才看到的是哪一屏。
-            *) echo "没有这个编号：$_choice（可用的有 1-6 和 0）"; continue;;
-        esac
+            echo "没有这个编号：$_choice（可用的有 1-6 和 0）"
+            continue
+        fi
+        # 空子命令 = 退出项。
+        [ -z "$_msub" ] && return 0
+        # 帮助留在本进程里跑：它要回到菜单，起子进程就回不来了。
+        if [ "$_msub" = "help" ]; then
+            show_help
+            continue
+        fi
         # 子进程跑完整子命令：与入口子命令走的是同一条路（含锁、确认、复检）。
         /bin/bash "$SCRIPT_PATH" "$_msub" || echo "启动失败（退出码 $?）。"
         # 子命令跑完，等用户看一眼再回菜单：否则清屏会立刻把它的输出抹掉。

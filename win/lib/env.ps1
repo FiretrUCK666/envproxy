@@ -138,7 +138,10 @@ function Remove-UserEnvVars {
     $ours = $DefaultNoProxy
     # 先算出每一项该变成什么，最后一次性写入：判断逻辑与写入动作分开，
     # 既不重复付注册表打开的开销，也让"到底动了哪些变量"在一处看得全。
+    # 要写的和要删的分开收：删除走 Remove-UserEnvNames 这个具名入口，
+    # 写入走 Write-UserEnvValues。两个入口都直写注册表，广播由调用方统一发一次。
     $plan = @{}
+    $drop = @()
     foreach ($n in $ProxyVarNames) {
         $cur = [Environment]::GetEnvironmentVariable($n, "User")
         if (-not $cur) { continue }
@@ -164,22 +167,23 @@ function Remove-UserEnvVars {
                 if ($oursSet -contains $key) { continue }                   # 我们加的，摘掉
                 $keep += $t
             }
-            $plan[$n] = if ($keep.Count -eq 0) { $null } else { ($keep -join ',') }
+            if ($keep.Count -eq 0) { $drop += $n } else { $plan[$n] = ($keep -join ',') }
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") {
-            if (Test-IsOwnedProxyValue $n $cur) { $plan[$n] = $null }
+            if (Test-IsOwnedProxyValue $n $cur) { $drop += $n }
             continue
         }
         if ($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
             # 归属判定：形状上是本机地址、且安装快照里本来没有它，才是我们写下的。
             # 用户自己挂的 mitmproxy（http://127.0.0.1:8080）同样有快照，一律不动。
-            if (Test-IsOwnedProxyValue $n $cur) { $plan[$n] = $null }
+            if (Test-IsOwnedProxyValue $n $cur) { $drop += $n }
             continue
         }
-        $plan[$n] = $null
+        $drop += $n
     }
     if ($plan.Count -gt 0) { Write-UserEnvValues -Values $plan }
+    if ($drop.Count -gt 0) { Remove-UserEnvNames -Names $drop }
     # 归属记录在这里**不动**：它记的是"我们写下过哪些值"，不是"我们现在是否持有"。
     # 为什么不能在这里清：off 之后，已经开着的窗口里还挂着我们注入的值，钩子唯一的判据
     # 就是这份记录——清掉它，off 就清不掉已开窗口，终端同步这条主功能直接失效。

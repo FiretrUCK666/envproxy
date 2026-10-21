@@ -96,9 +96,15 @@ if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Lea
 if (-not $target -or -not (Test-Path -LiteralPath $target)) {
     # 兜底：安装根找不到了（记录为空，或搜索后仍无可用候选、$target 留着旧的死路径），
     # 没有活着的组件会再纠正变量——把我们写的东西清掉，新终端不再读到过期代理。
-    # 只删本机地址（归属判定），用户自己的配置不动。判据与 Mac 侧同源（值非空且文件存在才算找到）。
+    # 只删本机地址，用户自己的配置不动。判据与 Mac 侧同源（值非空且文件存在才算找到）。
     # 清完必须广播：Explorer 在登录时已按旧注册表建好环境块，不广播则它之后起的
     # 每个终端都继续继承死变量。保持静默（登录路径不打扰用户）。
+    #
+    # 这里为什么自己写注册表、不调 env 层的 Write-UserEnvValues / Remove-UserEnvNames：
+    # 这段是**生成的独立脚本**，运行在登录时、安装根已经找不到的场合——那时 env.ps1
+    # 根本不在身边，没有库可以依赖。所以它只能自带最小实现。
+    # 代价是归属判定这里是简版（只看"像不像本机地址"，没有快照比对）：那种情况下
+    # 已经没有任何记录可查，而留下的过期代理必须清掉，两害相权取清理。
     $cleared = $false
     $drop = @()
     foreach ($n in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
