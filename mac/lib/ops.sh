@@ -47,6 +47,14 @@ _selftest_assert_contains() {
     esac
 }
 
+# 自检为什么住在 ops 库里（而不是像 Windows 那样放 tests\）:
+#   Windows 侧的自检在 tests\test-win-pure.ps1，Mac 侧没有对应的独立文件——
+#   两侧布局不同是既有现状，不是遗漏。真要搬走，得同时改 CORE_LIBS、门禁 10 的调用步骤
+#   和安装包范围，三处一起动；收益只是"文件更干净"，风险大于收益，所以保持现状。
+# 注意下面的 launchctl() 桩件是**函数内定义**，只在本函数执行期间生效，
+# 不会污染生产路径——不要在别处加同名的函数。
+# 加载代价实测可忽略：7 个库全部点源共 40ms（shell 只解析函数定义，不执行函数体）。
+
 self_test() {
     _selftest_fails=0
     _sandbox=$(mktemp -d /tmp/envproxy_selftest.XXXXXX 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
