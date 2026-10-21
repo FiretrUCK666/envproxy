@@ -185,11 +185,27 @@ function Show-Status {
     else    { Write-Host "监控进程 : 未运行" -ForegroundColor Yellow }
 
     $run = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
-    if ($run) { Write-Host "开机自启 : 已启用" -ForegroundColor Green }
-    else      { Write-Host "开机自启 : 未启用" -ForegroundColor Yellow }
+    if ($run) {
+        # 只看"值非空"会说谎：卸载不彻底或手工删过文件夹时，Run 键指向的启动器
+        # 已经不在了，登录时什么都不会起来，状态页却仍报"已启用"。
+        # 判据要和"能不能真的启动"一致：值在，且它指向的脚本真的存在。
+        $launcher = ""
+        if ($run -match '-File\s+"?([^"]+\.ps1)"?') { $launcher = $Matches[1] }
+        if ($launcher -and (Test-Path -LiteralPath $launcher)) {
+            Write-Host "开机自启 : 已启用" -ForegroundColor Green
+        } else {
+            Write-Host "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）" -ForegroundColor Yellow
+            Write-Host ("           记录指向：{0}" -f $(if ($launcher) { $launcher } else { $run })) -ForegroundColor DarkGray
+            Write-Host "           打开菜单选 1（安装 / 修复）可以重建。" -ForegroundColor DarkGray
+        }
+    } else {
+        Write-Host "开机自启 : 未启用" -ForegroundColor Yellow
+    }
 
     # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
-    $port = Get-ActiveProxyPort -FullScan:$false
+    # -NoLog：状态显示是只读契约（永不写文件）。枚举失败时若照常写日志，
+    # 一次 -Status 就会往 monitor.log 里塞一行，违反契约也污染黑匣子。
+    $port = Get-ActiveProxyPort -FullScan:$false -NoLog:$true
     if ($port) {
         Write-Host ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $port) -ForegroundColor Green
     } elseif ($script:PortEnumerationFailed) {

@@ -220,7 +220,7 @@ function Test-HttpProxyBatch([int[]]$Ports) {
 # 握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
 # 返回 [int[]]，可能为空。调用方（状态机）按集合签名判断变化并逐个试活；
 # 只要首选不要全集的调用方继续用 Get-ActiveProxyPort（取第一个）。
-function Find-CandidatePorts([bool]$FullScan = $true) {
+function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
     $ordered = @()
     # 端口枚举失败 ≠ 本机没有端口：失败的后果是候选集为空 → 调用方两轮后判 off 并删变量。
     # 所以这里先做一次即时重试；仍失败就记下"这一轮不知道"（$script:PortEnumerationFailed），
@@ -238,7 +238,7 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         }
     }
     $script:PortEnumerationFailed = (-not $enumerated)
-    if (-not $enumerated) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮沿用上一状态，不动环境变量" } catch {} }
+    if (-not $enumerated -and -not $NoLog) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮沿用上一状态，不动环境变量" } catch {} }
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
 
@@ -291,8 +291,8 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
 # 组合发现（薄封装）：只要首选不要全集的调用方（状态显示、更新走代理）继续调这个，
 # 语义与平台无关（第一个候选或 $null）。状态机走集合 + 试活，不调这个。
 # FullScan 控制是否启用昂贵的全端口批量探测（off 状态降频用）。
-function Get-ActiveProxyPort([bool]$FullScan = $true) {
-    $cands = Find-CandidatePorts -FullScan:$FullScan
+function Get-ActiveProxyPort([bool]$FullScan = $true, [bool]$NoLog = $false) {
+    $cands = Find-CandidatePorts -FullScan:$FullScan -NoLog:$NoLog
     if ($cands -and ($cands.Count -gt 0)) { return $cands[0] }
     return $null
 }

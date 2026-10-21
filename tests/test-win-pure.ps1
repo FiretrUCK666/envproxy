@@ -340,6 +340,15 @@ Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') ([string]$PID)
 Assert-Eq 'a live non-monitor pid is not a finished install' $false (Test-InstallRootMonitor $root10)
 Remove-Item -LiteralPath $root10 -Recurse -Force
 
+Write-Host '[10b] status display stays read-only'
+# 契约：状态显示永不写文件。它内部会快扫一次端口，而端口枚举失败时
+# Find-CandidatePorts 会写日志——只读路径必须用 -NoLog 把这一路关掉，
+# 否则一次 -Status 就往黑匣子里塞一行，既违反契约也污染日志。
+Assert-Eq 'Get-ActiveProxyPort accepts -NoLog' $true ((Get-Command Get-ActiveProxyPort).Parameters.ContainsKey('NoLog'))
+Assert-Eq 'Find-CandidatePorts accepts -NoLog' $true ((Get-Command Find-CandidatePorts).Parameters.ContainsKey('NoLog'))
+$opsSrc = Get-Content (Join-Path $ScriptDir 'lib\ops.ps1') -Raw -Encoding UTF8
+Assert-Eq 'status scan passes -NoLog' $true ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog:\$true')
+
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
 # switches, so every number must resolve and every switch must exist. Names are checked
