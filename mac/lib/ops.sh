@@ -693,6 +693,57 @@ self_test() {
     _selftest_assert_eq "帮助讲了'安装 / 修复'这条万能修复" "1" "$_lh2"
     case "$_ht" in *ENVPROXY_TERM*) _lh3=1;; *) _lh3=0;; esac
     _selftest_assert_eq "帮助给了逐窗口接管的命令" "1" "$_lh3"
+    # 屏幕形状：和 Windows 侧同一类防护。文案层的坏法（整屏超长、重复行、
+    # 超宽行、写死绝对路径、命令残缺）靠"关键词还在不在"查不出来，只能量形状。
+    # 两端各有一份，改文案时两边一起被守住——这是"行为改动双侧同改"的落地。
+    for _sk in "${HELP_TOPIC_KEYS[@]}"; do
+        _sr=$(format_help_topic "$_sk")
+        # 1) 一屏放得下：超出的部分会被终端切掉，常被切掉的正是底部的"怎么退出"。
+        _sn=$(printf '%s\n' "$_sr" | wc -l | tr -d ' ')
+        if [ "$_sn" -le 30 ]; then _s1=1; else _s1=0; fi
+        _selftest_assert_eq "主题 $_sk 在 30 行内" "1" "$_s1"
+        # 2) 相邻两行一模一样 = 编辑留下的重复段。
+        _s2=1
+        _sprev=""
+        _sfirst=1
+        while IFS= read -r _sline; do
+            if [ "$_sfirst" = "0" ] && [ -n "$_sline" ] && [ "$_sline" = "$_sprev" ]; then _s2=0; fi
+            _sprev="$_sline"; _sfirst=0
+        done <<EOF
+$_sr
+EOF
+        _selftest_assert_eq "主题 $_sk 无重复行" "1" "$_s2"
+        # 3) 行宽：超宽会硬折行。例外是一整条命令（缩进 + 纯 ASCII），
+        #    命令是给用户整条复制的，硬拆反而更难用。
+        _s3=1
+        _s3=1
+        # wc -L 给的是显示宽度（中文算 2 列），比 awk 的 length 靠谱——
+        # 后者在某些 awk 实现里按字节算，一个中文字就顶 3。
+        _swide=""
+        while IFS= read -r _sline; do
+            _sw=$(printf '%s' "$_sline" | wc -L | tr -d ' ')
+            [ -z "$_sw" ] && _sw=0
+            [ "$_sw" -le 80 ] && continue
+            # 例外：一整条命令（缩进 + 纯 ASCII），命令是给用户整条复制的。
+            case "$_sline" in
+                " "*[\!\#$%]*|[!-~]*) ;;
+            esac
+            if printf '%s' "$_sline" | grep -qE '^[ ]+[ -~]+$'; then continue; fi
+            _swide="$_sline"; break
+        done <<EOF
+$_sr
+EOF
+        if [ -n "$_swide" ]; then _s3=0; fi
+        _selftest_assert_eq "主题 $_sk 无超宽行" "1" "$_s3"
+        # 4) 不许混进本机绝对路径（那一屏是给别人看的）。
+        _s4=1
+        case "$_sr" in *"/Users/"*|*":\\Users\\"*) _s4=0;; esac
+        _selftest_assert_eq "主题 $_sk 无写死的家目录路径" "1" "$_s4"
+        # 5) 命令不许残缺：反引号残留、变量名被吃成空。
+        _s5=1
+        case "$_sr" in *'`'*) _s5=0;; esac
+        _selftest_assert_eq "主题 $_sk 无残缺命令" "1" "$_s5"
+    done
     if grep -qE '^[[:space:]]*menu\)' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _l5=1; else _l5=0; fi
     _selftest_assert_eq "menu 在入口分派里存在" "1" "$_l5"
     for _ms in install status stop uninstall update; do
@@ -1424,9 +1475,8 @@ TOPIC
 TOPIC
     ;;
     3) cat <<'TOPIC'
-Mac 只有一个终端（默认 zsh，bash 也行），不会像 Windows 那样敲错窗口。
-  fish 不支持：它不读 .zshenv，语法也不一样，用 fish 的话换 zsh 或 bash。
-
+Mac 只有一个终端（默认 zsh，bash 也行）。
+  fish 不支持：它不读 .zshenv，用 zsh 或 bash。
 下面四条命令都在「你要改的那个窗口」里敲，只影响那一个窗口。
 
 一、让这个窗口固定直连

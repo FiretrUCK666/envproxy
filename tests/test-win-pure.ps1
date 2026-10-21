@@ -432,8 +432,19 @@ foreach ($t in $helpTopics) {
     $absPath = ''
     foreach ($ln in $rendered) { if ($ln -match '[A-Za-z]:\\Users\\|/Users/') { $absPath = $ln; break } }
     Assert-Eq ('topic ' + $t.Key + ' has no hardcoded home path') '' $absPath
-    # 5) 命令必须是完整的：被转义吃掉时会只剩一个反引号加残片。
-    Assert-Eq ('topic ' + $t.Key + ' has no truncated variable') $false ((@($rendered | Where-Object { $_ -match '`(off|on)?\s*=' })).Count -gt 0)
+    # 5) 命令不许残缺。判据只看「长得像命令的行」（4 格以上缩进 + 含 = 或 $ 或 set/unset），
+    #    普通说明文字里出现 = 是正常的（比如「直接回车 = 回目录」），不能一起判死。
+    #    要挡住的是这几类真实事故：反引号残留、变量名被吃成空、等号左边没名字。
+    $broken = ''
+    foreach ($ln in $rendered) {
+        if ($ln -notmatch '^\s{4,}\S') { continue }
+        # 反引号单独判：它不可能出现在任何正常文案里，不需要先满足"像命令"。
+        if ($ln.IndexOf([char]96) -ge 0) { $broken = $ln; break }
+        if ($ln -notmatch '=|\$|set |unset |export ') { continue }
+        if ($ln -match '\$(\s|=|$)') { $broken = $ln; break }
+        if ($ln -match '^\s+[=:]\s') { $broken = $ln; break }
+    }
+    Assert-Eq ('topic ' + $t.Key + ' has no broken command') '' $broken
 }
 
 # A table entry that is never printed is a feature the user cannot reach: the menu once
