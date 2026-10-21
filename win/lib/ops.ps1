@@ -203,8 +203,10 @@ function Show-Status {
     }
 
     # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
-    # -NoLog：状态显示是只读契约（永不写文件）。枚举失败时若照常写日志，
-    # 一次 -Status 就会往 monitor.log 里塞一行，违反契约也污染黑匣子。
+    # DIVERGE(Win): 这里用 Get-ActiveProxyPort 并把日志关掉（-NoLog），Mac 侧状态页
+    #   直接调 find_candidate_ports ——那个函数本身就不写日志。两端都是只读，
+    #   只是 Mac 的日志写在 get_current_state 里、Windows 的写在 Find-CandidatePorts 里，
+    #   所以 Windows 需要显式传 -NoLog 才能守住"状态显示永不写文件"这条契约。
     $port = Get-ActiveProxyPort -FullScan:$false -NoLog:$true
     if ($port) {
         Write-Host ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $port) -ForegroundColor Green
