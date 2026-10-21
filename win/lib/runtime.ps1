@@ -938,20 +938,39 @@ function Run-MonitorLoop {
                 # on 态补齐缺失项，off 态把残留收干净——判据与删除侧同一套，
                 # 幂等（齐了就零写入、零广播）。只核对我们本该持有的那几个，
                 # 用户自己设的、与本工具无关的变量不受影响。
-                if ($lastState -eq "off") {
-                    if (Test-ProxyVarsPresent) {
-                        Remove-UserEnvVars
-                        Broadcast-EnvironmentChange
-                        Write-MonitorLog "检测到代理变量残留 -> 已回收，恢复直连"
+                #
+                # 这一段也必须拿 EnvProxyApplyState 这把锁：它与 Apply-State 做的是同一件事
+                # （判断 + 写 HKCU\Environment + 广播），而点"安装"时两者会同时跑到这里。
+                # 不拿锁就会出现"两边都判定要写 → 重复写 + 重复广播"，
+                # 也就是 Apply-State 注释里说的那个场景——只是换了个入口。
+                $healGate = $null
+                $healHeld = $false
+                try {
+                    # 与 Apply-State 用同一个名字：跨进程互斥，不是进程内的锁。
+                    $healGate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
+                    $healHeld = $healGate.WaitOne(5000)
+                } catch { $healHeld = $false }
+                try {
+                    if ($lastState -eq "off") {
+                        if (Test-ProxyVarsPresent) {
+                            Remove-UserEnvVars
+                            Broadcast-EnvironmentChange
+                            Write-MonitorLog "检测到代理变量残留 -> 已回收，恢复直连"
+                        }
+                    } else {
+                        # 自愈写入后也要广播：不广播的话已经运行的资源管理器/程序仍是旧环境，
+                        # 与 Apply-State 就成了两套行为。写入成功才广播。
+                        # 先判 "on:" 前缀：启动对齐若抛过异常，$lastState 仍是 $null，
+                        # 直接 Substring 会抛异常、白记一条"检测异常"。
+                        if ($lastState -and $lastState.StartsWith("on:")) {
+                            if (Sync-UserEnvVars $lastState.Substring(3)) { Broadcast-EnvironmentChange }
+                        }
                     }
-                } else {
-                    # 自愈写入后也要广播：不广播的话已经运行的资源管理器/程序仍是旧环境，
-                    # 与 Apply-State 就成了两套行为。写入成功才广播。
-                    # 先判 "on:" 前缀：启动对齐若抛过异常，$lastState 仍是 $null，
-                    # 直接 Substring 会抛异常、白记一条"检测异常"。
-                    if ($lastState -and $lastState.StartsWith("on:")) {
-                        if (Sync-UserEnvVars $lastState.Substring(3)) { Broadcast-EnvironmentChange }
-                    }
+                } finally {
+                    # 只有真拿到锁才释放：没拿到就 ReleaseMutex 会抛
+                    # "对象同步方法是从未获得该锁的线程调用的"。
+                    if ($healHeld -and $healGate) { try { $healGate.ReleaseMutex() } catch {} }
+                    if ($healGate) { try { $healGate.Dispose() } catch {} }
                 }
             }
 
