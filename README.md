@@ -104,6 +104,38 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 ## 3. 常用操作一页纸
 
+**先说清楚：这一节不是必读的。** 装完之后翻墙软件一开一关，终端自己就跟着切了，你一条命令都不用敲。
+
+**下面这些事，绝大多数用菜单就够了**：停止监控、彻底卸载、检查更新、看状态，都在菜单里，双击一下就行，不用敲命令。本节讲的是菜单做不到的那几件事——想单独处理某一个窗口的时候。
+
+看不懂可以整节跳过，不影响正常使用。真觉得不对劲，打开菜单选 1。
+
+### 这些命令在哪个终端里敲
+
+用的是 **PowerShell**，不是老式的「命令提示符」（cmd）。
+
+Windows 上你日常接触的窗口基本都是 PowerShell，不用担心：
+
+| 你怎么打开的窗口 | 是 PowerShell 吗 |
+|---|---|
+| 开始菜单搜「PowerShell」 | 是 |
+| Win+R 输入 `powershell` | 是 |
+| Windows Terminal | 是（默认就是） |
+| VS Code 的终端 | 是（默认就是） |
+| 开始菜单搜「命令提示符」或「cmd」 | **不是**，那些命令在这里会报错 |
+
+分辨方法看提示符：开头有 `PS` 的是 PowerShell，比如 `PS C:\Users\你的名字>`。
+
+**如果你确实在用 cmd**，对应的写法不一样：
+
+| 目的 | PowerShell | cmd |
+|---|---|---|
+| 固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set ENVPROXY_TERM=off` |
+| 恢复自动 | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
+| 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+
+Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列。
+
 下面每条命令都在**你要改的那个窗口里**输入，**只影响那个窗口**。Windows 和 Mac 写法不同，别抄错行。
 
 ### 3.1 让一个窗口固定直连
@@ -112,21 +144,21 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 | | 命令 |
 |---|---|
-| Windows | `$env:ENVPROXY_TERM = 'off'` |
+| Windows（PowerShell） | `$env:ENVPROXY_TERM = 'off'` |
 | Mac | `export ENVPROXY_TERM=off` |
 
 执行完这个窗口就一直直连，直到你关掉它。要恢复自动：
 
 | | 命令 |
 |---|---|
-| Windows | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
+| Windows（PowerShell） | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
 | Mac | `unset ENVPROXY_TERM` |
 
 ### 3.2 让一个窗口走公司代理
 
 **顺序不能反：先锁定窗口，再设代理。**
 
-| 步骤 | Windows | Mac |
+| 步骤 | Windows（PowerShell） | Mac |
 |---|---|---|
 | 1. 先锁定 | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
 | 2. 再设代理 | `$env:HTTPS_PROXY = 'http://你的地址:端口'` | `export HTTPS_PROXY=http://你的地址:端口` |
@@ -139,33 +171,30 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 | | 命令 |
 |---|---|
-| Windows | `$env:HTTPS_PROXY` |
+| Windows（PowerShell） | `$env:HTTPS_PROXY` |
 | Mac | `echo $HTTPS_PROXY` |
 
 有值就是走代理，空的就是直连。
 
 ### 3.4 让某一条命令不走代理
 
-`--noproxy` 是 curl 自己的参数，**只对 curl 有效**：
+不同工具写法不一样，没有通用的一条命令。
 
-| | 命令 |
-|---|---|
-| Windows | `curl.exe --noproxy "*" 网址` |
-| Mac | `curl --noproxy '*' 网址` |
+| 工具 | Windows（PowerShell） | Mac |
+|---|---|---|
+| `curl` | `curl.exe --noproxy "*" 网址` | `curl --noproxy '*' 网址` |
+| `git` | `git -c http.proxy= -c https.proxy= clone 仓库地址` | 同左 |
+| `npm` | `npm --noproxy="*" install 包名` | 同左 |
+| `wget` | 系统不自带，装过才有 `wget.exe --no-proxy 网址` | `wget --no-proxy 网址` |
+| `docker` | 改 Docker 自己的设置，没有单条命令的写法 | 同左 |
 
-Windows 上必须写 `curl.exe`。PowerShell 把 `curl` 当成了 `Invoke-WebRequest` 的别名，直接敲 `curl` 会报参数错误。
+三个实测确认过的坑：
 
-别的工具不认这个参数，各有各的写法：
+- **PowerShell 里 `curl` 和 `wget` 都是别名，两个都指向 `Invoke-WebRequest`**。直接敲会报「参数找不到」，所以 curl 要写 `curl.exe`。
+- **`npm --no-proxy` 是错的写法，而且不报错**。npm 会把它当子命令，回一句 `Unknown command`，然后照常走代理——你以为绕过了，其实没有。正确的是 `--noproxy`，没有连字符。
+- **`git` 的 `-c http.proxy=` 后面必须留空**。留空表示「这一条命令不用代理」，写别的值就是「改用这个代理」。
 
-| 工具 | 让这一条不走代理 |
-|---|---|
-| `curl` | 见上表 |
-| `git` | `git -c http.proxy= -c https.proxy= clone 仓库地址` |
-| `npm` | `npm --no-proxy install 包名` |
-| `wget` | `wget --no-proxy 网址` |
-| `docker` | 要改 Docker 自己的设置，没有单条命令的写法 |
-
-> 这些写法是各工具自己的，不是 EnvProxy 提供的。不加这些参数时，它们读的才是 EnvProxy 写入的环境变量。
+这些写法都是各工具自己的，不是 EnvProxy 提供的。不加这些参数时，它们读的才是 EnvProxy 写入的环境变量。
 
 ### 3.5 让已经开着的窗口立刻跟上
 
@@ -181,16 +210,17 @@ Windows 上必须写 `curl.exe`。PowerShell 把 `curl` 当成了 `Invoke-WebReq
 
 | | 命令 |
 |---|---|
-| Windows | `. $PROFILE` |
+| Windows（PowerShell） | `. $PROFILE` |
 | Mac | `. ~/.envproxy/prompt-sync.sh` |
 
 **这两条命令是什么**：`$PROFILE` 是 PowerShell 每次启动时自动跑的文件，安装时往里面放了一段同步代码，这条命令就是手动跑一次它。Mac 那个文件是同步脚本，作用一样。
 
-**注意三点**：
+**四点要注意**：
 
 - 开头的 `.` 和后面的空格都不能少。`.` 的意思是「在当前窗口里执行这个文件」。
 - 只对 PowerShell（Windows）和 zsh、bash（Mac）有效。Mac 上的 fish 不支持。
 - 执行完只影响这一个窗口。其他已开着的窗口要各自执行，或者直接重开。
+- 如果这个窗口里从来没装过 EnvProxy，`$PROFILE` 指向的文件可能不存在，会看到「找不到路径」的红字。那是正常的，重开一个窗口就行。
 
 ## 4. 出问题了按这个顺序查
 

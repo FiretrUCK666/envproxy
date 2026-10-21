@@ -104,6 +104,38 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 ## 3. Everyday commands on one page
 
+**None of this is required reading.** Once installed, the terminal follows the proxy app on its own — you do not type a single command.
+
+**Most of what you might want is in the menu already**: stop the monitor, uninstall, check for updates, see status. Double-click and pick a number; no typing. This section covers only the few things the menu cannot do — handling one particular window differently from the rest.
+
+Skip the whole section if it does not make sense; it does not affect normal use. If something feels wrong, open the menu and pick 1.
+
+### Which terminal these commands belong in
+
+They are **PowerShell** commands, not old-style Command Prompt (cmd).
+
+On Windows almost every window you touch day to day is PowerShell:
+
+| How you opened the window | Is it PowerShell? |
+|---|---|
+| Start menu, search "PowerShell" | Yes |
+| Win+R, type `powershell` | Yes |
+| Windows Terminal | Yes (the default) |
+| VS Code terminal | Yes (the default) |
+| Start menu, search "Command Prompt" or "cmd" | **No** — these commands fail there |
+
+To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
+
+**If you really are in cmd**, the syntax is different:
+
+| Purpose | PowerShell | cmd |
+|---|---|---|
+| Pin to direct | `$env:ENVPROXY_TERM = 'off'` | `set ENVPROXY_TERM=off` |
+| Back to automatic | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
+| Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
+
+On Mac that is the Terminal app, zsh by default, using the `export` column.
+
 Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 
 ### 3.1 Keep one window on a direct connection
@@ -112,21 +144,21 @@ While the proxy app is running, to make one window skip the proxy:
 
 | | Command |
 |---|---|
-| Windows | `$env:ENVPROXY_TERM = 'off'` |
+| Windows (PowerShell) | `$env:ENVPROXY_TERM = 'off'` |
 | Mac | `export ENVPROXY_TERM=off` |
 
 This window stays direct until you close it. To go back to automatic:
 
 | | Command |
 |---|---|
-| Windows | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
+| Windows (PowerShell) | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
 | Mac | `unset ENVPROXY_TERM` |
 
 ### 3.2 Give one window a corporate proxy
 
 **Order matters: pin the window first, then set the proxy.**
 
-| Step | Windows | Mac |
+| Step | Windows (PowerShell) | Mac |
 |---|---|---|
 | 1. Pin it | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
 | 2. Set the proxy | `$env:HTTPS_PROXY = 'http://your-host:port'` | `export HTTPS_PROXY=http://your-host:port` |
@@ -139,33 +171,30 @@ Values you set are never deleted. A corporate proxy, a capture tool, another por
 
 | | Command |
 |---|---|
-| Windows | `$env:HTTPS_PROXY` |
+| Windows (PowerShell) | `$env:HTTPS_PROXY` |
 | Mac | `echo $HTTPS_PROXY` |
 
 A value means proxied; empty means direct.
 
 ### 3.4 Make one command skip the proxy
 
-`--noproxy` is curl's own flag and **works for curl only**:
+Tools differ; there is no single universal command.
 
-| | Command |
-|---|---|
-| Windows | `curl.exe --noproxy "*" URL` |
-| Mac | `curl --noproxy '*' URL` |
+| Tool | Windows (PowerShell) | Mac |
+|---|---|---|
+| `curl` | `curl.exe --noproxy "*" URL` | `curl --noproxy '*' URL` |
+| `git` | `git -c http.proxy= -c https.proxy= clone <repo>` | same |
+| `npm` | `npm --noproxy="*" install <pkg>` | same |
+| `wget` | not shipped with Windows; if installed, `wget.exe --no-proxy <url>` | `wget --no-proxy <url>` |
+| `docker` | change Docker's own settings; no per-command flag | same |
 
-On Windows you must write `curl.exe`. PowerShell resolves `curl` to the `Invoke-WebRequest` alias, and plain `curl` fails with a parameter error.
+Three traps, all confirmed by testing:
 
-Other tools do not accept this flag and have their own forms:
+- **`curl` and `wget` are both aliases in PowerShell, and both resolve to `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`.
+- **`npm --no-proxy` is wrong, and it does not error out.** npm treats it as a subcommand, answers `Unknown command`, and then goes through the proxy anyway — you think you bypassed it and you did not. The correct form is `--noproxy`, no hyphen.
+- **`git`'s `-c http.proxy=` must be left empty.** Empty means "no proxy for this one command"; any other value means "use that proxy instead".
 
-| Tool | Skip the proxy for one command |
-|---|---|
-| `curl` | see the table above |
-| `git` | `git -c http.proxy= -c https.proxy= clone <repo>` |
-| `npm` | `npm --no-proxy install <pkg>` |
-| `wget` | `wget --no-proxy <url>` |
-| `docker` | change Docker's own settings; there is no per-command flag |
-
-> These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the environment variables EnvProxy wrote.
+These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the environment variables EnvProxy wrote.
 
 ### 3.5 Make an already-open window catch up
 
@@ -181,16 +210,17 @@ For the third case, opening a new window is easiest. If you would rather not, ru
 
 | | Command |
 |---|---|
-| Windows | `. $PROFILE` |
+| Windows (PowerShell) | `. $PROFILE` |
 | Mac | `. ~/.envproxy/prompt-sync.sh` |
 
 **What these commands are**: `$PROFILE` is the file PowerShell runs on every start; installing put a piece of sync code in it, and this command runs it by hand. On Mac that file is the sync script, same idea.
 
-**Three things to note**:
+**Four things to note**:
 
 - The leading `.` and the space after it are both required. `.` means "run this file in the current window".
 - Works for PowerShell on Windows and zsh or bash on Mac. fish on Mac is not supported.
 - It affects that one window only. Other open windows need the same command, or just reopen them.
+- If EnvProxy was never installed for that window, the file `$PROFILE` points at may not exist and you will see a red "cannot find path" error. That is normal; just open a new window.
 
 ## 4. Something is wrong: check in this order
 

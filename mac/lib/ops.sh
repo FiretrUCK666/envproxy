@@ -1237,6 +1237,9 @@ show_help() {
 
 常用命令（都在你要改的那个窗口里输入，只影响那个窗口）
 
+  先说明：这些命令在 Mac 的「终端」里敲（默认是 zsh，bash 也可以）。
+  Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不会敲错。
+
   让这个窗口固定直连：
       export ENVPROXY_TERM=off
   恢复自动：
@@ -1249,18 +1252,23 @@ show_help() {
   检查现在走不走代理：
       echo \$HTTPS_PROXY          （有值就是走代理，空的是直连）
 
-  让某一条命令不走代理（--noproxy 只对 curl 有效）：
+  让某一条命令不走代理：
       curl --noproxy '*' 网址
-  别的工具不认这个参数，各有各的写法：
+  别的工具各有各的写法：
       git  -c http.proxy= -c https.proxy= clone 仓库地址
-      npm  --no-proxy install 包名
+           （等号后留空=这条不用代理；写别的值=改用那个代理）
+      npm  --noproxy="*" install 包名
+           注意是 noproxy，没有连字符。写成 --no-proxy 不报错但会被忽略，
+           然后照常走代理——你以为绕过了，其实没有。
       wget --no-proxy 网址
       docker 要改它自己的设置，没有单条命令的写法
 
   让已经开着的窗口立刻跟上：
       . ~/.envproxy/prompt-sync.sh
   注意：开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效，fish 不支持；
-  执行完只影响这一个窗口，别的已开窗口要各自执行或重开。
+  执行完只影响这一个窗口，别的已开窗口要各自执行或重开；
+  如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」的错误，
+  属正常，重开一个窗口就行。
 
 菜单其它选项
   [2] 查看状态：监控在不在跑、翻墙状态、变量、版本。只读，不改任何东西。
