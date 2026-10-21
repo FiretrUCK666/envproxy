@@ -406,6 +406,13 @@ function Get-MenuNameWidth {
     return $w
 }
 
+# 分组的显示顺序，从 $MenuItems 按首次出现推导。打印（纯文本与彩屏）与帮助共用这一处。
+# 写死数组的后果不是"少印一行"而是"屏幕上看不见、却照样敲得动"：分派不看分组，
+# 所以漏印的那一项仍然会被执行——用户看到的菜单和能敲的菜单成了两件事。
+function Get-MenuGroups {
+    return @($MenuItems | ForEach-Object { $_.Group } | Where-Object { $_ } | Select-Object -Unique)
+}
+
 # 把一段文字按终端可见宽度补空格（中文按两格算）。
 function Format-MenuCell([string]$Text, [int]$Width) {
     $len = 0
@@ -430,7 +437,7 @@ function Show-MenuColored {
     } else {
         Write-Host ("  监控 未运行    版本 v{0}" -f $verText) -ForegroundColor DarkGray
     }
-    foreach ($g in @('日常', '维护', '退出')) {
+    foreach ($g in (Get-MenuGroups)) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
         if ($items.Count -eq 0) { continue }
         Write-Host ''
@@ -466,8 +473,7 @@ function Format-MenuText {
     # 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。
     # 打印与分派读同一份顺序。写死会在"表里有、数组里没有"时静默漏印一项，
     # 而分派不看分组、照样能敲到它——用户看见的菜单和能敲的菜单就不是同一件事。
-    $groups = @($MenuItems | ForEach-Object { $_.Group } | Where-Object { $_ } | Select-Object -Unique)
-    foreach ($g in $groups) {
+    foreach ($g in (Get-MenuGroups)) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
         if ($items.Count -eq 0) { continue }
         [void]$out.Add("")
@@ -495,8 +501,7 @@ function Get-HelpMenuLines {
     $out = New-Object System.Collections.Generic.List[string]
     $nameW = Get-MenuNameWidth
     [void]$out.Add('这些编号要在主菜单里敲，不是在帮助里敲。')
-    $groups = @($MenuItems | ForEach-Object { $_.Group } | Where-Object { $_ } | Select-Object -Unique)
-    foreach ($g in $groups) {
+    foreach ($g in (Get-MenuGroups)) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
         if ($items.Count -eq 0) { continue }
         [void]$out.Add('')

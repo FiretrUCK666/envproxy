@@ -1377,6 +1377,17 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
+# The coloured screen and the plain-text menu must take their group order from the
+# SAME derived list. They once each had a hand-written array: a group typo then made
+# an item invisible on screen while it stayed typeable -- the user sees one menu and
+# can run another. Pin it structurally: no hand-written group array may reappear.
+foreach ($fn in @('Show-MenuColored', 'Format-MenuText', 'Get-HelpMenuLines')) {
+    $src = (Get-Command $fn).Definition
+    Assert-Eq ($fn + ' derives its groups instead of listing them') $false ($src -match "@\('日常'")
+    Assert-Eq ($fn + ' uses the shared group order') $true ($src -match 'Get-MenuGroups')
+}
+Assert-Eq 'the shared group order is the only place groups are ordered' 1 (([regex]::Matches((Get-Command Get-MenuGroups).Definition, 'Select-Object -Unique')).Count)
+
 # Help topic 6 is a second copy of the menu table. If it is hand-written it goes
 # stale silently, and the symptom is the worst kind: the user reads help, types the
 # number it names, and gets a DIFFERENT action (wants check-for-updates, uninstalls).

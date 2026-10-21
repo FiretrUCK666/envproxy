@@ -697,6 +697,60 @@ self_test() {
     # "没有这一条"，会以为帮助坏了。这条钉住两端行为一致。
     if grep -qE '^[[:space:]]*q\|Q\|0\)' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null; then _lq=1; else _lq=0; fi
     _selftest_assert_eq "帮助页认 q 和 0（与菜单同义）" "1" "$_lq"
+    # 配色判据的纯函数断言：命令行（缩进 4 格、纯 ASCII）必须是命令色 32，
+    # 含中文的说明行必须不是。单引号是重点——它在 grep 字符类里是个转义陷阱，
+    # 曾经让 `curl --noproxy '*'` 这一行在 Mac 上与普通说明文字同色。
+    for _cl_case in "cmd|      curl --noproxy '*' https://example.com" \
+                    "cmd|      git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git" \
+                    "cmd|      echo \$HTTPS_PROXY" \
+                    "text|  窗口一关就失效，只有 zsh 和 bash 管用。" \
+                    "text|     curl 在 PowerShell 5.1 里是别名"; do
+        _cl_want=${_cl_case%%|*}
+        _cl_line=${_cl_case#*|}
+        _cl_got=$(_help_line_color "$_cl_line")
+        if [ "$_cl_want" = "cmd" ]; then
+            if [ "$_cl_got" = "32" ]; then _cl_ok=1; else _cl_ok=0; fi
+        else
+            if [ "$_cl_got" != "32" ]; then _cl_ok=1; else _cl_ok=0; fi
+        fi
+        _selftest_assert_eq "配色判据: $_cl_line" "1" "$_cl_ok"
+    done
+    # README 抄了一份菜单表和帮助目录，必须与代码逐项一致。抄的那一份一旦脱节，
+    # 后果不是"文档旧了"，而是用户照 README 的编号去敲、敲到另一件事。这类错误
+    # 没人会当场发现——文档看着很正常。Windows 侧同一道断言在 [21]，两侧都要有：
+    # 只在 Mac 本地跑 self-test 时，这条路径上同样要能查出来。
+    _rm_dir=$(cd "$SCRIPT_DIR/.." && pwd)
+    for _rm_pair in "README.md" "README.en.md"; do
+        _rm_f="$_rm_dir/$_rm_pair"
+        if [ ! -f "$_rm_f" ]; then
+            _selftest_assert_eq "$_rm_pair 存在" "1" "0"
+            continue
+        fi
+        # 菜单表：左侧是 **编号 名称**，收集编号序列再与 MENU_ITEMS 比。
+        _rm_doc_keys=$(grep -oE '^\|\s*\*\*[0-9]+ ' "$_rm_f" | tr -cd '0-9\n' | tr '\n' ',' )
+        _rm_code_keys=$(for _rm_i in "${MENU_ITEMS[@]}"; do printf '%s\n' "${_rm_i%%|*}"; done | tr '\n' ',')
+        _selftest_assert_eq "$_rm_pair 菜单表编号与代码一致" "$_rm_code_keys" "$_rm_doc_keys"
+        # 帮助目录表：表头「编号 / No.」，取每行第一格。
+        _rm_help_keys=$(awk '/^\| *(编号|No\.) *\|/{f=1;next} f&&/^\|/{print}' "$_rm_f" | grep -oE '^\|\s*[0-9]+' | tr -cd '0-9\n' | tr '\n' ',')
+        _rm_code_help=$(printf '%s\n' "${HELP_TOPIC_KEYS[@]}" | tr '\n' ',')
+        _selftest_assert_eq "$_rm_pair 帮助目录编号与代码一致" "$_rm_code_help" "$_rm_help_keys"
+    done
+    # 中文那份还要比名字：编号对上但名字配错，照样把人指到另一个动作上。
+    _rm_zh="$_rm_dir/README.md"
+    if [ -f "$_rm_zh" ]; then
+        for _rm_i in "${MENU_ITEMS[@]}"; do
+            _rm_key=${_rm_i%%|*}
+            _rm_rest=${_rm_i#*|}
+            _rm_name=${_rm_rest%%|*}
+            if grep -qF "**$_rm_key $_rm_name**" "$_rm_zh"; then _rm_ok=1; else _rm_ok=0; fi
+            _selftest_assert_eq "README 菜单 $_rm_key 写作 $_rm_name" "1" "$_rm_ok"
+        done
+        for _rm_k in "${HELP_TOPIC_KEYS[@]}"; do
+            _rm_t=$(_help_topic_title "$_rm_k")
+            if grep -qF "| $_rm_k | $_rm_t |" "$_rm_zh"; then _rm_ok2=1; else _rm_ok2=0; fi
+            _selftest_assert_eq "README 帮助 $_rm_k 写作 $_rm_t" "1" "$_rm_ok2"
+        done
+    fi
     # 屏幕形状：和 Windows 侧同一类防护。文案层的坏法（整屏超长、重复行、
     # 超宽行、写死绝对路径、命令残缺）靠"关键词还在不在"查不出来，只能量形状。
     # 两端各有一份，改文案时两边一起被守住——这是"行为改动双侧同改"的落地。
@@ -1705,10 +1759,13 @@ _help_line_color() {
     # 把"能整行复制去跑的一行"和"只是提到命令的一行"混成同一种视觉。
     # 反过来这条也给内容立了规矩：命令行必须能整行复制去跑，中文说明另起一行。
     if [ "$_hlc_ind" -ge 4 ]; then
-        # 白名单：命令行只该由 ASCII 字母、数字和常用命令标点组成。
-        # 用黑名单（找非 ASCII）在 Git Bash / 各种 locale 下不可靠——同一个
-        # 判断在 LC_ALL=C 与 UTF-8 下结果不同，纯 ASCII 行会被误判成含中文。
-        if ! printf '%s' "$_hlc_rest" | grep -qvE "^[A-Za-z0-9 _./\\\\:=\$\x27\"*&;<>|?~,+%#@!()\-]*$"; then
+        # 判据与 Win 侧同形：这一行里没有任何中日韩字符，就是能整行复制去跑的命令。
+        # 用 LC_ALL=C 把每个字节都当单字节看，再找"非可打印 ASCII"（[^ -~]）：
+        # 中文字符的 UTF-8 字节全部落在 0x80 以上，必然命中，纯 ASCII 行一定不命中。
+        # 不要用"列出允许字符的白名单"：grep -E 的方括号字符类里不支持 \x27 这类转义，
+        # 写了会变成字面的 \ x 2 7 四个字符——于是含单引号的行（curl --noproxy '*'）
+        # 被判成"不是命令"，屏幕上和普通说明文字同色，看起来像"只是在提 curl"。
+        if ! LC_ALL=C printf '%s' "$_hlc_rest" | grep -q '[^ -~]'; then
             echo "32"; return 0
         fi
     fi
