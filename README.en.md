@@ -13,24 +13,10 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 <img src="./assets/readme/quickstart.en.svg" width="100%" alt="After installing, only three things matter: a new window needs no action; a window that is already open catches up after one Enter press; if something feels wrong, open the menu and pick 1 Install / Repair, which fixes most problems without touching your own settings">
 
-## I just want to do one thing
-
-| I want to | Go to |
-|---|---|
-| Install it on this machine | [1. Install](#1-install-3-steps-5-minutes) |
-| Upgrade to a newer version | [the update part of 1](#updating) |
-| My terminal still cannot reach the internet | [4. Something is wrong](#4-something-is-wrong-check-in-this-order) |
-| Know how it decides | [5. How it decides](#5-how-it-decides-whether-you-are-behind-a-proxy) |
-| Look up one command | [3. Everyday commands](#3-everyday-commands-on-one-page) |
-| See what each menu item does | [2. Open the menu](#2-open-the-menu) |
-
-If you are not sure, open the menu and pick `6 Help`. It splits into seven topics, one screen each.
-
 ## Table of contents
 
 <!-- toc:start -->
 
-- [I just want to do one thing](#i-just-want-to-do-one-thing)
 - [0. What happens after installing](#0-what-happens-after-installing)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
