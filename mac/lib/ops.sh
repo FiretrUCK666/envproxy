@@ -652,10 +652,11 @@ self_test() {
     # 所以这里真的渲染一次、真的数条目。
     _lm=0
     for _lmi in "${MENU_ITEMS[@]}"; do _lm=$((_lm + 1)); done
-    _selftest_assert_eq "菜单有 7 个条目" "7" "$_lm"
+    _selftest_assert_eq "菜单表非空" "1" "$([ "$_lm" -gt 0 ] && echo 1 || echo 0)"
     _lmt=$(format_menu_text 2>/dev/null || true)
     _lmlines=$(printf '%s\n' "$_lmt" | grep -cE '^    [0-9]  ' || true)
-    _selftest_assert_eq "渲染出的菜单含全部 7 个条目" "7" "$_lmlines"
+    # 渲染出来的条目数必须等于表里的条目数：加一项时这里自动跟上，不会留下写死的旧数字。
+    _selftest_assert_eq "渲染出的条目数与表一致" "$_lm" "$_lmlines"
     case "$_lmt" in *日常*) _lmg=1;; *) _lmg=0;; esac
     _selftest_assert_eq "菜单渲染出分组名" "1" "$_lmg"
     # 每一行的分组字段必须是 日常/维护/退出，不能是子命令名（取错段就会变成 install）。
