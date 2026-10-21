@@ -527,31 +527,31 @@ function Get-HelpTopics {
         @{
             Key = '3'; Title = '我要单独设置某个窗口'; Short = '窗口'
             Lines = @(
-                '下面每条命令都在「你要改的那个窗口」里敲，只影响那个窗口。',
-                '  只有 PowerShell 会自动跟随；cmd 和 Git Bash 没有这个机制，要自己清变量。',
+                '命令都在「你要改的那个窗口」里敲，只影响那个窗口。',
+                '  只有 PowerShell 会自动跟随；cmd 和 Git Bash 没有这个机制。',
                 '',
-                '一、固定直连',
-                '    PowerShell     $env:ENVPROXY_TERM = ''off''',
-                '    cmd 和 Git Bash 没这个开关，直接把 5 个变量清掉：',
-                '      Git Bash：unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
-                '      cmd（一行写完，& 两边不能留空格）：',
-                '        set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
-                '  恢复自动：PowerShell 用 Remove-Item Env:ENVPROXY_TERM，',
-                '  cmd 和 Git Bash 重开窗口。',
+                '一、固定直连（这个窗口不再自动跟随）。PowerShell 输入：',
+                '    $env:ENVPROXY_TERM = ''off''',
+                'cmd 和 Git Bash 没这个开关，要把 5 个变量清掉。Git Bash 输入：',
+                '    unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
+                'cmd 输入下面两行（& 两边不能留空格，留了会得到一个只含空格的值）：',
+                '    set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=',
+                '    set NODE_USE_ENV_PROXY=',
                 '',
-                '二、走公司代理（两步，顺序不能反）',
-                '    1. 先按上面固定直连',
-                '    2. 再设地址：PowerShell 用 $env:HTTPS_PROXY = ''http://地址:端口''',
-                '       cmd 用 set HTTPS_PROXY=http://地址:端口，Git Bash 用 export 同名变量。',
-                '    不停掉的话，翻墙软件一有变化就会覆盖你刚设的地址。',
+                '二、恢复自动跟随。PowerShell 输入，cmd 和 Git Bash 重开窗口：',
+                '    Remove-Item Env:ENVPROXY_TERM',
                 '',
-                '三、看走不走代理（有值就是走代理，空的是直连）',
-                '    PowerShell：$env:HTTPS_PROXY　　cmd：set HTTPS_PROXY',
-                '    Git Bash：echo $HTTPS_PROXY',
+                '三、走公司代理（两步，顺序不能反）：1. 先按上面固定直连。',
+                '  2. 再设地址。三种终端各自输入：',
+                '       PowerShell  $env:HTTPS_PROXY = ''http://127.0.0.1:7890''',
+                '       cmd         set HTTPS_PROXY=http://127.0.0.1:7890',
+                '       Git Bash    export HTTPS_PROXY=http://127.0.0.1:7890',
+                '  不停掉自动跟随的话，翻墙软件一有变化就会覆盖你刚设的地址。',
                 '',
-                '四、让已开的窗口跟上',
-                '    PowerShell：. $PROFILE',
-                '    cmd 和 Git Bash 没这机制，只能重开窗口。'
+                '四、看走不走代理（有值就是走，空的是直连）',
+                '     PowerShell  $env:HTTPS_PROXY',
+                '     cmd         set HTTPS_PROXY',
+                '     Git Bash    echo $HTTPS_PROXY'
             )
         },
         @{
@@ -560,24 +560,23 @@ function Get-HelpTopics {
                 '不同工具写法不一样，没有通用的一条命令',
                 '',
                 'curl',
-                '      curl.exe --noproxy "*" 网址',
-                '  Windows 上必须写 curl.exe。PowerShell 把 curl 和 wget 都当成了别名，',
-                '  指向 Invoke-WebRequest，直接敲会报「参数找不到」。',
+                '     curl.exe --noproxy "*" https://example.com',
+                '  只有 PowerShell 5.1 必须写 .exe：它把 curl 和 wget 都当成了别名。',
+                '  cmd 和 PowerShell 7 里 curl 就是真的 curl.exe，写不写都行。',
                 '',
                 'git',
-                '      git -c http.proxy= -c https.proxy= clone 仓库地址',
-                '  等号后留空 = 这条不用代理；写别的值 = 改用那个代理。',
+                '     git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git',
+                '  等号后留空，这条就不用代理；写别的值，就改用那个代理。',
                 '',
                 'npm',
-                '      npm --noproxy=registry.npmjs.org install 包名',
-                '  注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。',
-                '  写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。',
+                '     npm --noproxy=registry.npmjs.org install typescript',
+                '  注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。',
+                '  写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。',
                 '  另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。',
                 '',
                 'wget',
-                '  Windows 不自带 wget。自己装过 GNU wget 才写：',
-                '      wget.exe --no-proxy 网址',
-                '  （PowerShell 里的 wget 只是别名，指向 Invoke-WebRequest，不是真的 wget）',
+                '  Windows 不自带 wget。自己装过才用得上这一条：',
+                '     wget.exe --no-proxy https://example.com',
                 '',
                 'docker',
                 '  没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。'
@@ -613,7 +612,8 @@ function Get-HelpTopics {
             Key = '6'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
             Lines = @(
                 '连不上网，按这个顺序查',
-                '  1. 先在那个窗口里看变量有没有值：PowerShell 敲 $env:HTTPS_PROXY',
+                '  1. 在那个窗口里看变量有没有值。PowerShell 输入：',
+                '       $env:HTTPS_PROXY',
                 '     空的就是没注入——多半是那个窗口在装之前就开着了，重开一个窗口。',
                 '  2. 有值还是连不上：看菜单顶上的「监控」是不是未运行。',
                 '     未运行就选 1（安装 / 修复）。',
@@ -629,17 +629,15 @@ function Get-HelpTopics {
                 '  就是这个样子，不是坏了。',
                 '',
                 '日志和 AI 排查',
-                '       win\monitor\monitor.log（上限 200KB，只留最近 200 行）。看不懂可以不看，'
-                '  反馈时附上最后 20 行就行。'
+                '  日志位置，看不懂可以不看，反馈时附上最后 20 行就行：',
+                '       win\monitor\monitor.log',
                 '',
                 '  AI 可能报 ECONNREFUSED 127.0.0.1:端口号。那是变量指向了一个已关闭的端口，',
                 '  不是网络坏了。菜单选 2 看「代理变量」那行，它会直接说清是不是这里的问题。',
-                '',
                 '  本工具只管 HTTP/HTTPS 变量。git、npm、curl、pip、docker 都认；',
                 '  ping、游戏、BT 这类走自己协议的不认——那些要开翻墙软件的 TUN 模式。'
             )
-        },
-        @{
+        },     @{
             Key = '7'; Title = '还是不行 / 想删掉它'; Short = '不行'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
@@ -699,10 +697,14 @@ function Get-HelpLineRole([string]$Line) {
         if ($body.Length -le 30 -and $body -notmatch '[。；，]$') { return 'heading' }
         return 'text'
     }
-    if ($body -match '^(注意|为什么|必须|别|不要|小心)') { return 'warn' }
-    # 命令：缩进 4 格以上，且像命令行（英文开头，或含 = / -- 这类参数特征）
-    if ($indent -ge 4 -and ($body -match '^[A-Za-z$./\\]' -or $body -match '--|=\S')) { return 'cmd' }
-    if ($body -match '^(\d+\.|\[|\d+ \s)') { return 'item' }
+    if ($body -match '^(注意|别|不要|小心)') { return 'warn' }
+    # 命令行 = 缩进 4 格以上，且这一行没有任何中日韩字符。
+    # 判据不能是"看起来像不像命令"：只要允许中英混排，「cmd 和 Git Bash 没这个开关」
+    # 这种说明就会因为开头是字母而被染成命令色。颜色一错，整屏就显得乱，而且会
+    # 把"能整行复制去跑的一行"和"只是提到命令的一行"混成同一种视觉。
+    # 反过来这条也给内容立了规矩：命令行必须能整行复制去跑，中文说明另起一行。
+    if ($indent -ge 4 -and $body -notmatch '[\u4e00-\u9fff\uff00-\uffef]') { return 'cmd' }
+    if ($body -match '^\d+[.、)]\s' -or $body -match '^\d+\s{2}') { return 'item' }
     return 'text'
 }
 
