@@ -412,6 +412,18 @@ $menuTextOrder = @()
 foreach ($g in @('日常', '维护', '退出')) { $menuTextOrder += $menuOut.IndexOf($g) }
 Assert-Eq 'menu groups render in order' $true ($menuTextOrder[0] -lt $menuTextOrder[1] -and $menuTextOrder[1] -lt $menuTextOrder[2])
 
+
+# Test-CanPrompt guards every interactive screen. It once called itself instead of reading
+# [Console]::IsInputRedirected: infinite recursion, stack overflow, swallowed by catch, so it
+# always returned $false -- the menu printed one line and quit on every real console, and
+# -Help took 14s. No behavioural test catches that (the suite runs redirected, where False is
+# the CORRECT answer). So pin the shape: the body must not mention its own name.
+$canPromptSrc = (Get-Command Test-CanPrompt).Definition
+Assert-Eq 'Test-CanPrompt does not call itself' $false ($canPromptSrc -match 'Test-CanPrompt\s*\)')
+Assert-Eq 'Test-CanPrompt reads IsInputRedirected' $true ($canPromptSrc -match 'IsInputRedirected')
+# Same class of mistake, other direction: a guard that always says "no prompt" would make the
+# menu unreachable too. Pin that the redirect check is a plain property read, in a single line.
+Assert-Eq 'Test-CanPrompt has no nested function' $false ($canPromptSrc -match 'function\s+Test-CanPrompt')
 Write-Host '[12] the online update source table'
 # The updater walks an ordered source table and takes the first source that answers, so a broken
 # table degrades silently: updates keep "working" until the day the official source is unreachable.

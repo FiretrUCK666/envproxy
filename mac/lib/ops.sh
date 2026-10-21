@@ -1078,29 +1078,36 @@ install_envproxy() {
     if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
     snapshot_prev_env "$_first" || true
-    echo "[1/3] 正在写开机自启……"
+    echo "[1/4] 正在写开机自启……"
     if set_autorun; then
-        echo "[1/3] 开机自启动：已写入"
+        echo "[1/4] 开机自启动：已写入"
     else
-        echo "[1/3] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
+        echo "[1/4] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
-    echo "[2/3] 正在写终端配置……"
+    echo "[2/4] 正在写终端配置……"
     if insert_shell_hooks; then
-        echo "[2/3] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
+        echo "[2/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
     else
-        echo "[2/3] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
+        echo "[2/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
     fi
     update_path_record
-    echo "[3/3] 正在启动后台监控……"
+    echo "[3/4] 正在启动后台监控……"
     if start_monitor 1; then
-        echo "[3/3] 监控进程：已启动"
+        echo "[3/4] 监控进程：已启动"
     else
-        echo "[3/3] 监控进程：未能确认运行，原因见上面那两行"
+        echo "[3/4] 监控进程：未能确认运行，原因见上面那两行"
     fi
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
     # 不管成没成就按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
-    align_state_once || true
-    sleep 1
+    # 这一步也要报进度：它是"会改这 4 处"里的第 4 处（环境变量），
+    # 不报的话用户只数到 3 步，会以为环境变量那步被跳过了。
+    echo "[4/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……"
+    if align_state_once >/dev/null 2>&1; then
+        echo "[4/4] 环境变量：已按当前状态校正"
+    else
+        # 读不出来 ≠ 没有代理：这一轮什么都没改，如实说明（与 Windows 侧同口径）。
+        echo "[4/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
+    fi
     echo ""
     # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
     echo "正在联网确认有没有新版本……"

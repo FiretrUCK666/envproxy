@@ -76,7 +76,7 @@ Two need a restart: it was already open before you installed EnvProxy, or it run
 2. Unzip anywhere; the folder can be renamed. Open `win` and double-click **`打开菜单.cmd`** (Mac: open `mac`, double-click **`打开菜单.command`**), pick **`1 Install / Repair`**
 3. When you see the monitor started message, you are done
 
-Installing does five things: it saves the current values of any variables with the same names (used to restore them on uninstall), registers automatic start at login, adds a script to your terminal's startup configuration (on Windows that is PowerShell's `$PROFILE`, written to both the 5.1 and the 7 location; on Mac it is the shell rc files), starts the monitor, and corrects the environment variables once. Progress is reported step by step on screen (4 steps on Windows, 3 on Mac; the snapshot is folded into step 1).
+Installing does five things: it saves the current values of any variables with the same names (used to restore them on uninstall), registers automatic start at login, adds a script to your terminal's startup configuration (on Windows that is PowerShell's `$PROFILE`, written to both the 5.1 and the 7 location; on Mac it is the shell rc files), starts the monitor, and corrects the environment variables once. Progress is reported step by step on screen: four steps on both platforms, matching the four places listed above.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the package for your platform, double-click the menu and choose 1 Install / Repair, see the monitor started message; below, a side by side comparison: a window opened after the install takes effect right away, and a window that was open before also catches up once you reopen it or load the sync script by hand">
 
@@ -140,7 +140,6 @@ On Mac that is the Terminal app, zsh by default, using the `export` column. **fi
 
 **On Windows with Git Bash installed**: it inherits the Windows environment variables, so "the terminal can go through the proxy" works automatically — nothing to do. But **the per-window pin to a direct connection does not work in Git Bash**: EnvProxy only writes the sync code into the PowerShell profiles, and nothing in Git Bash reads it. To skip the proxy in a Git Bash window, `export` the specific variables instead, following the Mac column.
 
-Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 
 ### 3.1 Three everyday actions
 

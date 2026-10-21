@@ -332,7 +332,7 @@ function Show-Status {
 # 两个条件都成立才算交互；任一条拿不到就当非交互处理（宁可给全文、不冒险去等键盘）。
 function Test-CanPrompt {
     try {
-        if (-not (Test-CanPrompt)) { return $false }
+        if ([Console]::IsInputRedirected) { return $false }
         # 没有控制台缓冲区时访问这个属性会抛异常（"句柄无效"）。
         $null = [Console]::WindowWidth
         return $true
@@ -511,7 +511,7 @@ function Get-HelpTopics {
                 '      $env:ENVPROXY_TERM = ''off''',
                 '  改回跟着翻墙软件走：',
                 '      Remove-Item Env:ENVPROXY_TERM',
-                '  ENVPROXY_TERM 是 EnvProxy 自己的开关变量，只有 ''off'' 一个值有意义：',
+                '  ENVPROXY_TERM 是 EnvProxy 自己的开关，只有 ''off'' 有意义，只影响这个窗口。',
                 '',
                 '让这个窗口走公司代理（两步，顺序不能反）',
                 '  1. 先停掉自动跟随：$env:ENVPROXY_TERM = ''off''',
