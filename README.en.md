@@ -13,10 +13,24 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 <img src="./assets/readme/quickstart.en.svg" width="100%" alt="After installing, only three things matter: a new window needs no action; a window that is already open catches up after one Enter press; if something feels wrong, open the menu and pick 1 Install / Repair, which fixes most problems without touching your own settings">
 
+## I just want to do one thing
+
+| I want to | Go to |
+|---|---|
+| Install it on this machine | [1. Install](#1-install-3-steps-5-minutes) |
+| Upgrade to a newer version | [the update part of 1](#updating) |
+| My terminal still cannot reach the internet | [4. Something is wrong](#4-something-is-wrong-check-in-this-order) |
+| Know how it decides | [5. How it decides](#5-how-it-decides-whether-you-are-behind-a-proxy) |
+| Look up one command | [3. Everyday commands](#3-everyday-commands-on-one-page) |
+| See what each menu item does | [2. Open the menu](#2-open-the-menu) |
+
+If you are not sure, open the menu and pick `6 Help`. It splits into seven topics, one screen each.
+
 ## Table of contents
 
 <!-- toc:start -->
 
+- [I just want to do one thing](#i-just-want-to-do-one-thing)
 - [0. What happens after installing](#0-what-happens-after-installing)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
@@ -110,26 +124,16 @@ This section covers what the menu cannot do: handling one particular window diff
 
 ### Which terminal these commands belong in
 
-They are **PowerShell** commands, not old-style Command Prompt (cmd).
+They are **PowerShell** commands, not old-style Command Prompt (cmd). To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
 
-On Windows almost every window you touch day to day is PowerShell:
-
-| How you opened the window | Is it PowerShell? |
-|---|---|
-| Start menu, search "PowerShell" | Yes |
-| Win+R, type `powershell` | Yes |
-| Windows Terminal | Yes (the default) |
-| VS Code terminal | Yes (the default) |
-| Start menu, search "Command Prompt" or "cmd" | **No** — these commands fail there |
-
-To tell them apart, look at the prompt: one starting with `PS` is PowerShell, such as `PS C:\Users\yourname>`.
+Almost every window you touch day to day is PowerShell: Start menu search for PowerShell, Win+R and type `powershell`, Windows Terminal, the VS Code terminal. Only opening Command Prompt by hand gives you cmd, and these commands fail there.
 
 **If you really are in cmd**, the syntax is different:
 
 | Purpose | PowerShell | cmd |
 |---|---|---|
 | Pin to direct | `$env:ENVPROXY_TERM = 'off'` | `set ENVPROXY_TERM=off` |
-| Back to automatic | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
+| Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | `set ENVPROXY_TERM=` |
 | Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` |
 
 On Mac that is the Terminal app, zsh by default, using the `export` column. **fish on Mac is not supported**; use zsh or bash.
@@ -385,6 +389,8 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | **Tools that need their own proxy configuration are out of scope** | They do not read these variables | Maven, Gradle, Docker and others are covered by the collapsed table in section 5 |
 | **No interface** | Zero dependencies is the install premise | There is only a menu: no tray icon and no window |
 
+Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
+
 ## 12. macOS version
 
 ### 12.1 Difference from the Windows version
@@ -419,12 +425,7 @@ See the folder structure in section 8. Mac has two extra template files: `locato
 | "Permission denied" | The script is not executable | Run `chmod +x 打开菜单.command` in a terminal |
 | Installed, but the status says it is not running | System settings blocked the background item | System Settings, General, Login Items & Extensions, allow it to run |
 
-### 12.6 Mac technical limits
-
-The first four limits for Windows apply here too (TUN, system proxy, running programs, tools needing their own configuration), and the fifth takes the Mac form, since Mac has no interface either. Two more:
-
-- **The `launchctl` environment is cleared at login and reboot**: the monitor therefore writes it again every 30 rounds, so it returns by itself after a restart.
-- **`~/.envproxy/` is a fixed location**, holding these files after installing:
+### 12.6 What lands in `~/.envproxy/` after installing
 
 | File | Purpose |
 |---|---|
