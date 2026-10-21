@@ -206,6 +206,34 @@ Four things to note:
 - It affects that one window only. Other open windows need the same command, or just reopen them.
 - If EnvProxy was never installed for that window, the file `$PROFILE` points at may not exist and you will see a red "cannot find path" error. That is normal; just open a new window.
 
+### 3.4 Use it without the menu (scripts, remote sessions)
+
+The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line switches. They match the menu numbers one to one.
+
+| Goal | Windows | Mac |
+|---|---|---|
+| Install / repair (menu 1) | `-Install` | `install` |
+| Show status (menu 2) | `-Status` | `status` |
+| Stop the monitor (menu 3) | `-Stop` | `stop` |
+| Full restore (menu 4) | `-Uninstall` | `uninstall` |
+| Check for updates (menu 5) | `-Update` | `update` |
+| Show help (menu 6) | `-Help` | `help` |
+| Open the menu | `-Menu` | `menu` |
+
+`-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
+
+The full form:
+
+```
+powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status
+```
+
+```
+bash envproxy.sh status
+```
+
+**Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
+
 ## 4. Something is wrong: check in this order
 
 **Work through the list in order, finishing one step before starting the next.**

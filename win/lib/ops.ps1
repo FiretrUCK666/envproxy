@@ -598,16 +598,20 @@ function Get-HelpTopics {
             Key = '7'; Title = '还是不行怎么办'; Short = '不行'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
-                '  打开菜单选 1。它不会重复安装，不会中断网络，',
-                '  也不会丢失你自己的设置。',
+                '  打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。',
                 '',
                 '还是不行',
-                '  打开菜单选 2，把状态截图；再选 1 修复一次。',
-                '  反馈时附上 monitor\monitor.log 最后 20 行，能省很多来回。',
+                '  菜单选 2 把状态截图，再选 1 修复一次。反馈时附上 monitor\monitor.log',
+                '  最后 20 行，能省很多来回。',
                 '',
-                '只想看命令和完整说明',
-                '  完整说明在项目里的 README，',
-                '  其中「常用操作一页纸」一节收了所有命令。'
+                '想彻底删掉它',
+                '  菜单选 4（一键恢复）。会问你要不要留日志。',
+                '',
+                '不开菜单也能用（适合写脚本，或远程连过来）',
+                '      -Install    -Status     -Stop        -Uninstall',
+                '      -Update     -Help       -Menu        -Uninstall -Purge',
+                '  -Purge 表示连日志一起删。完整写法：',
+                '      powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status'
             )
         }
     )
