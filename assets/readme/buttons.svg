@@ -24,8 +24,8 @@
 
   <g id="grid" fill="none" stroke-width="1.5">
     <path d="M200 156V434M380 156V434M560 156V434M740 156V434M920 156V434M1100 156V434" stroke="#2A3B58"/>
-    <path d="M56 156H1144M56 314H1144M56 434H1144" stroke="#2A3B58"/>
-    <path d="M56 194H1144" stroke="#33486B"/>
+    <path d="M56 156H1144M56 434H1144" stroke="#2A3B58"/>
+    <path d="M56 194H1144M56 354H1144" stroke="#33486B"/>
   </g>
 
   <g id="column-labels" font-size="20" fill="#C7D3E3" text-anchor="middle">
@@ -46,7 +46,7 @@
   </g>
 
   <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
-    <path d="M56 234H1144M56 274H1144M56 354H1144M56 394H1144"/>
+    <path d="M56 234H1144M56 274H1144M56 314H1144M56 394H1144"/>
   </g>
 
   <g id="kept" font-size="26" font-weight="700" fill="#34D399" text-anchor="middle">

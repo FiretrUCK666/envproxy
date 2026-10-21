@@ -1468,6 +1468,29 @@ format_help_nav_line() {
 # 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
 # 菜单可用的编号，从表里算：加一项就自动变成 "1-6 和 0"，不会留下写死的旧范围。
 # 和帮助的 format_help_key_range 同一个思路——改数字的地方只该有一处。
+# 把一组编号写成人话。连续就写「1-6」，中间有断层就逐个列出来。
+# 为什么不能只取首尾：从表里删掉一项之后，首尾相减仍然给出「1-6」，
+# 而那段时间里 4 已经不存在了——用户照着敲 4，得到「没有这个编号」。
+# 提示的用途是告诉他能敲什么，说错比不说更糟。
+format_key_list() {
+    _fkl_all=""
+    for _fkl_k in "$@"; do _fkl_all="$_fkl_all $_fkl_k"; done
+    set -- $_fkl_all
+    if [ $# -eq 0 ]; then echo ""; return 0; fi
+    if [ $# -eq 1 ]; then echo "$1"; return 0; fi
+    _fkl_prev=""
+    _fkl_contig=1
+    for _fkl_k in "$@"; do
+        if [ -n "$_fkl_prev" ] && [ "$_fkl_k" -ne $((_fkl_prev + 1)) ]; then _fkl_contig=0; break; fi
+        _fkl_prev=$_fkl_k
+    done
+    if [ "$_fkl_contig" = "1" ]; then
+        echo "$1-$_fkl_prev"
+    else
+        echo "$*"
+    fi
+}
+
 get_menu_key_range() {
     _mkr_keys=""
     _mkr_quit=""
@@ -1482,10 +1505,11 @@ get_menu_key_range() {
     done
     set -- $_mkr_keys
     if [ $# -eq 0 ]; then echo "没有可用的编号"; return 0; fi
-    _mkr_first=$1
-    eval "_mkr_last=\${$#}"
-    _mkr_text="$_mkr_first-$_mkr_last"
-    if [ -n "$_mkr_quit" ]; then _mkr_text="$_mkr_text 和$_mkr_quit"; fi
+    _mkr_text=$(format_key_list "$@")
+    if [ -n "$_mkr_quit" ]; then
+        _mkr_q=$(format_key_list $_mkr_quit)
+        _mkr_text="$_mkr_text 和 $_mkr_q"
+    fi
     echo "$_mkr_text"
 }
 
@@ -1744,8 +1768,7 @@ _help_line_color() {
             # C locale 下一个汉字顶 3，同一条标题会一会儿上色一会儿不上色。
             # 句末有标点、或句中有句号，说明它是正文而不是标题——与 Win 侧同一判据。
             case "$_hlc_rest" in
-                *。|*；|*，) echo ""; return 0;;
-                *。*) echo ""; return 0;;
+                *。*|*；*|*，*) echo ""; return 0;;
             esac
             echo "36"
             return 0

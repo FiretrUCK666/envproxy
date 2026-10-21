@@ -1377,6 +1377,23 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
+# The "you can type X" hint must never name a key that does not exist. Taking the
+# first and last key and printing a span does exactly that after a row is removed:
+# 1..6 minus 4 still read as "1-6", and typing 4 answers "no such number".
+Assert-Eq 'a contiguous key list collapses to a span' '1-6' (Format-KeyList @('1','2','3','4','5','6'))
+Assert-Eq 'a gapped key list is spelled out' '1 2 3 5 6' (Format-KeyList @('1','2','3','5','6'))
+Assert-Eq 'a single key is just itself' '4' (Format-KeyList @('4'))
+Assert-Eq 'an empty list says nothing' '' (Format-KeyList @())
+$saveItems = @($MenuItems)
+try {
+    $MenuItems = @($MenuItems | Where-Object { $_.Key -ne '4' })
+    $rangeWithGap = Get-MenuKeyRange
+    Assert-Eq 'the menu hint never names a removed key' $false ($rangeWithGap -match '\b4\b')
+    Assert-Eq 'the menu hint still names every remaining key' $true (($rangeWithGap -match '1 2 3') -and ($rangeWithGap -match '5 6'))
+} finally {
+    $MenuItems = $saveItems
+}
+
 # The coloured screen and the plain-text menu must take their group order from the
 # SAME derived list. They once each had a hand-written array: a group typo then made
 # an item invisible on screen while it stayed typeable -- the user sees one menu and

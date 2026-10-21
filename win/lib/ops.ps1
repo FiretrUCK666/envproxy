@@ -728,9 +728,12 @@ function Get-HelpLineRole([string]$Line) {
     $indent = 0
     foreach ($ch in $Line.ToCharArray()) { if ($ch -eq ' ') { $indent++ } else { break } }
     $body = $Line.Trim()
-    # 顶格的一行短句是小标题（不是句子：没有句号、逗号结尾通常也不长）
+    # 顶格、且不像一句完整的话 = 小标题。
+    # 判据只看结构、不看长度：长度上限是个任意数字，而它与 Mac 侧一旦不一致，
+    # 同一条标题就会在两端显示成不同颜色——同一个产品两种观感。句子才带句末标点，
+    # 标题不带，这条区分是稳定的，也不怕以后把标题写长一点。
     if ($indent -eq 0) {
-        if ($body.Length -le 30 -and $body -notmatch '[。；，]$') { return 'heading' }
+        if ($body -notmatch '[。；，]') { return 'heading' }
         return 'text'
     }
     if ($body -match '^(注意|别|不要|小心)') { return 'warn' }
@@ -765,12 +768,26 @@ function Write-HelpLine([string]$Line) {
 # 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
 # 菜单可用的编号，从表里算：加一项就自动变成 "1-6 和 0"，不会留下写死的旧范围。
 # 和帮助的 Format-HelpKeyRange 同一个思路——改数字的地方只该有一处。
+# 把一组编号写成人话。连续就写「1-6」，中间有断层就逐个列出来。
+# 为什么不能只取首尾：从表里删掉一项之后，首尾相减仍然给出「1-6」，
+# 而那段时间里 4 已经不存在了——用户照着敲 4，得到「没有这个编号」。
+# 提示的用途是告诉他能敲什么，说错比不说更糟。
+function Format-KeyList([string[]]$Keys) {
+    if ($Keys.Count -eq 0) { return '' }
+    if ($Keys.Count -eq 1) { return $Keys[0] }
+    $ints = @($Keys | ForEach-Object { [int]$_ } | Sort-Object)
+    $contiguous = $true
+    for ($i = 1; $i -lt $ints.Count; $i++) { if ($ints[$i] -ne $ints[$i - 1] + 1) { $contiguous = $false; break } }
+    if ($contiguous) { return ($ints[0].ToString() + '-' + $ints[$ints.Count - 1].ToString()) }
+    return (($ints | ForEach-Object { $_.ToString() }) -join ' ')
+}
+
 function Get-MenuKeyRange {
     $keys = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Key })
     $quit = @($MenuItems | Where-Object { -not $_.Switch } | ForEach-Object { $_.Key })
     if ($keys.Count -eq 0) { return '没有可用的编号' }
-    $text = $keys[0] + '-' + $keys[$keys.Count - 1]
-    if ($quit.Count -gt 0) { $text += ' 和 ' + ($quit -join ' ') }
+    $text = Format-KeyList $keys
+    if ($quit.Count -gt 0) { $text += ' 和 ' + ((@($quit | ForEach-Object { [int]$_ } | Sort-Object) | ForEach-Object { $_.ToString() }) -join ' ') }
     return $text
 }
 
@@ -778,7 +795,7 @@ function Format-HelpKeyRange {
     $keys = @(Get-HelpTopics | ForEach-Object { $_.Key })
     if ($keys.Count -eq 0) { return '没有可用的编号' }
     if ($keys.Count -eq 1) { return '只有 ' + $keys[0] }
-    return ('有 ' + $keys[0] + '-' + $keys[$keys.Count - 1])
+    return ('有 ' + (Format-KeyList $keys))
 }
 
 function Format-HelpNavLine([string]$CurrentKey) {
