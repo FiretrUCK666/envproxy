@@ -402,38 +402,38 @@ foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r +
 # 同一句写两遍、整屏超出终端高度）靠"关键字还在不在"是查不出来的——
 # 坏行里往往还含有别的行的关键字，于是断言照样全绿。
 # 所以直接量屏幕上会出现的形状，一次挡住一整类。
+# 量的是真实渲染结果（$rendered），不是正文数组：标题、空行、导航行、提示行
+# 都占屏幕，只数正文会漏掉它们。
 foreach ($t in $helpTopics) {
-    # 1) 一屏一条是这版帮助的设计承诺：超过 30 行的部分会被终端切掉，
-    #    而被切掉的常常是底部的「怎么退出」。
-    # 1) 一屏一条是这版帮助的设计承诺：超过终端高度的部分会被切掉，
-    #    而被切掉的常常是底部的「怎么退出」。这里量的是**真实渲染结果**而不是正文：
-    #    标题、空行、导航行、提示行都占屏幕，只数正文会漏掉它们（此前正是这么漏的）。
     $rendered = @((Format-HelpTopic $t.Key) -split "`n")
+    # 1) 一屏放得下：超出的部分会被终端切掉，而被切掉的常常是底部的「怎么退出」。
     Assert-Eq ('topic ' + $t.Key + ' renders within 30 lines') $true ($rendered.Count -le 30)
     # 2) 相邻两行一模一样 = 编辑时留下的重复段，用户会以为屏幕坏了。
     $dupFound = $false
-    for ($i = 1; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -ne '' -and $lines[$i] -eq $lines[$i - 1]) { $dupFound = $true; break }
+    for ($i = 1; $i -lt $rendered.Count; $i++) {
+        if ($rendered[$i] -ne '' -and $rendered[$i] -eq $rendered[$i - 1]) { $dupFound = $true; break }
     }
     Assert-Eq ('topic ' + $t.Key + ' has no duplicated line') $false $dupFound
-    # 3) 每行不能超 80 显示列：超了终端会硬折行，看起来像排版坏了。
-    #    这条同时会抓住"混进绝对路径"——开发机的 profile 路径有 100 多列。
+    # 3) 行宽：超宽会让终端硬折行。例外是「一整条命令」——命令是给用户整条复制的，
+    #    硬拆成两行会让复制变成两段、中间夹换行，粘进终端就成了两条命令，比折行更难用。
+    #    所以判据是「超宽的行必须是一条命令（缩进 + 不含中文）」，而不是「一律不许超」。
+    #    这比「一律不许超」弱，但它诚实表达了真实约束，而不是假装没超。
     $tooWide = ''
-    foreach ($ln in $lines) {
+    foreach ($ln in $rendered) {
         $w = 0
         foreach ($ch in $ln.ToCharArray()) { $w += if ([int]$ch -gt 0x2E80) { 2 } else { 1 } }
-        if ($w -gt 80) { $tooWide = $ln; break }
+        if ($w -le 80) { continue }
+        if ($ln -match '^\s+\S' -and $ln -notmatch '[\u4e00-\u9fff]') { continue }
+        $tooWide = $ln; break
     }
     Assert-Eq ('topic ' + $t.Key + ' has no line wider than 80 columns') '' $tooWide
-    Assert-Eq ('topic ' + $t.Key + ' has no line wider than 80 columns') '' $tooWide
-    # 5) 不许混进本机的绝对路径：那一屏是给别人看的，写死 C:\Users\某人 只会让人困惑，
-    #    而且换台机器就失准。C:\Users\FiretrUCK\Documents\PowerShell\Microsoft.PowerShell_profile.ps1 这类环境自带变量才是正确写法。
+    # 4) 不许混进本机的绝对路径：那一屏是给别人看的，写死 C:\Users\某人 会让别人困惑，
+    #    换台机器就失准。$PROFILE 这类环境自带变量才是正确写法。
     $absPath = ''
-    foreach ($ln in $lines) { if ($ln -match '[A-Za-z]:\\Users\\|/Users/') { $absPath = $ln; break } }
+    foreach ($ln in $rendered) { if ($ln -match '[A-Za-z]:\\Users\\|/Users/') { $absPath = $ln; break } }
     Assert-Eq ('topic ' + $t.Key + ' has no hardcoded home path') '' $absPath
-    # 4) 命令必须是完整的：三种写法各有特征前缀，被转义吃掉时会只剩 `` 或 `off。
-    #    这里只钉"不许出现半个变量名"这一种坏法，写法本身不管。
-    Assert-Eq ('topic ' + $t.Key + ' has no truncated variable') $false ((@($lines | Where-Object { $_ -match '`(off|on)?\s*=' })).Count -gt 0)
+    # 5) 命令必须是完整的：被转义吃掉时会只剩一个反引号加残片。
+    Assert-Eq ('topic ' + $t.Key + ' has no truncated variable') $false ((@($rendered | Where-Object { $_ -match '`(off|on)?\s*=' })).Count -gt 0)
 }
 
 # A table entry that is never printed is a feature the user cannot reach: the menu once

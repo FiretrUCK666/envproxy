@@ -266,8 +266,15 @@ function Show-Status {
     }
 
     $cur = Get-EnvProxyValue
-    if ($cur) { Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green }
-    else      { Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray }
+    if ($cur) {
+        Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green
+    } else {
+        Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray
+        # 上一行说"有代理在监听"、这一行说"没注入变量"，单独看会以为自相矛盾。
+        # 实话是：翻墙软件在跑，但本工具没在它上面工作（多半是用户自己停的）。
+        # 补一句桥接，否则用户会判定"坏了"然后去卸载。
+        if ($port -and -not $m) { Write-Host "           （翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" -ForegroundColor DarkGray }
+    }
 
     # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
@@ -497,29 +504,29 @@ function Get-HelpTopics {
             Key = '3'; Title = '我要单独设置某个窗口'; Short = '窗口'
             Lines = @(
                 '下面每条命令都在「你要改的那个窗口」里敲，只影响那个窗口。',
-                '  看提示符分辨：PS = PowerShell，C:\ = cmd，名字@主机 = Git Bash。只有前两种能自动跟随。',
+                '  看开头：PS = PowerShell，C:\ = cmd，名字@主机 = Git Bash。',
+                '  只有 PowerShell 会自动跟随，其余要自己清变量。窗口一关都失效。',
                 '',
                 '一、固定直连',
                 '    PowerShell     $env:ENVPROXY_TERM = ''off''',
-                '    Mac 终端        export ENVPROXY_TERM=off',
-                '    cmd            没有这个开关，直接清 5 个变量（& 两边不能留空格）：',
-                '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
-                '    Git Bash       unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
-                '  窗口一关就失效。恢复自动：PowerShell 和 Mac 见第三节，其余重开窗口。',
+                '    cmd 和 Git Bash 没这个开关，直接清掉 5 个变量：',
+                '      Git Bash：unset HTTP_PROXY HTTPS_PROXY ALL_PROXY',
+                '    cmd 和 Git Bash 没这个开关，直接清掉 5 个变量（cmd 的 & 两边不能留空格）：',
+                '        set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
+                '  恢复自动：PowerShell 用 Remove-Item Env:ENVPROXY_TERM，',
                 '',
                 '二、走公司代理（两步，顺序不能反）',
                 '    1. 先按上面固定直连',
-                '    2. 再设地址，三种终端依次是：',
-                '       $env:HTTPS_PROXY = ''http://地址:端口''        （PowerShell）',
-                '       set HTTPS_PROXY=http://地址:端口              （cmd）',
-                '       export HTTPS_PROXY=http://地址:端口           （Git Bash / Mac）',
+                '    2. 再设地址：PowerShell 用 $env:HTTPS_PROXY = ''http://地址:端口''',
+                '       cmd 用 set HTTPS_PROXY=http://地址:端口，Git Bash 用 export 同名变量。',
                 '    不停掉的话，翻墙软件一有变化就会覆盖你刚设的地址。',
                 '',
                 '三、看走不走代理（有值就是走代理，空的是直连）',
-                '    三种终端依次：$env:HTTPS_PROXY　set HTTPS_PROXY　echo $HTTPS_PROXY',
+                '    PowerShell：$env:HTTPS_PROXY　　cmd：set HTTPS_PROXY',
+                '    Git Bash：echo $HTTPS_PROXY',
                 '',
                 '四、让已开的窗口跟上',
-                '    PowerShell：. $PROFILE      Mac 终端：. ~/.envproxy/prompt-sync.sh',
+                '    PowerShell：. $PROFILE',
                 '    cmd 和 Git Bash 没这机制，只能重开窗口。'
             )
         },
@@ -579,23 +586,31 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '出问题了我该看哪里'; Short = '排错'
+            Key = '6'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
             Lines = @(
-                '日志',
-                '      win\monitor\monitor.log',
-                '  上限 200KB，写满只留最近 200 行。卸载时会问你要不要留它。',
+                '连不上网，按这个顺序查',
+                '  1. 先在那个窗口里看变量有没有值：PowerShell 敲 $env:HTTPS_PROXY',
+                '     空的就是没注入——多半是那个窗口在装之前就开着了，重开一个窗口。',
+                '  2. 有值还是连不上：看菜单顶上的「监控」是不是未运行。',
+                '     未运行就选 1（安装 / 修复）。',
+                '  3. npm 不认 HTTP_PROXY，只认 HTTPS_PROXY。EnvProxy 两个都写，',
+                '     但你要是自己清过变量，npm 就不走了。',
                 '',
-                '文件夹里都是什么',
-                '      打开菜单.cmd        唯一需要双击的文件',
-                '      envproxy.ps1        主程序',
-                '      lib\                程序库，不用管',
-                '      monitor\            运行时自动生成，放日志和 pid',
-                '  整个文件夹可以改名、搬走。更新只覆盖程序文件，',
-                '  所以别把你要长期保留的东西放进这个文件夹。'
+                '状态页那几行怎么读',
+                '  监控进程    本工具的后台程序在不在跑。',
+                '  开机自启    下次登录会不会自动起来（和上面那行是两件事）。',
+                '  翻墙代理    本机有没有翻墙软件在监听端口。',
+                '  代理变量    这个工具有没有往终端里设代理。',
+                '  后两行可能一个「有」一个「无」：翻墙软件在跑、但本工具被你停了，',
+                '  就是这个样子，不是坏了。',
+                '',
+                '日志',
+                '      win\monitor\monitor.log（上限 200KB，只留最近 200 行）',
+                '  看不懂可以不看。反馈问题时附上最后 20 行就行。'
             )
         },
         @{
-            Key = '7'; Title = '还是不行怎么办'; Short = '不行'
+            Key = '7'; Title = '还是不行 / 想删掉它'; Short = '不行'
             Lines = @(
                 '大部分问题都可以用「安装 / 修复」解决',
                 '  打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。',
@@ -680,6 +695,17 @@ function Write-HelpLine([string]$Line) {
 # 那句话等于白说。列出编号既回答了"编号是什么"，也顺手回答了"还有哪几条"。
 # 编号与短名都从表里取，加一条主题时这里自动跟上，不会留下写死的旧数字。
 # 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
+# 菜单可用的编号，从表里算：加一项就自动变成 "1-6 和 0"，不会留下写死的旧范围。
+# 和帮助的 Format-HelpKeyRange 同一个思路——改数字的地方只该有一处。
+function Get-MenuKeyRange {
+    $keys = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Key })
+    $quit = @($MenuItems | Where-Object { -not $_.Switch } | ForEach-Object { $_.Key })
+    if ($keys.Count -eq 0) { return '没有可用的编号' }
+    $text = $keys[0] + '-' + $keys[$keys.Count - 1]
+    if ($quit.Count -gt 0) { $text += ' 和 ' + ($quit -join ' ') }
+    return $text
+}
+
 function Format-HelpKeyRange {
     $keys = @(Get-HelpTopics | ForEach-Object { $_.Key })
     if ($keys.Count -eq 0) { return '没有可用的编号' }
@@ -765,6 +791,12 @@ function Show-Help([switch]$All) {
             if ($cur) { $cur = ''; continue }
             return
         }
+        # q 和 0 与「直接回车」同义：菜单里 q/0 都是退出，刚在菜单学会按 q 的人，
+        # 进到帮助再按就被判成"没有这一条"，会以为帮助坏了。不写进屏幕，只是别拒绝他。
+        if ($sel -eq 'q' -or $sel -eq 'Q' -or $sel -eq '0') {
+            if ($cur) { $cur = ''; continue }
+            return
+        }
         # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         # 与菜单屏一致（输错不重画），不该一屏一个做法。
         if (-not (Test-HelpKey $sel)) {
@@ -813,7 +845,7 @@ function Show-Menu {
         if (-not $item -or ($item.Count -eq 0)) {
             # 输错只补一行，菜单本身留在原位：重画一遍会让屏幕不停往下滚，
             # 连错几次就再也找不到自己在哪了（ADHD 用户尤其受不了）。
-            Write-Host ("没有这个编号：{0}（可用的有 1-6 和 0）" -f $choice) -ForegroundColor Yellow
+            Write-Host ("没有这个编号：{0}（可用的有 {1}）" -f $choice, (Get-MenuKeyRange)) -ForegroundColor Yellow
             $mode = "none"
             continue
         }

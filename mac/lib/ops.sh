@@ -1322,7 +1322,7 @@ _help_topic_short() {
         3) echo "窗口" ;;
         4) echo "命令" ;;
         5) echo "菜单" ;;
-        6) echo "排错" ;;
+        6) echo "连不上" ;;
         7) echo "不行" ;;
         *) echo "" ;;
     esac
@@ -1347,6 +1347,29 @@ format_help_nav_line() {
 }
 
 # 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
+# 菜单可用的编号，从表里算：加一项就自动变成 "1-6 和 0"，不会留下写死的旧范围。
+# 和帮助的 format_help_key_range 同一个思路——改数字的地方只该有一处。
+get_menu_key_range() {
+    _mkr_keys=""
+    _mkr_quit=""
+    for _mkr_i in "${MENU_ITEMS[@]}"; do
+        _mkr_k=${_mkr_i%%|*}
+        _mkr_sw=${_mkr_i##*|}
+        if [ -n "$_mkr_sw" ]; then
+            _mkr_keys="$_mkr_keys $_mkr_k"
+        else
+            _mkr_quit="$_mkr_quit $_mkr_k"
+        fi
+    done
+    set -- $_mkr_keys
+    if [ $# -eq 0 ]; then echo "没有可用的编号"; return 0; fi
+    _mkr_first=$1
+    eval "_mkr_last=\${$#}"
+    _mkr_text="$_mkr_first-$_mkr_last"
+    if [ -n "$_mkr_quit" ]; then _mkr_text="$_mkr_text 和$_mkr_quit"; fi
+    echo "$_mkr_text"
+}
+
 format_help_key_range() {
     _hkr_n=${#HELP_TOPIC_KEYS[@]}
     if [ "$_hkr_n" -eq 0 ]; then echo "没有可用的编号"; return 0; fi
@@ -1360,8 +1383,8 @@ _help_topic_title() {
         3) echo "我要单独设置某个窗口" ;;
         4) echo "我要让某条命令不走代理" ;;
         5) echo "菜单每一项是干什么的" ;;
-        6) echo "出问题了我该看哪里" ;;
-        7) echo "还是不行怎么办" ;;
+        6) echo "装了还是连不上网 / 状态不对" ;;
+        7) echo "还是不行 / 想删掉它" ;;
         *) echo "" ;;
     esac
     return 0
@@ -1477,23 +1500,28 @@ TOPIC
 TOPIC
     ;;
     6) cat <<'TOPIC'
-日志
-      mac/monitor/monitor.log
-  上限 200KB，写满只留最近 200 行。卸载时会问你要不要留它。
+连不上网，按这个顺序查
+  1. 先在那个窗口里看变量有没有值：echo $HTTPS_PROXY
+     空的就是没注入——多半是那个窗口在装之前就开着了，重开一个窗口。
+  2. 有值还是连不上：看菜单顶上的「监控」是不是未运行。
+     未运行就选 1（安装 / 修复）。
+  3. npm 不认 HTTP_PROXY，只认 HTTPS_PROXY。EnvProxy 两个都写，
+     但你要是自己清过变量，npm 就不走了。
 
-文件夹里都是什么
-      打开菜单.command     唯一需要双击的文件
-      envproxy.sh          主程序
-      locator.sh           定位脚本模板（安装时复制到 ~/.envproxy/）
-      prompt-sync.sh       终端同步脚本模板（同上）
-      lib/                 程序库，不用管
-      monitor/             运行时自动生成，放日志和 pid
-  整个文件夹可以改名、搬走。更新只覆盖程序文件，
-  所以别把你要长期保留的东西放进这个文件夹。
+状态页那几行怎么读
+  监控进程    本工具的后台程序在不在跑。
+  开机自启    下次登录会不会自动起来（和上面那行是两件事）。
+  翻墙代理    本机有没有翻墙软件在监听端口。
+  代理变量    这个工具有没有往终端里设代理。
+  后两行可能一个「有」一个「无」：翻墙软件在跑、但本工具被你停了，
+  就是这个样子，不是坏了。
+
+日志
+      mac/monitor/monitor.log（上限 200KB，只留最近 200 行）
+  看不懂可以不看。反馈问题时附上最后 20 行就行。
 TOPIC
     ;;
     7) cat <<'TOPIC'
-大部分问题都可以用「安装 / 修复」解决
 大部分问题都可以用「安装 / 修复」解决
   打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。
 
@@ -1665,10 +1693,10 @@ show_help() {
 # 这个编号有没有对应的帮助主题。输错时用它来决定"要不要清屏"：
 # 无效就保留当前屏（用户还要照着挑），有效才换屏。
 _help_key_valid() {
-    case "$1" in
-        1|2|3|4|5|6|7) return 0 ;;
-        *) return 1 ;;
-    esac
+    for _hkv_k in "${HELP_TOPIC_KEYS[@]}"; do
+        [ "$_hkv_k" = "$1" ] && return 0
+    done
+    return 1
 }
 
 # 菜单表：编号 | 名称 | 说明 | 分组 | 子命令。打印与分派共用它，加一项就一定会显示出来。
@@ -1870,7 +1898,7 @@ show_menu() {
         if [ "$_msub_ok" = "1" ]; then
             # 输错只补一行，菜单本身留在原位：重画一遍会让屏幕不停往下滚，
             # 连错几次就再也找不到自己在哪了（ADHD 用户尤其受不了）。
-            echo "没有这个编号：$_choice（可用的有 1-6 和 0）"
+            echo "没有这个编号：$_choice（可用的有 $(get_menu_key_range)）"
             _mode="none"
             continue
         fi
