@@ -208,6 +208,23 @@ self_test() {
                  . "$_ps_file" 2>/dev/null || true
                  [ "${PROMPT_COMMAND-}" = "$_a" ] && printf same || printf doubled )
         _selftest_assert_eq "重复 source 不重复注册" "same" "$_ps_r"
+        # 8b) zsh 兜底分支（没有 add-zsh-hook 的老 zsh）重复 source 也不能叠成多份。
+        #     直接验证那段剔除逻辑本身：它只用数组展开与 [ ] 比较，bash 下跑得出同样结论。
+        _ps_r=$( _f=_envproxy_prompt_sync
+                 precmd_functions=(kept_other)
+                 for _round in 1 2 3; do
+                     _ep_keep=()
+                     for _ep_fn in ${precmd_functions[@]}; do
+                         [ "$_ep_fn" = "$_f" ] || _ep_keep+=("$_ep_fn")
+                     done
+                     precmd_functions=(${_ep_keep[@]} "$_f")
+                 done
+                 _n=0
+                 for _ep_fn in "${precmd_functions[@]}"; do
+                     [ "$_ep_fn" = "$_f" ] && _n=$((_n + 1))
+                 done
+                 printf '%s:%s' "$_n" "${precmd_functions[0]}" )
+        _selftest_assert_eq "zsh 兜底分支重复 source 只注册一次" "1:kept_other" "$_ps_r"
         # 9) 钩子永不返回非零（返回非零会让使用者的主题提示符跟着崩）
         # 用固定路径传值，不用 $( )：命令替换会重置 $?，测的就不是钩子的行为了。
         _ps_tmp="$ENVPROXY_HOME/.selftest_rc"
@@ -1257,9 +1274,10 @@ show_help() {
   别的工具各有各的写法：
       git  -c http.proxy= -c https.proxy= clone 仓库地址
            （等号后留空=这条不用代理；写别的值=改用那个代理）
-      npm  --noproxy="*" install 包名
-           注意是 noproxy，没有连字符。写成 --no-proxy 不报错但会被忽略，
-           然后照常走代理——你以为绕过了，其实没有。
+      npm  --noproxy=registry.npmjs.org install 包名
+           注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。
+           写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。
+           另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
       wget --no-proxy 网址
       docker 要改它自己的设置，没有单条命令的写法
 
@@ -1290,7 +1308,9 @@ HELP
 }
 
 # 菜单表：编号 | 名称 | 说明。打印与分派共用它，加一项就一定会显示出来。
-# 格式写成 键|名字|提示，提示可以为空；解析时按第一个和第二个 | 切开。
+# 格式固定为 键|名字|提示，提示可以为空但**结尾那个竖线不能省**：
+# 少了它提示会被静默当成名字的副本（菜单照常打印、不报错，用户看到 [0] 退出（退出））。
+# 所以下面带一道加载期校验，格式不对就当场报错，不给"看起来正常"的机会。
 MENU_ITEMS=(
     '1|安装 / 修复|首次安装；觉得不对劲就点它'
     '2|查看状态|监控、翻墙、变量、版本'
@@ -1300,6 +1320,27 @@ MENU_ITEMS=(
     '6|帮助|忘了怎么用就点它'
     '0|退出|'
 )
+
+# 加载期校验：每条必须恰好两个竖线，且键与名字非空。不合格就报错（不静默降级）。
+_menu_items_valid() {
+    for _mv in "${MENU_ITEMS[@]}"; do
+        # 数竖线：把非竖线字符全删掉，剩下的长度就是个数
+        _bars=$(printf '%s' "$_mv" | tr -cd '|' | wc -c | tr -d ' ')
+        if [ "$_bars" -ne 2 ]; then
+            printf '菜单表格式错误（%s 个竖线，应为 2）：%s\n' "$_bars" "$_mv" >&2
+            return 1
+        fi
+        case "${_mv%%|*}" in
+            '') printf '菜单表格式错误（键为空）：%s\n' "$_mv" >&2; return 1 ;;
+        esac
+        _mvname=${_mv#*|}; _mvname=${_mvname%%|*}
+        case "$_mvname" in
+            '') printf '菜单表格式错误（名字为空）：%s\n' "$_mv" >&2; return 1 ;;
+        esac
+    done
+    return 0
+}
+_menu_items_valid || return 1 2>/dev/null || exit 1
 
 show_menu() {
     if [ ! -t 0 ]; then

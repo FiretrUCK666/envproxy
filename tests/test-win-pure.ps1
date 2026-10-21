@@ -989,16 +989,23 @@ try {
 
     # 用户配置文件的编码必须原样保住，而且要逐字节还原。
     # 这是最容易被写坏的东西：GBK 被当 UTF-8 读会变乱码、BOM 每轮叠加一层。
+    # 行尾也要保住：WriteAllLines 固定用 Environment.NewLine（CRLF），会把 LF 的
+    # profile 静默改成 CRLF——夹具只写 CRLF 时这条永远测不出来，所以这里带上 LF。
     $encCases = @(
-        @{ Name = 'GBK';       Enc = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage) },
-        @{ Name = 'UTF8-BOM';  Enc = (New-Object System.Text.UTF8Encoding($true)) },
-        @{ Name = 'UTF8';      Enc = (New-Object System.Text.UTF8Encoding($false)) }
+        @{ Name = 'GBK';       Enc = [System.Text.Encoding]::GetEncoding([System.Globalization.CultureInfo]::CurrentCulture.TextInfo.ANSICodePage); Nl = "`r`n" },
+        @{ Name = 'UTF8-BOM';  Enc = (New-Object System.Text.UTF8Encoding($true));                       Nl = "`r`n" },
+        @{ Name = 'UTF8';      Enc = (New-Object System.Text.UTF8Encoding($false));                      Nl = "`r`n" },
+        @{ Name = 'UTF8-LF';   Enc = (New-Object System.Text.UTF8Encoding($false));                      Nl = "`n" },
+        @{ Name = 'UTF8BOM-LF';Enc = (New-Object System.Text.UTF8Encoding($true));                       Nl = "`n" },
+        @{ Name = 'UTF16-LE';  Enc = (New-Object System.Text.UnicodeEncoding($false, $true));            Nl = "`r`n" }
     )
     $userLine = '# 我的 PowerShell 配置'
     foreach ($c in $encCases) {
         $fp = Join-Path $profSbox ("enc_" + $c.Name + ".ps1")
-        $body = $c.Enc.GetBytes($userLine + "`r`n")
-        if ($c.Name -eq 'UTF8-BOM') { $body = [System.Text.Encoding]::UTF8.GetPreamble() + $body }
+        # UnicodeEncoding 的 GetBytes 不含前导 BOM，要自己补，否则读回来对不上。
+        $body = $c.Enc.GetBytes($userLine + $c.Nl)
+        if ($c.Name -eq 'UTF8-BOM' -or $c.Name -eq 'UTF8BOM-LF') { $body = [System.Text.Encoding]::UTF8.GetPreamble() + $body }
+        if ($c.Name -eq 'UTF16-LE') { $body = $c.Enc.GetPreamble() + $body }
         [System.IO.File]::WriteAllBytes($fp, $body)
         $orig = [System.IO.File]::ReadAllBytes($fp)
         $env:ENVPROXY_PROFILE_OVERRIDE = $fp
@@ -1007,6 +1014,12 @@ try {
         Assert-Eq ("{0} 安装成功" -f $c.Name) $true $rI.Ok
         Assert-Eq ("{0} 用户原有中文保住" -f $c.Name) $true ($txtAfter -match '我的 PowerShell 配置')
         Assert-Eq ("{0} 钩子块写入" -f $c.Name) $true ($txtAfter -match 'EnvProxy: 让已经开着的窗口')
+        # 行尾风格在安装后必须没变：LF 夹具里不该出现 CR。
+        if ($c.Nl -eq "`n") {
+            $afterBytes = [System.IO.File]::ReadAllBytes($fp)
+            $cr = @($afterBytes | Where-Object { $_ -eq 13 }).Count
+            Assert-Eq ("{0} 安装后行尾未被改成 CRLF" -f $c.Name) 0 $cr
+        }
         $null = Remove-ShellProfile
         $fin = [System.IO.File]::ReadAllBytes($fp)
         Assert-Eq ("{0} 卸载后逐字节还原（BOM 不叠加）" -f $c.Name) $true (($fin -join ',') -eq ($orig -join ','))

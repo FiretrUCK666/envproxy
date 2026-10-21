@@ -331,9 +331,10 @@ function Show-Help {
         "  别的工具各有各的写法：",
         "      git  -c http.proxy= -c https.proxy= clone 仓库地址",
         "           （等号后留空=这条不用代理；写别的值=改用那个代理）",
-        "      npm  --noproxy=""*"" install 包名",
-        "           注意是 noproxy，没有连字符。写成 --no-proxy 不报错但会被忽略，",
-        "           然后照常走代理——你以为绕过了，其实没有。",
+        "      npm  --noproxy=registry.npmjs.org install 包名",
+        "           注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。",
+        "           写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。",
+        "           另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。",
         "      wget Windows 不自带 wget，装过才有 wget.exe",
         "      docker 要改它自己的设置，没有单条命令的写法",
         "",
@@ -398,8 +399,10 @@ function Show-Menu {
             Write-Host "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。" -ForegroundColor Yellow
             return
         }
+        # 先 Trim 再判空：纯空格应当与直接回车同义（Mac 侧 tr -d 之后再判空，两端同语义）。
+        $choice = "$choice".Trim()
         if (-not $choice) { $choice = "2" }
-        $item = @($MenuItems | Where-Object { $_.Key -eq $choice.Trim() })
+        $item = @($MenuItems | Where-Object { $_.Key -eq $choice })
         if (-not $item -or ($item.Count -eq 0)) {
             Write-Host "没有这个编号，重输一个。" -ForegroundColor Yellow
             continue

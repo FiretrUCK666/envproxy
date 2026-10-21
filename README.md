@@ -184,15 +184,18 @@ Mac 上就是「终端」这个 App，默认 zsh，命令用 `export` 那一列�
 |---|---|---|
 | `curl` | `curl.exe --noproxy "*" 网址` | `curl --noproxy '*' 网址` |
 | `git` | `git -c http.proxy= -c https.proxy= clone 仓库地址` | 同左 |
-| `npm` | `npm --noproxy="*" install 包名` | 同左 |
+| `npm` | `npm --noproxy=registry.npmjs.org install 包名` | 同左 |
 | `wget` | 系统不自带，装过才有 `wget.exe --no-proxy 网址` | `wget --no-proxy 网址` |
 | `docker` | 改 Docker 自己的设置，没有单条命令的写法 | 同左 |
 
-三个实测确认过的坑：
+四个实测确认过的坑：
 
-- **PowerShell 里 `curl` 和 `wget` 都是别名，两个都指向 `Invoke-WebRequest`**。直接敲会报「参数找不到」，所以 curl 要写 `curl.exe`。
-- **`npm --no-proxy` 是错的写法，而且不报错**。npm 会把它当子命令，回一句 `Unknown command`，然后照常走代理——你以为绕过了，其实没有。正确的是 `--noproxy`，没有连字符。
+- **PowerShell 里 `curl` 和 `wget` 都是别名，两个都指向 `Invoke-WebRequest`**。直接敲会报「参数找不到」，所以 curl 要写 `curl.exe`。（PowerShell 7 里没有这两个别名，这条只对系统自带的 5.1 成立。）
+- **`npm` 的 `--noproxy` 只认域名，写 `*` 没用**。它不会报错，请求照样打到代理上——你以为绕过了，其实没有。要写具体域名，比如 `--noproxy=registry.npmjs.org`。
+- **`npm --no-proxy` 会被理解成 `--proxy=false`**，不是「被忽略」，也和你想要的「不走代理」不是一回事。用 `--noproxy=域名`。
 - **`git` 的 `-c http.proxy=` 后面必须留空**。留空表示「这一条命令不用代理」，写别的值就是「改用这个代理」。
+
+另外，npm 只认 `HTTPS_PROXY`，不认 `HTTP_PROXY`。EnvProxy 两个都写，所以 npm 能正常工作；但如果你自己只设 `HTTP_PROXY`，npm 是不走代理的。
 
 这些写法都是各工具自己的，不是 EnvProxy 提供的。不加这些参数时，它们读的才是 EnvProxy 写入的环境变量。
 

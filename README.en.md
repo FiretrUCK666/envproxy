@@ -184,15 +184,18 @@ Tools differ; there is no single universal command.
 |---|---|---|
 | `curl` | `curl.exe --noproxy "*" URL` | `curl --noproxy '*' URL` |
 | `git` | `git -c http.proxy= -c https.proxy= clone <repo>` | same |
-| `npm` | `npm --noproxy="*" install <pkg>` | same |
+| `npm` | `npm --noproxy=registry.npmjs.org install <pkg>` | same |
 | `wget` | not shipped with Windows; if installed, `wget.exe --no-proxy <url>` | `wget --no-proxy <url>` |
 | `docker` | change Docker's own settings; no per-command flag | same |
 
-Three traps, all confirmed by testing:
+Four traps, all confirmed by testing:
 
-- **`curl` and `wget` are both aliases in PowerShell, and both resolve to `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`.
-- **`npm --no-proxy` is wrong, and it does not error out.** npm treats it as a subcommand, answers `Unknown command`, and then goes through the proxy anyway — you think you bypassed it and you did not. The correct form is `--noproxy`, no hyphen.
+- **`curl` and `wget` are both aliases in PowerShell, and both resolve to `Invoke-WebRequest`.** Typing them plainly fails with "parameter cannot be found", so curl must be `curl.exe`. (PowerShell 7 has neither alias, so this only applies to the built-in 5.1.)
+- **`npm`'s `--noproxy` only takes host names; `*` does nothing.** It does not complain and the request still goes through the proxy — you think you bypassed it and you did not. Write the host, for example `--noproxy=registry.npmjs.org`.
+- **`npm --no-proxy` is read as `--proxy=false`**, which is neither "ignored" nor what you want when skipping the proxy. Use `--noproxy=<host>`.
 - **`git`'s `-c http.proxy=` must be left empty.** Empty means "no proxy for this one command"; any other value means "use that proxy instead".
+
+One more: npm reads `HTTPS_PROXY` but not `HTTP_PROXY`. EnvProxy writes both, so npm works; but if you set only `HTTP_PROXY` yourself, npm will not use a proxy.
 
 These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the environment variables EnvProxy wrote.
 

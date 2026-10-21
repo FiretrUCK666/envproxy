@@ -84,6 +84,29 @@ if ($missingLib.Count) {
     Write-Host "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。" -ForegroundColor Yellow
     exit 1
 }
+# 解析预检：文件在、不为空，但语法解析不了（典型是 .ps1 丢了 UTF-8 BOM，
+# 5.1 按 ANSI 读中文注释会撑破字符串）——点源会抛错，而点源发生在参数分派之前，
+# 于是任何子命令都变成"没有输出、退出码 0"。静默退出 0 是最坏的失败方式：
+# 计划任务与 CI 会把它读成成功。这里先解析一遍，解析不过就明说并退出 1。
+$parseBad = @()
+foreach ($libName in $CoreLibs) {
+    $libPath = Join-Path $LibDir ("{0}.ps1" -f $libName)
+    $tok = $null; $err = $null
+    try {
+        [void][System.Management.Automation.Language.Parser]::ParseFile($libPath, [ref]$tok, [ref]$err)
+    } catch {
+        $parseBad += ("lib\{0}.ps1（读不出来）" -f $libName)
+        continue
+    }
+    if ($err -and $err.Count) { $parseBad += ("lib\{0}.ps1（{1}）" -f $libName, $err[0].Message) }
+}
+if ($parseBad.Count) {
+    Write-Host "程序文件损坏，无法解析：" -ForegroundColor Yellow
+    foreach ($m in $parseBad) { Write-Host ("  " + $m) -ForegroundColor Yellow }
+    Write-Host "最常见的原因是 .ps1 被存成了「UTF-8 无 BOM」：中文注释在 PowerShell 5.1 下" -ForegroundColor Yellow
+    Write-Host "会按系统代码页读成乱码、撑破语法。到 Releases 页面重新下载安装包覆盖即可。" -ForegroundColor Yellow
+    exit 1
+}
 foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) }
 
 # ------------------------------------------------------------------------------

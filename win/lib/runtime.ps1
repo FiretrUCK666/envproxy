@@ -440,7 +440,25 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
                 }
             } catch {}
         }
-        [System.IO.File]::WriteAllLines($tmp, $Lines, $enc)
+        # 行尾沿用原文件：WriteAllLines 固定用 Environment.NewLine（Windows 上是 CRLF），
+        # 会把 LF 的 profile 静默改成 CRLF——功能不坏，但污染用户的 diff 和仓库行尾约定。
+        # 判断必须**先按已探测到的编码解码再找换行**，不能直接扫原始字节：
+        # UTF-16 里每个字符占两字节，字节序列中的 13/10 各自独立出现，按字节扫会误判成 LF。
+        $nl = [Environment]::NewLine
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                $probe = $enc.GetString([System.IO.File]::ReadAllBytes($Path))
+                if ($probe.IndexOf("`n") -ge 0) {
+                    $loneLf = [regex]::IsMatch($probe, "(?<!`r)`n")
+                    $hasCrlf = $probe.IndexOf("`r`n") -ge 0
+                    # 有纯 LF 且没有 CRLF 才是 LF 文件；两者都有时按 CRLF 保持现状。
+                    if ($loneLf -and -not $hasCrlf) { $nl = "`n" }
+                }
+            } catch {}
+        }
+        $text = ($Lines -join $nl)
+        if ($Lines.Count -gt 0) { $text += $nl }
+        [System.IO.File]::WriteAllText($tmp, $text, $enc)
         if (Test-Path -LiteralPath $Path) {
             # 改用户文件之前先备份：改坏了还能手工还原。
             # 与 Mac 侧改 rc 前留 *.envproxy.bak 是同一规矩（双端对等）。

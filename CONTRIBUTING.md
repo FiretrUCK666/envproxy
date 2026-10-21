@@ -73,9 +73,15 @@ Mac 跑 `bash mac/envproxy.sh status` 确认。
 ```sh
 # 门禁 1：sh 语法（CI 同款）
 bash -n mac/*.sh mac/lib/*.sh
-# 门禁 2：ps1 语法（本机 PowerShell 5.1；CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
+# 门禁 2：ps1 语法（CI 在 ubuntu 用 pwsh 7、在 windows 用 5.1 各解析一遍）
 # 门禁 10：功能自检（纯函数 + hook/归属/注入回收/快照 + 跨端行为比对，沙箱跑，不碰用户文件）
-pwsh -NoProfile -File tests/test-win-pure.ps1
+#
+# 用 powershell（系统自带的 5.1）而不是 pwsh，两条都跑：
+#   用户真实跑的是 5.1。而编码红线（硬性规范第 6 条）成立的前提正是「5.1 按 ANSI 读
+#   无 BOM 文件会把中文注释读成乱码、撑破语法」——恰恰是 pwsh 7 不受影响的那件事。
+#   只跑 pwsh 7 的话，丢了 BOM 的文件在本地全绿、到用户机器上整个程序起不来。
+powershell -NoProfile -File tests/test-win-pure.ps1
+pwsh       -NoProfile -File tests/test-win-pure.ps1
 bash mac/envproxy.sh self-test
 # 其余门禁见 .github/workflows/check.yml（权威定义只有那一处），
 #   本地要单跑某一条，就把那一步的脚本原样粘进 PowerShell。

@@ -135,7 +135,15 @@ if [ -z "${_ENVPROXY_SYNC_READY-}" ]; then
             add-zsh-hook precmd _envproxy_prompt_sync 2>/dev/null || true
         else
             # 极老的 zsh 没有 add-zsh-hook：退回手写数组，不覆盖别人已有的项。
-            precmd_functions=(${precmd_functions[@]} _envproxy_prompt_sync) 2>/dev/null || true
+            # 先剔除同名项再追加，rc 被 source 多次时不会叠成多份——否则每次回车
+            # 会把同一件事跑好几遍。遍历剔除而不用 ${arr[@]:#pat}，那个写法只有
+            # zsh 支持，bash 3.2 会在展开时报错。
+            _ep_keep=()
+            for _ep_fn in ${precmd_functions[@]}; do
+                [ "$_ep_fn" = "_envproxy_prompt_sync" ] || _ep_keep+=("$_ep_fn")
+            done
+            precmd_functions=(${_ep_keep[@]} _envproxy_prompt_sync) 2>/dev/null || true
+            unset _ep_keep _ep_fn
         fi
 
     # ---- bash ----
