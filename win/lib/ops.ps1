@@ -9,6 +9,11 @@
 function Install-EnvProxy {
     Write-Host "======== EnvProxy 安装 ========" -ForegroundColor Cyan
     if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
+    # 先说清楚要动什么、不动什么，再说"正在做"——安装要改四处系统设置，
+    # 用户在按完编号之后得先知道会发生什么，而不是盯着静止的屏幕猜。
+    Write-Host "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
+    Write-Host "不会动你的其他设置。" -ForegroundColor DarkGray
+    Write-Host ""
     Set-AutoRun
     # 写完必须读回：装没装上由复读决定，不由"我调用了写入"决定（与自愈路径同一条规矩）。
     # 杀软拦 Run 键是真实发生过的事，那时不能报"已写入"。
@@ -29,6 +34,8 @@ function Install-EnvProxy {
     # （快照只记一次；已经存在时这里是无副作用的空操作。）
     Snapshot-PrevEnv -FirstInstall:$firstInstall
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
+    # 这一步在慢机器上可能花一两秒，先说一声，别让屏幕静止不动。
+    Write-Host "[2/4] 正在启动后台监控……" -ForegroundColor DarkGray
     if (Start-Monitor -Force:$true) {
         Write-Host "[2/4] 监控进程：已启动" -ForegroundColor Green
     } else {
@@ -36,6 +43,8 @@ function Install-EnvProxy {
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
     # （不等监控的双轮去抖，"安装"即"一键修复"）
+    # 先说要探测，因为这三层验证要连外网，慢的时候差不多一秒。
+    Write-Host "[3/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……" -ForegroundColor DarkGray
     $state = Get-CurrentState
     Apply-State $state
     if ($state -eq "unknown") {
@@ -46,6 +55,7 @@ function Install-EnvProxy {
     }
     # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
     # 失败不阻断安装（其余三件事已经做成），但必须如实说清原因，不许报成功。
+    Write-Host "[4/4] 正在写终端配置……" -ForegroundColor DarkGray
     $prof = Install-ShellProfile
     switch ($prof.Reason) {
         'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 配置文件里写入钩子" -ForegroundColor Green }
@@ -64,12 +74,14 @@ function Install-EnvProxy {
     if ($polWarn) { Write-Host ("      " + $polWarn) -ForegroundColor Yellow }
     Start-Sleep -Seconds 1
     Write-Host ""
+    # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
+    Write-Host "正在联网确认有没有新版本……" -ForegroundColor DarkGray
     Show-Status
     Write-Host ""
     Write-Host "提示：之后新开的终端/程序自动获得代理；" -ForegroundColor Green
     Write-Host "      已经开着的窗口敲一下回车就会跟上，退出翻墙软件后同样。" -ForegroundColor Green
     Write-Host "      想让某个窗口固定直连：在它里面执行 `$env:ENVPROXY_TERM = 'off'" -ForegroundColor DarkGray
-    Write-Host "      （恢复自动：Remove-Item Env:ENVPROXY_TERM）。" -ForegroundColor DarkGray
+    Write-Host "      （改回跟着翻墙软件走：Remove-Item Env:ENVPROXY_TERM）。" -ForegroundColor DarkGray
 }
 
 function Uninstall-EnvProxy([bool]$Purge = $false) {
@@ -177,6 +189,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     }
 }
 
+# 状态显示。
+# 会联网查一次最新版本（约 1-2 秒）：看状态时最想知道的就是"我是不是最新版"，
+# 这个检查不能省。慢的那一下由调用方先说一声，不静默等待。
 function Show-Status {
     Write-Host "======== EnvProxy 状态 ========" -ForegroundColor Cyan
 
