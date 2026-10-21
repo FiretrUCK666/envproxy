@@ -180,7 +180,10 @@ function Remove-UserEnvVars {
             if (Test-IsOwnedProxyValue $n $cur) { $drop += $n }
             continue
         }
-        $drop += $n
+        # 这里刻意不留"其余变量一律删"的兜底：$ProxyVarNames 的 5 个名字都被上面
+        # 三条分支覆盖，兜底永远走不到；留着它反而是个陷阱——将来真加进第 6 个变量时，
+        # 它会静默走进一个**没有归属判定**的分支，直接把用户自己设的值删掉。
+        # 新增变量时应当在这里显式写一条自己的归属规则，让编译器式的"漏了会报错"变成结构约束。
     }
     if ($plan.Count -gt 0) { Write-UserEnvValues -Values $plan }
     if ($drop.Count -gt 0) { Remove-UserEnvNames -Names $drop }
