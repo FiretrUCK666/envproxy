@@ -1456,6 +1456,43 @@ _help_topic_title() {
     return 0
 }
 
+# 帮助里「菜单每一项是干什么的」那一屏的正文，从 MENU_ITEMS 生成。
+# 为什么生成而不是手抄：手抄的那一份在改菜单时会静默过期，症状是用户照帮助里的
+# 编号去敲，敲到的是另一件事（想检查更新，结果卸载了）。生成之后这份内容与菜单
+# 读同一张表，改表即同步，不存在"两边都要记得改"。
+_help_menu_lines() {
+    _hml_w=0
+    for _hml_i in "${MENU_ITEMS[@]}"; do
+        _hml_rest=${_hml_i#*|}
+        _hml_name=${_hml_rest%%|*}
+        _hml_nw=$(_menu_cell_width "$_hml_name")
+        [ "$_hml_nw" -gt "$_hml_w" ] && _hml_w="$_hml_nw"
+    done
+    echo "这些编号要在主菜单里敲，不是在帮助里敲。"
+    for _hml_g in $(_menu_group_order); do
+        echo ""
+        if [ "$_hml_g" = "日常" ]; then
+            echo "$_hml_g（平时只会用到这些）"
+        else
+            echo "$_hml_g"
+        fi
+        for _hml_i in "${MENU_ITEMS[@]}"; do
+            _hml_rest=${_hml_i#*|}
+            _hml_name=${_hml_rest%%|*}
+            _hml_rest2=${_hml_rest#*|}
+            _hml_hint=${_hml_rest2%%|*}
+            _hml_grp=${_hml_i%|*}; _hml_grp=${_hml_grp##*|}
+            [ "$_hml_grp" != "$_hml_g" ] && continue
+            _hml_key=${_hml_i%%|*}
+            if [ -n "$_hml_hint" ]; then
+                echo "  $_hml_key  $(_menu_cell_pad "$_hml_name" "$_hml_w")  $_hml_hint"
+            else
+                echo "  $_hml_key  $(_menu_cell_pad "$_hml_name" "$_hml_w")  什么都不做。直接按回车等于查看状态"
+            fi
+        done
+    done
+}
+
 # 单个主题的正文。用 cat 输出，与 Windows 侧 Get-HelpTopics 的 Lines 一一对应。
 _help_topic_body() {
     case "$1" in
@@ -1542,22 +1579,7 @@ docker
   没有单条命令的写法，改 Docker 自己的设置（Docker Desktop 里的 Proxies）。
 TOPIC
     ;;
-    6) cat <<'TOPIC'
-这些编号要在主菜单里敲，不是在帮助里敲。
-
-日常（平时只会用到这四个）
-  1  安装 / 修复    第一次用选它；觉得不对劲也选它
-  2  查看状态      现在什么情况，一眼看清
-  3  检查更新      有新版先告诉你改了什么，同意才装
-  4  帮助          就是这里
-
-维护（要动它之前才用）
-  5  停止监控      先停掉，下次开机自己回来
-  6  一键恢复      彻底卸载，回到没装之前
-
-退出
-  0  退出          什么都不做。直接按回车等于选 2
-TOPIC
+    6) _help_menu_lines
     ;;
     7) cat <<'TOPIC'
 连不上网，按这个顺序查

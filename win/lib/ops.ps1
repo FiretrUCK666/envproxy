@@ -487,6 +487,31 @@ function Format-MenuText {
     return ($out -join "`n")
 }
 
+# 帮助里「菜单每一项是干什么的」那一屏的正文，从 $MenuItems 生成。
+# 为什么生成而不是手抄：手抄的那一份在改菜单时会静默过期，症状是用户照帮助里的
+# 编号去敲，敲到的是另一件事（想检查更新，结果卸载了）。生成之后这份内容与菜单
+# 读同一张表，改表即同步，不存在"两边都要记得改"。
+function Get-HelpMenuLines {
+    $out = New-Object System.Collections.Generic.List[string]
+    $nameW = Get-MenuNameWidth
+    [void]$out.Add('这些编号要在主菜单里敲，不是在帮助里敲。')
+    $groups = @($MenuItems | ForEach-Object { $_.Group } | Where-Object { $_ } | Select-Object -Unique)
+    foreach ($g in $groups) {
+        $items = @($MenuItems | Where-Object { $_.Group -eq $g })
+        if ($items.Count -eq 0) { continue }
+        [void]$out.Add('')
+        if ($g -eq '日常') { [void]$out.Add(($g + '（平时只会用到这些）')) } else { [void]$out.Add($g) }
+        foreach ($mi in $items) {
+            if ($mi.Hint) {
+                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW) + '  ' + $mi.Hint))
+            } else {
+                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW) + '  什么都不做。直接按回车等于查看状态'))
+            }
+        }
+    }
+    return $out
+}
+
 # 帮助的内容表：每个主题一屏放得下，进帮助先看目录，选一个只看那一段。
 # 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
@@ -611,22 +636,7 @@ function Get-HelpTopics {
         },
         @{
             Key = '6'; Title = '菜单每一项是干什么的'; Short = '菜单'
-            Lines = @(
-                '这些编号要在主菜单里敲，不是在帮助里敲。',
-                '',
-                '日常（平时只会用到这四个）',
-                '  1  安装 / 修复    第一次用选它；觉得不对劲也选它',
-                '  2  查看状态      现在什么情况，一眼看清',
-                '  3  检查更新      有新版先告诉你改了什么，同意才装',
-                '  4  帮助          就是这里',
-                '',
-                '维护（要动它之前才用）',
-                '  5  停止监控      先停掉，下次开机自己回来',
-                '  6  一键恢复      彻底卸载，回到没装之前',
-                '',
-                '退出',
-                '  0  退出          什么都不做。直接按回车等于选 2'
-            )
+            Lines = @(Get-HelpMenuLines)
         },
         @{
             Key = '7'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'

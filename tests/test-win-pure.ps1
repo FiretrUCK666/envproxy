@@ -1377,6 +1377,24 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
+# Help topic 6 is a second copy of the menu table. If it is hand-written it goes
+# stale silently, and the symptom is the worst kind: the user reads help, types the
+# number it names, and gets a DIFFERENT action (wants check-for-updates, uninstalls).
+# So it must be generated from $MenuItems, and this assertion proves it is: a fake
+# menu entry must show up in the help screen with no other edit.
+$helpMenuText = (Format-HelpTopic '6')
+foreach ($mi in $MenuItems) {
+    Assert-Eq ('help menu screen shows menu key ' + $mi.Key) $true ($helpMenuText -match ('(?m)^\s{2}' + [regex]::Escape($mi.Key) + '\s{2}'))
+    Assert-Eq ('help menu screen names menu key ' + $mi.Key) $true ($helpMenuText -match [regex]::Escape($mi.Name))
+}
+# Mutation test: append a row to the table and confirm it appears on the help screen.
+$fakeRow = @{ Key = '9'; Name = '假条目'; Switch = 'Status'; Group = '日常'; Hint = '这条只用于自检' }
+$MenuItems = @($MenuItems) + $fakeRow
+$helpMenuText2 = (Format-HelpTopic '6')
+Assert-Eq 'the help menu screen is generated from the table' $true ($helpMenuText2 -match '假条目')
+Assert-Eq 'a generated row keeps its hint' $true ($helpMenuText2 -match '这条只用于自检')
+$MenuItems = @($MenuItems | Where-Object { $_.Key -ne '9' })
+
 # ------------------------------------------------------------------------------
 # [21] README 抄了一份菜单表和帮助目录，必须是代码的镜像
 # 这一节的理由：README 不能引用代码，只能把菜单编号和帮助标题抄一份。这一份
