@@ -56,7 +56,7 @@ Almost always nothing. Only the last row below needs action.
 |---|---|---|
 | **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
 | **Opened after installing, proxy changed later** | It needs to read again | Press Enter once |
-| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run 3.5 |
+| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run 3.3 |
 
 ### Why an open window needs one Enter press
 
@@ -142,45 +142,30 @@ On Mac that is the Terminal app, zsh by default, using the `export` column. **fi
 
 Type each command **in the window you want to change**. It **affects that window only**. Windows and Mac differ; do not copy the wrong line.
 
-### 3.1 Keep one window on a direct connection
+### 3.1 Three everyday actions
 
-The proxy app is running, but you want one window to go direct:
+Every command below goes in **the window you want to change**, and affects **that window only**.
 
-| | Command |
-|---|---|
-| Windows (PowerShell) | `$env:ENVPROXY_TERM = 'off'` |
-| Mac | `export ENVPROXY_TERM=off` |
-
-This applies to the current window only, and ends when you close it. To have it follow the proxy app again:
-
-| | Command |
-|---|---|
-| Windows (PowerShell) | `Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue` |
-| Mac | `unset ENVPROXY_TERM` |
-
-### 3.2 Give one window a corporate proxy
-
-**Two steps, in this order.**
-
-| Step | Windows (PowerShell) | Mac |
+| I want to | Windows (PowerShell) | Mac |
 |---|---|---|
-| 1. Stop following the proxy app | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
-| 2. Set the corporate proxy | `$env:HTTPS_PROXY = 'http://your-host:port'` | `export HTTPS_PROXY=http://your-host:port` |
+| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `export ENVPROXY_TERM=off` |
+| Make it follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | `unset ENVPROXY_TERM` |
+| See whether it is proxied right now | `$env:HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
-Why step 1 comes first: otherwise the next change the proxy app makes overwrites the address you just set.
+Pinning applies to the current window only and ends when you close it. For the check, a value means proxied and empty means direct.
 
-Values you set are never deleted. A corporate proxy, a capture tool, another port — anything that differs from what we wrote stays as it is.
+**To send this window through a corporate proxy: two steps, in this order.**
 
-### 3.3 Check whether traffic goes through a proxy now
+Stop following the proxy app first (row one above), then set the proxy:
 
 | | Command |
 |---|---|
-| Windows (PowerShell) | `$env:HTTPS_PROXY` |
-| Mac | `echo $HTTPS_PROXY` |
+| Windows (PowerShell) | `$env:HTTPS_PROXY = 'http://your-host:port'` |
+| Mac | `export HTTPS_PROXY=http://your-host:port` |
 
-A value means proxied; empty means direct.
+Why stop first: otherwise the next change the proxy app makes overwrites the address you just set. Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
 
-### 3.4 Make one command skip the proxy
+### 3.2 Make one command skip the proxy
 
 Tools differ; there is no single universal command.
 
@@ -203,7 +188,7 @@ npm reads `HTTPS_PROXY` but not `HTTP_PROXY`. EnvProxy writes both, so npm works
 
 These are each tool's own flags, not something EnvProxy provides. Without them, the tool reads the variables EnvProxy wrote.
 
-### 3.5 Make an already-open window catch up
+### 3.3 Make an already-open window catch up
 
 First see which case you are in:
 
@@ -236,7 +221,7 @@ Four things to note:
 | What you see | Most likely cause | What to do |
 |---|---|---|
 | "Unrecognized switch" (Windows) or "unrecognized argument" (Mac) | A typo, or an abbreviation | Parameters must be written in full; abbreviations are rejected. Compare with the forms listed in the menu |
-| The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, run the command in 3.5 |
+| The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, run the command in 3.3 |
 | Still cannot use the proxy, and a new window does not help | The monitor is not running | Open the menu and pick 1 (Install / Repair) |
 | "Installation incomplete, missing program files" | The folder was not copied in full, or files were deleted | Download again from the Releases page and unzip over this folder. **Upgrading through Check for updates removes the old files for your platform automatically** |
 | Environment variables reappear after being removed | The node itself is unstable, and the monitor writes what it observes | Expected. If it keeps happening the node is poor; switch to another |
