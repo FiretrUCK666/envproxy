@@ -1336,17 +1336,14 @@ TOPIC
 TOPIC
     ;;
     3) cat <<'TOPIC'
-Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不会敲错
-  默认是 zsh，bash 也可以。只有 fish 不支持：它不读 .zshenv，
-  语法也不一样。用 fish 的话换 zsh 或 bash。
+Mac 只有一个终端（默认 zsh，bash 也行），不会像 Windows 那样敲错窗口。
+  fish 不支持：它不读 .zshenv，语法也不一样，用 fish 的话换 zsh 或 bash。
 
 让这个窗口固定直连（只管当前窗口，窗口一关就失效）
       export ENVPROXY_TERM=off
   改回跟着翻墙软件走：
       unset ENVPROXY_TERM
-  ENVPROXY_TERM 是 EnvProxy 自己的开关变量，只有 'off' 一个值有意义：
-  设上它就表示这个窗口不要跟着翻墙软件变。它不影响翻墙软件本身，
-  只影响你敲命令的这个窗口。
+  ENVPROXY_TERM 是 EnvProxy 自己的开关，只有 'off' 有意义，只影响这个窗口。
 
 让这个窗口走公司代理（两步，顺序不能反）
   1. 先停掉自动跟随：export ENVPROXY_TERM=off
@@ -1362,8 +1359,8 @@ Mac 只有一个终端，不像 Windows 那样分 PowerShell 和 cmd，所以不
     1. 开头的点号和后面的空格都不能少
     2. 只对 zsh 和 bash 有效（fish 不支持）
     3. 只影响这一个窗口，别的已开窗口要各自执行，或者重开
-    4. 如果那个窗口从没装过 EnvProxy，这个文件可能不存在，会看到「找不到」
-       的错误。这是正常的，重开一个窗口就行。
+    4. 那个窗口从没装过 EnvProxy 时，这个文件可能不存在，会看到「找不到」。
+       这是正常的，重开一个窗口就行。
 TOPIC
     ;;
     4) cat <<'TOPIC'
