@@ -639,6 +639,38 @@ self_test() {
     # 菜单列出的每个子命令都必须能在入口分派里找到（壳调回来的路不断）。
     if [ "$(type -t show_menu 2>/dev/null || true)" = "function" ]; then _l4=1; else _l4=0; fi
     _selftest_assert_eq "show_menu 已定义" "1" "$_l4"
+    # 光断言"函数存在"是不够的：它曾经因为分组取错段而渲染出一张**空菜单**——
+    # 函数在、键位也能用，屏幕上却一个条目都没有，而自检全绿。
+    # 所以这里真的渲染一次、真的数条目。
+    _lm=0
+    for _lmi in "${MENU_ITEMS[@]}"; do _lm=$((_lm + 1)); done
+    _selftest_assert_eq "菜单有 7 个条目" "7" "$_lm"
+    _lmt=$(format_menu_text 2>/dev/null || true)
+    _lmlines=$(printf '%s\n' "$_lmt" | grep -cE '^    [0-9]  ' || true)
+    _selftest_assert_eq "渲染出的菜单含全部 7 个条目" "7" "$_lmlines"
+    case "$_lmt" in *日常*) _lmg=1;; *) _lmg=0;; esac
+    _selftest_assert_eq "菜单渲染出分组名" "1" "$_lmg"
+    # 每一行的分组字段必须是 日常/维护/退出，不能是子命令名（取错段就会变成 install）。
+    for _lmi in "${MENU_ITEMS[@]}"; do
+        _lmgv=${_lmi%|*}; _lmgv=${_lmgv##*|}
+        case "$_lmgv" in
+            日常|维护|退出) _lmgok=1;;
+            *) _lmgok=0;;
+        esac
+        _selftest_assert_eq "分组字段是分组不是子命令（${_lmi%%|*}）" "1" "$_lmgok"
+    done
+    # 表里每个非退出项的子命令都要能取出来，且和入口分派里的名字对得上。
+    for _lmi in "${MENU_ITEMS[@]}"; do
+        _lmk=${_lmi%%|*}
+        _lms=$(_menu_switch_for "$_lmk" 2>/dev/null || true)
+        case "$_lmk" in
+            0) _selftest_assert_eq "退出项没有子命令" "" "$_lms";;
+            *) case "$_lms" in
+                   '') _selftest_assert_eq "条目 $_lmk 有子命令" "0" "1";;
+                   *) _selftest_assert_eq "条目 $_lmk 子命令可解析" "1" "1";;
+               esac;;
+        esac
+    done
     # 帮助：函数必须存在、入口分派里必须有 help 子命令、内容必须真的讲清三件事。
     # 只断言"存在"是不够的——帮助文本被改成一句废话也照样"存在"，那就不帮任何人了。
     if [ "$(type -t show_help 2>/dev/null || true)" = "function" ]; then _lh=1; else _lh=0; fi
@@ -1666,7 +1698,7 @@ format_menu_text() {
             _fname=${_frest%%|*}
             _frest2=${_frest#*|}
             _fhint=${_frest2%%|*}
-            _fgrp=${_fi##*|}
+            _fgrp=${_fi%|*}; _fgrp=${_fgrp##*|}
             [ "$_fgrp" != "$_fg" ] && continue
             if [ "$_fgfirst" = "1" ]; then
                 echo ""
@@ -1711,7 +1743,7 @@ show_menu_colored() {
             _smc_name=${_smc_rest%%|*}
             _smc_rest2=${_smc_rest#*|}
             _smc_hint=${_smc_rest2%%|*}
-            _smc_grp=${_smc_i##*|}
+            _smc_grp=${_smc_i%|*}; _smc_grp=${_smc_grp##*|}
             [ "$_smc_grp" != "$_smc_g" ] && continue
             if [ "$_smc_first" = "1" ]; then
                 echo ""
