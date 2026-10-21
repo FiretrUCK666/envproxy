@@ -135,11 +135,13 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 | 我想 | PowerShell | cmd | Git Bash |
 |---|---|---|---|
-| 让这个窗口固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY= & set HTTPS_PROXY= & set ALL_PROXY= & set NO_PROXY= & set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
+| 让这个窗口固定直连 | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
 | 改回跟着翻墙软件走 | `Remove-Item Env:ENVPROXY_TERM` | 重开这个窗口 | 重开这个窗口 |
 | 查看代理 | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
 PowerShell 有一句开关就能搞定，因为安装时往它的配置文件放了一小段代码，每次回到提示符就照当前状态调一次。cmd 和 Git Bash 没有这种入口，所以只能直接改变量——改完窗口一关就失效，和 PowerShell 的开关效果一样。
+
+`&` 两边不要留空格。留了会得到一个只含空格的值——看着像清掉了，实际还在，请求照样走代理。
 
 Mac 上就是「终端」这个 App，默认 zsh，命令看 Git Bash 那一列。**Mac 上的 fish 不支持**（换 zsh 或 bash）。
 

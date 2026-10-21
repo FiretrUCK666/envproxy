@@ -133,11 +133,13 @@ Almost every window you touch day to day is PowerShell: Start menu search for Po
 
 | I want to | PowerShell | cmd | Git Bash |
 |---|---|---|---|
-| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY= & set HTTPS_PROXY= & set ALL_PROXY= & set NO_PROXY= & set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
+| Pin this window to a direct connection | `$env:ENVPROXY_TERM = 'off'` | `set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=` | `unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY` |
 | Follow the proxy app again | `Remove-Item Env:ENVPROXY_TERM` | Reopen the window | Reopen the window |
 | Check the proxy | `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
 
 PowerShell needs one switch because the installer drops a small piece of code into its profile, and that code re-checks the state every time the prompt comes back. cmd and Git Bash have no such entry point, so you change the variables directly. Either way it ends when the window closes.
+
+Do not put spaces around `&`. A space leaves a value containing just that space — it looks cleared but the request still goes through the proxy.
 
 On Mac that is the Terminal app, zsh by default, using the Git Bash column. **fish on Mac is not supported**; use zsh or bash.
 
