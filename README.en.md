@@ -235,13 +235,15 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 
 | Goal | Windows | Mac |
 |---|---|---|
-| Install / repair (menu 1) | `-Install` | `install` |
-| Show status (menu 2) | `-Status` | `status` |
-| Stop the monitor (menu 3) | `-Stop` | `stop` |
-| Full restore (menu 4) | `-Uninstall` | `uninstall` |
-| Check for updates (menu 5) | `-Update` | `update` |
-| Show help (menu 6) | `-Help` | `help` |
+| Install / repair | `-Install` | `install` |
+| Show status | `-Status` | `status` |
+| Check for updates | `-Update` | `update` |
+| Help | `-Help` | `help` |
+| Stop the monitor | `-Stop` | `stop` |
+| Full restore | `-Uninstall` | `uninstall` |
 | Open the menu | `-Menu` | `menu` |
+
+The order matches the menu: four everyday items first, then the two upkeep ones.
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
 
@@ -432,7 +434,7 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 ### 12.3 Menu (identical to Windows)
 
-The numbers, behaviour and what each item affects are identical to Windows, including `6 Help` and `0 Quit`. Pressing Enter directly means show status.
+The numbers, behaviour and what each item affects are identical to Windows, including `4 Help` and `0 Quit`. Pressing Enter directly means show status.
 
 ### 12.4 What is in the `mac` folder
 

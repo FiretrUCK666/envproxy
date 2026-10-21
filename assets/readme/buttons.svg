@@ -17,6 +17,11 @@
     <text x="446" y="126" font-size="20" fill="#94A6BE">看当前有没有在翻墙</text>
   </g>
 
+  <g id="legend2">
+    <text x="700" y="118" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
+    <text x="728" y="126" font-size="20" fill="#94A6BE">停掉再用新版本重启</text>
+  </g>
+
   <g id="grid" fill="none" stroke-width="1.5">
     <path d="M200 156V434M380 156V434M560 156V434M740 156V434M920 156V434M1100 156V434" stroke="#2A3B58"/>
     <path d="M56 156H1144M56 314H1144M56 434H1144" stroke="#2A3B58"/>
@@ -59,6 +64,9 @@
     <text x="650" y="214">±</text>
   </g>
 
+  <g id="restart" font-size="26" font-weight="700" fill="#60A5FA" text-anchor="middle">
+    <text x="470" y="294" dominant-baseline="central">↻</text>
+  </g>
   <g id="cleared" font-size="26" font-weight="700" fill="#94A6BE" text-anchor="middle">
     <text x="470" y="374" dominant-baseline="central">—</text>
     <text x="650" y="374" dominant-baseline="central">—</text>
@@ -75,7 +83,6 @@
     <circle cx="830" cy="254" r="4"/>
     <circle cx="1010" cy="254" r="4"/>
     <circle cx="290" cy="294" r="4"/>
-    <circle cx="470" cy="294" r="4"/>
     <circle cx="650" cy="294" r="4"/>
     <circle cx="830" cy="294" r="4"/>
     <circle cx="1010" cy="294" r="4"/>

@@ -238,13 +238,15 @@ PowerShell 和 Mac 终端不想重开的话，在那个窗口里执行一次：
 
 | 想做的事 | Windows | Mac |
 |---|---|---|
-| 装 / 修复（同菜单 1） | `-Install` | `install` |
-| 看状态（同菜单 2） | `-Status` | `status` |
-| 停止监控（同菜单 3） | `-Stop` | `stop` |
-| 一键恢复（同菜单 4） | `-Uninstall` | `uninstall` |
-| 检查更新（同菜单 5） | `-Update` | `update` |
-| 看帮助（同菜单 6） | `-Help` | `help` |
+| 安装 / 修复 | `-Install` | `install` |
+| 查看状态 | `-Status` | `status` |
+| 检查更新 | `-Update` | `update` |
+| 帮助 | `-Help` | `help` |
+| 停止监控 | `-Stop` | `stop` |
+| 一键恢复 | `-Uninstall` | `uninstall` |
 | 打开菜单 | `-Menu` | `menu` |
+
+顺序和菜单里一样：先是日常四项，再是维护两项。
 
 `-Purge`（Mac 是 `--purge`）只配一键恢复用，表示连日志一起删。`-Yes`（Mac 是 `--yes`）只配检查更新用，表示不再问「要不要装」。
 

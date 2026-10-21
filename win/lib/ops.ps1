@@ -380,7 +380,7 @@ function Clear-Screen {
 # **打印与分派共用下面这张 $MenuItems**：加一项就自动出现在菜单里，不会再出现
 # "表里加了、打印忘了"这种功能明明做了、用户却看不见的缺口。
 # 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
-# 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
+# 分组只影响打印顺序；编号按使用频率从上往下连续排（1-4 日常、5-6 维护、0 退出）。
 $MenuItems = @(
     @{ Key = "1"; Name = "安装 / 修复"; Switch = "Install";   Group = "日常"; Hint = "第一次用选它；觉得不对劲也选它" },
     @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "现在什么情况，一眼看清" },
@@ -463,7 +463,10 @@ function Format-MenuText {
     if (-not $verText) { $verText = "未知" }
     [void]$out.Add("======== EnvProxy 菜单 ========")
     [void]$out.Add(("  监控 {0}    版本 v{1}" -f $monText, $verText))
-    $groups = @('日常', '维护', '退出')
+    # 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。
+    # 打印与分派读同一份顺序。写死会在"表里有、数组里没有"时静默漏印一项，
+    # 而分派不看分组、照样能敲到它——用户看见的菜单和能敲的菜单就不是同一件事。
+    $groups = @($MenuItems | ForEach-Object { $_.Group } | Where-Object { $_ } | Select-Object -Unique)
     foreach ($g in $groups) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
         if ($items.Count -eq 0) { continue }

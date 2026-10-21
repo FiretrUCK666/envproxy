@@ -747,6 +747,15 @@ EOF
         _s5=1
         case "$_sr" in *'`'*) _s5=0;; esac
         _selftest_assert_eq "主题 $_sk 无残缺命令" "1" "$_s5"
+        # 正文和标题都不许空。Mac 侧主题信息分散在四个 case 里，漏改标题
+        # 的后果不是报错，而是"目录出现一个空标题、选中后是一页空白"，
+        # 自检的形状断言（行数/重复/超宽）全都会通过——所以这一条必须单独查。
+        _st=$(_help_topic_title "$_sk")
+        if [ -n "$_st" ]; then _s6=1; else _s6=0; fi
+        _selftest_assert_eq "主题 $_sk 有标题" "1" "$_s6"
+        _sbody=$(format_help_topic "$_sk" | sed -n "4,999p" | grep -c "[^ ]" || true)
+        if [ "$_sbody" -ge 5 ]; then _s7=1; else _s7=0; fi
+        _selftest_assert_eq "主题 $_sk 正文不为空" "1" "$_s7"
     done
     if grep -qE '^[[:space:]]*menu\)' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then _l5=1; else _l5=0; fi
     _selftest_assert_eq "menu 在入口分派里存在" "1" "$_l5"
@@ -1495,7 +1504,7 @@ Mac 只有一个终端（默认 zsh，bash 也行）。fish 不支持：它不�
       export HTTPS_PROXY=http://127.0.0.1:7890
   不停掉自动跟随的话，翻墙软件一有变化就会覆盖你刚设的地址。
 
-三、看这个窗口现在走不走代理（有值就是走，空的是直连）
+三、看这个窗口现在走不走代理
       echo $HTTPS_PROXY
 
 四、让已经开着的窗口立刻跟上，输入：
@@ -1650,11 +1659,18 @@ _help_line_color() {
         _hlc_ind=$((_hlc_ind + 1))
         _hlc_rest="${_hlc_rest# }"
     done
-    if [ "$_hlc_ind" -eq 0 ]; then
-        # 顶格短句 = 小标题
-        if [ ${#_hlc_rest} -le 30 ]; then echo "36"; else echo ""; fi
-        return 0
-    fi
+        if [ "$_hlc_ind" -eq 0 ]; then
+            # 顶格、且不像一句完整的话 = 小标题。
+            # 判据用结构而不是长度：${#var} 与 wc -m 数的是字节还是字符取决于 locale，
+            # C locale 下一个汉字顶 3，同一条标题会一会儿上色一会儿不上色。
+            # 句末有标点、或句中有句号，说明它是正文而不是标题——与 Win 侧同一判据。
+            case "$_hlc_rest" in
+                *。|*；|*，) echo ""; return 0;;
+                *。*) echo ""; return 0;;
+            esac
+            echo "36"
+            return 0
+        fi
     case "$_hlc_rest" in
         注意*|别*|不要*|小心*) echo "33"; return 0;;
     esac
@@ -1770,7 +1786,7 @@ _help_key_valid() {
 }
 
 # 菜单表：编号 | 名称 | 说明 | 分组 | 子命令。打印与分派共用它，加一项就一定会显示出来。
-# 分组只影响"打印时怎么排"，不改变编号与行为：用户记熟的 1-6、0 一个都不动。
+# 分组只影响打印顺序；编号按使用频率从上往下连续排（1-4 日常、5-6 维护、0 退出）。
 # 子命令为空表示"不跑任何东西"（退出项）。分派直接读这一列，
 # 不许再另写一份 case——两份清单必然漂移，症状是"表里加了、点了没反应"。
 # 格式固定为五个字段、四条竖线；少一条竖线字段会静默错位（菜单照常打印、不报错，
@@ -1785,6 +1801,22 @@ MENU_ITEMS=(
     '0|退出||退出|'
 )
 # 加载期校验：每条必须恰好四条竖线，且键、名字、分组非空。不合格就报错（不静默降级）。
+# 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。
+# 打印与分派读同一份顺序。写死会在"表里有、数组里没有"时静默漏印一项，
+# 而分派不看分组、照样能敲到它——用户看见的菜单和能敲的菜单就不是同一件事。
+_menu_group_order() {
+    _mgo_seen=""
+    for _mgo_i in "${MENU_ITEMS[@]}"; do
+        _mgo_g=$(printf '%s' "$_mgo_i" | cut -d'|' -f4)
+        [ -z "$_mgo_g" ] && continue
+        case " $_mgo_seen " in
+            *" $_mgo_g "*) ;;
+            *) _mgo_seen="$_mgo_seen $_mgo_g" ;;
+        esac
+    done
+    printf '%s\n' "$_mgo_seen"
+}
+
 _menu_items_valid() {
     for _mv in "${MENU_ITEMS[@]}"; do
         # 数竖线：把非竖线字符全删掉，剩下的长度就是个数
@@ -1850,7 +1882,9 @@ format_menu_text() {
     if [ -n "$_fhpid" ]; then _fhmon="运行中 (PID $_fhpid)"; else _fhmon="未运行"; fi
     echo "======== EnvProxy 菜单 (macOS) ========"
     echo "  监控 $_fhmon    版本 v$_fhver"
-    for _fg in 日常 维护 退出; do
+    # 分组顺序从表里按首次出现推导，不再写死：加一个分组只改表。
+    _fg_groups=$(_menu_group_order)
+    for _fg in $_fg_groups; do
         _fgfirst=1
         for _fi in "${MENU_ITEMS[@]}"; do
             _frest=${_fi#*|}
@@ -1898,7 +1932,7 @@ show_menu_colored() {
     else
         printf '\033[90m  监控 未运行    版本 v%s\033[0m\n' "$_smc_ver"
     fi
-    for _smc_g in 日常 维护 退出; do
+    for _smc_g in $(_menu_group_order); do
         _smc_first=1
         for _smc_i in "${MENU_ITEMS[@]}"; do
             _smc_rest=${_smc_i#*|}
