@@ -102,6 +102,11 @@ self_test() {
     _selftest_launchctl_log="$ENVPROXY_HOME/launchctl.log"
     _selftest_launchctl_env="$ENVPROXY_HOME/launchctl.env"
     : > "$_selftest_launchctl_env" 2>/dev/null || true
+    # 替身定义在 self_test 内部，但 **bash 的函数定义是全局的**：self_test 返回后
+    # 它仍然活着，一直到进程结束。这会污染后面所有用到它的代码——
+    # env_vars_in_sync 里 `command -v launchctl` 会恒真，"launchd 那一路是否就位"
+    # 全程跑在替身上，真实行为一次都没验过。
+    # 所以 self_test 收尾处必须 `unset -f launchctl` 把它撤掉（见函数末尾）。
     launchctl() {
         case "${1:-}" in
             setenv)
@@ -171,6 +176,18 @@ self_test() {
             grep -q "^$_ps_v	" "$_ps_owned" 2>/dev/null || _ps_owned_missing="$_ps_owned_missing $_ps_v"
         done
         _selftest_assert_eq "owned.env 覆盖整张变量表（漏一个就清不掉）" "" "$_ps_owned_missing"
+        # launchd 那一路（GUI 程序看到的那份）必须与 proxy.env 同进同退。
+        #
+        # 替身把每次 setenv 记进 launchctl.log，但在此之前**没人读过它**——
+        # 也就是说 env.sh 里那 9 行 `launchctl setenv` 删掉任意几行，自检照样全绿。
+        # 那 9 行（5 个大写 + 4 个小写拼写）决定 Dock 启动的 GUI 程序能否读到代理，
+        # 是 macOS 的第二路注入，没有第二条路能发现它坏掉。
+        _ps_lc_missing=""
+        for _ps_v in $PROXY_VAR_NAMES; do
+            grep -qx "setenv $_ps_v" "$_selftest_launchctl_log" 2>/dev/null \
+                || _ps_lc_missing="$_ps_lc_missing $_ps_v"
+        done
+        _selftest_assert_eq "launchd 注入覆盖整张变量表（漏一个 GUI 就拿不到）" "" "$_ps_lc_missing"
         # on 态文件
         printf '%s\n' '# envproxy-state: on 7078' \
             'export HTTP_PROXY="http://127.0.0.1:7078"' \
@@ -1340,6 +1357,9 @@ EOF
 
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
+    # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面
+    # 每一次 launchctl 调用都拿到假结果（details 见替身定义处的说明）。
+    unset -f launchctl 2>/dev/null || true
     trap - EXIT
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"

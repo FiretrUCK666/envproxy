@@ -182,11 +182,21 @@ Remove-Variable __bakOrig, __bakTmp, __bakMade -ErrorAction SilentlyContinue
 # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy（127.0.0.1:8080）
 # 会在 off 态每 30 轮被定时删掉，日志还谎称"回收残留"。
 if ($env:OS -eq 'Windows_NT') {
-    $bakKey = 'HKCU:\Software\EnvProxy\Backup'
+    # 用**临时键**，不碰真实的 Backup 键。
+    #
+    # 真实 Backup 键里存着使用者安装前的原值快照（可能带 HTTPS_PROXY / ALL_PROXY /
+    # NODE_USE_ENV_PROXY 以及配套的 __Kind 类型记录）。原来这里直接往真实键写
+    # NO_PROXY 与 HTTP_PROXY、跑完再把这两个名字删掉——如果使用者恰好在这两个名字上
+    # 有原值，跑一次自检就把他的原值覆盖成测试值、再删掉，快照从此残缺，
+    # 卸载时还原不回去。这属于"测试损坏用户数据"，不是理论风险。
+    # [2] 段已经示范了正确手法（把 PrevEnvRegKey 指到临时键），这里照同一形态写。
+    $bakKey = 'HKCU:\Software\EnvProxy\__test_snapshot'
     $madeParent = $false
     if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) { New-Item -Path 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue | Out-Null; $madeParent = $true }
-    $madeBak = $false
-    if (-not (Test-RegKey $bakKey)) { New-Item -Path $bakKey -ErrorAction SilentlyContinue | Out-Null; $madeBak = $true }
+    Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path $bakKey -ErrorAction SilentlyContinue | Out-Null
+    $__pvOrig = $PrevEnvRegKey
+    Set-Variable -Name PrevEnvRegKey -Value $bakKey -Scope Global
     try {
         Set-ItemProperty -Path $bakKey -Name 'NO_PROXY' -Value 'localhost' -ErrorAction Stop
         Set-ItemProperty -Path $bakKey -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:8080' -ErrorAction Stop
@@ -199,9 +209,11 @@ if ($env:OS -eq 'Windows_NT') {
         Assert-Eq '掺了默认项的混合值算我们写的' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,127.0.0.1,::1')
         Assert-Eq '全在快照里的值算使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
     } finally {
-        foreach ($nm in @('NO_PROXY', 'HTTP_PROXY')) { Remove-ItemProperty -Path $bakKey -Name $nm -ErrorAction SilentlyContinue }
-        if ($madeBak) { Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue }
+        # 临时键整个删掉；PrevEnvRegKey 还原回去。
+        Set-Variable -Name PrevEnvRegKey -Value $__pvOrig -Scope Global
+        Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue
         if ($madeParent) { Remove-Item -Path 'HKCU:\Software\EnvProxy' -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-Variable __pvOrig -ErrorAction SilentlyContinue
     }
 } else {
     Write-Host '  SKIP 快照归属判定（本机没有注册表）'
@@ -1068,6 +1080,13 @@ Assert-Eq '监控判据认不得命令行中间提到脚本的进程' $false ('p
 # 这一组断言要在**已知的归属记录状态**下跑：先记下真实记录、单独造一份受控的，
 # 跑完还原。不这样做的话，同一条断言在"装过一次的机器"和"干净机器"上会得出相反结论——
 # 那是最难查的一类红。
+# 只有 Windows 有注册表：CI 的 ubuntu 作业跑的是同一份文件。
+# 这一段直接 New-Item -Path 'HKCU:\...'，在 Linux 上抛 DriveNotFoundException；
+# 而本文件第 19 行是 $ErrorActionPreference = 'Stop'，于是它成为终止错误——
+# 脚本当场退出，ALL PASS / FAILURES 那两行都不打印，**之后 124 条断言一条不跑**。
+# 那种红看起来像"某条断言失败"，实际是整个后半段都没执行，排查方向会完全跑偏。
+# 其余 5 处注册表访问都有守卫（161/175/184/1122/1354），这里照同一形态补上。
+if ($env:OS -eq 'Windows_NT') {
 $script:SavedOwned = $null
 $script:SavedOwnedNames = @()
 try {
@@ -1111,6 +1130,9 @@ try {
     }
     Remove-Variable -Name SavedOwned -Scope Script -ErrorAction SilentlyContinue
     Remove-Variable -Name SavedOwnedNames -Scope Script -ErrorAction SilentlyContinue
+}
+} else {
+    Write-Host '  SKIP 快照归属判定（本机没有注册表）'
 }
 
 # ------------------------------------------------------------------------------

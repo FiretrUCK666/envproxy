@@ -163,9 +163,38 @@ jobs:
             for ($i = 0; $i -lt $lines2.Count; $i++) {
               $l = $lines2[$i]
               if ($l.Trim().StartsWith('#')) { continue }
-              if ($l -match '(Test-Path|Get-Content|Set-Content|Add-Content|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Get-Item)\s+\$[A-Za-z_]+(\s|\)|;|,|$)') {
+              # 判据要同时覆盖两种写法：
+              #   位置参数  Test-Path $p
+              #   具名参数  New-Item -Path $p -Force
+              # 原来只认第一种，实测生产代码里命中数为 **0** —— 也就是说这条门禁
+              # 一直在扫一份它永远扫不到的东西，等于没开。
+              # 而符合第二种写法的实际有 30 处（19 处注册表、11 处文件系统）。
+              #
+              # 只查**文件系统**路径：注册表提供程序不按通配符解释，`HKCU:\...` 没有这个风险，
+              # 把它们一起报出来只会让人习惯性忽略这条门禁。变量名带 Reg/reg 的跳过。
+              # 判据要同时覆盖两种写法：
+              #   位置参数  Test-Path $p
+              #   具名参数  Remove-Item -Path $p
+              # 原来只认第一种，实测生产代码里命中数为 **0** —— 这条门禁一直在扫
+              # 一份它永远扫不到的东西，等于没开。
+              #
+              # 只报"读或删已存在项"的 cmdlet，**放过 New-Item**：
+              # 实测 New-Item -Path 对含方括号的新路径工作正常（它创建时那个路径确实不存在，
+              # 通配符没东西可展开）。真正的坑在这里实测复现过：
+              #   Test-Path -Path $d        -> False（目录明明在）
+              #   Remove-Item -Path $d      -> 报成功，实际没删掉，目录还在
+              # 都是静默失败，所以只盯这一类。
+              #
+              # 注册表路径跳过：注册表提供程序不按通配符解释，`HKCU:\...` 没有这个风险。
+              if ($l -match '\b(Test-Path|Get-Content|Set-Content|Add-Content|Remove-Item|Copy-Item|Move-Item|Get-ChildItem|Get-Item|Set-ItemProperty|Remove-ItemProperty|Get-ItemPropertyValue|Get-ItemProperty)\s+(-Path\s+)?(\$[A-Za-z_][A-Za-z0-9_]*)') {
                 if ($l -match '-LiteralPath') { continue }
+                $pathVar = $matches[3]
+                if ($pathVar -match 'Reg|reg|RunKey') { continue }
+                # 已经用 Get-Item -LiteralPath 归一过的变量，后续再传 -Path 就不会展开
+                if ($l -match 'Get-Item -LiteralPath') { continue }
                 Write-Host ("裸变量路径（{0} 第 {1} 行）：{2}" -f $f.Name, ($i + 1), $l.Trim())
+                Write-Host ("  变量 {0} 可能含通配符字符（[ ] * ?）——实测 Test-Path/Remove-Item 会静默出错；" -f $pathVar)
+                Write-Host '  改用 -LiteralPath，或先 (Get-Item -LiteralPath ...).FullName 归一。'
                 exit 1
               }
             }
@@ -694,7 +723,16 @@ jobs:
           }
           # 用 git 索引取清单：与 CI 看到的完全一致，不会把本地临时脚本算进来。
           $ps = (@(git ls-files 'win/*.ps1' | Sort-Object | ForEach-Object { Get-CodeOnly $_ }) -join "`n")
-          $sh = (@(git ls-files 'mac/*.sh' 'mac/lib/*.sh' | Sort-Object | ForEach-Object { Get-CodeOnly $_ }) -join "`n")
+          # 语料只取**产品代码**，必须排除测试文件。
+          #
+          # `mac/*.sh` 这个通配会把 mac/test-mac-pure.sh 一起拼进来，于是这些
+          # "产品里必须有某段代码"的存在性断言可以被测试文件满足——实测把生产代码里
+          # 两处 /releases/assets/ 全删掉，门禁照样通过，因为测试文件里有 11 处。
+          # 测试替生产担保，等于这类断言根本没在守着产品。
+          # win 侧天然没这个洞（$ps 只取 win/*.ps1，测试在 tests/ 下）。
+          $sh = (@(git ls-files 'mac/*.sh' 'mac/lib/*.sh' |
+                   Where-Object { $_ -ne 'mac/test-mac-pure.sh' } |
+                   Sort-Object | ForEach-Object { Get-CodeOnly $_ }) -join "`n")
           $fail = 0
           # 语料是"整个脚本集拼起来"的，同一模式可能在多处命中；取第一个匹配就等于悄悄
           # 选了一个未必是运行时那个的值。所以命中数必须恰好为 1，模棱两可就当场失败。
