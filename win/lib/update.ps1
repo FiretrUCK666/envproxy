@@ -802,7 +802,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
         }
         if ($dl -ne "ok") { $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds) }
         if ($dl -eq "ok") {
-            Write-Host "正在解压并校验..." -ForegroundColor Cyan
+            Write-Styled 'title' "正在解压并校验..."
             try {
                 # -LiteralPath 而不是 -Path：-Path 会把路径当通配模式，
                 # 临时目录里带方括号（如 [1]）时直接报 PathNotFound（实测），
@@ -845,10 +845,10 @@ function Invoke-InstallFinish([string]$Entry, [int]$TimeoutMs = 120000) {
         )
         if ($proc.WaitForExit($TimeoutMs)) { return $true }
         try { $proc.Kill() } catch {}
-        Write-Host "安装收尾超过 2 分钟没结束，已中止。" -ForegroundColor Yellow
+        Write-Styled 'warn' "安装收尾超过 2 分钟没结束，已中止。"
         return $false
     } catch {
-        Write-Host ("安装收尾没能启动：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
+        Write-Styled 'warn' ("安装收尾没能启动：{0}" -f $_.Exception.Message)
         return $false
     }
 }
@@ -871,66 +871,66 @@ function Test-InstallRootMonitor([string]$Root) {
 
 function Update-EnvProxy([bool]$AutoYes = $false) {
     $script:UpdateExitCode = 0
-    Write-Host "======== EnvProxy 检查更新 ========" -ForegroundColor Cyan
+    Write-Styled 'title' "======== EnvProxy 检查更新 ========"
     $local = Get-LocalVersion
-    if ($local) { Write-Host ("本地版本 : v{0}" -f $local) -ForegroundColor Green }
-    else { Write-Host "本地版本 : 未知" -ForegroundColor Yellow }
-    Write-Host "正在检查最新版本（最多等十几秒）..." -ForegroundColor DarkGray
+    if ($local) { Write-Styled 'ok' ("本地版本 : v{0}" -f $local) }
+    else { Write-Styled 'warn' "本地版本 : 未知" }
+    Write-Styled 'dim' "正在检查最新版本（最多等十几秒）..."
     $remote = Get-RemoteVersion
     if (-not $remote) {
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
-        Write-Host ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源")) -ForegroundColor Yellow
+        Write-Styled 'warn' ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源"))
         $script:UpdateExitCode = 1
         return
     }
-    Write-Host ("最新版本 : {0}（来源：{1}）" -f $remote.Tag, $remote.Name) -ForegroundColor Green
+    Write-Styled 'ok' ("最新版本 : {0}（来源：{1}）" -f $remote.Tag, $remote.Name)
     $cleanSource = $false
     if (Test-DevCopy) {
-        Write-Host "这是开发副本（安装根有 .git）：更新入口不改动任何文件。" -ForegroundColor DarkGray
-        Write-Host "拉新代码请在仓库里执行：git pull" -ForegroundColor DarkGray
+        Write-Styled 'dim' "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
+        Write-Styled 'dim' "拉新代码请在仓库里执行：git pull"
         return
     }
     if (Test-SourceCopy) {
-        Write-Host "这里是源码包（有 .github、无 .git），不是安装包。" -ForegroundColor Yellow
+        Write-Styled 'warn' "这里是源码包（有 .github、无 .git），不是安装包。"
         $choice = ""
         try { $choice = Read-Host "更新会覆盖程序文件：[U] 当安装包用并清理源码文件 / [D] 自己改代码什么都不动（默认）" } catch { $choice = "" }
         if ($choice -notmatch '^[Uu]') {
-            Write-Host "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。" -ForegroundColor Yellow
+            Write-Styled 'warn' "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。"
             return
         }
-        Write-Host "继续更新，完成后源码专用文件会被清理（下次不再问）。" -ForegroundColor Cyan
+        Write-Styled 'title' "继续更新，完成后源码专用文件会被清理（下次不再问）。"
         $cleanSource = $true
     }
     # 本地版本读不到 = 安装区已经不完整（VERSION 是随包必带的文件）。
     # 此时任何"比较"都是瞎猜，直接拒绝并指一条明路，而不是继续往下走。
     if (-not $local) {
-        Write-Host "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。" -ForegroundColor Yellow
-        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选「安装 / 修复」。" -ForegroundColor Yellow
+        Write-Styled 'warn' "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
+        Write-Styled 'warn' "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选「安装 / 修复」。"
         $script:UpdateExitCode = 1
         return
     }
     if ($local -and ((Compare-Versions $local $remote.Version) -gt 0)) {
-        Write-Host "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。" -ForegroundColor Green
+        Write-Styled 'ok' "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。"
         return
     }
     if ($local -and ((Compare-Versions $remote.Version $local) -le 0)) {
-        Write-Host "已是最新，无需更新。" -ForegroundColor Green
-        Write-Host "（如果怀疑上次更新没装完整，到 Releases 页面重新下载安装包覆盖一次即可。）" -ForegroundColor DarkGray
+        Write-Styled 'ok' "已是最新，无需更新。"
+        Write-Styled 'dim' "（如果怀疑上次更新没装完整，到 Releases 页面重新下载安装包覆盖一次即可。）"
         return
     }
     # 防呆：点的是备份文件夹时警告（正式路径以注册表记录为准）
     $regPath = $null
     try { $regPath = (Get-ItemProperty $ScriptPathRegKey -ErrorAction SilentlyContinue).ScriptPath } catch {}
     if ($regPath -and (("$regPath").ToLower() -ne ("$ScriptPath").ToLower())) {
-        Write-Host ("注意：你现在点的是 [{0}]，" -f $ScriptPath) -ForegroundColor Yellow
-        Write-Host ("但正式安装在 [{0}]。" -f $regPath) -ForegroundColor Yellow
-        Write-Host "继续会更新【当前这个文件夹】并把它切换为正式安装。" -ForegroundColor Yellow
+        Write-Styled 'warn' ("注意：你现在点的是 [{0}]，" -f $ScriptPath)
+        Write-Styled 'warn' ("但正式安装在 [{0}]。" -f $regPath)
+        Write-Styled 'warn' "继续会更新【当前这个文件夹】并把它切换为正式安装。"
     }
     # 非交互环境（没有能提问的控制台）：问不到人，就别白下一个包。
     # 先问再下载：反过来会白烧一次 GitHub 配额和一份安装包。
     if (-not $AutoYes -and -not (Test-CanPrompt)) {
-        Write-Host ("发现新版本 {0}，但当前环境没法提问（没有可交互的控制台），未做任何改动。" -f $remote.Tag) -ForegroundColor Yellow
-        Write-Host "要更新请在能交互的终端里运行，或加 -Yes 跳过确认。" -ForegroundColor Yellow
+        Write-Styled 'warn' ("发现新版本 {0}，但当前环境没法提问（没有可交互的控制台），未做任何改动。" -f $remote.Tag)
+        Write-Styled 'warn' "要更新请在能交互的终端里运行，或加 -Yes 跳过确认。"
         $script:UpdateExitCode = 1
         return
     }
@@ -953,7 +953,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
                 if (-not $alt) { continue }
                 # 只接受不比当前目标更旧的源：更新到一个更旧的版本没有意义。
                 if ((Compare-Versions $alt.Version $remote.Version) -lt 0) { continue }
-                Write-Host ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag) -ForegroundColor Cyan
+                Write-Styled 'title' ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag)
                 $pkg = Get-UpdatePackage $alt
                 if ($pkg) { break }
                 $kinds += $script:UpdateLastFailure
@@ -963,8 +963,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         # 两句口径必须一致：这里说"下载失败或校验没过"会与上面"没有提供安装包"自相矛盾。
         if (-not $pkg) {
             $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds)
-            Write-Host ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name)) -ForegroundColor Yellow
-            Write-Host "未做任何改动。" -ForegroundColor Yellow
+            Write-Styled 'warn' ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name))
+            Write-Styled 'warn' "未做任何改动。"
             $script:UpdateExitCode = 1
             return
         }
@@ -979,15 +979,15 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             $readOk = $true
             try { $answer = Read-Host ("已下载并校验通过（{0}），现在更新？[y/N]" -f $pkg.Tag) } catch { $readOk = $false }
             if (-not $readOk) {
-                Write-Host "没法提问：读不到你的回答，未做任何改动。" -ForegroundColor Yellow
+                Write-Styled 'warn' "没法提问：读不到你的回答，未做任何改动。"
                 $script:UpdateExitCode = 1
                 return
             }
-            if ($answer -notmatch '^[Yy]') { Write-Host "已取消：安装区一个字节都没动。" -ForegroundColor Yellow; return }
+            if ($answer -notmatch '^[Yy]') { Write-Styled 'warn' "已取消：安装区一个字节都没动。"; return }
         }
         # 停监控 → 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位）→ 用安装根新脚本收尾
         # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
-        Write-Host "正在安装新版（保留日志，原监控先停）..." -ForegroundColor Cyan
+        Write-Styled 'title' "正在安装新版（保留日志，原监控先停）..."
         try { Stop-Monitor } catch {}
         $root = Split-Path -Parent $ScriptDir
         try {
@@ -996,8 +996,8 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             # 任何一步失败会整体回滚。
             Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir -ShipDirs @("win", "release-notes", "assets")
         } catch {
-            Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-            Write-Host "已恢复原状，正在重启监控..." -ForegroundColor Yellow
+            Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
+            Write-Styled 'warn' "已恢复原状，正在重启监控..."
             try { Install-EnvProxy | Out-Null } catch {}
             $script:UpdateExitCode = 1
             return
@@ -1019,18 +1019,18 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         if (-not $ok) {
             # 文件已经覆盖到位：再跑一次收尾，跑的仍是安装根里的**新代码**（不是本进程这份旧代码——
             # 旧代码对新布局的假设可能已经过时，让它去动安装区是自找麻烦）。
-            Write-Host "收尾没走完，正在用新版本再试一次..." -ForegroundColor Yellow
+            Write-Styled 'warn' "收尾没走完，正在用新版本再试一次..."
             $null = Invoke-InstallFinish $newScript
             $ok = Test-InstallRootMonitor $root
         }
         if (-not $ok) {
             # 文件已经覆盖到位，但监控没起来：目的没达成，退出码要如实说"没成"。
-            Write-Host "监控未能确认运行，请打开菜单选一次「安装 / 修复」。" -ForegroundColor Yellow
+            Write-Styled 'warn' "监控未能确认运行，请打开菜单选一次「安装 / 修复」。"
             $script:UpdateExitCode = 1
         }
     } catch {
-        Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次「安装 / 修复」。" -ForegroundColor Yellow
+        Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
+        Write-Styled 'warn' "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次「安装 / 修复」。"
         $script:UpdateExitCode = 1
     } finally {
         # 取包失败时这两个变量还是 $null：没拿到包就说明临时物已经在取包函数里清过了。
@@ -1047,9 +1047,9 @@ function Show-ReleaseNotes([string]$Root, [string]$Tag) {
     if (-not (Test-Item $f)) { return }
     try {
         $lines = @([System.IO.File]::ReadAllLines($f, [System.Text.Encoding]::UTF8))
-        Write-Host ("---------- {0} 改了什么 ----------" -f $Tag) -ForegroundColor Cyan
+        Write-Styled 'title' ("---------- {0} 改了什么 ----------" -f $Tag)
         $lines | Select-Object -First 40 | ForEach-Object { Write-Host "  $_" }
-        if ($lines.Count -gt 40) { Write-Host ("  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes\{0}.md）" -f $Tag) -ForegroundColor DarkGray }
-        Write-Host "----------------------------------" -ForegroundColor Cyan
+        if ($lines.Count -gt 40) { Write-Styled 'dim' ("  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes\{0}.md）" -f $Tag) }
+        Write-Styled 'title' "----------------------------------"
     } catch {}
 }

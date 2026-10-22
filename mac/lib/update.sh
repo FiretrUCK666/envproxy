@@ -861,24 +861,24 @@ source_acceptable() {
 #   1 = 失败（检查失败、下载失败、校验失败、覆盖失败、没法提问）
 update_envproxy() {
     _yes="$1"
-    echo "======== EnvProxy 检查更新 ========"
+    style_out title "======== EnvProxy 检查更新 ========"
     _local=$(get_local_version || true)
-    if [ -n "$_local" ]; then echo "本地版本 : v$_local"; else echo "本地版本 : 未知"; fi
-    echo "正在检查最新版本（最多等十几秒）..."
+    if [ -n "$_local" ]; then style_out ok "本地版本 : v$_local"; else style_out warn "本地版本 : 未知"; fi
+    style_out dim "正在检查最新版本（最多等十几秒）..."
     if ! get_remote_version; then
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
-        echo "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
+        style_out warn "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
         return 1
     fi
-    echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
+    style_out ok "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     _clean_source=0
     if is_dev_copy; then
-        echo "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
-        echo "拉新代码请在仓库里执行：git pull"
+        style_out dim "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
+        style_out dim "拉新代码请在仓库里执行：git pull"
         return 0
     fi
     if is_source_copy; then
-        echo "这里是源码包（有 .github、无 .git），不是安装包。"
+        style_out warn "这里是源码包（有 .github、无 .git），不是安装包。"
         printf "更新会覆盖程序文件：[U] 当安装包用并清理源码文件 / [D] 自己改代码什么都不动（默认）: "
         _ans=""
         # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
@@ -898,11 +898,11 @@ update_envproxy() {
         fi
         case "$_ans" in
             [Uu]*)
-                echo "继续更新，完成后源码专用文件会被清理（下次不再问）。"
+                style_out ok "继续更新，完成后源码专用文件会被清理（下次不再问）。"
                 _clean_source=1
                 ;;
             *)
-                echo "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。"
+                style_out warn "已取消：一个字节都没动。纯使用请去 Releases 下载安装包。"
                 return 0
                 ;;
         esac
@@ -910,12 +910,12 @@ update_envproxy() {
     if [ -n "$_local" ]; then
         _newer=$(compare_versions "$_local" "$REMOTE_VERSION" || true)
         if [ "$_newer" -gt 0 ] 2>/dev/null; then
-            echo "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。"
+            style_out ok "本地版本比最新发布版新，不自动更新（需要确认就打开 Releases 页面）。"
             return 0
         fi
         _older=$(compare_versions "$REMOTE_VERSION" "$_local" || true)
         if [ "$_older" -le 0 ] 2>/dev/null; then
-            echo "已是最新，无需更新。"
+            style_out ok "已是最新，无需更新。"
             return 0
         fi
     fi
@@ -931,8 +931,8 @@ update_envproxy() {
             exec 3<&- 2>/dev/null || true
         fi
         if [ $_ui_tty -eq 0 ]; then
-            echo "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
-            echo "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
+            style_out warn "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
+            style_out warn "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
             return 1
         fi
     fi
@@ -941,13 +941,13 @@ update_envproxy() {
     # 两项任一不过就拒绝并指明路，不下载、不覆盖、不删任何东西。
     _uroot="$(get_project_root)"
     if [ ! -f "$_uroot/mac/envproxy.sh" ] || [ ! -f "$_uroot/VERSION" ]; then
-        echo "这里不是 EnvProxy 安装目录（缺少 mac/envproxy.sh 或 VERSION），未做任何改动。"
-        echo "请从安装包的 mac/ 目录里运行，或手动下载安装包覆盖。"
+        style_out warn "这里不是 EnvProxy 安装目录（缺少 mac/envproxy.sh 或 VERSION），未做任何改动。"
+        style_out warn "请从安装包的 mac/ 目录里运行，或手动下载安装包覆盖。"
         return 1
     fi
     if [ -z "$_local" ]; then
-        echo "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
-        echo "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。"
+        style_out warn "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
+        style_out text "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。"
         return 1
     fi
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
@@ -958,9 +958,9 @@ update_envproxy() {
     _reg_lc=$(printf '%s' "$_reg" | tr 'A-Z' 'a-z')
     _self_lc=$(printf '%s' "$SCRIPT_PATH" | tr 'A-Z' 'a-z')
     if [ -n "$_reg" ] && [ "$_reg_lc" != "$_self_lc" ]; then
-        echo "注意：你现在点的是 [$SCRIPT_PATH]，"
-        echo "但正式安装在 [$_reg]。"
-        echo "继续会更新【当前这个文件夹】并把它切换为正式安装。"
+        style_out warn "注意：你现在点的是 [$SCRIPT_PATH]，"
+        style_out warn "但正式安装在 [$_reg]。"
+        style_out warn "继续会更新【当前这个文件夹】并把它切换为正式安装。"
     fi
     # 取包：逐源尝试"问版本 → 下载 → 解压 → 校验"，第一个拿到合格包的源胜出。
     # 只回退"问版本"是不够的——官方源的 API 答得出、它的资产主机却下不动，是现实存在的形态
@@ -970,7 +970,7 @@ update_envproxy() {
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
     # 先清掉以前留下的临时目录：进程被强杀（或者断电）会留下，不清就一直堆着。
     remove_stale_update_temp
-    _rnd=$(mktemp "$UPDATE_TMP_BASE/envproxy_update.XXXXXX" 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 1; }
+    _rnd=$(mktemp "$UPDATE_TMP_BASE/envproxy_update.XXXXXX" 2>/dev/null) || { style_out warn "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 1; }
     rm -f "$_rnd" 2>/dev/null || true
     # 本次更新的临时物登记在案：正常路径各自会删，这里兜的是"被信号打断/断电前一刻"。
     # 各次尝试的包与解压目录都挂在同一个 $_rnd 前缀下，通配一次就全清。
@@ -990,7 +990,7 @@ update_envproxy() {
     _pre_tag="$REMOTE_TAG"
     _pre_ver="$REMOTE_VERSION"
     _pre_base="$REMOTE_SOURCE_BASE"
-    echo "正在下载安装包..."
+    style_out dim "正在下载安装包..."
     while IFS='|' read -r _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sname" ] || continue
         if [ "$_sname" = "$_pre_name" ]; then
@@ -1102,12 +1102,12 @@ $(get_update_sources)
 _ENVPROXY_PKG_
     if [ -z "$_exdir" ]; then
         _pkg_kind=$(select_update_failure_kind "$_pkg_kinds")
-        echo "更新失败：$(update_failure_message "$_pkg_kind" "${REMOTE_SOURCE_NAME:-更新源}")"
-        echo "未做任何改动。"
+        style_out warn "更新失败：$(update_failure_message "$_pkg_kind" "${REMOTE_SOURCE_NAME:-更新源}")"
+        style_out warn "未做任何改动。"
         rm -f "$_rnd"* 2>/dev/null || true
         return 1
     fi
-    echo "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
+    style_out ok "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
     # 先把这一版改了什么给用户看，再问要不要装
     show_release_notes "$_exdir" "$REMOTE_TAG"
     if [ "$_yes" != "1" ]; then
@@ -1131,7 +1131,7 @@ _ENVPROXY_PKG_
         case "$_ans" in
             [Yy]*) ;;
             *)
-                echo "已取消：安装区一个字节都没动。"
+                style_out warn "已取消：安装区一个字节都没动。"
                 rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
                 rm -rf "$_exdir" 2>/dev/null || true
                 return 0
@@ -1144,14 +1144,14 @@ _ENVPROXY_PKG_
     # 旧监控在覆盖期间只读写变量与自启动，不碰程序文件，不会打架。
     # DIVERGE(Mac): Windows 侧是先停监控再覆盖。两侧收尾都会由新脚本的安装再对齐一次，
     # 最终状态相同；这里选"后停"只为缩短变量无人纠正的窗口。
-    echo "正在安装新版（保留日志）..."
+    style_out dim "正在安装新版（保留日志）..."
     if ! install_package "$_exdir" "$_uroot" "$_exdir" "mac release-notes assets"; then
         rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
         rm -rf "$_exdir" 2>/dev/null || true
-        echo "安装区已回滚（覆盖前监控没停，不需要恢复）。"
+        style_out warn "安装区已回滚（覆盖前监控没停，不需要恢复）。"
         return 1
     fi
-    echo "正在停止旧监控..."
+    style_out dim "正在停止旧监控..."
     rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
     if [ "${_clean_source:-0}" = "1" ]; then clean_source_files "$_uroot" || true; fi
     # 收尾跑**安装根里**的新脚本：只有从安装根执行，路径记录、自启动与监控才会落在安装根，
@@ -1161,9 +1161,9 @@ _ENVPROXY_PKG_
     rm -rf "$MONITOR_DIR/.op.lock" 2>/dev/null || true
     trap - EXIT
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
-        echo "收尾没走完，正在按当前文件重启监控..."
+        style_out warn "收尾没走完，正在按当前文件重启监控..."
         install_envproxy >/dev/null 2>&1 || true
-        echo "如果状态仍不对，请打开菜单选一次"安装 / 修复"。"
+        style_out text "如果状态仍不对，请打开菜单选一次"安装 / 修复"。"
     fi
     rm -rf "$_exdir" 2>/dev/null || true
     # 主体跑完，撤销信号兜底（不动外层的 EXIT trap）。
@@ -1176,12 +1176,12 @@ show_release_notes() {
     _ntag=$(printf '%s' "$2" | tr -c 'A-Za-z0-9._-' '_')
     _nfile="$1/release-notes/$_ntag.md"
     [ -f "$_nfile" ] || return 0
-    echo "---------- $2 改了什么 ----------"
+    style_out title "---------- $2 改了什么 ----------"
     sed -n '1,40p' "$_nfile" 2>/dev/null
     _nlines=$(wc -l < "$_nfile" 2>/dev/null | tr -d ' ')
     if [ -n "$_nlines" ] && [ "$_nlines" -gt 40 ] 2>/dev/null; then
-        echo "  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes/$_ntag.md）"
+        style_out dim "  （以上为前 40 行；全文见 Releases 页面，更新完成后也会出现在安装目录的 release-notes/$_ntag.md）"
     fi
-    echo "----------------------------------"
+    style_out title "----------------------------------"
     return 0
 }

@@ -452,11 +452,27 @@ Assert-Eq 'a topic screen offers no letter keys' $false ($topicText -match 'n = 
 $indexText = (Format-HelpIndex)
 Assert-Eq 'the help index offers no letter keys' $false ($indexText -match 'n = |p = |m = |a 看')
 Assert-Eq 'the help index says what Enter does' $true ($indexText -match '直接回车')
-# Every line gets a colour role so the screen has hierarchy instead of one grey wall.
-# Roles are derived from the line shape, so each shape must be recognised.
+# 每一行都带一个明确角色，屏幕才有层次，而不是一整屏灰。
+# 角色由内容自己声明（行首标记），不从行的形状去猜——猜的判据注定会错：
+# 同一屏里 `set HTTP_PROXY=…` 判成命令、`PowerShell  $env:...` 判成说明，
+# 用户看到的就是"配色坏了"。
 $roleSeen = @{}
-foreach ($t in $helpTopics) { foreach ($l in $t.Lines) { $roleSeen[(Get-HelpLineRole $l)] = $true } }
-foreach ($r in @('heading', 'cmd', 'text')) { Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r) }
+foreach ($t in $helpTopics) {
+    foreach ($r in (Get-HelpRenderedLines $t.Lines)) {
+        $roleSeen[$r.Role] = $true
+        foreach ($sg in $r.Segments) { $roleSeen[$sg.Role] = $true }
+    }
+}
+foreach ($r in @('heading', 'cmd', 'text', 'item', 'key', 'value', 'dim')) {
+    Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r)
+}
+# 用到的角色必须都在配色表里：写错一个角色名不会报错，只会静默变成默认色，
+# 而"这一行怎么没颜色"正是这次要治的那类毛病。
+# blank/row 是排版结构（空行、多列行），不是颜色，不参与这条断言。
+foreach ($r in $roleSeen.Keys) {
+    if ($r -eq 'blank' -or $r -eq 'row') { continue }
+    Assert-Eq ('role ' + $r + ' is defined in the style table') $true ($StyleRoles -contains $r)
+}
 # 屏幕形状：这一类坏法（命令被转义吃掉、混进开发机路径、行太长折行、
 # 同一句写两遍、整屏超出终端高度）靠"关键字还在不在"是查不出来的——
 # 坏行里往往还含有别的行的关键字，于是断言照样全绿。
@@ -1486,52 +1502,53 @@ Assert-Eq 'status page checks whether the injected port is still alive' $true ($
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
 Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
 
-# A green line means "you can copy this whole line and run it". That claim has to be
-# TRUE, because colour is the only thing telling the reader which lines are commands.
-# Two ways it has been false before:
-#   - one command split across two green lines (copying the first half leaves the
-#     variables half-cleared, the exact state this project exists to prevent);
-#   - a bare list of switch names, green because it is indented ASCII, but pasting
-#     it fails with "unrecognised switch" because the launcher is missing.
-# So: every green line's first token must be a real program, and no green line may
-# contain a lone trailing command fragment.
-$cmdFirstTokens = @{}
+# 绿色的一行 = "这一整行可以复制去跑"。颜色是唯一告诉读者"哪些行是命令"的东西，
+# 所以这个承诺必须是真的。历史上假过两次：
+#   - 一条命令被拆成两行绿色（只复制前半段会留下半套变量，正是本项目要防的状态）；
+#   - 一串开关名因为缩进像命令而被染绿，粘进终端却报"无法识别开关"。
+# 现在颜色由内容声明（'c ' 标记表示"整行可复制"），于是断言从"渲染结果里的命令段"取，
+# 而不是从一个会在改文案后漂移的形状判据取。
+$cmdTexts = @()
 foreach ($t2 in $helpTopics) {
-    foreach ($l in $t2.Lines) {
-        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
-        $first = ($l.Trim() -split '\s+')[0]
-        if (-not $cmdFirstTokens.ContainsKey($first)) { $cmdFirstTokens[$first] = $l.Trim() }
+    foreach ($r2 in (Get-HelpRenderedLines $t2.Lines)) {
+        # 两列行（r/rc）的右边是命令，也要收；但编号段（m 行）不算命令。
+        if ($r2.Role -eq 'cmd') { $cmdTexts += $r2.Text.Trim(); continue }
+        if ($r2.Role -ne 'row') { continue }
+        foreach ($sg2 in $r2.Segments) {
+            if ($sg2.Role -ne 'cmd') { continue }
+            # 纯数字段是菜单编号，不是命令。
+            if ($sg2.Text.Trim() -match '^\d+$') { continue }
+            $cmdTexts += $sg2.Text.Trim()
+        }
     }
 }
-# The set is deliberately small and explicit: help only ever shows this many tools.
-# `$env:NAME = 'value'` is an assignment statement, so a green line may start with a
-# variable reference too. Keep the list explicit: help must not silently start
-# showing a tool nobody reviewed.
+$cmdTexts = @($cmdTexts | Where-Object { $_ })
+Assert-Eq 'help actually shows runnable commands' $true ($cmdTexts.Count -ge 5)
+# 只按"渲染成命令色"收不行：帮助 6（菜单那一屏）的编号也是命令色，它们不是命令，
+# 是"在这个屏幕里敲哪个数字"。判据用行角色把两者分开——cmd 行才是命令，
+# row 行里的 cmd 段是"要敲的编号"，不该拿去比对"首词是不是真程序"。
+$cmdFirstTokens = @{}
+foreach ($c in $cmdTexts) {
+    $first = ($c -split '\s+')[0]
+    if (-not $cmdFirstTokens.ContainsKey($first)) { $cmdFirstTokens[$first] = $c }
+}
+# 允许的首词表刻意写得小而明确：帮助里只该出现这么多工具。
+# `$env:NAME = 'value'` 是赋值语句，所以绿色行也可以以变量引用开头。
+# 保持明确：帮助不该悄悄开始展示没人审过的工具。
 $allowed = @('powershell', 'set', 'unset', 'export', 'Remove-Item', 'curl', 'curl.exe',
-             'git', 'npm', 'wget', 'wget.exe', 'echo', '.')
+             'git', 'npm', 'wget', 'wget.exe', 'echo', '.', 'source')
 foreach ($first in $cmdFirstTokens.Keys) {
     $isAssignment = $first -match '^\$env:[A-Za-z_][A-Za-z0-9_]*$'
     Assert-Eq ('a green line starts with a real program: ' + $first) $true (($allowed -contains $first) -or $isAssignment)
 }
-# A green line that is nothing but flags is not a command, it is a cheat sheet.
-foreach ($t2 in $helpTopics) {
-    foreach ($l in $t2.Lines) {
-        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
-        $trim = $l.Trim()
-        Assert-Eq ('a green line is not just a list of switches: ' + $trim) $false ($trim -match '^-{1,2}\w+(\s+-{1,2}\w+)+$')
-    }
+# 只有开关的一行不是命令，是备忘单。
+foreach ($c in $cmdTexts) {
+    Assert-Eq ('a green line is not just a list of switches: ' + $c) $false ($c -match '^-{1,2}\w+(\s+-{1,2}\w+)+$')
 }
-# No command may be split mid-way: a green line ending in '=' or '&' would mean the
-# rest of it is on the next line, and copying it alone silently does half the job.
-foreach ($t2 in $helpTopics) {
-    foreach ($l in $t2.Lines) {
-        if ((Get-HelpLineRole $l) -ne 'cmd') { continue }
-        $trim = $l.TrimEnd()
-        # `set VAR=` is a complete command (it clears the variable), so a trailing
-        # '=' is fine. A trailing '&' is not: it means "and then something", which
-        # is on another line -- that is the split-command defect.
-        Assert-Eq ('a green command is not left unfinished: ' + $trim) $false ($trim -match '&$')
-    }
+# 命令不许断在半路：以 '&' 结尾意味着后半段在下一行，单独复制只做了一半的活。
+# （`set VAR=` 以等号结尾是完整命令——它就是在清空变量，不算断。）
+foreach ($c in $cmdTexts) {
+    Assert-Eq ('a green command is not left unfinished: ' + $c) $false ($c -match '&$')
 }
 
 # The "you can type X" hint must never name a key that does not exist. Taking the
@@ -1555,10 +1572,18 @@ try {
 # SAME derived list. They once each had a hand-written array: a group typo then made
 # an item invisible on screen while it stayed typeable -- the user sees one menu and
 # can run another. Pin it structurally: no hand-written group array may reappear.
-foreach ($fn in @('Show-MenuColored', 'Format-MenuText', 'Get-HelpMenuLines')) {
+# 彩屏、纯文本、帮助第 6 条必须都从同一个渲染来源取分组顺序。
+# 三个函数各自拼一遍的话，分组只要改一处漏两处，就会出现"屏幕上少一项、却照样敲得动"。
+foreach ($fn in @('Get-MenuRenderedLines', 'Get-HelpMenuLines')) {
     $src = (Get-Command $fn).Definition
     Assert-Eq ($fn + ' derives its groups instead of listing them') $false ($src -match "@\('日常'")
     Assert-Eq ($fn + ' uses the shared group order') $true ($src -match 'Get-MenuGroups')
+}
+# 纯文本与彩屏必须同源：只查"两边都上色"是不够的，得钉住它们点名了同一个渲染函数，
+# 否则各写一份内容照样能通过颜色断言（颜色对、字不一样）。
+foreach ($fn in @('Show-MenuColored', 'Format-MenuText')) {
+    $src = (Get-Command $fn).Definition
+    Assert-Eq ($fn + ' renders from the shared source') $true ($src -match 'Get-MenuRenderedLines')
 }
 Assert-Eq 'the shared group order is the only place groups are ordered' 1 (([regex]::Matches((Get-Command Get-MenuGroups).Definition, 'Select-Object -Unique')).Count)
 
@@ -1569,7 +1594,7 @@ Assert-Eq 'the shared group order is the only place groups are ordered' 1 (([reg
 # menu entry must show up in the help screen with no other edit.
 $helpMenuText = (Format-HelpTopic '6')
 foreach ($mi in $MenuItems) {
-    Assert-Eq ('help menu screen shows menu key ' + $mi.Key) $true ($helpMenuText -match ('(?m)^\s{2}' + [regex]::Escape($mi.Key) + '\s{2}'))
+    Assert-Eq ('help menu screen shows menu key ' + $mi.Key) $true ($helpMenuText -match ('(?m)^\s+' + [regex]::Escape($mi.Key) + '\s{2}'))
     Assert-Eq ('help menu screen names menu key ' + $mi.Key) $true ($helpMenuText -match [regex]::Escape($mi.Name))
 }
 # Mutation test: append a row to the table and confirm it appears on the help screen.

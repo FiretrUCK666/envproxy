@@ -74,9 +74,32 @@ function Get-ListeningTcpConnections {
         $netstat = Join-Path ([string]$env:SystemRoot) "System32\netstat.exe"
         if (-not (Test-Path -LiteralPath $netstat)) { $netstat = "netstat.exe" }
     }
-    try { $raw = & $netstat -ano 2>$null } catch { $raw = $null }
+    # 失败原因要分开记，不许糊成一条。
+    #
+    # 实测踩过：常驻监控连续几十次记"两次都没成功：Get-NetTCPConnection is not recognized"，
+    # 而那句话来自下面 WMI 兜底那一路——真正失败的其实是 netstat 这一次调用。
+    # 两条不同原因的路径共用一个措辞，事后就永远分不清"系统工具没了"还是"行格式变了"，
+    # 而排查方向完全不同。所以每条路各自保留自己的原因（$netstatWhy / $wmiWhy），
+    # 最后由抛出的那条消息把两段都带上。
+    $netstatWhy = ""
+    $wmiWhy = ""
+    try {
+        $raw = & $netstat -ano 2>$null
+        # 命令没抛异常、但一行都没拿到：netstat 被换掉了、被策略挡住、或者输出被吞。
+        # 这与"抛异常"是两回事，同样要留下原因——否则会静默走 WMI 兜底然后只说 WMI 失败。
+        if (-not $raw) { $netstatWhy = "netstat 没有输出（$netstat）" }
+    } catch {
+        $raw = $null
+        $netstatWhy = "netstat 调用失败：" + $_.Exception.Message
+    }
     if (-not $raw) {
-        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+        # netstat 这条路不通，退到 WMI（慢，但可靠）。它自己也失败时要把两条原因都带出去。
+        try {
+            return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+        } catch {
+            $wmiWhy = "Get-NetTCPConnection 也不可用：" + $_.Exception.Message
+            throw ("端口枚举失败（" + $netstatWhy + "；" + $wmiWhy + "）")
+        }
     }
     $listeners = New-Object System.Collections.ArrayList
     $sawListening = $false
@@ -105,8 +128,13 @@ function Get-ListeningTcpConnections {
     if ($sawListening) { throw "netstat 解析出错：有 LISTENING 行但没解析出端口" }
     if ($sawTcp) {
         # 有 TCP 行、却一个监听口都没解析出来：状态列被本地化了，或者行形状变了。
-        # 两种都走 WMI 那一路（慢，但可靠）。
-        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+        # 两种都走 WMI 那一路（慢，但可靠）。WMI 也失败时，原因必须写明是"行形状变了"，
+        # 而不是笼统一句"读不出来"——那会让人去查系统和权限，真正的问题在解析。
+        try {
+            return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+        } catch {
+            throw ("netstat 有 TCP 行但没解析出监听口（行格式可能变了）；Get-NetTCPConnection 也不可用：" + $_.Exception.Message)
+        }
     }
     # 一条 TCP 行都没有：协议列不是 "TCP"，这在 netstat 的输出里不会出现
     # （协议名不会被本地化）。要么这台机器真的一个 TCP 连接都没有，

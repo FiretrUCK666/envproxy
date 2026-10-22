@@ -1040,10 +1040,10 @@ function Start-Monitor([bool]$Force = $false) {
         # 注意：用 IndexOf 而非 -like——-like 会把路径里的 [ ] 当通配符误判
         $samePath = ($existing.CommandLine.IndexOf($ScriptPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
         if (-not $Force -and $samePath) {
-            Write-Host "监控进程已在运行（路径一致），跳过启动。" -ForegroundColor Yellow
+            Write-Styled 'warn' "监控进程已在运行（路径一致），跳过启动。"
             return $true
         }
-        Write-Host $(if ($Force) { "正在重启监控以加载当前最新代码..." } else { "检测到旧位置的监控进程，正在迁移到当前路径..." }) -ForegroundColor Yellow
+        Write-Styled 'warn' $(if ($Force) { "正在重启监控以加载当前最新代码..." } else { "检测到旧位置的监控进程，正在迁移到当前路径..." })
         Stop-Monitor
     }
     # 启动前清掉可能残留的 pid 文件（强杀不给监控机会删它），否则复检会读到上一次运行的 pid。
@@ -1058,7 +1058,7 @@ function Start-Monitor([bool]$Force = $false) {
         Start-Sleep -Milliseconds 400
     }
     if (Get-MonitorProcessFromPidFile) {
-        Write-Host "监控进程已启动。" -ForegroundColor Green
+        Write-Styled 'ok' "监控进程已启动。"
         return $true
     }
     # 起不来要分清是"另一个副本占着锁"还是"根本没起来"：前者该去别处收摊，后者该查杀软与日志。
@@ -1072,11 +1072,11 @@ function Start-Monitor([bool]$Force = $false) {
         $otherPath = ""
         if ($other.CommandLine -match '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$') { $otherPath = $Matches[1] }
         $otherDir = if ($otherPath) { Split-Path -Parent (Split-Path -Parent $otherPath) } else { "" }
-        Write-Host ("监控进程未能确认运行：另一个副本的监控正占着单实例锁（{0}）。" -f $(if ($otherDir) { $otherDir } else { $otherPath })) -ForegroundColor Yellow
-        Write-Host "      还用那份就继续用它；不用了，进上面那个文件夹打开菜单选 一键恢复，再回到这里选 安装。" -ForegroundColor Yellow
+        Write-Styled 'warn' ("监控进程未能确认运行：另一个副本的监控正占着单实例锁（{0}）。" -f $(if ($otherDir) { $otherDir } else { $otherPath }))
+        Write-Styled 'warn' "      还用那份就继续用它；不用了，进上面那个文件夹打开菜单选 一键恢复，再回到这里选 安装。"
     } else {
-        Write-Host "监控进程未能确认运行：这次没看到别的副本，多半是启动被拦或启动过程出错。" -ForegroundColor Yellow
-        Write-Host "      再选一次 安装 / 修复；仍然不行就看 查看状态 和 monitor.log 最近几行。" -ForegroundColor Yellow
+        Write-Styled 'warn' "监控进程未能确认运行：这次没看到别的副本，多半是启动被拦或启动过程出错。"
+        Write-Styled 'warn' "      再选一次 安装 / 修复；仍然不行就看 查看状态 和 monitor.log 最近几行。"
     }
     return $false
 }
@@ -1088,7 +1088,7 @@ function Stop-Monitor {
         # 不记的话，状态页会把这台机器报成"进程不在了（可能被结束任务关掉）"，
         # 而真相是使用者刚刚点过停止。意图比进程状态更权威。
         try { Write-Text -Path $StopIntentFile -Text "user" } catch {}
-        Write-Host "监控进程未在运行。" -ForegroundColor Yellow
+        Write-Styled 'warn' "监控进程未在运行。"
         return
     }
     # 从目标监控的命令行动态解析它的脚本位置 → 把停止标志写到"它自己"的 monitor 目录。
@@ -1131,9 +1131,9 @@ function Stop-Monitor {
         }
     }
     if (Get-MonitorProcess) {
-        Write-Host "监控进程未能停止（请检查是否有别的窗口正在运行它）。" -ForegroundColor Yellow
+        Write-Styled 'warn' "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
     } else {
-        Write-Host "监控进程已停止。" -ForegroundColor Green
+        Write-Styled 'ok' "监控进程已停止。"
     }
 }
 

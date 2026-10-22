@@ -719,23 +719,36 @@ self_test() {
     # "没有这一条"，会以为帮助坏了。这条钉住两端行为一致。
     if grep -qE '^[[:space:]]*q\|Q\|0\)' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null; then _lq=1; else _lq=0; fi
     _selftest_assert_eq "帮助页认 q 和 0（与菜单同义）" "1" "$_lq"
-    # 配色判据的纯函数断言：命令行（缩进 4 格、纯 ASCII）必须是命令色 32，
-    # 含中文的说明行必须不是。单引号是重点——它在 grep 字符类里是个转义陷阱，
-    # 曾经让 `curl --noproxy '*'` 这一行在 Mac 上与普通说明文字同色。
-    for _cl_case in "cmd|      curl --noproxy '*' https://example.com" \
-                    "cmd|      git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git" \
-                    "cmd|      echo \$HTTPS_PROXY" \
-                    "text|  窗口一关就失效，只有 zsh 和 bash 管用。" \
-                    "text|     curl 在 PowerShell 5.1 里是别名"; do
-        _cl_want=${_cl_case%%|*}
-        _cl_line=${_cl_case#*|}
-        _cl_got=$(_help_line_color "$_cl_line")
-        if [ "$_cl_want" = "cmd" ]; then
-            if [ "$_cl_got" = "32" ]; then _cl_ok=1; else _cl_ok=0; fi
-        else
-            if [ "$_cl_got" != "32" ]; then _cl_ok=1; else _cl_ok=0; fi
-        fi
-        _selftest_assert_eq "配色判据: $_cl_line" "1" "$_cl_ok"
+    # 配色：颜色由内容自己声明（行首标记），不再从行的形状去猜。
+    # 为什么改：猜的判据是"缩进 4 格 + 无汉字 = 命令"，而真实内容不按这个形状长——
+    # `Git Bash  source ~/.bashrc` 带左列标签、`PowerShell  $env:...` 只缩进 2 格，
+    # 两行都是能整行复制的命令却判成灰。这不是漏了哪一行，是判据注定会错。
+    # 现在断言的是**渲染结果**：标成 c / rc 的行必须出命令色 32，标成 t / w 的必须不是。
+    for _cl_case in "c curl --noproxy '*' https://example.com" \
+                    "c git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git" \
+                    "c echo \$HTTPS_PROXY" \
+                    "rc zsh / bash|export ENVPROXY_TERM=off" \
+                    "t 窗口一关就失效，只有 zsh 和 bash 管用。" \
+                    "w 注意：只认具体网址，写 * 没用。"; do
+        _cl_code=${_cl_case%% *}
+        # 行首标记必须原样带进渲染函数：去掉它，第一格就变成正文内容，
+        # 整行会被当成标记认不出的正文（灰）——这条测试最初就是这么假绿的。
+        # 取的是**实际打印出来的那一段**（命令替换捕获），不是累加器变量：
+        # 累加器在 flush 之后就被清空了，拿它比对会一律"没有颜色"——
+        # 那会让 t/w 那几条假通过（它们本来就不该有颜色）。
+        _cl_esc=$(printf '\033')
+        _cl_got=$(
+            _SEG_COLORED=1
+            _SEG_LINE=""
+            _help_render_line "$_cl_case"
+        )
+        case "$_cl_code:$_cl_got" in
+            c:*"$_cl_esc[32m"*|rc:*"$_cl_esc[32m"*) _cl_ok=1 ;;
+            c:*|rc:*) _cl_ok=0 ;;
+            *"$_cl_esc[32m"*) _cl_ok=0 ;;
+            *) _cl_ok=1 ;;
+        esac
+        _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"
     done
     # README 抄了一份菜单表和帮助目录，必须与代码逐项一致。抄的那一份一旦脱节，
     # 后果不是"文档旧了"，而是用户照 README 的编号去敲、敲到另一件事。这类错误

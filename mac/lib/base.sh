@@ -29,6 +29,80 @@ HELP_MAX_LINES=30
 LOG_MAX_BYTES=204800
 LOG_TAIL_LINES=200
 
+# 计算一段文字在终端里占几格：中日韩字符占两格，ASCII 占一格。
+# 所有需要对齐的地方（菜单、帮助的两列、安装提示）都走这一处：
+# 写第二份就会有一天两份算出两个宽度，屏幕上看就是"某一屏的表格歪了"。
+# 放在 base 层而不是 ops：帮助与菜单都要用它，而 ops 里的定义顺序会随编辑变化。
+_display_width() {
+    _dw_s="$1"
+    _dw_all=$(printf '%s' "$_dw_s" | wc -c)
+    _dw_ascii=$(printf '%s' "$_dw_s" | LC_ALL=C tr -dc '\000-\177' | wc -c)
+    _dw_multi=$((_dw_all - _dw_ascii))
+    # 多字节字节数 / 3 得到汉字个数（本项目文案里没有 2 字节或 4 字节字符）
+    _dw_han=$((_dw_multi / 3))
+    _dw_rest=$((_dw_multi - _dw_han * 3))
+    printf '%s' $((_dw_ascii + _dw_han * 2 + _dw_rest))
+}
+
+# 把文字补齐到指定宽度（按上面的显示宽度算）。
+_menu_cell_pad() {
+    _mcp_text="$1"
+    _mcp_width="$2"
+    _mcp_len=$(_display_width "$_mcp_text")
+    _mcp_pad=$((_mcp_width - _mcp_len))
+    [ "$_mcp_pad" -lt 0 ] && _mcp_pad=0
+    printf '%s%*s' "$_mcp_text" "$_mcp_pad" ''
+}
+# 屏幕角色的配色表：与 Windows 侧 $StyleRoles 同一批角色名、同一套语义，门禁 6 核对。
+# 为什么要有这张表：颜色散在各页面时，同一个概念会在不同页面用不同颜色——用户每换一屏
+# 就要重新认一遍"哪一行是能照抄的命令"。改配色只改这里。
+# 取空串 = 用终端自己的默认前景色（不写转义序列），避免与使用者的配色方案打架。
+# 把一段文字按终端显示宽度截断，超出时补省略号。
+# 必须按"字符"走而不是按字节切：中文占两格，按字节切会把一个汉字切成半个，
+# 屏幕上就是乱码。逐字符累加显示宽度，超过就停。
+_truncate_width() {
+    _tw_s="$1"
+    _tw_max="$2"
+    if [ "$(_display_width "$_tw_s")" -le "$_tw_max" ]; then
+        printf '%s' "$_tw_s"
+        return 0
+    fi
+    _tw_acc=""
+    _tw_aw=0
+    _tw_i=1
+    _tw_len=${#_tw_s}
+    while [ "$_tw_i" -le "$_tw_len" ]; do
+        _tw_ch=${_tw_s:$((_tw_i - 1)):1}
+        _tw_cw=$(_display_width "$_tw_ch")
+        [ $((_tw_aw + _tw_cw)) -gt "$_tw_max" ] && break
+        _tw_acc="$_tw_acc$_tw_ch"
+        _tw_aw=$((_tw_aw + _tw_cw))
+        _tw_i=$((_tw_i + 1))
+    done
+    printf '%s…' "$_tw_acc"
+}
+
+STYLE_ROLES="title heading item key value cmd ok warn bad dim text"
+style_color() {
+    case "$1" in
+        title|heading) echo "36" ;;
+        item|key|value) echo "97" ;;
+        cmd|ok) echo "32" ;;
+        warn|bad) echo "33" ;;
+        dim) echo "90" ;;
+        *) echo "" ;;
+    esac
+}
+# 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
+# stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。
+style_out() {
+    _so_role="$1"; shift
+    if [ ! -t 1 ]; then printf '%s\n' "$*"; return 0; fi
+    _so_c=$(style_color "$_so_role")
+    if [ -z "$_so_c" ]; then printf '%s\n' "$*"; else printf '\033[%sm%s\033[0m\n' "$_so_c" "$*"; fi
+    return 0
+}
+
 # 变量事实源（写/核/收/判四处共用，口径不再分家）：代理变量 6 个（大小写双写）
 # + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
 OWNED_HTTP_PREFIX="http://127.0.0.1:"

@@ -192,7 +192,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 if ($rel -match '^(win|mac)\\monitor\\') { continue }
                 if (-not $pkg.ContainsKey($rel.ToLower())) {
                     Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
-                    Write-Host ("  已移除旧版本残留：{0}" -f $rel) -ForegroundColor DarkGray
+                    Write-Styled 'dim' ("  已移除旧版本残留：{0}" -f $rel)
                     $removed++
                 }
             }
@@ -230,7 +230,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -like '*.tmp[0-9]*' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }
-        if ($removed -gt 0) { Write-Host ("  共移除 {0} 个旧版本残留文件。" -f $removed) -ForegroundColor DarkGray }
+        if ($removed -gt 0) { Write-Styled 'dim' ("  共移除 {0} 个旧版本残留文件。" -f $removed) }
     } catch {
         if ($backup -and (Test-Item $backup)) {
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：

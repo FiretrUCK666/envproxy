@@ -87,6 +87,38 @@ $HelpMaxLines = 30
 $LogMaxBytes = 200KB
 $LogTailLines = 200
 
+# 屏幕角色的配色表：所有用户可见页面（菜单、帮助、状态、安装、卸载、更新）都从这里取色。
+# 为什么要有这张表：颜色散在各页面时，同一个概念会在不同页面用不同颜色——用户每换一屏
+# 就要重新认一遍"哪一行是能照抄的命令"。角色名与 Mac 侧 STYLE_ROLES 一致（门禁 6 核对），
+# 于是"两端口径一致"不靠人记得住，而是靠没有第二个地方可以改。
+# 取空串 = 用终端自己的默认前景色（不写颜色），避免与使用者的配色方案打架。
+$StyleMap = [ordered]@{
+    title   = 'Cyan'      # 每屏开头那一行等号标题
+    heading = 'Cyan'      # 段标题
+    item    = 'White'     # 编号条目
+    key     = 'White'     # 两列的左列（PowerShell / 监控进程…）
+    value   = 'White'     # 要强调的值（名字、版本号）
+    cmd     = 'Green'     # 能整行复制去跑的命令
+    ok      = 'Green'     # 做成了
+    warn    = 'Yellow'    # 要留意
+    bad     = 'Yellow'    # 没做成 / 有残留
+    dim     = 'DarkGray'  # 次要说明，不该抢注意力
+    text    = ''          # 正文：跟终端默认色一致
+}
+$StyleRoles = @('title', 'heading', 'item', 'key', 'value', 'cmd', 'ok', 'warn', 'bad', 'dim', 'text')
+
+function Get-StyleColor([string]$Role) {
+    if ($StyleMap.Contains($Role)) { return $StyleMap[$Role] }
+    return ''
+}
+
+# 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
+function Write-Styled([string]$Role, [string]$Text, [switch]$NoNewline) {
+    $c = Get-StyleColor $Role
+    if ($c) { Write-Host $Text -ForegroundColor $c -NoNewline:$NoNewline }
+    else { Write-Host $Text -NoNewline:$NoNewline }
+}
+
 # 是否跑在提权身份下：提权后 HKCU 指向管理员的配置，装/停/卸动的都是"另一个人"的状态。
 # 只做提醒不拦截——机器上只有一个日常用户时，提醒一句就够了。
 function Test-IsElevated {

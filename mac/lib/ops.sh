@@ -11,56 +11,56 @@
 # 10. 子命令
 # ------------------------------------------------------------------------------
 install_envproxy() {
-    echo "======== EnvProxy 安装 (macOS) ========"
+    style_out title "======== EnvProxy 安装 (macOS) ========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     # 先说清楚要动什么、不动什么，再说"正在做"——用户在按完编号之后得先知道会发生什么，
     # 而不是盯着静止的屏幕猜。
-    echo "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
-    echo "不会动你的其他设置。"
+    style_out text "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
+    style_out text "不会动你的其他设置。"
     echo ""
     # 首次安装的判据要在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
     if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
     snapshot_prev_env "$_first" || true
-    echo "[1/4] 正在写开机自启……"
+    style_out text "[1/4] 正在写开机自启……"
     if set_autorun; then
-        echo "[1/4] 开机自启动：已写入"
+        style_out ok "[1/4] 开机自启动：已写入"
     else
-        echo "[1/4] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
+        style_out warn "[1/4] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
-    echo "[2/4] 正在写终端配置……"
+    style_out text "[2/4] 正在写终端配置……"
     if insert_shell_hooks; then
-        echo "[2/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
+        style_out ok "[2/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
     else
-        echo "[2/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
+        style_out warn "[2/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
     fi
     update_path_record
-    echo "[3/4] 正在启动后台监控……"
+    style_out text "[3/4] 正在启动后台监控……"
     if start_monitor 1; then
-        echo "[3/4] 监控进程：已启动"
+        style_out ok "[3/4] 监控进程：已启动"
     else
-        echo "[3/4] 监控进程：未能确认运行，原因见上面那两行"
+        style_out warn "[3/4] 监控进程：未能确认运行，原因见上面那两行"
     fi
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
     # 不管成没成就按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
     # 这一步也要报进度：它是"会改这 4 处"里的第 4 处（环境变量），
     # 不报的话用户只数到 3 步，会以为环境变量那步被跳过了。
-    echo "[4/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……"
+    style_out text "[4/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……"
     if align_state_once >/dev/null 2>&1; then
-        echo "[4/4] 环境变量：已按当前状态校正"
+        style_out ok "[4/4] 环境变量：已按当前状态校正"
     else
         # 读不出来 ≠ 没有代理：这一轮什么都没改，如实说明（与 Windows 侧同口径）。
-        echo "[4/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
+        style_out warn "[4/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
     fi
     echo ""
     # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
-    echo "正在联网确认有没有新版本……"
+    style_out text "正在联网确认有没有新版本……"
     show_status
     echo ""
     # 左边那一列按最长条目补齐，不靠手敲空格：改一个字就整列歪掉，
     # 而"歪一格"这种事只有人眼看得出来。与 Windows 侧同一套做法。
-    echo "装好了。之后怎么用："
+    style_out ok "装好了。之后怎么用："
     _tip_a1="新开的终端 / 程序"
     _tip_a2="一直开着的窗口"
     _tip_a3="装之前就开着的窗口"
@@ -69,21 +69,25 @@ install_envproxy() {
     _tip_a6="忘了怎么用"
     _tip_w=0
     for _tip_t in "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6"; do
-        _tip_n=$(_menu_cell_width "$_tip_t")
+        _tip_n=$(_display_width "$_tip_t")
         [ "$_tip_n" -gt "$_tip_w" ] && _tip_w="$_tip_n"
     done
-    echo "   $(_menu_cell_pad "$_tip_a1" "$_tip_w")   自动就是对的，什么都不用做。"
-    echo "   $(_menu_cell_pad "$_tip_a2" "$_tip_w")   敲一下回车就跟上。"
-    echo "   $(_menu_cell_pad "$_tip_a3" "$_tip_w")   重开一个，或者手动加载一次"
-    echo "   $(printf '%*s' "$_tip_w" '')   菜单选 4（帮助）第 2 条，有现成命令。"
-    echo "   $(_menu_cell_pad "$_tip_a4" "$_tip_w")   在它里面执行  export ENVPROXY_TERM=off"
-    echo "   $(_menu_cell_pad "$_tip_a5" "$_tip_w")   unset ENVPROXY_TERM"
-    echo "   $(_menu_cell_pad "$_tip_a6" "$_tip_w")   菜单选 4（帮助）。"
+    # 前三条是"你会遇到的情况"，正常亮度；后三条是"想改的时候怎么做"，压暗一档。
+    # 与 Windows 侧同一套分法：按"这一行右边有没有要照抄的命令"分，
+    # 而不是逐条判名字——以后加一条也会自动归到对的一边。
+    _tip_pad=$(printf '%*s' "$_tip_w" '')
+    style_out ok "   $(_menu_cell_pad "$_tip_a1" "$_tip_w")   自动就是对的，什么都不用做。"
+    style_out ok "   $(_menu_cell_pad "$_tip_a2" "$_tip_w")   敲一下回车就跟上。"
+    style_out ok "   $(_menu_cell_pad "$_tip_a3" "$_tip_w")   重开一个，或者手动加载一次"
+    style_out ok "   $_tip_pad   菜单选 4（帮助）第 2 条，有现成命令。"
+    style_out dim "   $(_menu_cell_pad "$_tip_a4" "$_tip_w")   在它里面执行  export ENVPROXY_TERM=off"
+    style_out dim "   $(_menu_cell_pad "$_tip_a5" "$_tip_w")   unset ENVPROXY_TERM"
+    style_out dim "   $(_menu_cell_pad "$_tip_a6" "$_tip_w")   菜单选 4（帮助）。"
 }
 
 uninstall_envproxy() {
     _purge="$1"
-    echo "======== EnvProxy 卸载（一键恢复原状）========"
+    style_out title "======== EnvProxy 卸载（一键恢复原状）========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     stop_monitor || true
     remove_autorun
@@ -146,22 +150,22 @@ uninstall_envproxy() {
     if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
     if [ $_remove_log -eq 1 ] && [ -f "$LOG_FILE" ]; then _dirty="$_dirty 历史日志未能删除；"; fi
     if [ -z "$_dirty" ]; then
-        echo "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。"
+        style_out ok "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。"
         if [ $_remove_log -eq 1 ]; then
-            echo "        历史日志已一并彻底删除。"
+            style_out dim "        历史日志已一并彻底删除。"
         else
-            echo "        历史日志保留在 monitor/monitor.log（黑匣子，供日后排查）。"
+            style_out dim "        历史日志保留在 monitor/monitor.log（黑匣子，供日后排查）。"
         fi
-        echo "        电脑已恢复到安装前的状态，无需重启。"
+        style_out dim "        电脑已恢复到安装前的状态，无需重启。"
     else
-        echo "[未完成] 这几处没清干净："
-        echo "        $_dirty"
-        echo "        再跑一次 uninstall 试一次；还不行就照上面列出的位置手动删。"
+        style_out warn "[未完成] 这几处没清干净："
+        style_out warn "        $_dirty"
+        style_out warn "        再跑一次 uninstall 试一次；还不行就照上面列出的位置手动删。"
     fi
 }
 
 show_status() {
-    echo "======== EnvProxy 状态 (macOS) ========"
+    style_out title "======== EnvProxy 状态 (macOS) ========"
     _m=$(get_monitor_pid || true)
       # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
       # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
@@ -172,20 +176,20 @@ show_status() {
           _autorun_ok=1
       fi
     if [ -n "$_m" ]; then
-        echo "监控进程 : 运行中 (PID $_m)"
+        style_out ok "监控进程 : 运行中 (PID $_m)"
     else
-        echo "监控进程 : 未运行"
+        style_out warn "监控进程 : 未运行"
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 不说清这一点，用户会看到"自启已启用"和"监控未运行"并列，以为装坏了。
-        [ "$_autorun_ok" = "1" ] && echo "           （已按你的选择停止，下次登录会自动恢复）"
+        [ "$_autorun_ok" = "1" ] && style_out dim "           （已按你的选择停止，下次登录会自动恢复）"
     fi
       if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then
           if [ "$_autorun_ok" = "1" ]; then
-              echo "开机自启 : 已启用"
+              style_out ok "开机自启 : 已启用"
           else
-              echo "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
-              echo "           记录指向：$LOCATOR_PATH"
-              echo "           打开菜单选 1（安装 / 修复）可以重建。"
+              style_out warn "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
+              style_out dim "           记录指向：$LOCATOR_PATH"
+              style_out dim "           打开菜单选 1（安装 / 修复）可以重建。"
           fi
       else
           if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
@@ -197,13 +201,13 @@ show_status() {
     _crc=0
     _cands=$(find_candidate_ports 0) || _crc=$?
     if [ "$_crc" -ne 0 ]; then
-        echo "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
+        style_out warn "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
     else
         _port=$(printf '%s' "$_cands" | awk '{print $1}')
         if [ -n "$_port" ]; then
-            echo "翻墙代理 : 已开启（本地端口 $_port 监听中）"
+            style_out ok "翻墙代理 : 已开启（本地端口 $_port 监听中）"
         else
-            echo "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+            style_out warn "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
         fi
     fi
     # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
@@ -229,12 +233,12 @@ show_status() {
         _ts_state="unpaired"
     fi
     case "$_ts_state" in
-        ok)       echo "终端同步 : 已生效（已开着的窗口敲回车即跟上）" ;;
-        unpaired) echo "终端同步 : 配置文件里的标记不成对，未改动它（重跑一次安装可修复）" ;;
-        *)        echo "终端同步 : 配置文件里没有同步块（重跑一次安装可修复）" ;;
+        ok)       style_out ok "终端同步 : 已生效（已开着的窗口敲回车即跟上）" ;;
+        unpaired) style_out warn "终端同步 : 配置文件里的标记不成对，未改动它（重跑一次安装可修复）" ;;
+        *)        style_out warn "终端同步 : 配置文件里没有同步块（重跑一次安装可修复）" ;;
     esac
     _cur=$(get_current_proxy_port 2>/dev/null || true)
-    if [ -n "$_cur" ]; then echo "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else echo "代理变量 : 无（直连状态）"; fi
+    if [ -n "$_cur" ]; then style_out ok "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else style_out dim "代理变量 : 无（直连状态）"; fi
     # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
     # 与 Win 侧 HKCU Internet Settings 那段同语义（读系统设置 → 试连 → 只在连不上时提醒）。
@@ -259,48 +263,59 @@ show_status() {
                     --noproxy '' -p -x "http://127.0.0.1:$_sp_port" "http://127.0.0.1:9/" 2>/dev/null; then _sp_alive=1; fi
             fi
             if [ "$_sp_alive" = "0" ]; then
-                echo "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）"
-                echo "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+                style_out warn "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）"
+                style_out dim "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
             fi
         fi
     fi
     # 版本信息（只读：查不到只提示，不写文件、不提问）
     _local_ver=$(get_local_version || true)
-    if [ -n "$_local_ver" ]; then echo "本地版本 : v$_local_ver"; else echo "本地版本 : 未知"; fi
+    if [ -n "$_local_ver" ]; then style_out ok "本地版本 : v$_local_ver"; else style_out warn "本地版本 : 未知"; fi
     if get_remote_version; then
-        echo "最新版本 : $REMOTE_TAG"
+        style_out ok "最新版本 : $REMOTE_TAG"
         if is_dev_copy; then
-            echo "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）"
+            style_out dim "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）"
         elif is_source_copy; then
-            echo "更新状态 : 源码包（更新入口会先确认用途再动手）"
+            style_out warn "更新状态 : 源码包（更新入口会先确认用途再动手）"
         elif [ -z "$_local_ver" ]; then
-            echo "更新状态 : 可打开菜单选 3（检查更新）升级"
+            style_out warn "更新状态 : 可打开菜单选 3（检查更新）升级"
         else
             _newer=$(compare_versions "$_local_ver" "$REMOTE_VERSION" || true)
             if [ "$_newer" -gt 0 ] 2>/dev/null; then
-                echo "更新状态 : 本地版本比最新发布版新"
+                style_out ok "更新状态 : 本地版本比最新发布版新"
             else
                 _older=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
                 if [ "$_older" -gt 0 ] 2>/dev/null; then
-                    echo "更新状态 : 发现新版，打开菜单选 3（检查更新）即可升级"
+                    style_out warn "更新状态 : 发现新版，打开菜单选 3（检查更新）即可升级"
                 else
-                    echo "更新状态 : 已是最新"
+                    style_out ok "更新状态 : 已是最新"
                 fi
             fi
         fi
     else
         # 状态显示也要说清是哪一类失败：笼统说"都不可达"会让用户以为是网络问题，
         # 而限流（等一小时）、缺包（手动下载）要做的动作完全不同。
-        echo "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
-        echo "更新状态 : 未知"
+        style_out warn "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
+        style_out dim "更新状态 : 未知"
     fi
-    echo "---------------- 最近日志 ----------------"
+    style_out title "---------------- 最近日志 ----------------"
     if [ -f "$LOG_FILE" ]; then
-        tail -n 3 "$LOG_FILE" 2>/dev/null | sed 's/^/  /' || echo "  （暂无日志）"
+        # 日志行按终端宽度裁：日志文件里的长行是给"搜"用的（不折行才好 grep），
+        # 但状态页会把它原样打到屏幕上，长行会硬折成两三行，屏幕上就是一团乱。
+        # 与 Windows 侧同一做法（那边取 [Console]::WindowWidth）。
+        _lg_w=78
+        if [ -t 1 ]; then
+            _lg_cols=$(tput cols 2>/dev/null || echo "")
+            case "$_lg_cols" in ''|*[!0-9]*) ;; *) _lg_w=$((_lg_cols - 2)) ;; esac
+        fi
+        [ "$_lg_w" -lt 40 ] && _lg_w=40
+        tail -n 3 "$LOG_FILE" 2>/dev/null | while IFS= read -r _lg_l; do
+            style_out dim "  $(_truncate_width "$_lg_l" $((_lg_w - 1)))"
+        done
     else
-        echo "  （暂无日志）"
+        style_out dim "  （暂无日志）"
     fi
-    echo "=================================="
+    style_out title "=================================="
 }
 
 # ------------------------------------------------------------------------------
@@ -423,24 +438,19 @@ _help_topic_title() {
 # 读同一张表，改表即同步，不存在"两边都要记得改"。
 _help_menu_lines() {
     _hml_w=0
-    # 键号列按最宽的键号补空格，而不是写死两个空格：以后键号多一位（比如到 10）
-    # 就会全表错位，而"错位"这种事肉眼看得出、断言看不出来。
-    _hml_kw=1
     for _hml_i in "${MENU_ITEMS[@]}"; do
         _hml_rest=${_hml_i#*|}
         _hml_name=${_hml_rest%%|*}
-        _hml_nw=$(_menu_cell_width "$_hml_name")
+        _hml_nw=$(_display_width "$_hml_name")
         [ "$_hml_nw" -gt "$_hml_w" ] && _hml_w="$_hml_nw"
-        _hml_k=${_hml_i%%|*}
-        [ "${#_hml_k}" -gt "$_hml_kw" ] && _hml_kw="${#_hml_k}"
     done
-    echo "这些编号要在主菜单里敲，不是在帮助里敲。"
+    echo "t 这些编号要在主菜单里敲，不是在帮助里敲。"
     for _hml_g in $(_menu_group_order); do
-        echo ""
+        echo "b "
         if [ "$_hml_g" = "日常" ]; then
-            echo "$_hml_g（平时只会用到这些）"
+            echo "h $_hml_g（平时只会用到这些）"
         else
-            echo "$_hml_g"
+            echo "h $_hml_g"
         fi
         for _hml_i in "${MENU_ITEMS[@]}"; do
             _hml_rest=${_hml_i#*|}
@@ -450,158 +460,268 @@ _help_menu_lines() {
             _hml_grp=${_hml_i%|*}; _hml_grp=${_hml_grp##*|}
             [ "$_hml_grp" != "$_hml_g" ] && continue
             _hml_key=${_hml_i%%|*}
-            _hml_pad=$((_hml_kw - ${#_hml_key} + 2))
-            _hml_kcell="$_hml_key$(printf '%*s' "$_hml_pad" '')"
-            if [ -n "$_hml_hint" ]; then
-                echo "  $_hml_kcell$(_menu_cell_pad "$_hml_name" "$_hml_w")  $_hml_hint"
-            else
-                echo "  $_hml_kcell$(_menu_cell_pad "$_hml_name" "$_hml_w")"
-            fi
+            # 三格：编号 / 名字 / 说明。名字列由渲染器按整块自动补齐，不在这里手敲空格。
+            echo "m $_hml_key|$_hml_name|$_hml_hint"
         done
     done
+}
+
+# 帮助正文的角色标记。每一行自己声明"我是什么"，渲染器照着画，不再从行的形状去猜。
+#
+# 为什么必须这样：靠形状猜的判据是"缩进 4 格以上 + 这一行没有汉字 = 命令"，
+# 而真实内容不按这个形状长——`Git Bash   source ~/.bashrc` 带了左列标签，
+# `PowerShell  $env:ENVPROXY_TERM = 'off'` 只缩进 2 格，两行都是能整行复制的命令，
+# 却都会被判成普通说明（灰）。同一屏里 `set HTTP_PROXY=…` 是绿的、旁边三行是灰的，
+# 用户看到的就是"配色坏了"。这不是漏了哪一行，是判据本身注定会错。
+#
+# 标记写在行首，一个字母加一个空格（与 Windows 侧同一套，门禁 6 核对）：
+#   h  小标题                         t  正文
+#   t2 正文（接在编号条目下面的续行）  i  编号条目
+#   w  提醒                           c  命令（整行可复制）
+#   b  空行
+#   r  两列：左列说"在哪儿敲"、右列是说明      rc 两列，右列是命令
+#   m  三格：编号 / 名字 / 说明（菜单那一屏）
+# 多列行的写法：'rc PowerShell|export ENVPROXY_TERM=off'
+# 列宽由渲染器按整块自动算，不手敲空格——手敲与写死列宽是同一类毛病。
+_help_indent() {
+    case "$1" in
+        h) echo 0 ;;
+        t) echo 2 ;;
+        t2) echo 6 ;;
+        i) echo 4 ;;
+        w) echo 2 ;;
+        c) echo 6 ;;
+        r|rc|m) echo 4 ;;
+        *) echo 0 ;;
+    esac
+}
+
+# 帮助正文的角色标记表：所有合法标记。渲染与自检都读它，加一种标记只改这里。
+HELP_LINE_CODES="h t t2 i w c b r rc m"
+
+_help_code_valid() {
+    case " $HELP_LINE_CODES " in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+
+# 按角色输出一行帮助正文（带 _SEG_* 那套上色开关）。
+_help_render_line() {
+    _hrl_raw="$1"
+    _hrl_code=${_hrl_raw%% *}
+    _hrl_rest=${_hrl_raw#* }
+    # 标记认不出来时按正文处理并把整行原样显示：宁可颜色不理想，也不能把内容弄丢。
+    if ! _help_code_valid "$_hrl_code"; then
+        _hrl_code="t"
+        _hrl_rest="$_hrl_raw"
+    fi
+    _hrl_ind=$(_help_indent "$_hrl_code")
+    _hrl_pad=$(printf '%*s' "$_hrl_ind" '')
+    case "$_hrl_code" in
+        b)  _line_blank ;;
+        h)  _seg heading "$_hrl_pad$_hrl_rest"; _line_flush ;;
+        i)  _seg item "$_hrl_pad$_hrl_rest"; _line_flush ;;
+        w)  _seg warn "$_hrl_pad$_hrl_rest"; _line_flush ;;
+        c)  _seg cmd "$_hrl_pad$_hrl_rest"; _line_flush ;;
+        r|rc)
+            _hrl_key=${_hrl_rest%%|*}
+            _hrl_val=${_hrl_rest#*|}
+            _hrl_kw=$(_help_block_key_width)
+            _seg key "$_hrl_pad$(_menu_cell_pad "$_hrl_key" "$_hrl_kw")   "
+            if [ "$_hrl_code" = "rc" ]; then _seg cmd "$_hrl_val"; else _seg text "$_hrl_val"; fi
+            _line_flush ;;
+        m)
+            _hrl_key=${_hrl_rest%%|*}
+            _hrl_rest2=${_hrl_rest#*|}
+            _hrl_name=${_hrl_rest2%%|*}
+            _hrl_hint=${_hrl_rest2#*|}
+            [ "$_hrl_hint" = "$_hrl_name" ] && _hrl_hint=""
+            _hrl_nw=$(_help_block_name_width)
+            _seg cmd "$_hrl_pad$_hrl_key  "
+            _seg value "$(_menu_cell_pad "$_hrl_name" "$_hrl_nw")"
+            [ -n "$_hrl_hint" ] && _seg dim "   $_hrl_hint"
+            _line_flush ;;
+        *)  _seg text "$_hrl_pad$_hrl_rest"; _line_flush ;;
+    esac
+    return 0
+}
+
+# 一个主题里两列行的左列宽度（只按两列行算，别的行不参与——
+# 否则一段长正文会把列撑得很宽）。当前正在渲染的主题由 _HELP_BLOCK 指定。
+_help_block_key_width() {
+    _hbk_w=0
+    while IFS= read -r _hbk_l; do
+        _hbk_c=${_hbk_l%% *}
+        case "$_hbk_c" in r|rc) ;; *) continue ;; esac
+        _hbk_rest=${_hbk_l#* }
+        _hbk_k=${_hbk_rest%%|*}
+        _hbk_n=$(_display_width "$_hbk_k")
+        [ "$_hbk_n" -gt "$_hbk_w" ] && _hbk_w="$_hbk_n"
+    done <<EOF
+$_HELP_BLOCK
+EOF
+    printf '%s' "$_hbk_w"
+}
+
+# 一个主题里 m 行的名字列宽度。
+_help_block_name_width() {
+    _hbn_w=0
+    while IFS= read -r _hbn_l; do
+        _hbn_c=${_hbn_l%% *}
+        [ "$_hbn_c" = "m" ] || continue
+        _hbn_rest=${_hbn_l#* }
+        _hbn_rest2=${_hbn_rest#*|}
+        _hbn_name=${_hbn_rest2%%|*}
+        _hbn_n=$(_display_width "$_hbn_name")
+        [ "$_hbn_n" -gt "$_hbn_w" ] && _hbn_w="$_hbn_n"
+    done <<EOF
+$_HELP_BLOCK
+EOF
+    printf '%s' "$_hbn_w"
 }
 
 # 单个主题的正文。用 cat 输出，与 Windows 侧 Get-HelpTopics 的 Lines 一一对应。
 _help_topic_body() {
     case "$1" in
     1) cat <<'TOPIC'
-它做什么
-  翻墙软件一开，终端里的 git、npm、curl 就能翻墙；
-  一关，它们自动恢复直连。不用记任何开关。
-
-它怎么判断你现在在翻墙
-  每 2 到 3 秒看一次。要同时满足三条才算：
-    1. 本机有端口在监听；
-    2. 它确实是个代理，会回应握手；
-    3. 它确实连得通外面，试 7 个端点任意一个通就算。
-  三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。
-  它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
+h 它做什么
+t 翻墙软件一开，终端里的 git、npm、curl 就能翻墙；
+t 一关，它们自动恢复直连。不用记任何开关。
+b 
+h 它怎么判断你现在在翻墙
+t 每 2 到 3 秒看一次。要同时满足三条才算：
+i 1. 本机有端口在监听；
+i 2. 它确实是个代理，会回应握手；
+i 3. 它确实连得通外面，试 7 个端点任意一个通就算。
+t 三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。
+t 它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
 TOPIC
     ;;
     2) cat <<'TOPIC'
-装完之后，按窗口分三种情况
-
-  1. 装完之后才打开的窗口
-     启动时读到的就是当前状态，什么都不用做。
-
-  2. 装完之后打开的窗口，后来代理又变了
-     按一次回车即可。
-
-  3. 装之前就已经开着的窗口
-     同步代码还没装进去。在那个窗口里敲一次对齐的那一条，或者重开窗口：
-
-       zsh / bash       . ~/.envproxy/prompt-sync.sh
-
-     开头的点号和后面的空格都不能少；fish 不支持。
-
-为什么要按一次回车
-  每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
-  已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、
-  等你回到能打字的状态时同步——你本来就一直在敲命令，不用专门做什么。
+h 装完之后，按窗口分三种情况
+b 
+i 1. 装完之后才打开的窗口
+t2 启动时读到的就是当前状态，什么都不用做。
+b 
+i 2. 装完之后打开的窗口，后来代理又变了
+t2 按一次回车即可。
+b 
+i 3. 装之前就已经开着的窗口
+t2 同步代码还没装进去。在那个窗口里敲下面这一条，或者重开窗口：
+b 
+rc zsh / bash|. ~/.envproxy/prompt-sync.sh
+b 
+t 开头的点号和后面的空格都不能少；fish 不支持。
+b 
+h 为什么要按一次回车
+t 每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
+t 已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、
+t 等你回到能打字的状态时同步——你本来就一直在敲命令，不用专门做什么。
 TOPIC
     ;;
     3) cat <<'TOPIC'
-一、让这个窗口一直直连
-
-  zsh / bash       export ENVPROXY_TERM=off
-
-  敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
-  fish 不支持：它不读这些配置文件，这个开关对它无效。
-
-二、改回自动跟随
-
-  zsh / bash       unset ENVPROXY_TERM
-
-  上面两节都只对这个窗口有效，窗口一关就没了。
+h 一、让这个窗口一直直连
+b 
+rc zsh / bash|export ENVPROXY_TERM=off
+b 
+t 敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
+t fish 不支持：它不读这些配置文件，这个开关对它无效。
+b 
+h 二、改回自动跟随
+b 
+rc zsh / bash|unset ENVPROXY_TERM
+b 
+t 上面两节都只对这个窗口有效，窗口一关就没了。
 TOPIC
     ;;
     4) cat <<'TOPIC'
-先做第 3 条（固定直连），再设地址。顺序反了等于没设。
-
-一、设地址（换成公司给的）
-
-  zsh / bash       export HTTPS_PROXY=http://你的地址:端口
-
-二、看现在走不走代理（有值 = 走，空的 = 直连）
-
-  zsh / bash       echo $HTTPS_PROXY
-
-端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。
-注意：这里不是翻墙软件那个端口，别去那儿找。
-你手设的值不会被删，只清和工具写入值相同的那些。
+t 先做第 3 条（固定直连），再设地址。顺序反了等于没设。
+b 
+h 一、设地址（换成公司给的）
+b 
+rc zsh / bash|export HTTPS_PROXY=http://你的地址:端口
+b 
+h 二、看现在走不走代理（有值 = 走，空的 = 直连）
+b 
+rc zsh / bash|echo $HTTPS_PROXY
+b 
+t 端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。
+w 注意：这里不是翻墙软件那个端口，别去那儿找。
+t 你手设的值不会被删，只清和工具写入值相同的那些。
 TOPIC
     ;;
     5) cat <<'TOPIC'
-不同工具写法不一样，没有通用的一条命令
-
-curl
-      curl --noproxy '*' https://example.com
-
-git
-      git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
-  等号后留空，这条就不用代理；写别的值，就改用那个代理。
-
-npm
-      npm --noproxy=registry.npmjs.org install typescript
-  注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。
-  写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
-  另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
-
-wget
-  Mac 不自带 wget，自己装过才用得上这一条：
-      wget --no-proxy https://example.com
-
-docker
-  没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
+h 不同工具写法不一样，没有通用的一条命令
+b 
+h curl
+c curl --noproxy '*' https://example.com
+b 
+h git
+c git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
+t 等号后留空，这条就不用代理；写别的值，就改用那个代理。
+b 
+h npm
+c npm --noproxy=registry.npmjs.org install typescript
+w 注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。
+t 写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
+t 另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
+b 
+h wget
+t Mac 不自带 wget，自己装过才用得上这一条：
+c wget --no-proxy https://example.com
+b 
+h docker
+t 没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
 TOPIC
     ;;
     6) _help_menu_lines
     ;;
     7) cat <<'TOPIC'
-连不上网，按这个顺序查
-  1. 在那个窗口里看变量有没有值。终端输入：
-       echo $HTTPS_PROXY
-     空的就是没注入，重开一个窗口就好。
-
-  2. 有值还是连不上：看菜单顶上「监控」是不是未运行。
-     未运行就选 1（安装 / 修复）。
-
-  3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。
-
-状态页怎么读
-  监控进程  后台程序在不在跑
-  开机自启  下次登录会不会自动起来
-  翻墙代理  本机有没有翻墙软件在监听端口
-  终端同步  已经开着的窗口会不会跟着变
-  代理变量  这个工具往终端里设代理了没有
-  「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被你停了，不是坏了。
-  其余几行是系统代理、版本号、更新状态。
-
-日志和 AI 排查
-  日志在 mac/monitor/monitor.log，反馈附最后 20 行。
-  AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，
-  不是网络坏了。菜单选 2 看「代理变量」那行会直接说清。
-  它只管 HTTP/HTTPS 变量；ping、游戏、BT 这类走自己协议的
-  不认——那些要开翻墙软件的 TUN 模式。
+h 连不上网，按这个顺序查
+i 1. 在那个窗口里看变量有没有值。终端输入：
+c echo $HTTPS_PROXY
+t2 空的就是没注入，重开一个窗口就好。
+b 
+i 2. 有值还是连不上：看菜单顶上「监控」写的是运行中还是未运行。
+t2 未运行就选 1（安装 / 修复）。
+b 
+i 3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。
+b 
+h 状态页怎么读
+r 监控进程|后台程序在不在跑
+r 开机自启|下次登录会不会自动起来
+r 翻墙代理|本机有没有翻墙软件在监听端口
+r 终端同步|已经开着的窗口会不会跟着变
+r 代理变量|这个工具往终端里设代理了没有
+t 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被你停了，不是坏了。
+t 其余几行是系统代理、版本号、更新状态。
+b 
+h 日志和 AI 排查
+t 日志在 mac/monitor/monitor.log，反馈附最后 20 行。
+t AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，
+t 不是网络坏了。菜单选 2 看「代理变量」那行会直接说清。
+t 它只管 HTTP/HTTPS 变量；ping、游戏、BT 这类走自己协议的
+t 不认——那些要开翻墙软件的 TUN 模式。
 TOPIC
     ;;
     8) cat <<'TOPIC'
-大部分问题都可以用「安装 / 修复」解决
-  打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。
-
-还是不行
-  菜单选 2 把状态截图，再选 1 修复一次。反馈时附上 mac/monitor/monitor.log
-  最后 20 行，能省很多来回。
-
-想彻底删掉它
-  菜单选 6（一键恢复）。会问你要不要留日志。
-
-不开菜单也能用（适合写脚本，或远程连过来）
-  开关：install  status  stop  uninstall  update  help  menu  self-test
-  --purge 连日志一起删，只配 uninstall 用。完整写法：
-      bash envproxy.sh status
-  self-test 是给排查问题用的：它在一个临时沙箱里跑一遍内部检查，
-  不碰你的 ~/.zshrc 和环境变量，只报告「自检全部通过」或指出哪一项不对。
+h 大部分问题都可以用「安装 / 修复」解决
+t 打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。
+b 
+h 还是不行
+t 菜单选 2 把状态截图，再选 1 修复一次。反馈时附上 mac/monitor/monitor.log
+t 最后 20 行，能省很多来回。
+b 
+h 想彻底删掉它
+t 菜单选 6（一键恢复）。会问你要不要留日志。
+b 
+h 不开菜单也能用（适合写脚本，或远程连过来）
+r 开关|install  status  stop  uninstall  update  help  menu  self-test
+t --purge 连日志一起删，只配 uninstall 用。完整写法：
+c bash envproxy.sh status
+t self-test 是给排查问题用的：它在一个临时沙箱里跑一遍内部检查，
+t 不碰你的 ~/.zshrc 和环境变量，只报告自检结果或指出哪一项不对。
 TOPIC
     ;;
 
@@ -609,7 +729,31 @@ TOPIC
     return 0
 }
 
-# 帮助目录：只列标题，一屏放得下。
+# 帮助目录屏（带配色）。编号用命令色、标题用强调色、底部说明用灰：
+# 与主菜单同一套三层区分，用户在两个页面之间切换时不用重新认一遍。
+show_help_index_colored() {
+    _shic_ver=$(get_local_version 2>/dev/null || true)
+    [ -z "$_shic_ver" ] && _shic_ver="未知"
+    _SEG_COLORED=1
+    _SEG_LINE=""
+    _seg title "================ EnvProxy 帮助 ================"
+    _line_flush
+    _line_blank
+    _seg text "  按你遇到的问题挑一条："
+    _line_flush
+    for _shic_k in "${HELP_TOPIC_KEYS[@]}"; do
+        _seg cmd "    $_shic_k"
+        _seg value "  $(_help_topic_title "$_shic_k")"
+        _line_flush
+    done
+    _line_blank
+    _seg dim "  本机版本 v$_shic_ver"
+    _line_blank
+    _seg dim "  输编号查看    直接回车 = 回主菜单"
+    _line_flush
+}
+
+# 帮助目录的纯文本（非交互与自检用）：与彩屏同源，不各写一份。
 format_help_index() {
     _hi_hv=$(get_local_version 2>/dev/null || true)
     [ -z "$_hi_hv" ] && _hi_hv="未知"
@@ -630,9 +774,16 @@ format_help_index() {
 format_help_topic() {
     _ht_title=$(_help_topic_title "$1")
     [ -z "$_ht_title" ] && return 1
+    _SEG_COLORED=0
+    _SEG_LINE=""
     echo "================ 帮助 $1 · $_ht_title ================"
     echo ""
-    _help_topic_body "$1"
+    _HELP_BLOCK=$(_help_topic_body "$1")
+    while IFS= read -r _ht_l; do
+        _help_render_line "$_ht_l"
+    done <<EOF
+$_HELP_BLOCK
+EOF
     echo ""
     format_help_nav_line "$1"
     echo "  输编号看别的    直接回车 = 回目录"
@@ -646,75 +797,28 @@ clear_screen_safe() {
     clear 2>/dev/null || true
 }
 
-# 判断一行该用什么颜色。只看行的形状，文案改了配色自动跟上。
-#   顶格且短 -> 小标题（青）
-#   缩进 4 格以上且像命令 -> 命令（绿）
-#   以 注意/为什么/必须 开头 -> 提醒（黄）
-#   其余 -> 正文（默认色，终端里就是灰白）
-_help_line_color() {
-    _hlc_line="$1"
-    [ -z "$_hlc_line" ] && { echo ""; return 0; }
-    # 数前导空格
-    _hlc_ind=0
-    _hlc_rest="$_hlc_line"
-    while [ "${_hlc_rest# }" != "$_hlc_rest" ]; do
-        _hlc_ind=$((_hlc_ind + 1))
-        _hlc_rest="${_hlc_rest# }"
-    done
-        if [ "$_hlc_ind" -eq 0 ]; then
-            # 顶格、且不像一句完整的话 = 小标题。
-            # 判据用结构而不是长度：${#var} 与 wc -m 数的是字节还是字符取决于 locale，
-            # C locale 下一个汉字顶 3，同一条标题会一会儿上色一会儿不上色。
-            # 句末有标点、或句中有句号，说明它是正文而不是标题——与 Win 侧同一判据。
-            case "$_hlc_rest" in
-                *。*|*；*|*，*) echo ""; return 0;;
-            esac
-            echo "36"
-            return 0
-        fi
-    case "$_hlc_rest" in
-        注意*|别*|不要*|小心*) echo "33"; return 0;;
-    esac
-    # 命令行 = 缩进 4 格以上，且这一行没有任何中日韩字符。
-    # 判据不能是"看起来像不像命令"：只要允许中英混排，「cmd 和 Git Bash 没这个开关」
-    # 这种说明就会因为开头是字母而被染成命令色。颜色一错，整屏就显得乱，而且会
-    # 把"能整行复制去跑的一行"和"只是提到命令的一行"混成同一种视觉。
-    # 反过来这条也给内容立了规矩：命令行必须能整行复制去跑，中文说明另起一行。
-    if [ "$_hlc_ind" -ge 4 ]; then
-        # 判据与 Win 侧同形：这一行里没有任何中日韩字符，就是能整行复制去跑的命令。
-        # 用 LC_ALL=C 把每个字节都当单字节看，再找"非可打印 ASCII"（[^ -~]）：
-        # 中文字符的 UTF-8 字节全部落在 0x80 以上，必然命中，纯 ASCII 行一定不命中。
-        # 不要用"列出允许字符的白名单"：grep -E 的方括号字符类里不支持 \x27 这类转义，
-        # 写了会变成字面的 \ x 2 7 四个字符——于是含单引号的行（curl --noproxy '*'）
-        # 被判成"不是命令"，屏幕上和普通说明文字同色，看起来像"只是在提 curl"。
-        if ! LC_ALL=C printf '%s' "$_hlc_rest" | grep -q '[^ -~]'; then
-            echo "32"; return 0
-        fi
-    fi
-    echo "90"
-    return 0
-}
-
-# 带配色地打一个主题。与 format_help_topic 分工：那个给纯文本（非交互与测试用），
-# 这个负责上色。两者读同一份内容，不会出现"屏幕上有、文档里没有"。
+# 带配色地打一个主题。与 format_help_topic 同一个渲染函数，只差上不上色。
 show_help_topic_colored() {
-    # 同 show_menu_colored：没终端就不上色，直接给纯文本。
+    # 没终端就不上色，直接给纯文本（与菜单同一判据）。
     if [ ! -t 1 ]; then format_help_topic "$1"; return $?; fi
     _sht_title=$(_help_topic_title "$1")
     [ -z "$_sht_title" ] && return 1
-    printf '\033[36m%s\033[0m\n' "================ 帮助 $1 · $_sht_title ================"
-    echo ""
-    _help_topic_body "$1" | while IFS= read -r _sht_l; do
-        _sht_c=$(_help_line_color "$_sht_l")
-        if [ -z "$_sht_c" ]; then
-            printf '%s\n' "$_sht_l"
-        else
-            printf '\033[%sm%s\033[0m\n' "$_sht_c" "$_sht_l"
-        fi
-    done
-    echo ""
-    printf '\033[90m%s\033[0m\n' "$(format_help_nav_line "$1")"
-    printf '\033[90m%s\033[0m\n' "  输编号看别的    直接回车 = 回目录"
+    _SEG_COLORED=1
+    _SEG_LINE=""
+    _seg title "================ 帮助 $1 · $_sht_title ================"
+    _line_flush
+    _line_blank
+    _HELP_BLOCK=$(_help_topic_body "$1")
+    while IFS= read -r _sht_l; do
+        _help_render_line "$_sht_l"
+    done <<EOF
+$_HELP_BLOCK
+EOF
+    _line_blank
+    _seg dim "$(format_help_nav_line "$1")"
+    _line_flush
+    _seg dim "  输编号看别的    直接回车 = 回目录"
+    _line_flush
     return 0
 }
 
@@ -746,7 +850,7 @@ show_help() {
     while true; do
         if [ -z "$_hs_cur" ]; then
             clear_screen_safe
-            format_help_index
+            show_help_index_colored
         fi
         printf "输编号，或直接回车："
         if ! IFS= read -r _hs_sel; then
@@ -794,7 +898,7 @@ _help_key_valid() {
 # 子命令为空表示"不跑任何东西"（退出项）。分派直接读这一列，
 # 不许再另写一份 case——两份清单必然漂移，症状是"表里加了、点了没反应"。
 # 格式固定为五个字段、四条竖线；少一条竖线字段会静默错位（菜单照常打印、不报错，
-# 用户看到的却是错的内容）。所以下面带一道加载期校验，格式不对就当场报错。
+# 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'
@@ -804,7 +908,7 @@ MENU_ITEMS=(
     '6|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
     '0|退出|关掉这个窗口|退出|'
 )
-# 加载期校验：每条必须恰好四条竖线，且键、名字、分组非空。不合格就报错（不静默降级）。
+
 # 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。
 # 打印与分派读同一份顺序。写死会在"表里有、数组里没有"时静默漏印一项，
 # 而分派不看分组、照样能敲到它——用户看见的菜单和能敲的菜单就不是同一件事。
@@ -850,122 +954,99 @@ _menu_switch_for() {
     done
     return 1
 }
-_menu_cell_width() {
-    _mcw_s="$1"
-    _mcw_all=$(printf '%s' "$_mcw_s" | wc -c)
-    _mcw_ascii=$(printf '%s' "$_mcw_s" | LC_ALL=C tr -dc '\000-\177' | wc -c)
-    _mcw_multi=$((_mcw_all - _mcw_ascii))
-    # 多字节字节数 / 3 得到汉字个数（本项目文案里没有 2 字节或 4 字节字符）
-    _mcw_han=$((_mcw_multi / 3))
-    _mcw_rest=$((_mcw_multi - _mcw_han * 3))
-    printf '%s' $((_mcw_ascii + _mcw_han * 2 + _mcw_rest))
+
+# 输出一段带颜色的文字到当前行（不换行）。
+# _SEG_COLORED=1 时按角色上色，=0 时原样输出——纯文本与彩屏共用同一段渲染代码，
+# 于是"屏幕上有、测试里没有"不可能发生。
+# DIVERGE(Mac): Windows 侧把渲染结果做成对象再分别输出，这里用"一个开关 + 一个累加器"。
+#   原因是 shell 没有对象：用分隔符拼中间格式会在含制表符/空格的内容上出错，
+#   而把上色与否塞进同一个渲染函数既不会出错，也不多一份内容。
+_SEG_COLORED=1
+_SEG_LINE=""
+_seg() {
+    _seg_role="$1"
+    _seg_text="$2"
+    if [ "$_SEG_COLORED" = "1" ]; then
+        _seg_c=$(style_color "$_seg_role")
+        if [ -n "$_seg_c" ]; then
+            _SEG_LINE="$_SEG_LINE$(printf '\033[%sm%s\033[0m' "$_seg_c" "$_seg_text")"
+            return 0
+        fi
+    fi
+    _SEG_LINE="$_SEG_LINE$_seg_text"
+    return 0
+}
+_line_flush() {
+    printf '%s\n' "$_SEG_LINE"
+    _SEG_LINE=""
+}
+_line_blank() {
+    printf '\n'
+    _SEG_LINE=""
 }
 
-# 把文字补齐到指定宽度（按上面的显示宽度算）。
-_menu_cell_pad() {
-    _mcp_text="$1"
-    _mcp_width="$2"
-    _mcp_len=$(_menu_cell_width "$_mcp_text")
-    _mcp_pad=$((_mcp_width - _mcp_len))
-    [ "$_mcp_pad" -lt 0 ] && _mcp_pad=0
-    printf '%s%*s' "$_mcp_text" "$_mcp_pad" ''
-}
-
-# 渲染整张菜单。打印与测试共用它：表里有什么，屏幕就有什么。
-format_menu_text() {
-    _fmt_w=0
-    for _fi in "${MENU_ITEMS[@]}"; do
-        _frest=${_fi#*|}
-        _fname=${_frest%%|*}
-        _fw=$(_menu_cell_width "$_fname")
-        [ "$_fw" -gt "$_fmt_w" ] && _fmt_w="$_fw"
+# 渲染整张菜单。colored=1 上色，=0 纯文本；内容只有这一份。
+_render_menu() {
+    _rm_colored="$1"
+    _rm_w=0
+    for _rm_i in "${MENU_ITEMS[@]}"; do
+        _rm_rest=${_rm_i#*|}
+        _rm_name=${_rm_rest%%|*}
+        _rm_nw=$(_display_width "$_rm_name")
+        [ "$_rm_nw" -gt "$_rm_w" ] && _rm_w="$_rm_nw"
     done
-    _fhpid=$(get_monitor_pid || true)
-    _fhver=$(get_local_version || true)
-    [ -z "$_fhver" ] && _fhver="未知"
-    if [ -n "$_fhpid" ]; then _fhmon="运行中 (PID $_fhpid)"; else _fhmon="未运行"; fi
-    echo "======== EnvProxy 菜单 (macOS) ========"
-    echo "  监控 $_fhmon    版本 v$_fhver"
-    # 分组顺序从表里按首次出现推导，不再写死：加一个分组只改表。
-    _fg_groups=$(_menu_group_order)
-    for _fg in $_fg_groups; do
-        _fgfirst=1
-        for _fi in "${MENU_ITEMS[@]}"; do
-            _frest=${_fi#*|}
-            _fname=${_frest%%|*}
-            _frest2=${_frest#*|}
-            _fhint=${_frest2%%|*}
-            _fgrp=${_fi%|*}; _fgrp=${_fgrp##*|}
-            [ "$_fgrp" != "$_fg" ] && continue
-            if [ "$_fgfirst" = "1" ]; then
-                echo ""
-                echo "  $_fg"
-                _fgfirst=0
+    _rm_pid=$(get_monitor_pid || true)
+    _rm_ver=$(get_local_version || true)
+    [ -z "$_rm_ver" ] && _rm_ver="未知"
+    if [ -n "$_rm_pid" ]; then _rm_mon="运行中 (PID $_rm_pid)"; else _rm_mon="未运行"; fi
+    _SEG_COLORED="$_rm_colored"
+    _SEG_LINE=""
+    _seg title "======== EnvProxy 菜单 (macOS) ========"
+    _line_flush
+    # 抬头是状态提要，用灰：它是背景信息，不该和可点的编号抢注意力。
+    _seg dim "  监控 $_rm_mon    版本 v$_rm_ver"
+    _line_flush
+    for _rm_g in $(_menu_group_order); do
+        _rm_first=1
+        for _rm_i in "${MENU_ITEMS[@]}"; do
+            _rm_rest=${_rm_i#*|}
+            _rm_name=${_rm_rest%%|*}
+            _rm_rest2=${_rm_rest#*|}
+            _rm_hint=${_rm_rest2%%|*}
+            _rm_grp=${_rm_i%|*}; _rm_grp=${_rm_grp##*|}
+            [ "$_rm_grp" != "$_rm_g" ] && continue
+            if [ "$_rm_first" = "1" ]; then
+                _line_blank
+                _seg heading "  $_rm_g"
+                _line_flush
+                _rm_first=0
             fi
-            _fkey=${_fi%%|*}
-            if [ -n "$_fhint" ]; then
-                echo "    $_fkey  $(_menu_cell_pad "$_fname" "$_fmt_w")   $_fhint"
-            else
-                echo "    $_fkey  $_fname"
-            fi
+            _rm_key=${_rm_i%%|*}
+            _rm_sw=${_rm_i##*|}
+            # 退出项没有动作，编号跟着变暗：亮绿色的编号会让人以为"它跟别的项一样要跑个什么"。
+            if [ -n "$_rm_sw" ]; then _rm_kr="cmd"; else _rm_kr="dim"; fi
+            _seg "$_rm_kr" "    $_rm_key"
+            _seg value "  $(_menu_cell_pad "$_rm_name" "$_rm_w")"
+            [ -n "$_rm_hint" ] && _seg dim "   $_rm_hint"
+            _line_flush
         done
     done
-    echo ""
-    echo "  输编号后回车执行    直接回车 = 查看状态"
+    _line_blank
+    _seg dim "  输编号后回车执行    直接回车 = 查看状态"
+    _line_flush
 }
 
-# 带配色地打菜单。与 format_menu_text 分工：那个返回纯文本（非交互与测试用），
-# 这个负责上色。两者读同一份 MENU_ITEMS，不会出现"屏幕上有、测试里没有"。
+# 渲染整张菜单（纯文本）。打印与测试共用，表里有什么，屏幕就有什么。
+format_menu_text() {
+    _render_menu 0
+}
+
+# 带配色地打菜单。与 format_menu_text 同一个渲染函数，只差上不上色。
 show_menu_colored() {
     # stdout 不是终端就退回纯文本：管道/重定向时转义序列会原样写进日志（实测 ^[[36m），
     # 既弄脏日志也没法给人看。纯文本版本本来就为这种场合准备（也在自检里被断言）。
     if [ ! -t 1 ]; then format_menu_text; return 0; fi
-    _smc_w=0
-    for _smc_i in "${MENU_ITEMS[@]}"; do
-        _smc_rest=${_smc_i#*|}
-        _smc_name=${_smc_rest%%|*}
-        _smc_fw=$(_menu_cell_width "$_smc_name")
-        [ "$_smc_fw" -gt "$_smc_w" ] && _smc_w="$_smc_fw"
-    done
-    _smc_pid=$(get_monitor_pid || true)
-    _smc_ver=$(get_local_version || true)
-    [ -z "$_smc_ver" ] && _smc_ver="未知"
-    printf '\033[36m%s\033[0m\n' "======== EnvProxy 菜单 (macOS) ========"
-    if [ -n "$_smc_pid" ]; then
-        printf '\033[90m  监控 运行中 (PID %s)    版本 v%s\033[0m\n' "$_smc_pid" "$_smc_ver"
-    else
-        printf '\033[90m  监控 未运行    版本 v%s\033[0m\n' "$_smc_ver"
-    fi
-    for _smc_g in $(_menu_group_order); do
-        _smc_first=1
-        for _smc_i in "${MENU_ITEMS[@]}"; do
-            _smc_rest=${_smc_i#*|}
-            _smc_name=${_smc_rest%%|*}
-            _smc_rest2=${_smc_rest#*|}
-            _smc_hint=${_smc_rest2%%|*}
-            _smc_grp=${_smc_i%|*}; _smc_grp=${_smc_grp##*|}
-            [ "$_smc_grp" != "$_smc_g" ] && continue
-            if [ "$_smc_first" = "1" ]; then
-                echo ""
-                printf '\033[36m  %s\033[0m\n' "$_smc_g"
-                _smc_first=0
-            fi
-            _smc_key=${_smc_i%%|*}
-            # 编号亮色（要敲的东西），名字白，说明灰：三层区分让"敲哪个"一眼看出来。
-            case "$_smc_key" in
-                0) _smc_kc=90;;
-                *) _smc_kc=32;;
-            esac
-            if [ -n "$_smc_hint" ]; then
-                printf '\033[%sm    %s\033[0m  \033[97m%s\033[0m   \033[90m%s\033[0m\n' \
-                    "$_smc_kc" "$_smc_key" "$(_menu_cell_pad "$_smc_name" "$_smc_w")" "$_smc_hint"
-            else
-                printf '\033[%sm    %s\033[0m  \033[97m%s\033[0m\n' "$_smc_kc" "$_smc_key" "$_smc_name"
-            fi
-        done
-    done
-    echo ""
-    printf '\033[90m%s\033[0m\n' "  输编号后回车执行    直接回车 = 查看状态"
+    _render_menu 1
 }
 
 show_menu() {

@@ -79,10 +79,10 @@ foreach ($libName in $CoreLibs) {
     elseif ((Get-Item -LiteralPath $libPath).Length -eq 0) { $missingLib += ("lib\{0}.ps1（空文件）" -f $libName) }
 }
 if ($missingLib.Count) {
-    Write-Host "安装不完整，缺少程序文件：" -ForegroundColor Yellow
-    foreach ($m in $missingLib) { Write-Host ("  " + $m) -ForegroundColor Yellow }
-    Write-Host "这个文件夹没有完整拷过来，或者文件被删掉了。" -ForegroundColor Yellow
-    Write-Host "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。" -ForegroundColor Yellow
+    Write-Styled 'warn' "安装不完整，缺少程序文件："
+    foreach ($m in $missingLib) { Write-Styled 'warn' ("  " + $m) }
+    Write-Styled 'warn' "这个文件夹没有完整拷过来，或者文件被删掉了。"
+    Write-Styled 'warn' "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。"
     exit 1
 }
 # 解析预检：文件在、不为空，但语法解析不了（典型是 .ps1 丢了 UTF-8 BOM，
@@ -102,10 +102,10 @@ foreach ($libName in $CoreLibs) {
     if ($err -and $err.Count) { $parseBad += ("lib\{0}.ps1（{1}）" -f $libName, $err[0].Message) }
 }
 if ($parseBad.Count) {
-    Write-Host "程序文件损坏，无法解析：" -ForegroundColor Yellow
-    foreach ($m in $parseBad) { Write-Host ("  " + $m) -ForegroundColor Yellow }
-    Write-Host "最常见的原因是 .ps1 被存成了「UTF-8 无 BOM」：中文注释在 PowerShell 5.1 下" -ForegroundColor Yellow
-    Write-Host "会按系统代码页读成乱码、撑破语法。到 Releases 页面重新下载安装包覆盖即可。" -ForegroundColor Yellow
+    Write-Styled 'warn' "程序文件损坏，无法解析："
+    foreach ($m in $parseBad) { Write-Styled 'warn' ("  " + $m) }
+    Write-Styled 'warn' "最常见的原因是 .ps1 被存成了「UTF-8 无 BOM」：中文注释在 PowerShell 5.1 下"
+    Write-Styled 'warn' "会按系统代码页读成乱码、撑破语法。到 Releases 页面重新下载安装包覆盖即可。"
     exit 1
 }
 foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) }
@@ -128,7 +128,7 @@ function Get-OpLock {
 function Exit-IfOpBusy {
     $m = Get-OpLock
     if (-not $m) {
-        Write-Host "另一个安装/更新正在进行，请等它结束再试（没有做任何改动）。" -ForegroundColor Yellow
+        Write-Styled 'warn' "另一个安装/更新正在进行，请等它结束再试（没有做任何改动）。"
         exit 1
     }
     return $m
@@ -175,9 +175,9 @@ if (-not [string]::IsNullOrWhiteSpace($rawLine)) {
     foreach ($m in [regex]::Matches($scriptArgs, '(?i)(?<=^|\s)--?([A-Za-z][A-Za-z0-9]*)')) {
         $typed = $m.Groups[1].Value
         if (-not ($knownSwitches | Where-Object { $_ -eq $typed })) {
-            Write-Host ("无法识别的开关：-" + $typed) -ForegroundColor Yellow
-            Write-Host ("可用开关：" + (($knownSwitches | ForEach-Object { "-" + $_ }) -join ' ')) -ForegroundColor Yellow
-            Write-Host "参数必须写全，不支持缩写（少打几个字母会被当成另一个动作）。" -ForegroundColor Yellow
+            Write-Styled 'warn' ("无法识别的开关：-" + $typed)
+            Write-Styled 'warn' ("可用开关：" + (($knownSwitches | ForEach-Object { "-" + $_ }) -join ' '))
+            Write-Styled 'warn' "参数必须写全，不支持缩写（少打几个字母会被当成另一个动作）。"
             exit 2
         }
     }
@@ -188,8 +188,8 @@ if ($usageCommands.Count -eq 1) { $usageCommand = $usageCommands[0] }
 $usageError = Get-UsageError -Command $usageCommand -CommandCount $usageCommands.Count `
                             -Switches $usageSwitches -Extra @($args)
 if ($usageError) {
-    Write-Host $usageError -ForegroundColor Yellow
-    Write-Host "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help} [-Yes] [-Purge]" -ForegroundColor Yellow
+    Write-Styled 'warn' $usageError
+    Write-Styled 'warn' "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help} [-Yes] [-Purge]"
     exit 2
 }
 if ($Update) {
@@ -210,15 +210,15 @@ if ($Uninstall) {
 }
 if ($Stop) {
     $opMutex = Exit-IfOpBusy
-    if (Test-IsElevated) { Write-Host "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" -ForegroundColor Yellow }
+    if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" }
     Stop-Monitor
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
     $null = Apply-State "off"
-    Write-Host "代理变量已清除，当前恢复直连。" -ForegroundColor Cyan
+    Write-Styled 'title' "代理变量已清除，当前恢复直连。"
     # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
     # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
     # 与其让人以为"工具坏了"，不如说清楚。
-    Write-Host "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。" -ForegroundColor DarkGray
+    Write-Styled 'dim' "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。"
     return
 }
 if ($Status) {
