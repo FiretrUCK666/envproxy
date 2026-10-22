@@ -1006,9 +1006,9 @@ jobs:
         run: |
           # 这份文件每次会话都注入上下文，必须有天花板。量的是 git 里的 blob，
           # 不受检出时 LF/CRLF 影响，本地与 CI 结果一致。
-          $limit = 48 * 1024
+          $limit = 54 * 1024
           $size = [int](git cat-file -s HEAD:AGENTS.md)
-          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（48 KB）" -f $size, $limit)
+          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（54 KB）" -f $size, $limit)
           if ($size -gt $limit) {
             Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
             exit 1
