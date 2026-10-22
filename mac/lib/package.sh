@@ -253,7 +253,7 @@ install_package() {
                 echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
             fi
         else
-            echo "更新失败：文件写入失败。请打开菜单选"安装 / 修复"后重试。"
+            echo "更新失败：文件写入失败。请打开菜单选「安装 / 修复」后重试。"
         fi
         rm -f "$_plist" 2>/dev/null || true
         return 1

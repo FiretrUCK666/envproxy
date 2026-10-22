@@ -778,6 +778,29 @@ self_test() {
         esac
         _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"
     done
+    # 从 proxy.env 取端口：IPv6 地址必须取对。
+    #
+    # 判据是"取最后一段数字"，不是"第一个 :数字"。注入值可能是
+    # http://[::1]:7078，而 grep -oE ':[0-9]+' 会先命中 "::1" 里的 ":1"，
+    # 返回 1 —— 调用方把它拼成 http://127.0.0.1:<端口>，状态页就会显示
+    # "已注入 (127.0.0.1:1)"。对只绑 ::1 的代理，那是一条看起来正常、
+    # 实则完全错的结论（比检测不到更糟）。
+    _pp_saved="$PROXY_ENV"
+    PROXY_ENV="$_sandbox/getport.env"
+    # 用变量拼内容，不写字面量 `printf 'export HTTP_PROXY=...'`：
+    # 门禁 6 用 `^\s*printf 'export ([A-Za-z_]+)=` 从**整份 mac 语料**里提取变量名清单，
+    # 而 mc/*.sh 的通配把本文件也算进去了——这里每写一次字面量，就会被当成一次"变量定义"，
+    # 于是"macOS 变量数不是 9"。
+    _pp_k='HTTP_PROXY'
+    for _pp_case in "http://127.0.0.1:7078:7078" "http://[::1]:7078:7078" "http://127.0.0.1:9999:9999"; do
+        _pp_url=${_pp_case%:*}
+        _pp_want=${_pp_case##*:}
+        printf 'export %s="%s"\n' "$_pp_k" "$_pp_url" > "$PROXY_ENV"
+        _selftest_assert_eq "取端口：$_pp_url" "$_pp_want" "$(get_current_proxy_port)"
+    done
+    rm -f "$PROXY_ENV" 2>/dev/null || true
+    PROXY_ENV="$_pp_saved"
+
     # 快照归属：归属记录里有的值，即使是"首次安装"也不该进快照。
     #
     # 为什么：首次安装的推断前提是"机器上还没有我们的东西"，而卸载没清干净时

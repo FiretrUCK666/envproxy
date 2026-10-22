@@ -71,7 +71,14 @@ cd envproxy
 # 必须逐文件循环：`bash -n a.sh b.sh` 只解析**第一个**参数，后面的全部静默跳过
 # （实测：一个合法文件 + 一个语法错误的文件，按这个顺序调用返回 0）。
 # 写完命令没有任何输出就以为过了，直到推送后 CI 才红。
-for f in mac/*.sh mac/lib/*.sh mac/tests/*.sh win/*.sh; do bash -n "$f" || echo "语法错误：$f"; done
+# 清单与 check.yml 的门禁 1 逐字一致（那边是权威定义）：
+#   mac/ 根与 mac/lib/ 下的脚本；win/ 根下若再出现 .sh 也一并解析。
+# 别写 mac/tests/*.sh —— 那个目录不存在，而 glob 不展开时 bash -n 仍返回 0，
+# 屏幕上什么都不打印，看着像"全绿"，其实一个文件都没检查。
+for f in mac/*.sh mac/lib/*.sh win/*.sh; do
+  [ -f "$f" ] || continue
+  bash -n "$f" || echo "语法错误：$f"
+done
 # 门禁 10 的 Mac 侧：功能自检（沙箱跑，不碰你的 ~/.zshrc 与环境变量）
 bash mac/envproxy.sh self-test
 ```

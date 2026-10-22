@@ -939,9 +939,14 @@ update_envproxy() {
         # 两者必须分开走：合并成一条路会谎报成"已取消"，而且退出码是 0。
         # 报错信息也要吃掉：重定向失败发生在 2>/dev/null 生效之前，会原样漏到屏幕上。
         _ans_ok=1
-        if exec 3<>/dev/tty 2>/dev/null; then
+        # 先静默探测能不能开控制台，再真正打开：探测放在子 shell 里，
+        # 重定向在子 shell 启动时就位，所以"打不开"的报错不会漏到屏幕上
+        # （写成 `exec 3<>/dev/tty 2>/dev/null` 挡不住——重定向按从左到右生效，
+        #   报错发生在 2>/dev/null 生效之前；`{ exec ...; } 2>/dev/null` 同样挡不住）。
+        if ( : < /dev/tty ) 2>/dev/null; then
+            exec 3<>/dev/tty
             read -r _ans <&3 || _ans_ok=0
-            exec 3<&- 2>/dev/null || true
+            exec 3<&-
         else
             _ans_ok=0
         fi
@@ -979,10 +984,8 @@ update_envproxy() {
         # 只看"文件存在"（-r /dev/tty）不够：文件在却打不开时会漏过去，
         # 于是先下载再发现问不到人——白烧一次配额和一份安装包。
         _ui_tty=0
-        if exec 3<>/dev/tty 2>/dev/null; then
-            _ui_tty=1
-            exec 3<&- 2>/dev/null || true
-        fi
+        # 判据与真正提问时同一件事：能不能打开控制台。探测放子 shell 里静默失败。
+        if ( : < /dev/tty ) 2>/dev/null; then _ui_tty=1; fi
         if [ $_ui_tty -eq 0 ]; then
             style_out warn "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
             style_out warn "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
@@ -1000,7 +1003,7 @@ update_envproxy() {
     fi
     if [ -z "$_local" ]; then
         style_out warn "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。"
-        style_out text "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。"
+        style_out text "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选「安装 / 修复」。"
         return 1
     fi
     # 防呆：点的是备份文件夹时警告（正式路径以 path.conf 记录为准）
@@ -1169,9 +1172,14 @@ _ENVPROXY_PKG_
         # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
         _ans_ok=1
-        if exec 3<>/dev/tty 2>/dev/null; then
+        # 先静默探测能不能开控制台，再真正打开：探测放在子 shell 里，
+        # 重定向在子 shell 启动时就位，所以"打不开"的报错不会漏到屏幕上
+        # （写成 `exec 3<>/dev/tty 2>/dev/null` 挡不住——重定向按从左到右生效，
+        #   报错发生在 2>/dev/null 生效之前；`{ exec ...; } 2>/dev/null` 同样挡不住）。
+        if ( : < /dev/tty ) 2>/dev/null; then
+            exec 3<>/dev/tty
             read -r _ans <&3 || _ans_ok=0
-            exec 3<&- 2>/dev/null || true
+            exec 3<&-
         else
             _ans_ok=0
         fi
@@ -1216,7 +1224,7 @@ _ENVPROXY_PKG_
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
         style_out warn "收尾没走完，正在按当前文件重启监控..."
         install_envproxy >/dev/null 2>&1 || true
-        style_out text "如果状态仍不对，请打开菜单选一次"安装 / 修复"。"
+        style_out text "如果状态仍不对，请打开菜单选一次「安装 / 修复」。"
     fi
     rm -rf "$_exdir" 2>/dev/null || true
     # 主体跑完，撤销信号兜底（不动外层的 EXIT trap）。

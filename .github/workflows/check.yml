@@ -372,7 +372,13 @@ jobs:
         run: |
           [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
           $fail = 0
-          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
+          # 两侧都要扫。这条规范讲的是"中文文案里别用 ASCII 双引号"，而它不是 PowerShell
+          # 独有的问题——shell 的字符串同样是双引号界定，里面的 ASCII 引号会提前闭合：
+          # mac 侧原本有三处 `选"安装 / 修复"`，输出时引号被 shell 吃掉、两侧空格被吞，
+          # 而门禁只扫 win/ 所以一直绿着。覆盖面按"平台有几个"来定，不按"哪里出过事"来定。
+          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse) +
+                          @(Get-ChildItem 'mac' -Filter *.sh -File -Recurse) +
+                          @(Get-ChildItem 'mac' -Filter *.command -File)) {
             $ln = 0
             # here-string 里的内容是**模板正文**（会被原样写进生成的文件），不是本文件的代码。
             # 它里面出现中文引号是模板自己的文案问题，与"这行 PowerShell 会不会因引号截断"无关；
@@ -764,6 +770,64 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
+          # d1a) 三处"注释声称门禁 6 核对"的表，必须真的被核对。
+          # 留着假承诺比没有承诺更糟：下一个人会相信已经有人看着了，于是放心只改一侧。
+          # 这三句注释都写着"与 Win 侧同形，门禁 6 核对"，而门禁里一个都没提到过它们。
+
+          # (1) 配色角色表：两侧角色名集合必须相同（顺序无关）。
+          $srWin = Grab $ps '\$StyleRoles\s*=\s*@\(([^)]*)\)' 'Win 配色角色表'
+          $srMac = Grab $sh 'STYLE_ROLES="([^"]*)"' 'Mac 配色角色表'
+          if ((-not $srWin) -or (-not $srMac)) { $fail = 1 }
+          else {
+            $setWin = @([regex]::Matches($srWin, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+            $setMac = @($srMac -split '\s+' | Where-Object { $_ } | Sort-Object)
+            if (($setWin -join ',') -ne ($setMac -join ',')) {
+              Write-Host ("配色角色表两侧不一致：Win [{0}] / Mac [{1}]" -f ($setWin -join ' '), ($setMac -join ' '))
+              $fail = 1
+            } else { Write-Host ("配色角色表两侧一致：{0} 个" -f $setWin.Count) }
+          }
+
+          # (2) 帮助行标记集：两侧必须认同一批标记（顺序无关）。
+          # 不用 Grab：它要求命中数恰好为 1，而这里的模式在剥注释后的语料里
+          # 还可能命中别处（比如注释里提到的同名片段）。取第一处即可。
+          $hcWinM = [regex]::Match($ps, '\$HelpRoleIndent\s*=\s*@\{([^}]*)\}')
+          $hcWin = if ($hcWinM.Success) { $hcWinM.Groups[1].Value } else { '' }
+          $hcMac = Grab $sh 'HELP_LINE_CODES="([^"]*)"' 'Mac 帮助行标记集'
+          if ((-not $hcWin) -or (-not $hcMac)) { $fail = 1 }
+          else {
+            $hWin = @([regex]::Matches($hcWin, "'([^']+)'\s*=") | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+            $hMac = @($hcMac -split '\s+' | Where-Object { $_ } | Sort-Object)
+            if (($hWin -join ',') -ne ($hMac -join ',')) {
+              Write-Host ("帮助行标记集两侧不一致：Win [{0}] / Mac [{1}]" -f ($hWin -join ' '), ($hMac -join ' '))
+              $fail = 1
+            } else { Write-Host ("帮助行标记集两侧一致：{0} 个" -f $hWin.Count) }
+          }
+
+          # (3) 探测端点的期望状态：逐项比对，不只是比条数。
+          # 这条最要紧：期望值决定"什么算通"。只比条数时，把一侧的 wikipedia 从 3xx
+          # 改成 204 门禁照样绿，而判决口径已经分叉——跨域段兜底端点收到 204 会永远判死。
+          $epWin = @([regex]::Matches($ps, '@\{ Host = "([^"]+)";[^}]*?Expect = "([^"]+)"') |
+                     ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })
+          $epMac = Grab $sh 'CHECK_EXPECTS="([^"]*)"' 'Mac 端点期望值'
+          if ((@($epWin).Count -eq 0) -or (-not $epMac)) {
+            Write-Host '端点期望值取不到（两侧都要有具名表）'; $fail = 1
+          } else {
+            $macList = @($epMac -split '\s+' | Where-Object { $_ })
+            if ($epWin.Count -ne $macList.Count) {
+              Write-Host ("端点条数两侧不一致：Win {0} / Mac {1}" -f $epWin.Count, $macList.Count); $fail = 1
+            } else {
+              $bad = 0
+              for ($i = 0; $i -lt $epWin.Count; $i++) {
+                $wExp = ($epWin[$i] -split '=')[1]
+                if ($wExp -ne $macList[$i]) {
+                  Write-Host ("端点期望值第 {0} 项不一致：Win {1} / Mac {2}" -f ($i + 1), $wExp, $macList[$i])
+                  $bad = 1
+                }
+              }
+              if ($bad) { $fail = 1 } else { Write-Host ("端点期望值逐项一致：{0} 项" -f $epWin.Count) }
+            }
+          }
+
           # d1b) 帮助一屏的行数上限：两侧必须同一个数。
           # 它决定「帮助会不会被终端切掉底部」，一侧改了另一侧没改，两个平台就会
           # 一屏放得下、另一屏放不下——同一个产品两种体验，而且原因很难查。

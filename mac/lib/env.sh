@@ -26,7 +26,11 @@ get_current_proxy_port() {
     [ -f "$PROXY_ENV" ] || return 1
     _line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
     [ -n "$_line" ] || return 1
-    printf '%s' "$_line" | grep -oE ':[0-9]+' | tr -d ':' | head -n 1
+    # 取**最后**一段端口，不能取第一个匹配：注入值可能是 http://[::1]:7078，
+    # 而 ':[0-9]+' 会先命中 "::1" 里的 ":1"，于是返回 1。
+    # 调用方把结果拼成 http://127.0.0.1:<端口>，就会显示 "已注入 (127.0.0.1:1)"——
+    # 对只绑 ::1 的代理，那是一条看起来正常、实则完全错的结论。
+    printf '%s' "$_line" | sed -nE 's/.*:([0-9]+)"?$/\1/p' | head -n 1
 }
 
 set_user_env_vars() {
@@ -106,7 +110,11 @@ write_off_sentinel() {
     if [ -z "$_oh" ]; then
         # 整条 URL 取回来（含地址），不再只取端口再拼 127.0.0.1：注入值可能是
         # http://[::1]:port，只认 IPv4 那种写法会让这份兼容路径对它失效。
-        _op=$(sed -n 's/^export HTTP_PROXY="\(http:\/\/\(127\.0\.0\.1\|\[::1\]\):[0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+        # 用 -E（ERE）而不是 BRE 里的 \|：\| 是 GNU 扩展，macOS 自带的 BSD sed
+        # 在 BRE 里把它当普通字符 |，这条兼容路径会静默失效——而它服务的正是
+        # "从早期版本升级上来、没有 owned.env"的用户，失效后果是 off 哨兵写不出
+        # 守卫值、已开着的窗口永远清不掉旧变量。
+        _op=$(sed -nE 's/^export HTTP_PROXY="(http:\/\/(127\.0\.0\.1|\[::1\]):[0-9]+)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
         [ -n "$_op" ] && _oh="$_op"
     fi
     _onp=""
@@ -311,7 +319,6 @@ remove_user_env_vars() {
     # NODE_USE_ENV_PROXY 只有值是我们写的 1 才清。
     _rmv_mode="${1:-purge}"
     # 安装时的原值快照另存（见 snapshot_prev_env），卸载时由 restore_prev_env 还原。
-    _ours_default="$(printf '%s' "$DEFAULT_NO_PROXY" | tr -d ' ' | tr 'A-Z' 'a-z')"
     for _v in $NO_PROXY_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue

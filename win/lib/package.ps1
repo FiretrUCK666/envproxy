@@ -43,7 +43,7 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
     # 这条规则的真正约束不是"本程序支持哪些脚本"，而是**最老的那个客户端接受什么**：
     # 老用户点「检查更新」时，跑的是他手里那版代码的校验器。新校验器一旦比它宽松，
     # 就会出现"新版能收、老版拒收"——而修复只在新版里，新版又正是被拒的那一个，自锁。
-    # v2.1.0 的老校验器：win 放行 .ps1/.command/.cmd，mac 放行 .sh/.command/.cmd。
+    # 已发布旧版的校验器放行集合：win 是 .ps1/.command/.cmd，mac 是 .sh/.command/.cmd。
     # 所以这里取同样的集合，保证"能过新版 ⇒ 一定也能过老版"。
     # （win 侧曾经内嵌过 prompt-sync.sh，正是踩了老版不认 .sh 这个坑；现在它内嵌在代码里，
     #  包里不再有这个文件，但规则仍按上面的兼容性原则划。）

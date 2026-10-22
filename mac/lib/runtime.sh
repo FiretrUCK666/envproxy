@@ -206,14 +206,14 @@ _repair_hooks() {
 # 落点选择：`.zshenv` 是唯一在所有 shell 类型（登录/交互/脚本/ssh 远程命令）都会加载的文件，
 # 所以它是终端路的首选落点；`.zshrc` 作为冗余。hook 行本身无输出、无耗时。
 insert_shell_hooks() {
-    for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
+    for _rc in $(rc_zsh_files); do
         touch "$_rc" 2>/dev/null || continue
         _normalize_hook_block "$_rc" || true
         if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
-    for _rc in "$HOME/.bash_profile" "$HOME/.bashrc"; do
+    for _rc in $(rc_bash_files); do
         [ -f "$_rc" ] || continue
         _normalize_hook_block "$_rc" || true
         if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
@@ -345,10 +345,18 @@ _normalize_hook_block() {
 }
 
 remove_shell_hooks() {
-    for _rc in "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+    # 名单用 base 层那一份（rc_check_files）：状态页、安装、卸载三处必须同一个来源，
+    # 各写一份必然漂移——曾经状态页只看 .zshrc 系列、安装实际写 .zshenv，
+    # 只装了 .zshenv 的用户状态页会错报"没有同步块"。
+    for _rc in $(rc_check_files); do
         [ -f "$_rc" ] || continue
+        # 卸载是"恢复原状"，安装前快照到此已经用过（或本来就该丢）：
+        # 留着它只会让家目录多出一堆 .envproxy.bak，而屏幕上还印着"已恢复到安装前的状态"。
+        # 注意只在块确实被摘掉之后才删，否则那份快照还是唯一的还原依据。
+        _had_block=0
+        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null && _had_block=1
         # 没有标记的文件碰都不碰：全量重写会改 mtime，白白弄脏用户文件。
-        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null || continue
+        [ "$_had_block" = "1" ] || continue
         if ! _hook_block_paired "$_rc"; then
             log_msg "shell hook 标记不完整（缺结束行或顺序错乱），未改动：$_rc"
             continue
@@ -358,9 +366,18 @@ remove_shell_hooks() {
         if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null; then
             if ! _write_rc_atomic "$_tmp" "$_rc"; then
                 log_msg "shell hook 清理失败（原文件保持不变）：$_rc"
+            else
+                # 块已摘掉，快照用完就丢：留着它就等于留下"安装痕迹"。
+                rm -f "$_rc.envproxy.bak" 2>/dev/null || true
             fi
         fi
         rm -f "$_tmp" 2>/dev/null || true
+    done
+    # 早期版本可能在别的落点写过块（.zprofile/.zlogin），那些文件不在写入名单里，
+    # 但同样要清干净它们的 .bak，否则家目录里会孤零零留一份备份。
+    for _rc in $(rc_check_files); do
+        [ -e "$_rc.envproxy.bak" ] || continue
+        rm -f "$_rc.envproxy.bak" 2>/dev/null || true
     done
 }
 

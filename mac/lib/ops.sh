@@ -1,7 +1,8 @@
 # ------------------------------------------------------------------------------
 #  ops.sh — 动作层：菜单背后的安装、停止、卸载、状态编排
 #  把下面各层拼成使用者点得到的行为。
-#  自检（沙箱回归）不在本文件里，搬到 mac\tests\test-mac-pure.sh，
+#  自检（沙箱回归）不在本文件里，是 mac/test-mac-pure.sh（必须放 mac/ 直属：
+#  包校验器只放行平台目录直接下级的脚本，放进子目录会让每版更新都被自己拒收），
 #  由入口的 self-test 子命令加载——它不属于运行时逻辑。
 # ------------------------------------------------------------------------------
 # 更新收尾不需要单独的子命令：覆盖完成后由更新入口 exec 安装根里的新脚本跑 install
@@ -101,7 +102,7 @@ uninstall_envproxy() {
     else
         printf "历史日志 monitor/monitor.log 是否保留？[Y] 保留（默认） / [N] 彻底删除: "
         _choice=""
-        if read -r _choice < /dev/tty 2>/dev/null; then :; else _choice=""; fi
+        if read -r _choice 2>/dev/null < /dev/tty; then :; else _choice=""; fi
         case "$_choice" in [Nn]*) _remove_log=1;; *) _remove_log=0;; esac
     fi
     if [ $_remove_log -eq 1 ]; then
@@ -143,7 +144,7 @@ uninstall_envproxy() {
     if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
     # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
-    for _rc in "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+    for _rc in $(rc_check_files); do
         if grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then _dirty="$_dirty 终端同步的配置块还在（$_rc）；"; break; fi
     done
     if proxy_vars_present 2>/dev/null; then _dirty="$_dirty 代理变量仍在；"; fi
@@ -215,7 +216,7 @@ show_status() {
     _ts_state="missing"
     _ts_hits=0
     _ts_unpaired=0
-    for _ts_p in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    for _ts_p in $(rc_check_files); do
         [ -f "$_ts_p" ] || continue
         # 先看有没有我们的标记：连标记都没有的文件不是「不成对」，是「没装过」，不计数。
         _ts_has_s=0
@@ -256,10 +257,15 @@ show_status() {
             if nc_supports_G; then
                 if printf '' | nc -z -G 1 -w 1 127.0.0.1 "$_sp_port" 2>/dev/null; then _sp_alive=1; fi
             else
+                # 与 probe 层同一个坑：--noproxy '' 是绕过代理直连目标，'*' 语义正好相反；
+                # 而且不加 -p 时 curl 发的是普通 GET，任何回 200 的服务都会被当成代理。
+                #
+                # 注释必须写在命令**上方**：续行（行尾反斜杠）中间夹一行注释，bash 会把
+                # 整行注释丢弃、续行到此结束，后面的参数变成一条独立命令去执行——
+                # 实测 curl 只收到前四个参数、URL 全丢，报 "no URL specified"，
+                # 于是 _sp_alive 永远是 0，状态页每次都打印"系统代理疑似残留"的假警告。
                 if env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
                     curl --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
-                    # 与 probe 层同一个坑：'*' 是绕过代理直连目标，语义正好相反；
-                    # 而且不加 -p 时 curl 发的是普通 GET，任何回 200 的服务都会被当成代理。
                     --noproxy '' -p -x "http://127.0.0.1:$_sp_port" "http://127.0.0.1:9/" 2>/dev/null; then _sp_alive=1; fi
             fi
             if [ "$_sp_alive" = "0" ]; then

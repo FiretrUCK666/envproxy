@@ -19,6 +19,37 @@ ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"
 # 也就是说方括号属于 URL 字面量的写法，在 NO_PROXY 里是写错了位置。
 DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
 
+# 终端同步要检查/写入/摘除的那些 shell 配置文件。
+#
+# **写成函数，不写成常量**：常量在 source 那一刻就把 $HOME 固化进去了。
+# 自检会把 HOME 改道到沙箱，固化过的名单仍然指向使用者的真实家目录——
+# 那等于自检去动真实环境（曾经就是这样：断言红在一个与改动无关的用例上，
+# 而真实原因是它操作了错误的文件）。
+#
+# 三个调用方（状态页 / 安装 / 卸载）必须共用这一份，各写一份必然漂移：
+# 曾经状态页只看 `.zshrc` 系列、安装实际写 `.zshenv`，只装了 `.zshenv` 的用户
+# 状态页会报"配置文件里没有同步块"，照它说的重装一遍也修不好。
+#
+# 为什么是这几个：zsh 的 `.zshenv` 在**所有** shell 类型下都会加载（登录、交互、
+# 脚本、ssh 远程命令），`.zshrc` 只在交互式下加载；bash 侧用 `.bash_profile`
+# 与 `.bashrc`。`.zprofile` / `.zlogin` 列进来是为了认出"早期版本可能写过的位置"——
+# 装过老版本的用户那里可能还留着块，摘除时要找得到。
+rc_check_files() {
+    printf '%s\n' \
+        "$HOME/.zshenv" "$HOME/.zshrc" "$HOME/.zprofile" "$HOME/.zlogin" \
+        "$HOME/.bash_profile" "$HOME/.bashrc"
+}
+
+# 安装真正写入的落点，按 shell 分两组：zsh 侧 `touch` 建（缺了就建），
+# bash 侧只在文件已存在时写（不替使用者造 `.bash_profile` 那种会干扰他既有配置的文件）。
+rc_zsh_files() {
+    printf '%s\n' "$HOME/.zshenv" "$HOME/.zshrc"
+}
+
+rc_bash_files() {
+    printf '%s\n' "$HOME/.bash_profile" "$HOME/.bashrc"
+}
+
 # 帮助每一屏的行数上限。超过这个数，终端会把底部的「怎么退出」切掉——
 # 用户会以为帮助卡死，其实只是没画出来。与 Windows 侧 $HelpMaxLines 必须一致。
 HELP_MAX_LINES=30

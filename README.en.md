@@ -149,6 +149,8 @@ Three things that trip people up:
 - **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
 - Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
 
+**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (no prompt hook available) and fish (another Mac shell; the hook cannot reach it).
+
 ### 3.1 A window you already have open needs one Enter press
 
 EnvProxy follows the proxy app: connect it and the terminal uses the proxy; disconnect it and the terminal goes direct again. **A newly opened window is always current.**

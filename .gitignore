@@ -13,12 +13,17 @@ Thumbs.db
 win/monitor/monitor.log
 win/monitor/monitor.pid
 win/monitor/stop.flag
+# "停止"是一次跨重启仍然有效的意图，所以它落在磁盘上而不是内存里。
+win/monitor/stopped.intent
 mac/monitor/monitor.log
 mac/monitor/monitor.pid
 mac/monitor/stop.flag
 # 操作锁（mac 侧用文件锁；正常退出会自己删，被 kill -9 或断电时会留下）
 mac/monitor/.op.lock
 mac/monitor/.op.lock.tmp.*
+# 监控单实例锁（目录形式）：被强杀时同样会留下空目录
+mac/monitor/.lock/
+mac/monitor/.lock
 
 # temp / local bundles (README ships the folder via USB/drive/zip)
 *.tmp
