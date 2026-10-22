@@ -356,7 +356,7 @@ bash envproxy.sh status
 
 1. **有端口在监听** —— 本机有程序开了代理端口
 2. **它确实是代理** —— 发一次 `CONNECT` 握手，必须回 `HTTP/1.x 200`。这一步排除开发服务器和普通网页服务
-3. **它确实连得通外面** —— 通过这个端口访问 **7 个不同的站点**，**任意一个**真拿到响应就算通过
+3. **它确实连得通外面** —— 通过这个端口访问 **7 个不同的端点**，**任意一个**真拿到响应就算通过
 
 三条全过才写入变量。所以本机开着个网页服务不会被误判。
 
@@ -430,21 +430,26 @@ Windows 写 5 个，macOS 写 9 个（同样 5 个，再加一份小写拼写）
 
 ```
 EnvProxy\
-  win\                    Windows 版
-    打开菜单.cmd         唯一需要双击的文件
-    envproxy.ps1         主程序
-    locator.ps1          定位脚本的源文件（安装时据它生成 %LOCALAPPDATA%\EnvProxy\launcher.ps1）
-    lib\                 程序库（不用管）
-    monitor\             运行时自动生成，放日志
-  mac\                    Mac 版，结构一样，另有三个 Windows 没有的文件：
-    locator.sh           定位脚本（对应 win 侧的 locator.ps1）
-    test-mac-pure.sh     自检脚本（self-test 用，随包发，不影响正常运行）
-    prompt-sync.sh       终端同步脚本（给 zsh/bash 用；Windows 那份由安装程序生成，不在这里）
+  win\                     Windows 版
+    打开菜单.cmd           Windows 上唯一需要双击的文件
+    envproxy.ps1           主程序
+    locator.ps1            定位脚本的源文件（安装时据它生成 %LOCALAPPDATA%\EnvProxy\launcher.ps1）
+    lib\                   程序库（不用管）
+    monitor\               运行时自动生成，放日志
+  mac\                     Mac 版，结构一样
+    打开菜单.command       Mac 上唯一需要双击的文件
+    envproxy.sh            主程序
+    locator.sh             定位脚本的源文件（对应 win 侧的 locator.ps1）
+    prompt-sync.sh         终端同步脚本（给 zsh/bash 用）
+    test-mac-pure.sh       自检脚本（self-test 用，随包发，不影响正常运行）
+    lib\  monitor\         程序库；运行时自动生成，放日志
   README.md  README.en.md  中英文说明
   LICENSE  VERSION         许可证、版本号
   release-notes\          每版改了什么（选「检查更新」时显示）
   assets\readme\          README 的配图
 ```
+
+两边一一对应，只有两个文件是 Mac 独有的：`prompt-sync.sh` 和 `test-mac-pure.sh`（Windows 的终端同步脚本由安装程序生成，不在文件夹里）。
 
 分成三块，规矩不一样：
 

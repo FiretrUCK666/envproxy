@@ -169,7 +169,7 @@ case "$_CMD_NORM" in
     menu) show_menu;;
     help) show_help;;
     self-test)
-        # 自检的正文住在 tests/ 下，不随运行时库加载：它有 1100 多行，是"沙箱里跑断言"，
+        # 自检的正文住在一个单独的文件里，不随运行时库加载：它是"沙箱里跑断言"，体量超过任何一个库，
         # 不是使用者每次 install/status 都要解析的逻辑。Windows 侧的对应物一直是独立文件。
         _st="$SCRIPT_DIR/test-mac-pure.sh"
         if [ -f "$_st" ]; then

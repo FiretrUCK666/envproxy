@@ -23,6 +23,12 @@ DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
 # 用户会以为帮助卡死，其实只是没画出来。与 Windows 侧 $HelpMaxLines 必须一致。
 HELP_MAX_LINES=30
 
+# 日志体积上限与截断后保留的行数。写成具名常量而不是散在代码里的 204800 / 200：
+# 文档里印着这两个数，两侧也各写了一遍，散着放就一定会有一天改一处漏一处。
+# 与 Windows 侧 $LogMaxBytes / $LogTailLines 同口径，门禁 6 核对。
+LOG_MAX_BYTES=204800
+LOG_TAIL_LINES=200
+
 # 变量事实源（写/核/收/判四处共用，口径不再分家）：代理变量 6 个（大小写双写）
 # + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
 OWNED_HTTP_PREFIX="http://127.0.0.1:"

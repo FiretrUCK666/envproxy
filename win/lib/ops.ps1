@@ -553,6 +553,8 @@ function Format-MenuText {
 function Get-HelpMenuLines {
     $out = New-Object System.Collections.Generic.List[string]
     $nameW = Get-MenuNameWidth
+    $keyW = 1
+    foreach ($mi in $MenuItems) { if ($mi.Key.Length -gt $keyW) { $keyW = $mi.Key.Length } }
     [void]$out.Add('这些编号要在主菜单里敲，不是在帮助里敲。')
     foreach ($g in (Get-MenuGroups)) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
@@ -560,13 +562,16 @@ function Get-HelpMenuLines {
         [void]$out.Add('')
         if ($g -eq '日常') { [void]$out.Add(($g + '（平时只会用到这些）')) } else { [void]$out.Add($g) }
         foreach ($mi in $items) {
+            # 键号列也按最宽的键号补空格，而不是写死两个空格：多一位数（比如以后到 10）
+            # 就会全表错位，而"错位"这种事肉眼看得出、单测看不出来。
+            $keyCell = $mi.Key + (' ' * ($keyW - $mi.Key.Length + 2))
             if ($mi.Hint) {
-                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW) + '  ' + $mi.Hint))
+                [void]$out.Add(('  ' + $keyCell + (Format-MenuCell $mi.Name $nameW) + '  ' + $mi.Hint))
             } else {
                 # 每个菜单项都必须有 Hint（上面那张表里写全）。这里留空只是兜底，
                 # 不再拼"什么都不做。直接按回车等于查看状态"——那句话本身就自相矛盾
                 # （0 明明会关掉窗口，而在帮助页里回车是退回上一级，不是查看状态）。
-                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW)))
+                [void]$out.Add(('  ' + $keyCell + (Format-MenuCell $mi.Name $nameW)))
             }
         }
     }
@@ -590,7 +595,7 @@ function Get-HelpTopics {
                 '  每 2 到 3 秒看一次。要同时满足三条才算：',
                 '    1. 本机有端口在监听；',
                 '    2. 它确实是个代理，会回应握手；',
-                '    3. 它确实连得通外面，试 7 个站点任意一个通就算。',
+                '    3. 它确实连得通外面，试 7 个端点任意一个通就算。',
                 '  三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。',
                 '  它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。'
             )
@@ -607,12 +612,12 @@ function Get-HelpTopics {
                 '     按一次回车即可（cmd 窗口只能重开，见下面第 3 条）。',
                 '',
                 '  3. 装之前就已经开着的窗口',
-                '     同步代码还没装进去。PowerShell 输入下面这条，或者重开窗口：',
-                '         . $PROFILE',
+                '     同步代码还没装进去。在那个窗口里敲一次对齐的那一条，或者重开窗口：',
                 '',
-                '     Git Bash 输入：source ~/.bashrc',
-                '',
-                '     cmd 没有这个办法，重开窗口就行。',
+                '       PowerShell       . $PROFILE',
+                '       Git Bash         source ~/.bashrc',
+                '       Mac 终端         . ~/.envproxy/prompt-sync.sh',
+                '       cmd              没有这条命令，只能重开窗口',
                 '',
                 '为什么要按一次回车',
                 '  每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，',
@@ -623,24 +628,26 @@ function Get-HelpTopics {
         @{
             Key = '3'; Title = '这个窗口固定直连 / 恢复自动'; Short = '窗口'
             Lines = @(
-                '一、固定直连（这个窗口不再自动跟随）',
-                '  PowerShell 输入：',
-                '      $env:ENVPROXY_TERM = ''off''',
-                '  Git Bash 输入：',
-                '      export ENVPROXY_TERM=off',
-                '  设上之后这个窗口一直直连，你自己设的值（比如公司代理）不动。',
+                '一、让这个窗口一直直连',
                 '',
-                '  cmd 没有这个开关，自己把 5 个变量清掉（& 两边别留空格）：',
+                '  PowerShell       $env:ENVPROXY_TERM = ''off''',
+                '  Git Bash         export ENVPROXY_TERM=off',
+                '',
+                '  敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。',
+                '',
+                '  cmd 没有这个开关，只能自己清 5 个变量（& 两边别留空格）：',
                 '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
                 '',
                 '  别用 unset HTTP_PROXY：我们写进 Git Bash 的是小写拼写，',
                 '  unset 大写的清不掉小写，curl 照样走代理，下个提示符还会写回来。',
                 '',
-                '二、恢复自动跟随',
-                '  PowerShell：Remove-Item Env:ENVPROXY_TERM',
-                '  Git Bash：unset ENVPROXY_TERM',
-                '  cmd：重开窗口就是自动跟随',
-                '  窗口一关，上面这些改动全部失效。'
+                '二、改回自动跟随',
+                '',
+                '  PowerShell       Remove-Item Env:ENVPROXY_TERM',
+                '  Git Bash         unset ENVPROXY_TERM',
+                '  cmd              重开一个窗口',
+                '',
+                '  上面两节都只对这个窗口有效，窗口一关就没了。'
             )
         },
         @{
@@ -649,24 +656,16 @@ function Get-HelpTopics {
                 '先做第 3 条（固定直连），再设地址。顺序反了等于没设。',
                 '',
                 '一、设地址（换成公司给的）',
-                '  PowerShell 输入：',
-                '      $env:HTTPS_PROXY = ''http://你的地址:端口''',
                 '',
-                '  cmd 输入：',
-                '      set HTTPS_PROXY=http://你的地址:端口',
-                '',
-                '  Git Bash 输入：',
-                '      export HTTPS_PROXY=http://你的地址:端口',
+                '  PowerShell       $env:HTTPS_PROXY = ''http://你的地址:端口''',
+                '  Git Bash / Mac   export HTTPS_PROXY=http://你的地址:端口',
+                '  cmd              set HTTPS_PROXY=http://你的地址:端口',
                 '',
                 '二、看现在走不走代理（有值 = 走，空的 = 直连）',
-                '  PowerShell 输入：',
-                '      $env:HTTPS_PROXY',
                 '',
-                '  cmd 输入：',
-                '      set HTTPS_PROXY',
-                '',
-                '  Git Bash 输入：',
-                '      echo $HTTPS_PROXY',
+                '  PowerShell       $env:HTTPS_PROXY',
+                '  Git Bash / Mac   echo $HTTPS_PROXY',
+                '  cmd              set HTTPS_PROXY',
                 '',
                 '端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。',
                 '注意：这里不是翻墙软件那个端口，别去那儿找。',
@@ -713,7 +712,7 @@ function Get-HelpTopics {
                 '       $env:HTTPS_PROXY',
                 '     空的就是没注入，重开一个窗口就好。',
                 '',
-                '  2. 有值还是连不上：看菜单顶上「监控」是不是未运行。',
+                '  2. 有值还是连不上：看菜单顶上「监控」那一行写的是「运行中」还是「未运行」。',
                 '     未运行就选 1（安装 / 修复）。',
                 '',
                 '  3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',

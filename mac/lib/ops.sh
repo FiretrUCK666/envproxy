@@ -2,7 +2,7 @@
 #  ops.sh — 动作层：菜单背后的安装、停止、卸载、状态编排
 #  把下面各层拼成使用者点得到的行为。
 #  自检（沙箱回归）不在本文件里，搬到 mac\tests\test-mac-pure.sh，
-#  由入口的 self-test 子命令加载——那 1100 多行不是运行时逻辑。
+#  由入口的 self-test 子命令加载——它不属于运行时逻辑。
 # ------------------------------------------------------------------------------
 # 更新收尾不需要单独的子命令：覆盖完成后由更新入口 exec 安装根里的新脚本跑 install
 # （从安装根执行，路径记录/自启动/监控才会落在安装根）。
@@ -407,11 +407,16 @@ _help_topic_title() {
 # 读同一张表，改表即同步，不存在"两边都要记得改"。
 _help_menu_lines() {
     _hml_w=0
+    # 键号列按最宽的键号补空格，而不是写死两个空格：以后键号多一位（比如到 10）
+    # 就会全表错位，而"错位"这种事肉眼看得出、断言看不出来。
+    _hml_kw=1
     for _hml_i in "${MENU_ITEMS[@]}"; do
         _hml_rest=${_hml_i#*|}
         _hml_name=${_hml_rest%%|*}
         _hml_nw=$(_menu_cell_width "$_hml_name")
         [ "$_hml_nw" -gt "$_hml_w" ] && _hml_w="$_hml_nw"
+        _hml_k=${_hml_i%%|*}
+        [ "${#_hml_k}" -gt "$_hml_kw" ] && _hml_kw="${#_hml_k}"
     done
     echo "这些编号要在主菜单里敲，不是在帮助里敲。"
     for _hml_g in $(_menu_group_order); do
@@ -429,10 +434,12 @@ _help_menu_lines() {
             _hml_grp=${_hml_i%|*}; _hml_grp=${_hml_grp##*|}
             [ "$_hml_grp" != "$_hml_g" ] && continue
             _hml_key=${_hml_i%%|*}
+            _hml_pad=$((_hml_kw - ${#_hml_key} + 2))
+            _hml_kcell="$_hml_key$(printf '%*s' "$_hml_pad" '')"
             if [ -n "$_hml_hint" ]; then
-                echo "  $_hml_key  $(_menu_cell_pad "$_hml_name" "$_hml_w")  $_hml_hint"
+                echo "  $_hml_kcell$(_menu_cell_pad "$_hml_name" "$_hml_w")  $_hml_hint"
             else
-                echo "  $_hml_key  $(_menu_cell_pad "$_hml_name" "$_hml_w")"
+                echo "  $_hml_kcell$(_menu_cell_pad "$_hml_name" "$_hml_w")"
             fi
         done
     done
@@ -450,7 +457,7 @@ _help_topic_body() {
   每 2 到 3 秒看一次。要同时满足三条才算：
     1. 本机有端口在监听；
     2. 它确实是个代理，会回应握手；
-    3. 它确实连得通外面，试 7 个站点任意一个通就算。
+    3. 它确实连得通外面，试 7 个端点任意一个通就算。
   三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。
   它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
 TOPIC
@@ -465,9 +472,11 @@ TOPIC
      按一次回车即可。
 
   3. 装之前就已经开着的窗口
-     同步代码还没装进去。输入下面这条，或者重开窗口：
-         . ~/.envproxy/prompt-sync.sh
-     开头的点号和后面的空格都不能少；只对 zsh 和 bash 有效。
+     同步代码还没装进去。在那个窗口里敲一次对齐的那一条，或者重开窗口：
+
+       zsh / bash       . ~/.envproxy/prompt-sync.sh
+
+     开头的点号和后面的空格都不能少；fish 不支持。
 
 为什么要按一次回车
   每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
@@ -476,26 +485,30 @@ TOPIC
 TOPIC
     ;;
     3) cat <<'TOPIC'
-一、固定直连（这个窗口不再自动跟随）
-  终端输入：
-      export ENVPROXY_TERM=off
-  窗口一关就失效。只有 zsh 和 bash 管用，fish 不读它。
+一、让这个窗口一直直连
 
-二、恢复自动跟随
-  终端输入：
-      unset ENVPROXY_TERM
+  zsh / bash       export ENVPROXY_TERM=off
+
+  敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
+  fish 不支持：它不读这些配置文件，这个开关对它无效。
+
+二、改回自动跟随
+
+  zsh / bash       unset ENVPROXY_TERM
+
+  上面两节都只对这个窗口有效，窗口一关就没了。
 TOPIC
     ;;
     4) cat <<'TOPIC'
 先做第 3 条（固定直连），再设地址。顺序反了等于没设。
 
 一、设地址（换成公司给的）
-  终端输入：
-      export HTTPS_PROXY=http://你的地址:端口
+
+  zsh / bash       export HTTPS_PROXY=http://你的地址:端口
 
 二、看现在走不走代理（有值 = 走，空的 = 直连）
-  终端输入：
-      echo $HTTPS_PROXY
+
+  zsh / bash       echo $HTTPS_PROXY
 
 端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。
 注意：这里不是翻墙软件那个端口，别去那儿找。
@@ -510,12 +523,12 @@ curl
 
 git
       git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
-  等号后留空 = 这条不用代理；写别的值 = 改用那个代理。
+  等号后留空，这条就不用代理；写别的值，就改用那个代理。
 
 npm
       npm --noproxy=registry.npmjs.org install typescript
-  注意：noproxy 只认域名，写 * 没用，而且不报错，请求照常走代理。
-  写成 --no-proxy 会被理解成 --proxy=false，也不是你要的效果。
+  注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。
+  写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
   另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
 
 wget
@@ -773,7 +786,7 @@ MENU_ITEMS=(
     '4|帮助|忘了怎么用就看它|日常|help'
     '5|停止监控|先停掉，下次开机自己回来|维护|stop'
     '6|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
-    '0|退出||退出|'
+    '0|退出|关掉这个窗口|退出|'
 )
 # 加载期校验：每条必须恰好四条竖线，且键、名字、分组非空。不合格就报错（不静默降级）。
 # 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。

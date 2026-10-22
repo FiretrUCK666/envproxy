@@ -27,7 +27,7 @@ $LauncherPath     = Join-Path $LauncherDir "launcher.ps1"
 
 # 登录定位器的正文住在 win\locator.ps1 这个**真实文件**里，不再内嵌成字符串。
 #
-# 为什么必须是真实文件：它以前是一段 ~139 行的 here-string。字符串里的代码对解析器不可见，
+# 为什么必须是真实文件：它以前是一段 here-string（内嵌在代码里的字符串）。字符串里的代码对解析器不可见，
 # 门禁 2（语法检查）与门禁 3（编码红线）都看不见它，测试也只验证"启动命令指向这个文件"。
 # 实测在那段字符串里删掉一个右花括号：门禁 2 仍然绿、单元测试仍然 ALL PASS、
 # 自愈判据仍然报"已是最新"——错误会一路绿灯发到用户机器上，表现为"开机自启静默失效"，
@@ -1138,7 +1138,7 @@ function Stop-Monitor {
 }
 
 # ------------------------------------------------------------------------------
-# 5. 日志（只记状态翻转，不刷屏；超过 200KB 自动截断）
+# 5. 日志（只记状态翻转，不刷屏；超过 $LogMaxBytes 自动截断）
 # ------------------------------------------------------------------------------
 $LogFile = Join-Path $MonitorDir "monitor.log"
 
@@ -1158,12 +1158,12 @@ function Write-MonitorLog([string]$msg) {
             $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + "`r`n")
             $fs.Write($bytes, 0, $bytes.Length)
         } finally { $fs.Dispose() }
-        # 体积上限：超过 200KB 截断为最近 200 行（黑匣子保留近期窗口，永远不会无限增长）
+        # 体积上限：超过 $LogMaxBytes 截断为最近 $LogTailLines 行（黑匣子保留近期窗口，永远不会无限增长）
         # 截断同样用共享模式；万一失败（极端外部锁），静默跳过、下次再试——绝不中断监控
         # 注意：读取必须显式 UTF8 —— 默认按 ANSI 读会乱码，且截断时把乱码写回损坏日志
         $fi = New-Object System.IO.FileInfo($LogFile)
-        if ($fi.Exists -and $fi.Length -gt 200KB) {
-            $keep = [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 200
+        if ($fi.Exists -and $fi.Length -gt $LogMaxBytes) {
+            $keep = [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last $LogTailLines
             $fs2 = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Create,
                 [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
             try {

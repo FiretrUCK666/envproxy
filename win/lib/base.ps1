@@ -81,6 +81,12 @@ $DefaultNoProxy = "localhost,127.0.0.1,::1"
 # 门禁 6 核对。改这里就是改「帮助一屏能放多少」，不是调样式。
 $HelpMaxLines = 30
 
+# 日志体积上限与截断后保留的行数。写成具名常量而不是散在代码里的 200KB / 200：
+# 文档里印着这两个数，两侧也各写了一遍，散着放就一定会有一天改一处漏一处。
+# 与 Mac 侧 LOG_MAX_BYTES / LOG_TAIL_LINES 同口径，门禁 6 核对。
+$LogMaxBytes = 200KB
+$LogTailLines = 200
+
 # 是否跑在提权身份下：提权后 HKCU 指向管理员的配置，装/停/卸动的都是"另一个人"的状态。
 # 只做提醒不拦截——机器上只有一个日常用户时，提醒一句就够了。
 function Test-IsElevated {

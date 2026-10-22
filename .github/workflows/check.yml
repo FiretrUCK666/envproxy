@@ -814,14 +814,14 @@ jobs:
           # g) 事实清单：数字从代码取值，再查双语 README——代码改了、文档没跟上就当场失败
           $zh = Get-Content 'README.md' -Raw -Encoding UTF8
           $en = Get-Content 'README.en.md' -Raw -Encoding UTF8
-          $psKB = [int](Grab $ps 'Length -gt (\d+)KB' 'Win 日志上限')
-          $shBytes = [int](Grab $sh '\$_size"\s+-gt\s+(\d+)' 'Mac 日志上限')
+          $psKB = [int](Grab $ps '\$LogMaxBytes\s*=\s*(\d+)KB' 'Win 日志上限')
+          $shBytes = [int](Grab $sh 'LOG_MAX_BYTES=(\d+)' 'Mac 日志上限')
           if (-not $psKB -or -not $shBytes) { $fail = 1 }
           elseif ($psKB * 1024 -ne $shBytes) { Write-Host ("日志上限两侧不一致：Win {0}KB / Mac {1}B" -f $psKB, $shBytes); $fail = 1 }
           # 日志截断行数必须锚定到"截断"那一行：状态显示也用 Select-Object -Last 3 / tail -n 3，
           # 不锚定就会取到状态显示的行数。常量住在哪个库不该影响门禁，所以按用法锚定而不是按文件。
-          $psTail = [int](Grab $ps '\$keep\s*=\s*[^\n]*Select-Object -Last (\d+)' 'Win 截断行数')
-          $shTail = [int](Grab $sh 'tail -n (\d+)\s+"\$LOG_FILE"\s+>\s+"\$LOG_FILE\.tmp"' 'Mac 截断行数')
+          $psTail = [int](Grab $ps '\$LogTailLines\s*=\s*(\d+)' 'Win 截断行数')
+          $shTail = [int](Grab $sh 'LOG_TAIL_LINES=(\d+)' 'Mac 截断行数')
           if (-not $psTail -or -not $shTail) { $fail = 1 }
           elseif ($psTail -ne $shTail) { Write-Host ("截断行数两侧不一致：Win {0} / Mac {1}" -f $psTail, $shTail); $fail = 1 }
           $psRep = [int](Grab $ps 'repairRound -ge (\d+)' 'Win 自愈轮次')
@@ -892,7 +892,7 @@ jobs:
           $lo = [int]([math]::Ceiling($loRaw / 5.0) * 5)
           $hi = [int]([math]::Ceiling($hiRaw / 5.0) * 5)
           $facts = @(
-            @('端点个数', "$epCount 个不同的站点", "$epCount different sites"),
+            @('端点个数', "$epCount 个不同的端点", "$epCount different endpoints"),
             @('日志上限', "${psKB}KB", "${psKB}KB"),
             @('日志截断行数', "最近 $psTail 行", "most recent $psTail lines"),
             @('自愈周期', "每 $psRep 轮", "every $psRep rounds"),

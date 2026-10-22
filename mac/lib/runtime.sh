@@ -27,15 +27,15 @@ HOOK_LINE='[ -r "$HOME/.envproxy/prompt-sync.sh" ] && . "$HOME/.envproxy/prompt-
 STATE_DEBOUNCE_ROUNDS=2
 
 # ------------------------------------------------------------------------------
-# 1. 日志（只记状态翻转；超过 200KB 截断为最近 200 行）
+# 1. 日志（只记状态翻转；超过 LOG_MAX_BYTES 截断为最近 LOG_TAIL_LINES 行）
 # ------------------------------------------------------------------------------
 log_msg() {
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE" 2>/dev/null || return 0
     _size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
     _size=$(printf '%s' "$_size" | tr -cd '0-9')
-    if [ -n "$_size" ] && [ "$_size" -gt 204800 ] 2>/dev/null; then
-        tail -n 200 "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || rm -f "$LOG_FILE.tmp" 2>/dev/null || true
+    if [ -n "$_size" ] && [ "$_size" -gt "$LOG_MAX_BYTES" ] 2>/dev/null; then
+        tail -n "$LOG_TAIL_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || rm -f "$LOG_FILE.tmp" 2>/dev/null || true
     fi
 }
 

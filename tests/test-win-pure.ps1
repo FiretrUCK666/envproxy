@@ -1446,8 +1446,12 @@ $is51 = ($PSVersionTable.PSVersion.Major -lt 6)
 Assert-Eq 'curl kind matches what the docs claim for this version' $true (($is51 -and $curlKind -eq 'Alias') -or ((-not $is51) -and $curlKind -ne 'Alias'))
 
 # cmd：清 5 个变量（一行写法）。用独立 cmd 进程，不碰本进程环境。
-$cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe'
-if (Test-Path -LiteralPath $cmdExe) {
+# 没有 SystemRoot 就是不在 Windows 上（CI 的 Linux 侧会跑这一份）：这时根本没有 cmd.exe，
+# 连 Join-Path 都会因为参数为空直接抛错——而一个抛错会让**整个自检静默中止**，
+# 后面所有用例一条都不跑，日志里却只看到"退出码 1"。所以先算出生效的路径，拿不到就跳过。
+$cmdExe = $null
+if ($env:SystemRoot) { $cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe' }
+if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
     $script = (@('@echo off', 'set HTTPS_PROXY=http://b', 'set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=', 'if defined HTTPS_PROXY (echo LEFT) else (echo CLEARED)') -join "`r`n")
     $tmpCmd = Join-Path $env:TEMP ('ep_cmd_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
     [System.IO.File]::WriteAllText($tmpCmd, $script, (New-Object System.Text.ASCIIEncoding))
@@ -1457,7 +1461,7 @@ if (Test-Path -LiteralPath $cmdExe) {
 }
 
 # cmd 的坑：& 两边留空格会得到一个只含空格的值。文档专门警告过，这里钉住这个事实。
-if (Test-Path -LiteralPath $cmdExe) {
+if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
     $tmpCmd2 = Join-Path $env:TEMP ('ep_cmd2_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
     $script2 = (@('@echo off', 'set SPACETEST=hello', 'set SPACETEST= & set OTHER=1', 'if "[%SPACETEST%]"=="[ ]" (echo HASTHE-SPACE) else (echo NO-SPACE)') -join "`r`n")
     [System.IO.File]::WriteAllText($tmpCmd2, $script2, (New-Object System.Text.ASCIIEncoding))
