@@ -44,7 +44,7 @@ Almost always nothing. Of the three cases below, only the first needs nothing fr
 |---|---|---|
 | **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
 | **A window kept open, proxy changed later** | The window still holds the old state | Press Enter once (a cmd window has to be reopened) |
-| **A window opened before installing** | The sync code was never loaded into it | Open a new window, or load it as shown in 3.1 |
+| **A window opened before installing** | The sync code was never loaded into it | Open a new window; to avoid reopening, load it by hand with the command in 3.1 |
 
 ### Why an open window needs one Enter press
 
@@ -456,6 +456,23 @@ Three areas with different rules:
 
 Day to day you only open `win\` (or `mac\`).
 
+### Where the installer writes things
+
+All of it is **outside** this folder, so an update that overwrites the program files never touches them:
+
+| Where | What | What it is for |
+|---|---|---|
+| `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | the locator script; the login item uses it to find the program |
+| | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
+| `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
+| `HKCU\Software\EnvProxy` | the `Owned` and `Backup` keys | which values we wrote, and what yours were before |
+| `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
+| Your PowerShell profile | one small block (marked `EnvProxy` at both ends) | syncs once on every return to the prompt |
+| Your Git Bash `~/.bashrc` | one small block (same markers) | Git Bash reads the mirror file on every prompt |
+| `win\monitor\` | `monitor.log`, `monitor.pid` | the decisions it made, and the process id |
+
+Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
+
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder (overwritten by updates, do not keep your files there), the runtime folder (logs and run markers never overwritten or deleted), and the top level (only same-name files are overwritten, your things are never deleted)">
 
 ## 9. Copying and backing up the folder
@@ -533,20 +550,27 @@ The locator has a source file on each platform — `locator.sh` on Mac, `win\loc
 | "Permission denied" | The script is not executable | Run `chmod +x 打开菜单.command` in a terminal |
 | Installed, but the status says it is not running | macOS blocked the background item, or the "access your Documents folder" prompt was denied | Background item: System Settings, General, Login Items & Extensions, allow it to run. Folder access: System Settings, Privacy & Security, Files and Folders. Then run Install / Repair once more from the menu |
 
-### 12.6 What lands in `~/.envproxy/` after installing
+### 12.6 What the installer adds
 
-| File | Purpose |
-|---|---|
-| `locator.sh` | the locator script |
-| `prompt-sync.sh` | the terminal sync script, referenced by one line in the rc files |
-| `path.conf` | records the project path |
-| `proxy.env` | the environment variables for the terminal path and the current state |
-| `owned.env` | the values we wrote, so clearing removes only those (absent if the proxy has never been on) |
-| `prev.env` | the original values saved at install time, restored on uninstall |
-| `monitor.stdout.log` | launchd standard-output redirection |
-| `monitor.stderr.log` | launchd standard-error redirection (look here when login start-up misbehaves) |
+Installing writes files to three places. **None of them is the folder you downloaded.**
 
- The project folder can be moved elsewhere and is located again at the next login; a backup folder is never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` you chose to keep.
+| Where | Files | What they are for |
+|---|---|---|
+| `~/.envproxy/` | `locator.sh` | the locator script (tells start-at-login where the program is) |
+| | `prompt-sync.sh` | the terminal sync script, referenced by one line in the rc files |
+| | `path.conf` | records where the project folder currently is |
+| | `proxy.env` | the environment variables for the terminal path and the current state |
+| | `owned.env` | the values we wrote, so clearing removes only those (absent if the proxy has never been on) |
+| | `prev.env` | the original values saved at install time, restored on uninstall |
+| | `monitor.stdout.log` | what the background program prints (look here when login start-up misbehaves) |
+| | `monitor.stderr.log` | errors the background program reports |
+| `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
+| `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
+| | `monitor.pid` | the process id of the background program |
+
+Your shell config files (`~/.zshrc`, `~/.bashrc` and the like) also gain one small block, marked `EnvProxy` at both ends; removing that block turns off auto-follow for that terminal.
+
+**The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
 
 ### 12.7 Setting it up for a friend or a new Mac
 

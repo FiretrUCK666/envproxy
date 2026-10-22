@@ -103,11 +103,32 @@ function Install-EnvProxy {
     Write-Host "正在联网确认有没有新版本……" -ForegroundColor DarkGray
     Show-Status
     Write-Host ""
-    Write-Host "提示：之后新开的终端/程序自动获得代理；" -ForegroundColor Green
-    Write-Host "      装完之后一直开着的窗口，敲一下回车就跟上（cmd 窗口只能重开）。" -ForegroundColor Green
-    Write-Host "      装之前就开着的窗口没有同步代码，要重开一个。退出翻墙软件后同样。" -ForegroundColor Green
-    Write-Host "      想让某个窗口固定直连：在它里面执行 `$env:ENVPROXY_TERM = 'off'" -ForegroundColor DarkGray
-    Write-Host "      （改回跟着翻墙软件走：Remove-Item Env:ENVPROXY_TERM）。" -ForegroundColor DarkGray
+    # 左边那一列用 Format-MenuCell 按最长的条目补齐，不靠手敲空格：
+    # 手敲的话，改一个字就整列歪掉，而"歪一格"这种事只有人眼看得出来。
+    Write-Host "装好了。之后怎么用：" -ForegroundColor Green
+    $tipRows = @(
+        @('新开的终端 / 程序', '自动就是对的，什么都不用做。'),
+        @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。'),
+        @('装之前就开着的窗口', '重开一个，或者手动加载一次'),
+        @('', '菜单选 4（帮助）第 2 条，各种终端都有现成命令。'),
+        @('想让某个窗口固定直连', "在它里面执行  `$env:ENVPROXY_TERM = 'off'"),
+        @('改回跟着翻墙软件走', 'Remove-Item Env:ENVPROXY_TERM'),
+        @('忘了怎么用', '菜单选 4（帮助）。')
+    )
+    $tipW = 0
+    foreach ($r in $tipRows) {
+        $len = 0
+        foreach ($ch in $r[0].ToCharArray()) { $len += if ([int]$ch -gt 0x2E80) { 2 } else { 1 } }
+        if ($len -gt $tipW) { $tipW = $len }
+    }
+    foreach ($r in $tipRows) {
+        $color = if ($r[0] -eq '想让某个窗口固定直连' -or $r[0] -eq '改回跟着翻墙软件走' -or $r[0] -eq '忘了怎么用') { 'DarkGray' } else { 'Green' }
+        if (-not $r[0]) {
+            Write-Host (('   ' + (' ' * $tipW) + '   ' + $r[1])) -ForegroundColor Green
+        } else {
+            Write-Host (('   ' + (Format-MenuCell $r[0] $tipW) + '   ' + $r[1])) -ForegroundColor $color
+        }
+    }
 }
 
 function Uninstall-EnvProxy([bool]$Purge = $false) {

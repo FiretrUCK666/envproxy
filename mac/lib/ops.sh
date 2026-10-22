@@ -58,11 +58,27 @@ install_envproxy() {
     echo "正在联网确认有没有新版本……"
     show_status
     echo ""
-    echo "提示：之后新开的终端/程序自动获得代理；"
-    echo "      装完之后一直开着的窗口，敲一下回车就跟上。"
-    echo "      装之前就开着的窗口没有同步代码，要重开一个。退出翻墙软件后同样。"
-    echo "      想让某个窗口固定直连：在它里面执行 export ENVPROXY_TERM=off"
-    echo "      （改回跟着翻墙软件走：unset ENVPROXY_TERM）。"
+    # 左边那一列按最长条目补齐，不靠手敲空格：改一个字就整列歪掉，
+    # 而"歪一格"这种事只有人眼看得出来。与 Windows 侧同一套做法。
+    echo "装好了。之后怎么用："
+    _tip_a1="新开的终端 / 程序"
+    _tip_a2="一直开着的窗口"
+    _tip_a3="装之前就开着的窗口"
+    _tip_a4="想让某个窗口固定直连"
+    _tip_a5="改回跟着翻墙软件走"
+    _tip_a6="忘了怎么用"
+    _tip_w=0
+    for _tip_t in "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6"; do
+        _tip_n=$(_menu_cell_width "$_tip_t")
+        [ "$_tip_n" -gt "$_tip_w" ] && _tip_w="$_tip_n"
+    done
+    echo "   $(_menu_cell_pad "$_tip_a1" "$_tip_w")   自动就是对的，什么都不用做。"
+    echo "   $(_menu_cell_pad "$_tip_a2" "$_tip_w")   敲一下回车就跟上。"
+    echo "   $(_menu_cell_pad "$_tip_a3" "$_tip_w")   重开一个，或者手动加载一次"
+    echo "   $(printf '%*s' "$_tip_w" '')   菜单选 4（帮助）第 2 条，有现成命令。"
+    echo "   $(_menu_cell_pad "$_tip_a4" "$_tip_w")   在它里面执行  export ENVPROXY_TERM=off"
+    echo "   $(_menu_cell_pad "$_tip_a5" "$_tip_w")   unset ENVPROXY_TERM"
+    echo "   $(_menu_cell_pad "$_tip_a6" "$_tip_w")   菜单选 4（帮助）。"
 }
 
 uninstall_envproxy() {
