@@ -90,6 +90,19 @@ self_test() {
     OWNED_ENV="$ENVPROXY_HOME/owned.env"
     MONITOR_DIR="$ENVPROXY_HOME/monitor"
     LOG_FILE="$MONITOR_DIR/monitor.log"
+    PID_FILE="$MONITOR_DIR/monitor.pid"
+    STOP_FLAG="$MONITOR_DIR/stop.flag"
+    # 这三个也必须在**库里求值之前**改道。它们（runtime.sh 第 9/10/13 行）是
+    # 被 source 时求值一次的普通赋值，之后再改 HOME / ENVPROXY_HOME 它们不跟着变——
+    # 当下没有用例调用会写它们的东西，所以还没真出事；但谁给 set_autorun /
+    # repair_autorun / update_path_record 加一条用例，就会往使用者的真实
+    # ~/.envproxy/ 与 ~/Library/LaunchAgents/ 写东西。这是"一改测试就踩"的地雷。
+    # self_test 在库加载之后运行，所以这里直接覆盖它们即可（PLIST_PATH 本来就写成
+    # ${PLIST_PATH:-...}，说明覆盖是受支持的）。
+    PATH_CONF="$ENVPROXY_HOME/path.conf"
+    LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
+    PLIST_PATH="$_sandbox/Library/LaunchAgents/$PLIST_LABEL.plist"
+    mkdir -p "$(dirname "$PLIST_PATH")" 2>/dev/null || true
     export HOME ENVPROXY_HOME
     mkdir -p "$ENVPROXY_HOME" "$MONITOR_DIR" 2>/dev/null || true
     # launchctl 必须桩掉：HOME / ENVPROXY_HOME 只能改道文件，管不到 launchctl——
@@ -363,6 +376,112 @@ self_test() {
     # compare_versions 结果走 stdout（exit 恒 0），直接取输出断言。
     _selftest_assert_eq "版本逐段数值比" "1" "$(compare_versions "1.0.10" "1.0.9")"
 
+    # ----------------------------------------------------------------------
+    # [2c] 判决第二三层：真起一个假代理，验 CONNECT 握手与端点应答
+    # ----------------------------------------------------------------------
+    #
+    # 这一段之前是完全空白的：test_http_proxy / test_http_proxy_batch /
+    # _handshake_at / test_endpoint_status / test_single_endpoint 在自检里
+    # **引用次数全为 0**。也就是说把握手判据改成恒真、或改坏状态码解析正则，
+    # mac 侧的自检照样全绿——而这三个函数决定"要不要给用户的终端注入代理"，
+    # 是这个工具的核心判决。win 侧一直有正向覆盖（真起 TcpListener 验握手），
+    # 两侧对等性上这是最大的一处失衡。
+    #
+    # 假代理用 perl 起（macOS 系统自带，不破坏零依赖）；客户端用 curl
+    # （同样是系统自带）。不用 nc：macOS 各版本 nc 参数不一致，
+    # 而本机实测 Git Bash 根本没有 nc —— 那会让这段测试在别的机器上随机红。
+    _fp_port=""
+    for _fp_try in 19000 19001 19002 19003 19004 19005; do
+        if ( : < /dev/null ) 2>/dev/null; then :; fi
+        # 挑一个没人监听的端口：能连上就说明被占了，换下一个
+        if ! (exec 9<>/dev/tcp/127.0.0.1/$_fp_try) 2>/dev/null; then
+            _fp_port=$_fp_try; break
+        fi
+        exec 9<&- 2>/dev/null || true
+    done
+    if [ -n "$_fp_port" ] && command -v perl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
+        _fp_respond() {
+            # $1 = 端口, $2 = 应答首行（如 'HTTP/1.1 200 Connection established'）
+            perl -e '
+              use IO::Socket::INET;
+              my ($port, $line) = @ARGV;
+              my $srv = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$port,
+                                              Listen=>8, ReuseAddr=>1) or exit 1;
+              my $n = 0;
+              while ($n++ < 6) {
+                my $c = $srv->accept() or next;
+                my $buf = "";
+                while (my $l = <$c>) { $buf .= $l; last if $l =~ /^\r?\n$/; }
+                print $c "$line\r\n\r\n";
+                close $c;
+              }
+            ' "$1" "$2" &
+            _fp_pid=$!
+            # 等它真的监听起来：固定 sleep 在忙的机器上不够（会随机红）。
+            _fp_wait=0
+            while [ $_fp_wait -lt 50 ]; do
+                if (exec 9<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null; then
+                    exec 9<&- 2>/dev/null || true
+                    return 0
+                fi
+                _fp_wait=$((_fp_wait + 1))
+                sleep 0.1
+            done
+            return 1
+        }
+
+        # 1) 真代理：回 "200 Connection established" 的端口必须judged 为代理
+        if _fp_respond "$_fp_port" 'HTTP/1.1 200 Connection established'; then
+            _fp_bak="$(printf '%s' "$NC_HAS_G")"
+            NC_HAS_G=0   # 强制走 curl 那条路：本机可能没有 nc
+            if test_http_proxy "$_fp_port"; then _fp_a=1; else _fp_a=0; fi
+            _selftest_assert_eq "判决：真代理端口认得出来（CONNECT 200）" "1" "$_fp_a"
+            # 命中的回环地址要记下来，注入端靠它拼 URL
+            _selftest_assert_eq "判决：握手命中时记下回环地址" "1" "$([ -n "$LOOPBACK_HIT" ] && echo 1 || echo 0)"
+            NC_HAS_G="$_fp_bak"
+            kill $_fp_pid 2>/dev/null || true
+            wait $_fp_pid 2>/dev/null || true
+        else
+            echo "  SKIP 判决：真代理（假代理起不来）"
+        fi
+
+        # 2) 非代理：回 "404" 的服务不能被当成代理
+        #    这是"任何回 200 的 HTTP 服务都会被当成代理"那个坑的反面验证。
+        if _fp_respond "$_fp_port" 'HTTP/1.1 404 Not Found'; then
+            _fp_bak="$(printf '%s' "$NC_HAS_G")"
+            NC_HAS_G=0
+            if test_http_proxy "$_fp_port"; then _fp_b=1; else _fp_b=0; fi
+            _selftest_assert_eq "判决：回 404 的普通服务不算代理" "0" "$_fp_b"
+            NC_HAS_G="$_fp_bak"
+            kill $_fp_pid 2>/dev/null || true
+            wait $_fp_pid 2>/dev/null || true
+        else
+            echo "  SKIP 判决：404 服务（假代理起不来）"
+        fi
+
+        # 3) 关闭的端口不能被当成代理
+        if test_http_proxy 9; then _fp_c=1; else _fp_c=0; fi
+        _selftest_assert_eq "判决：关闭的端口不算代理" "0" "$_fp_c"
+    else
+        echo "  SKIP 判决第二层（没有 perl 或 curl，或挑不到空闲端口）"
+    fi
+
+    # 端点应答的三态判定：纯函数，不碰网络。
+    # 这三条钉住"什么算通"：generate_204 类只认 204（强制门户劫持回 200/302 都不算），
+    # 跨域段兜底端点只认 3xx（收 204 会让它们永远判死）。
+    if test_endpoint_status 204 204; then _ep_a=1; else _ep_a=0; fi
+    _selftest_assert_eq "端点判据：204 对 204 算通" "1" "$_ep_a"
+    if test_endpoint_status 200 204; then _ep_b=1; else _ep_b=0; fi
+    _selftest_assert_eq "端点判据：204 类收到 200 不算通（门户劫持）" "0" "$_ep_b"
+    if test_endpoint_status 302 204; then _ep_c=1; else _ep_c=0; fi
+    _selftest_assert_eq "端点判据：204 类收到 302 不算通" "0" "$_ep_c"
+    if test_endpoint_status 302 3xx; then _ep_d=1; else _ep_d=0; fi
+    _selftest_assert_eq "端点判据：3xx 类收到 302 算通" "1" "$_ep_d"
+    if test_endpoint_status 204 3xx; then _ep_e=1; else _ep_e=0; fi
+    _selftest_assert_eq "端点判据：3xx 类收到 204 不算通" "0" "$_ep_e"
+    if test_endpoint_status 404 3xx; then _ep_f=1; else _ep_f=0; fi
+    _selftest_assert_eq "端点判据：3xx 类收到 404 不算通" "0" "$_ep_f"
+
     echo "[3] 注入核对回收往返"
     set_user_env_vars "17890" || true
     if env_vars_in_sync "17890"; then _s1=1; else _s1=0; fi
@@ -378,6 +497,59 @@ self_test() {
     if proxy_vars_present; then _s4=1; else _s4=0; fi
     _selftest_assert_eq "回收后无痕迹" "0" "$_s4"
     unset HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy NODE_USE_ENV_PROXY 2>/dev/null || true
+
+    # ----------------------------------------------------------------------
+    # [3b] off 哨兵：内容是对"已开窗口敲回车就跟上"的唯一凭据
+    # ----------------------------------------------------------------------
+    #
+    # 这一段之前完全没有直接覆盖（write_off_sentinel 引用次数为 0）。
+    # 它写出的文件会被使用者的 shell 在**每次提示符**处 source，所以格式错一点都不行：
+    #   - 写成裸 $VAR 会在开了 nounset 的 shell 里报 unbound variable，打断用户输入；
+    #   - 守卫值写错会让旧变量永远清不掉（"固定直连了但 curl 还走代理"）；
+    #   - 末行不是 true 会让 zsh 后续 precmd 钩子全部不执行（连主题都会崩）。
+    _wos_saved_proxy="$PROXY_ENV"; _wos_saved_owned="$OWNED_ENV"
+    PROXY_ENV="$_sandbox/wos_proxy.env"
+    OWNED_ENV="$_sandbox/wos_owned.env"
+    # 造一份"我们写下过的值"（格式与真实 owned.env 一致：名字 TAB 值）
+    { printf 'HTTP_PROXY\thttp://127.0.0.1:7078\n'
+      printf 'NO_PROXY\tlocalhost,127.0.0.1,::1\n'
+      printf 'NODE_USE_ENV_PROXY\t1\n'; } > "$OWNED_ENV"
+    write_off_sentinel >/dev/null 2>&1
+    _wos_body=$(cat "$PROXY_ENV" 2>/dev/null || true)
+    case "$_wos_body" in
+        *'# envproxy-state: off'*) _wos_a=1;;
+        *) _wos_a=0;;
+    esac
+    _selftest_assert_eq "off 哨兵：首行标明状态" "1" "$_wos_a"
+    # 每个地址变量都要有自己那一行 unset
+    _wos_miss=""
+    for _wos_v in $PROXY_ADDR_VAR_NAMES; do
+        printf '%s' "$_wos_body" | grep -q "unset $_wos_v" || _wos_miss="$_wos_miss $_wos_v"
+    done
+    _selftest_assert_eq "off 哨兵：覆盖每一个地址变量" "" "$_wos_miss"
+    # NODE_USE_ENV_PROXY 也要有守卫行（它是"使用者自己设的 1 不许删"那条契约）
+    printf '%s' "$_wos_body" | grep -q 'unset NODE_USE_ENV_PROXY' && _wos_b=1 || _wos_b=0
+    _selftest_assert_eq "off 哨兵：含 NODE_USE_ENV_PROXY 守卫" "1" "$_wos_b"
+    # 必须是 ${VAR-} 形式：裸 $VAR 在 nounset 下会报错
+    printf '%s' "$_wos_body" | grep -q '\[ "\${HTTP_PROXY-}"' && _wos_c=1 || _wos_c=0
+    _selftest_assert_eq "off 哨兵：用 \${VAR-} 而不是裸变量（nounset 安全）" "1" "$_wos_c"
+    # 末行必须是 true：source 返回非零会打断 zsh 后续钩子
+    _wos_last=$(printf '%s' "$_wos_body" | tail -n 1)
+    _selftest_assert_eq "off 哨兵：末行恒真（source 返回 0）" "true" "$_wos_last"
+    # 真的能清掉：在子 shell 里 source 一遍，看变量有没有被 unset
+    _wos_after=$( ( export HTTP_PROXY="http://127.0.0.1:7078"
+                     export HTTPS_PROXY="http://127.0.0.1:7078"
+                     export NODE_USE_ENV_PROXY=1
+                     . "$PROXY_ENV" >/dev/null 2>&1
+                     printf '%s|%s|%s' "${HTTP_PROXY-unset}" "${HTTPS_PROXY-unset}" "${NODE_USE_ENV_PROXY-unset}" ) )
+    _selftest_assert_eq "off 哨兵：source 后变量确实被清掉" "unset|unset|unset" "$_wos_after"
+    # 反向：值不是我们写的（使用者自己的代理）时一个都不许动
+    _wos_keep=$( ( export HTTP_PROXY="http://corp-proxy:8080"
+                    . "$PROXY_ENV" >/dev/null 2>&1
+                    printf '%s' "${HTTP_PROXY-unset}" ) )
+    _selftest_assert_eq "off 哨兵：不碰使用者自己的代理值" "http://corp-proxy:8080" "$_wos_keep"
+    rm -f "$PROXY_ENV" "$OWNED_ENV" 2>/dev/null || true
+    PROXY_ENV="$_wos_saved_proxy"; OWNED_ENV="$_wos_saved_owned"
 
     echo "[4] 快照还原"
     snapshot_prev_env || true
@@ -647,8 +819,12 @@ self_test() {
     # 而紧接着启的新监控可能抢不到单实例锁——于是"自愈"的结果是监控没了。
     if autorun_reload_needed 1; then _r13=1; else _r13=0; fi
     _selftest_assert_eq "明确要求时才重载代理" "1" "$_r13"
-    if grep -q 'autorun_reload_needed' "$LIB_DIR/runtime.sh" 2>/dev/null; then _r14=1; else _r14=0; fi
-    _selftest_assert_eq "set_autorun 走的是这个判据" "1" "$_r14"
+    # 必须数**调用点**，不能只 grep 名字存在。
+    # `autorun_reload_needed` 的定义就在 runtime.sh 里，grep 名字必然命中——
+    # 那是自证：把 set_autorun 里唯一的调用点删掉，这条断言照样通过。
+    # 所以判据是"调用点恰好一个"，删掉它这里立刻红。
+    _r14=$(grep -c 'if autorun_reload_needed ' "$LIB_DIR/runtime.sh" 2>/dev/null || printf '0')
+    _selftest_assert_eq "set_autorun 真的调用了这个判据（调用点恰好 1 处）" "1" "$_r14"
 
     # 判"断"要同时满足"次数"和"时长"（与 Win 侧 Test-NodeVerdict 同形）。
     # 只数次数时，判据的时长是「次数 × 节流间隔」的乘积：改节流（省流量）会直接变成
@@ -743,7 +919,18 @@ self_test() {
             0) _selftest_assert_eq "退出项没有子命令" "" "$_lms";;
             *) case "$_lms" in
                    '') _selftest_assert_eq "条目 $_lmk 有子命令" "0" "1";;
-                   *) _selftest_assert_eq "条目 $_lmk 子命令可解析" "1" "1";;
+                   *)
+                       # 真去核一遍：这个子命令必须出现在入口的 case 分派里。
+                       # 原来这里写的是 assert_eq "1" "1" —— 期望与实际都是常量，
+                       # 数学上不可能失败，等于一条什么都不测的断言（而它的名字
+                       # 还声称"子命令可解析"，很容易被当成"这块有覆盖"）。
+                       if grep -qE "^[[:space:]]*${_lms}\)" "$SCRIPT_DIR/envproxy.sh" 2>/dev/null; then
+                           _lmsok=1
+                       else
+                           _lmsok=0
+                       fi
+                       _selftest_assert_eq "条目 $_lmk 的子命令 $_lms 在入口分派里" "1" "$_lmsok"
+                       ;;
                esac;;
         esac
     done
@@ -919,7 +1106,8 @@ EOF
         _selftest_assert_eq "主题 $_sk 无重复行" "1" "$_s2"
         # 3) 行宽：超宽会硬折行。例外是一整条命令（缩进 + 纯 ASCII），
         #    命令是给用户整条复制的，硬拆反而更难用。
-        _s3=1
+        # 只有这一行：原来这里连着写了两遍同样的赋值，删掉重复的那一遍即可，
+        # 不能两行都删——_s3 是下面那条断言的初值（超宽时会被置 0）。
         _s3=1
         # wc -L 给的是显示宽度（中文算 2 列），比 awk 的 length 靠谱——
         # 后者在某些 awk 实现里按字节算，一个中文字就顶 3。

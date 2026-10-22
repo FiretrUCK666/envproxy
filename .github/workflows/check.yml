@@ -625,7 +625,41 @@ jobs:
             if ($block.Count -eq 0) { Write-Host ("{0}：第 8 节里找不到文件夹清单代码块" -f $f); $fail = 1; continue }
             $blob = $block -join "`n"
             foreach ($t in $tops) {
-              if ($blob -notmatch [regex]::Escape($t)) { Write-Host ("{0}：第 8 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
+              # 必须**行首锚定**：子串匹配会假绿——实测把清单里 `mac\` 那一行删掉，
+              # 门禁照样通过，因为同块里 "打开菜单.command  Mac 上唯一需要双击的文件"
+              # 与 "test-mac-pure.sh" 都含 mac 字样。
+              # 必须是**独立一项**，不能是别人的子串：
+              # 前面是行首或空白，后面是空白或行尾。
+              # 纯子串匹配会假绿——实测把清单里 `mac\` 那一行删掉，门禁照样通过，
+              # 因为同块里 "打开菜单.command  Mac 上唯一需要双击的文件"
+              # 与 "test-mac-pure.sh" 都含 mac 字样。
+              # 也不能要求行首：清单里 "README.md  README.en.md  中英文说明" 是同一行两项。
+              # 必须是**独立一项**，不能是别人的子串：
+              # 前面是行首或空白；后面是空白、反斜杠（目录条目写作 `assets\readme\`）或行尾。
+              # 纯子串匹配会假绿——实测把清单里 `mac\` 那一行删掉，门禁照样通过，
+              # 因为同块里 "打开菜单.command  Mac 上唯一需要双击的文件"
+              # 与 "test-mac-pure.sh" 都含 mac 字样。
+              # 也不能要求行首：清单里 "README.md  README.en.md  中英文说明" 是同一行两项。
+              # 必须是**独立一项**，不能是别人的子串，而且要区分大小写：
+              # 清单里的目录名是小写 `mac\`，而描述文字里有 "Mac 上唯一需要双击的文件"——
+              # 用不区分大小写的匹配时，后者会把前者顶替掉，删掉清单项也发现不了。
+              # 边界：前面是行首或空白；后面是空白、反斜杠（`assets\readme\`）或行尾。
+              # 也不能要求行首：清单里 "README.md  README.en.md  中英文说明" 是同一行两项。
+              # 顶层条目的**缩进恰好是两个空格**（子条目是四个），按位置锚定：
+              # 这是清单里唯一能区分"这是顶层目录"与"描述文字里提到了这个词"的判据。
+              # 走过的弯路：纯子串匹配漏掉"删掉整行"（同块别处含该词就能顶替）；
+              # 加词边界后仍然漏，因为描述文字 "定位脚本的源文件（对应 win 侧的 ...）" 
+              # 里 win 两侧都是空白，边界判据看不出它只是正文。
+              # 条目尾部可以是空白、反斜杠（`assets\readme\`）或行尾；大小写敏感（目录名是小写）。
+              # 顶层条目行的**缩进恰好是两个空格**（子条目是四个），按这个位置锚定。
+              # 这是清单里唯一能区分"这是顶层条目"与"描述文字里提到了这个词"的判据：
+              # 走过的弯路——纯子串匹配漏掉"删掉整行"（同块别处含该词就能顶替）；
+              # 加词边界仍漏，因为描述文字 "定位脚本的源文件（对应 win 侧的 ...）"
+              # 里 win 两侧都是空白，边界判据看不出它只是正文。
+              # 同一缩进行里可以并排两项（"README.md  README.en.md"），
+              # 所以先挑出所有"缩进 2 空格"的行，再在那些行里找这个条目名。
+              $topLines = ($blob -split "`n" | Where-Object { $_ -cmatch '^  [^ ]' }) -join "`n"
+              if ($topLines -cnotmatch ('(?m)(^|\s)' + [regex]::Escape($t) + '(?:\s|\\|$)')) { Write-Host ("{0}：第 8 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
             }
           }
           # e) 发版说明随版：VERSION 抬了，发版说明必须同交（否则推标签时才报错，而标签不许重打）
@@ -675,7 +709,9 @@ jobs:
               }
               $blob = $prose -join "`n"
               foreach ($w in @('win','mac','release-notes','assets')) {
-                if ($blob -notmatch [regex]::Escape($w)) { Write-Host ("{0} 第 8 节散文里没点名 {1}" -f $pair[0], $w); $fail = 1 }
+              # 同上：散文里点名这四个目录，要求是独立词（前后不接字母数字）。
+              # 裸子串会把 "macOS" 这种也算成点名了 mac。
+              if ($blob -notmatch ('(?<![A-Za-z0-9_-])' + [regex]::Escape($w) + '(?![A-Za-z0-9_-])')) { Write-Host ("{0} 第 8 节散文里没点名 {1}" -f $pair[0], $w); $fail = 1 }
               }
             }
           }
@@ -1508,7 +1544,11 @@ jobs:
             Write-Host ("资产契约两侧用例数对不上：win {0} / mac {1}" -f $winContract.Count, $macContract.Count); exit 1
           }
           for ($i = 0; $i -lt $winContract.Count; $i++) {
-            if ($winContract[$i] -ne $macContract[$i]) {
+          # 用 -cne（大小写敏感）：`-ne` 对字符串不区分大小写，而这几行里带着
+          # 校验值（sha256:...）。大小写归一一旦坏掉，会出现"一边认大写、另一边
+          # 跳过大写校验"——同一个包两侧结论不同，正是这道门禁要抓的漂移。
+          # 用 -ne 时它抓不到，因为两行只差字母大小写。
+            if ($winContract[$i] -cne $macContract[$i]) {
               Write-Host '资产契约两侧结论不一致：'
               Write-Host ("  win: {0}" -f $winContract[$i])
               Write-Host ("  mac: {0}" -f $macContract[$i])

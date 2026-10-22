@@ -37,6 +37,15 @@ function Assert-Eq([string]$Name, $Want, $Have) {
     else { Write-Host ("  FAIL {0} (want [{1}] have [{2}])" -f $Name, $Want, $Have); $script:fails++ }
 }
 
+# 大小写敏感的比较。`-eq` 对字符串不区分大小写，所以"校验值被归一成小写"
+# 这类契约用它断言等于没断言——实测把 Get-AssetFromJson 里的 .ToLower() 删掉，
+# 全部 digest 用例照样 PASS，而那正是两侧判决口径会分叉的地方
+# （一边认大写、另一边跳过大写校验，同一个包两边结论不同）。
+function Assert-EqCase([string]$Name, $Want, $Have) {
+    if ("$Want" -ceq "$Have") { Write-Host ("  PASS {0}" -f $Name) }
+    else { Write-Host ("  FAIL {0} (want [{1}] have [{2}])" -f $Name, $Want, $Have); $script:fails++ }
+}
+
 function Assert-Throws([string]$Name, [scriptblock]$Block) {
     $threw = $false
     try { & $Block | Out-Null } catch { $threw = $true }
@@ -414,7 +423,8 @@ Assert-Eq 'a dead pid is not a confirmed monitor' '' (Get-MonitorProcessFromPidF
 $PidFile = $savedPidFile
 Remove-Item -LiteralPath $dir9 -Recurse -Force
 
-Write-Host '[10] judging a finished install'# The updater decides the finish step worked by reading the install root's pid file, never by the
+Write-Host '[10] judging a finished install'
+# The updater decides the finish step worked by reading the install root's pid file, never by the
 # child's exit code: PowerShell 5.1 cannot read ExitCode after Start-Process -PassThru (it returns
 # empty), so treating "unreadable" as failure makes every update run the fallback and tear down the
 # monitor it had just started.
@@ -647,7 +657,7 @@ foreach ($badId in @('0', '007', '12345678901234567890')) {
 # (older assets do not carry the field).
 $digestOk = 'sha256:' + ('a' * 64)
 $assetDigest = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"' + $digestOk + '"}]}'
-Assert-Eq 'a valid digest is taken' $digestOk ((Get-AssetFromJson $assetDigest 'EnvProxy-win.zip').Digest)
+Assert-EqCase 'a valid digest is taken' $digestOk ((Get-AssetFromJson $assetDigest 'EnvProxy-win.zip').Digest)
 $assetDigestNull = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":null}]}'
 Assert-Eq 'a null digest counts as no digest' '' ((Get-AssetFromJson $assetDigestNull 'EnvProxy-win.zip').Digest)
 $assetDigestBad = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:XYZ"}]}'
@@ -705,7 +715,7 @@ Assert-Eq 'a file that is not there is not a mismatch' 'skip' (Test-AssetDigest 
 # The digest hex case must be handled the same way on both sides: a publisher that answers in
 # uppercase must not make one platform check and the other silently skip.
 $assetDigestUpper = '{"assets":[{"url":"https://api.github.com/repos/o/r/releases/assets/777","name":"EnvProxy-win.zip","digest":"sha256:2CF24DBA5FB0A30E26E83B2AC5B9E29E1B161E5C1FA7425E73043362938B9824"}]}'
-Assert-Eq 'an uppercase digest is accepted and normalised' 'sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' ((Get-AssetFromJson $assetDigestUpper 'EnvProxy-win.zip').Digest)
+Assert-EqCase 'an uppercase digest is accepted and normalised' 'sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824' ((Get-AssetFromJson $assetDigestUpper 'EnvProxy-win.zip').Digest)
 # A tag goes into a URL, so it has to be encoded first. The tag comes from the server's answer,
 # not from us: a tag with a space or a slash would otherwise build a broken address.
 Assert-Eq 'a plain tag is left alone' 'v1.2.3' (ConvertTo-UrlSegment 'v1.2.3')
@@ -732,6 +742,10 @@ $remoteForAsset = @{ ApiRepo = 'http://127.0.0.1:1/repos/o/r'; Tag = 'v1.0.0'; B
 # 这条只问一件事：连不上时归哪一类。可本机要是正好有代理在跑，代码会经它重试一次，
 # 代理替我们回一个 502，就被归成"对方服务端出错"——测试结果跟着这台机器当时的状态摇摆。
 # 把"有没有活代理"在测试作用域里固定成没有，这一条才只测它自己那件事。
+# 同样要成对还原：这个替身会真去扫端口的函数，后面的用例若"顺带"调它，
+# 拿到的永远是 $null —— 而那正是"本机没有代理"这个假设，会让断言在不该过的场合过。
+$__gapSaved = (Get-Item -Path Function:Get-ActiveProxyPort).ScriptBlock
+try {
 function Get-ActiveProxyPort { param([switch]$FullScan) return $null }
 Assert-Eq 'an asset lookup that cannot reach the API reports a network problem' 'network' (Get-UpdateAsset $remoteForAsset 'EnvProxy-win.zip').Failure
 Assert-Eq 'the placeholder expands into the repo id' 'https://api.github.com/repos/owner/repo/releases/latest' ($UpdateSourceTable[0].Api).Replace('@@', 'owner/repo')
@@ -755,6 +769,10 @@ Assert-Eq 'a trailing slash is not part of the id' 'owner/repo' (Get-RepoIdFromR
 Assert-Eq 'a host that is not GitHub is not an id' '' (Get-RepoIdFromRemoteUrl 'https://gitlab.com/owner/repo.git')
 Assert-Eq 'a local path is not an id' '' (Get-RepoIdFromRemoteUrl 'D:\somewhere\repo')
 Assert-Eq 'an empty remote is not an id' '' (Get-RepoIdFromRemoteUrl '')
+} finally {
+    Set-Item -Path Function:Get-ActiveProxyPort -Value $__gapSaved
+    Remove-Variable -Name __gapSaved -Scope Script -ErrorAction SilentlyContinue
+}
 
 Write-Host '[5c] update failure classification'
 # The reason a download failed decides what the user is told to do next: wait an hour
@@ -1187,6 +1205,11 @@ if ($NodeFailDwellSec -gt 0) { Write-Host '  ok   dwell 是正数' } else { Writ
 # 这里直接驱动 Test-NodeAlive，钉住"闲置太久就丢弃旧起点"真的发生了。
 $script:NodeState = @{}
 $script:ProbeOk = $false
+# 替身必须成对还原：本文件其他替身都用 try/finally（见上面的 Get-ListeningTcpConnections）。
+# 留着不还原，本文件后面任何"顺带"走到真实连通性判定的用例都会拿到 $script:ProbeOk 的假答案——
+# 那种错极难查：断言看起来在测 A，实际测的是一个被前一段代码留下的常量。
+$__trcSaved = (Get-Item -Path Function:Test-RealConnectivity).ScriptBlock
+try {
 ${function:Test-RealConnectivity} = { param([int]$p) return $script:ProbeOk }
 [void](Test-NodeAlive 7078)                       # 先失败一次，建立失败起点
 $slot = $script:NodeState['7078']
@@ -1246,6 +1269,10 @@ for ($i = 0; $i -lt 20; $i++) {
 }
 Assert-Eq '失败/成功交替 20 轮里从不判"断"（抖动不累积）' $false $everDown
 Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来）' 1 $maxFails
+} finally {
+    Set-Item -Path Function:Test-RealConnectivity -Value $__trcSaved
+    Remove-Variable -Name __trcSaved -Scope Script -ErrorAction SilentlyContinue
+}
 
 # 终端同步：$PROFILE 里的钩子块。核心是"只摘自己那一块、用户内容一字不动"，
 # 以及"标记不配对时绝不猜"。沙箱里用两个临时文件当两个版本的 profile——
