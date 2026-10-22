@@ -153,8 +153,19 @@ fetch_update_text() {
     _ftt_h="$2"
     _ftt_out=$(curl -fsSL --max-time 8 -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null) \
         && { printf '%s' "$_ftt_out"; return 0; }
-    env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null
+    # 带环境代理这次失败后，才考虑直连回退——但只在"换出口可能有用"时做。
+    # 判据由 retry_with_other_exit 给（与取包那条路、与 Windows 侧同一个标准），
+    # 不是"无脑再试一次"：配额/缺包/服务端错误换个出口是同样结果，白等一轮。
+    # 状态码是输出的最后一行（curl -w '\n%{http_code}' 的格式），拿不到就当空。
+    _ftt_code=$(printf '%s' "$_ftt_out" | tail -n 1)
+    _ftt_why=$(update_failure_kind "$_ftt_code" "$(_fetch_rate_remaining "$_ftt_h")")
+    if retry_with_other_exit "$_ftt_why"; then
+        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null
+        return $?
+    fi
+    printf '%s' "$_ftt_out"
+    return 1
 }
 
 # ------------------------------------------------------------------------------
@@ -172,6 +183,37 @@ fetch_update_text() {
 #   bad-content 拿回来的东西没法用（内容是 JSON/HTML/损坏的包，或这一版里安装包的信息有问题）
 #   missing     这个版本没有提供该文件（404/410）——等不会好，要去 Releases 手动下
 # missing 排在最后是刻意的：它指控的是发布方，只有在没有别的解释时才能这么说。
+# 这一次失败，换一条路（Mac 侧是"换个出口"：带代理 -> 直连，或反过来）值不值得再试。
+#
+# 判据只有一条，与 Windows 侧的 Test-RetryWithProxy 同形（门禁 6 核对）：
+# **失败是不是由"这个出口 IP"决定的**。
+#   network  连不上（超时/DNS/被墙）  -> 换出口有意义，常常是唯一办法
+#   quota    配额按来源 IP 计          -> 直连出口用尽了，代理那个出口可能还有
+#   server   对方 5xx                 -> 换出口也是同一台服务器，白等
+#   missing  这一版没这个文件          -> 换出口还是 404，白等
+#   bad-content / local                -> 与出口无关，重试毫无意义
+#
+# quota 这一条是踩出来的：GitHub 的匿名配额按来源 IP 计。实测直连出口
+# used=60 / remaining=0，而同一个地址经本机代理 468 毫秒就 200。
+# 只让 network 重试，等于"最该换出口的情况反而不换"。
+retry_with_other_exit() {
+    case "$1" in
+        network|quota) return 0 ;;
+    esac
+    return 1
+}
+
+# 给 get_tag_from_web 用：它的输出是 "状态码 重定向地址"（或只有状态码）。
+# 3xx 说明这一跳是有效的（网页兜底正常就靠重定向），不该再去试直连。
+_gtw_retry_needed() {
+    _grn_code="${1%% *}"
+    case "$_grn_code" in
+        3??) return 1 ;;
+    esac
+    _grn_why=$(update_failure_kind "$_grn_code" "")
+    retry_with_other_exit "$_grn_why"
+}
+
 UPDATE_FAILURE_KINDS="local network quota server bad-content missing"
 
 # 把 HTTP 状态码归到失败原因。403/429 有两种含义（限流 vs 真的被拒），
@@ -579,9 +621,10 @@ fetch_update_file() {
     [ "$_fuf_rc" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
     _fuf_rem=$(_fetch_rate_remaining "$2.headers")
     FETCH_FAILURE=$(update_failure_kind "$_fuf_code" "$_fuf_rem")
-    # 非"文件不存在"的失败：直连再试一次（代理变量在、代理却不干活，是墙内常见形态）。
-    # 但只有"连不上"才值得再试一次：配额与服务端错误换个出口也是同样结果，重试只是白等。
-    if [ "$FETCH_FAILURE" = "network" ]; then
+    # 非"文件不存在"的失败：换条路再试一次（代理变量在、代理却不干活，是墙内常见形态）。
+    # 条件由 retry_with_other_exit 统一判定——"换出口会不会有用"是唯一标准，
+    # 见那条原则的说明（配额也是按出口 IP 计的，同样该换）。
+    if retry_with_other_exit "$FETCH_FAILURE"; then
         _fuf_code2=$(_fetch_to_file_direct "$2" "$_fuf_hdr" "$1")
         _fuf_rc2=$?
         [ "$_fuf_rc2" -eq 0 ] && { FETCH_FAILURE=""; return 0; }
@@ -661,9 +704,19 @@ tag_from_web_response() {
 
 get_tag_from_web() {
     _gtw_h=$(_update_headers_new)
+    # 顺序与 API 那条路相反：先走代理，再退回直连。
+    # 理由不是口味，是实测：github.com 的直连在受限网络里整段超时
+    # （同一台机器实测直连这一跳 21 秒才失败，经本机代理 390 毫秒就拿到 302）。
+    # 而这条路是"最后一道保障"，走到这里说明前面已经失败过一次了；
+    # 再让用户等一个必然超时的 8 秒，等于把"兜底"变成"再罚一次"。
+    # Mac 侧 curl 继承环境变量代理，所以"先代理"就是不带 --noproxy 的那一次。
     _gtw_out=$(curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
-    [ -n "$_gtw_out" ] || _gtw_out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+    # 只有"换出口可能有用"时才退直连；给出确定结论（400/404/5xx）就不必再罚一次。
+    if [ -z "$_gtw_out" ] || _gtw_retry_needed "$_gtw_out"; then
+        _gtw_out2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+        [ -n "$_gtw_out2" ] && _gtw_out="$_gtw_out2"
+    fi
     case "$_gtw_out" in
         *" "*) _gtw_code="${_gtw_out%% *}"; _gtw_loc="${_gtw_out#* }" ;;
         *) _gtw_code="$_gtw_out"; _gtw_loc="" ;;

@@ -258,14 +258,40 @@ function Get-LocalVersion {
 # DIVERGE(Win): Mac 侧 curl 自动继承环境变量代理，单次调用叠加直连回退即可；
 # Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试。
 # 失败原因记在 $script:UpdateLastVersionFailure：调用方要靠它区分"连不上"与"被限流"。
+# 这一次失败，换一个出口 IP 有没有可能成功？
+#
+# 不是所有失败都值得重试一次：重试要花一次完整的网络往返，还会把真实原因盖掉。
+# 判据只有一条——**失败是否由"这个出口 IP"决定**：
+#   network  连不上（超时/DNS/被墙）  -> 换出口有意义，而且常常是唯一办法
+#   quota    GitHub 配额按出口 IP 计 -> 直连出口用尽了，代理那个出口可能还有
+#   server   对方 5xx                 -> 换出口也是同一台服务器，白等
+#   missing  这一版没这个文件          -> 换出口还是 404，白等
+#   bad-content 拿回来的东西没法用     -> 同上
+#   local    本机临时目录不可写         -> 与网络无关，重试毫无意义
+#
+# quota 这一条是踩出来的：GitHub 的匿名配额按**来源 IP** 计，实测直连出口
+# 已经 used=60/remaining=0，而通过本机代理同一个地址 468 毫秒就 200。
+# 之前只让 network 重试，于是"配额用尽"这种最该换出口的情况反而不换，
+# 只能去走那条更慢的网页兜底——同一个 9 秒里有 8.5 秒是本可以避免的。
+function Test-RetryWithProxy([string]$Failure) {
+    return ($Failure -eq "network" -or $Failure -eq "quota")
+}
+
+# 重试时用哪个代理端口。先快扫，没有再全扫：这一步发生在"已经失败一次"之后，
+# 用户已经在等了，慢一点可以接受，认不出来才是问题。
+function Get-UpdateRetryProxyPort {
+    $port = $null
+    try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
+    if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+    return $port
+}
+
 function Invoke-UpdateText([string]$Url) {
     $text = Invoke-UpdateTextVia $Url ""
     if ($text.Text) { return $text.Text }
     $script:UpdateLastVersionFailure = $text.Failure
-    if ($text.Failure -eq "network") {
-        $port = $null
-        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+    if (Test-RetryWithProxy $text.Failure) {
+        $port = Get-UpdateRetryProxyPort
         if ($port) {
             $t2 = Invoke-UpdateTextVia $Url "$port"
             if ($t2.Text) { return $t2.Text }
@@ -402,21 +428,28 @@ function Get-TagFromLocation([string]$Location) {
 }
 
 # 网页路径：读 302 的 Location 取标签。带代理兜底（与 API 路径同一个模式）。
+# 网页兜底（API 答不上来时用）：只拦住第一跳、读 Location 里的标签。
+#
+# 顺序与 API 那条路**相反**：先走代理。
+# 理由不是口味，是实测：github.com 的直连在很多网络里整段超时——
+# 同一台机器实测直连这一跳 21 秒才失败，经本机代理 390 毫秒就拿到 302。
+# 而这条路是"最后一道保障"，走到这里说明前面已经失败一次了；
+# 再让用户等一个必然超时的 8 秒，等于把"兜底"变成"再罚一次"。
+# 直连仍然作为第二跳保留：代理没在跑、或者代理不认这个目标时，它还有机会。
 function Get-TagFromWeb([string]$Url) {
     $script:UpdateLastVersionFailure = ""
-    $r = Get-TagFromWebVia $Url ""
-    if ($r.Tag) { return $r.Tag }
-    $script:UpdateLastVersionFailure = $r.Failure
-    if ($r.Failure -eq "network") {
-        $port = $null
-        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
-        if ($port) {
-            $r2 = Get-TagFromWebVia $Url "$port"
-            if ($r2.Tag) { return $r2.Tag }
-            $script:UpdateLastVersionFailure = $r2.Failure
-        }
+    $port = Get-UpdateRetryProxyPort
+    if ($port) {
+        $r = Get-TagFromWebVia $Url "$port"
+        if ($r.Tag) { return $r.Tag }
+        $script:UpdateLastVersionFailure = $r.Failure
+        # 代理这条路给出的是"确定结论"（404/5xx）时不必再试直连：
+        # 那是对方的状态，与出口无关。
+        if (-not (Test-RetryWithProxy $r.Failure)) { return "" }
     }
+    $r2 = Get-TagFromWebVia $Url ""
+    if ($r2.Tag) { return $r2.Tag }
+    $script:UpdateLastVersionFailure = $r2.Failure
     return ""
 }
 

@@ -783,6 +783,22 @@ Assert-Eq 'the local advice points at the disk' '1' ([int]($msgLocal -match '磁
 $advices = @('missing', 'quota', 'server', 'network', 'bad-content', 'local') | ForEach-Object { Get-UpdateFailureMessage $_ 'GitHub' }
 Assert-Eq 'no advice claims success' '0' (@($advices | Where-Object { $_ -match '成功' }).Count)
 
+Write-Host '[7a2] retry with another exit IP'
+
+# 失败以后要不要"换个出口 IP 再试一次"，判据只有一条：这个失败是不是由出口决定的。
+# 把它钉住，是因为判错的代价不对称：
+#   - 该换却不换（quota）：只能去走更慢的兜底路。实测直连出口配额用尽时，
+#     同地址经本机代理 468ms 就 200，而网页兜底要 8.7 秒。
+#   - 不该换却换（missing/server）：白等一轮，还把真实原因盖成别的原因。
+# 这两种都是"看起来能跑、其实慢或误导"的坏法，只有断言看得见。
+foreach ($k in @('network', 'quota')) {
+    Assert-Eq ('the ' + $k + ' failure is worth retrying on another exit') '1' ([int](Test-RetryWithProxy $k))
+}
+foreach ($k in @('server', 'missing', 'bad-content', 'local', '')) {
+    Assert-Eq ('the ' + $k + ' failure is not retried on another exit') '0' ([int](Test-RetryWithProxy $k))
+}
+# 空原因（一次都没失败过）也不能触发重试。
+Assert-Eq 'no failure means no retry' '0' ([int](Test-RetryWithProxy $null))
 Write-Host '[7b] listening port enumeration'
 
 # The listening port list drives the whole judgment, so the netstat parsing has to be exact.

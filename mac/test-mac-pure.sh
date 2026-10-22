@@ -750,6 +750,17 @@ self_test() {
         esac
         _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"
     done
+    # 失败后要不要"换个出口再试一次"，判据只有一条：这个失败是不是由出口决定的。
+    # 与 Windows 侧 Test-RetryWithProxy 同一批结论（门禁 6 再核一次两侧同形）。
+    # 判错的代价不对称：该换不换（quota）只能去走更慢的兜底——实测直连配额用尽时
+    # 同地址经代理 468ms 就通，兜底要 8.7 秒；不该换却换（missing/server）白等一轮，
+    # 还把真实原因盖掉。两种都是"看起来能跑、其实慢或误导"，只有断言看得见。
+    for _re_case in "network:1" "quota:1" "server:0" "missing:0" "bad-content:0" "local:0"; do
+        _re_k=${_re_case%%:*}
+        _re_want=${_re_case#*:}
+        if retry_with_other_exit "$_re_k"; then _re_got=1; else _re_got=0; fi
+        _selftest_assert_eq "换出口判据: $_re_k" "$_re_want" "$_re_got"
+    done
     # README 抄了一份菜单表和帮助目录，必须与代码逐项一致。抄的那一份一旦脱节，
     # 后果不是"文档旧了"，而是用户照 README 的编号去敲、敲到另一件事。这类错误
     # 没人会当场发现——文档看着很正常。Windows 侧同一道断言在 [21]，两侧都要有：

@@ -764,6 +764,36 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
+          # d1c) 失败后"换出口重试"的判据：两侧必须是同一批原因。
+          # 这条判据决定"要不要再花一次网络往返"，两侧不一致的后果是同一个失败
+          # 在一个平台上会退代理、在另一个平台上直接放弃——用户看到的就是
+          # "同一个网络问题，Windows 好了 Mac 不好"。
+          # 判据是"这个失败是不是由出口 IP 决定的"，所以对的两项是 network 与 quota。
+          # 两侧写法不同（Win 是一条 -or 表达式，Mac 是 case 分支），所以各取各的形式。
+          function Get-RetryKinds([string]$Text, [string]$Pattern, [string]$Who) {
+            $m = [regex]::Match($Text, $Pattern)
+            if (-not $m.Success) { Write-Host ($Who + ' 找不到"换出口重试"的判据函数'); return '' }
+            $body = $m.Groups[1].Value
+            # 把 body 里所有像"失败原因"的词都扫出来，再按词表过滤。
+            # 不按"双引号 / case 分支"分别写正则：那种写法每种形态都要补一条分支，
+            # 而形态是可变的（Win 用双引号连 -eq，Mac 用 | 分隔），
+            # 补漏一处就会静默少算一个词——门禁自己成了漏检点。
+            $kinds = @([regex]::Matches($body, '[a-z][a-z-]{2,}') |
+                       ForEach-Object { $_.Value } |
+                       Where-Object { $_ -in @('local', 'network', 'quota', 'server', 'bad-content', 'missing') })
+            return (($kinds | Sort-Object -Unique) -join ' ')
+          }
+          $rkWin = Get-RetryKinds $ps '(?s)function Test-RetryWithProxy[^{]*\{(.*?)\n\}' 'Win'
+          $rkMac = Get-RetryKinds $sh '(?s)retry_with_other_exit\(\) \{(.*?)\n\}' 'Mac'
+          if ((-not $rkWin) -or (-not $rkMac)) {
+            Write-Host '换出口重试判据缺失（两侧都要有具名判据函数）'; $fail = 1
+          } elseif ($rkWin -ne $rkMac) {
+            Write-Host ("换出口重试判据两侧不一致：Win [{0}] / Mac [{1}]" -f $rkWin, $rkMac); $fail = 1
+          } elseif ($rkWin -ne 'network quota') {
+            Write-Host ("换出口重试判据应当是 network quota，实际 [{0}]" -f $rkWin); $fail = 1
+          } else {
+            Write-Host '换出口重试判据两侧一致：network quota'
+          }
           # d1b) 帮助一屏的行数上限：两侧必须同一个数。
           # 它决定「帮助会不会被终端切掉底部」，一侧改了另一侧没改，两个平台就会
           # 一屏放得下、另一屏放不下——同一个产品两种体验，而且原因很难查。
