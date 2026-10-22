@@ -1478,7 +1478,18 @@ jobs:
           foreach ($line in (git -c core.quotepath=false ls-files -s)) {
             $p = $line -split '\s+'
             $mode = $p[0]; $path = $p[3]
-            if (($path -match '^mac/.*\.(sh|command)$') -and ($mode -ne '100755')) { Write-Host ("应为可执行 100755：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
+            # mac/ 下的两类分档：
+            #   可执行（755）：入口、定位器、菜单壳——使用者双击或直接执行它们。
+            #   只被 source（644）：prompt-sync.sh（rc 里 source）、test-mac-pure.sh
+            #     （self-test 时 source）。它们从不被执行，不需要可执行位；
+            #     安装时 install_prompt_sync 还显式 chmod 644。
+            # 为什么不能一律要求 755：git archive 在 Windows 上按**文件系统权限**打包，
+            # 而 Windows 没有可执行位——一律 755 会让门禁绿、产物却是 644，
+            # 两边长期不一致而没人发现。实测：从 Release 下载的真实安装包里这两个文件
+            # 就是 644，跑自检全部通过（`bash mac/envproxy.sh self-test`）。
+            $macSourceOnly = @('mac/prompt-sync.sh', 'mac/test-mac-pure.sh')
+            if (($path -match '^mac/.*\.(sh|command)$') -and ($mode -ne '100755') -and ($macSourceOnly -notcontains $path)) { Write-Host ("应为可执行 100755：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
+            if (($macSourceOnly -contains $path) -and ($mode -ne '100644')) { Write-Host ("只被 source 的脚本应为 100644：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
             if (($path -match '^win/.*\.(cmd|ps1)$') -and ($mode -ne '100644')) { Write-Host ("不应可执行 100644：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
             # win/ 下的 .sh 是给 Git Bash source 的（prompt-sync.sh），不双击运行、不需要可执行位；
             # 与 win 侧其他文件同档 100644，避免 Windows 上 checkout 出来模式飘。
