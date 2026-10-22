@@ -13,7 +13,7 @@
   <g id="terminal-path">
     <rect x="56" y="140" width="210" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="76" y="165.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Terminal</text>
-    <text x="76" y="189.5" dominant-baseline="central" font-size="18" fill="#94A6BE">the window you open</text>
+    <text x="76" y="189.5" dominant-baseline="central" font-size="18" fill="#94A6BE">a window you open</text>
 
     <rect x="290" y="140" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
     <text x="310" y="164.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>

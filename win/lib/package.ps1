@@ -35,12 +35,21 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
     $allowed = @()
     $allowed += "$platDir/$entryName"
     foreach ($l in $declared) { $allowed += "$platDir/lib/$l$libExt" }
-    # 根下（lib/ 之外）的脚本一律允许：菜单壳、以及被复制到固定位置的模板（定位器、shell 集成脚本）。
-    # 这些不是库、不由入口加载，所以不进库清单——但它们是合法包内容。
-    # 这里刻意不逐个点名：点名就意味着"新增一个模板要记得改两处校验"，
-    # 而那正是漏掉 prompt-sync.sh、让所有更新被自己拒收的原因。
-    # 形态由 CI 门禁 1 约束，非脚本文件仍然落在下面被拒。
-    $rootScriptExt = @("$libExt", ".command", ".cmd")
+    # 根下（lib/ 之外）**直属**的脚本一律放行：菜单壳，以及被复制到固定位置的模板
+    # （定位器、shell 集成脚本）。它们不是库、不由入口加载，所以不进库清单，但是合法包内容。
+    #
+    # 允许的扩展名**按平台分开**，而且只收本平台在用的那几种。
+    #
+    # 这条规则的真正约束不是"本程序支持哪些脚本"，而是**最老的那个客户端接受什么**：
+    # 老用户点「检查更新」时，跑的是他手里那版代码的校验器。新校验器一旦比它宽松，
+    # 就会出现"新版能收、老版拒收"——而修复只在新版里，新版又正是被拒的那一个，自锁。
+    # v2.1.0 的老校验器：win 放行 .ps1/.command/.cmd，mac 放行 .sh/.command/.cmd。
+    # 所以这里取同样的集合，保证"能过新版 ⇒ 一定也能过老版"。
+    # （win 侧曾经内嵌过 prompt-sync.sh，正是踩了老版不认 .sh 这个坑；现在它内嵌在代码里，
+    #  包里不再有这个文件，但规则仍按上面的兼容性原则划。）
+    # 仍然必须判"直属"（见下面的 extra 判定）：任意深度的子目录脚本照样拒，
+    # 否则等于给投毒包开了一扇后门。
+    $scriptExts = if ($Platform -eq "mac") { @(".sh", ".cmd", ".command") } else { @(".ps1", ".cmd", ".command") }
     # 相对路径要么按传入的 Root 剥、要么按它的长名剥：Windows 上同一个目录可能以 8.3 短名
     # （FIRETR~1）出现，而 Get-ChildItem 回的是长名——只按一种剥会算出空名单，
     # 于是"包内缺少所有文件"，把好包也拒了。
@@ -55,7 +64,7 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
         } | ForEach-Object { $_.TrimStart('\', '/').Replace('\', '/') })
     $missing = @($allowed | Where-Object { $actual -notcontains $_ })
     # 多出来的文件：lib/ 下的一律拒（清单外的库覆盖时会被当残留删掉）；
-    # 平台目录**直属**的脚本放行（菜单壳与各种模板，见 $rootScriptExt 的说明）；其余一律拒。
+    # 平台目录**直属**的脚本放行（菜单壳与各种模板，见 $scriptExts 的说明）；其余一律拒。
     # 必须判"直属"：只比扩展名会连 payload\evil.ps1 这种任意深度的子目录脚本一起放行，
     # 那等于给投毒包开了一扇后门。
     $extra = @($actual | Where-Object {
@@ -64,7 +73,7 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
         $rel = $_ -replace ("^" + [regex]::Escape($platDir) + "/"), ""
         if ($rel -like "*/*") { return $true }
         $ext = [System.IO.Path]::GetExtension($_)
-        return -not ($rootScriptExt -contains $ext)
+        return -not ($scriptExts -contains $ext)
     })
     if ($missing.Count) { throw ("校验失败（安装包缺少 {0}），未做任何改动。" -f ($missing -join ', ')) }
     if ($extra.Count) { throw ("校验失败（安装包里有清单外的文件：{0}），未做任何改动。" -f ($extra -join ', ')) }
@@ -100,7 +109,9 @@ function Copy-FileAtomic([string]$Src, [string]$Dest) {
         # 写完核对字节数：磁盘满或中途被杀会留下截断文件，而"非空"检查分辨不出 1 字节和完整文件。
         if ((Get-Item -LiteralPath $tmp).Length -ne $wantLen) { throw ("写入不完整（{0}：源 {1} 字节，已写 {2} 字节）" -f $Dest, $wantLen, (Get-Item -LiteralPath $tmp).Length) }
         if ([System.IO.File]::Exists($Dest)) {
-            try { [System.IO.File]::Replace($tmp, $Dest, $null) }
+            # 第三参数必须是 [NullString]::Value：传 $null 绑成空字符串会抛异常，
+            # 于是每次都悄悄退化成非原子的 Copy+Delete（见 base.ps1 同一处注释）。
+            try { [System.IO.File]::Replace($tmp, $Dest, [NullString]::Value) }
             catch { [System.IO.File]::Copy($tmp, $Dest, $true); [System.IO.File]::Delete($tmp) }
         } else {
             [System.IO.File]::Move($tmp, $Dest)

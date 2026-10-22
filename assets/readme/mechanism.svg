@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580" role="img" aria-labelledby="mechTitle mechDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="mechTitle">EnvProxy 的三层验证流程</title>
-  <desc id="mechDesc">流程说明：每 2–3 秒轮询一次，依次过三道门——本机端口在监听、端口会回答 CONNECT 握手、通过它访问外网真实可达。三层都通过就写入整套代理变量；不通就删除整套变量、恢复直连。</desc>
+  <desc id="mechDesc">流程说明：每 2–3 秒轮询一次，依次过三道门——本机端口在监听、端口会回答 CONNECT 握手、通过它访问外网真实可达。三层都通过就写入整套代理变量；连续失败满 10 秒且至少 3 次才删除整套变量、恢复直连（单次失败不算）。</desc>
 
   <rect width="1200" height="580" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="578.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -65,9 +65,9 @@
 
     <g id="outcome-off">
       <rect x="624" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">不通 → 删除整套变量，恢复直连</text>
+      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">连续失败满 10 秒 → 删除整套变量</text>
       <text x="648" y="452" dominant-baseline="central" font-size="18" fill="#94A6BE">「断开连接但软件内核还活着」</text>
-      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">就落在这一支：翻不出去 → 判定没在翻墙</text>
+      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">至少 3 次都不通才判定，单次失败不算</text>
     </g>
   </g>
 

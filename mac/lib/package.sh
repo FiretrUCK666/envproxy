@@ -50,18 +50,20 @@ verify_package() {
                 case " $_vdecl " in *" $_vbase "*) ;; *) return 1 ;; esac ;;
             # 本平台目录**直属**的其余脚本：菜单壳、以及被复制到固定位置的模板
             # （定位器、shell 集成脚本）。这些不是库、不由入口加载，所以不进 CORE_LIBS。
-            # 不逐个点名：点名意味着"新增一个模板要改两处校验"，漏掉 prompt-sync.sh 就是这么来的。
-            # 但**只认直属**：写成 "$_vplat_dir/"*"$_vlib_ext" 会连 mac/payload/evil.sh
-            # 这种任意深度的子目录脚本一起放行——那等于给投毒包开了一扇后门。
-            # 判据是"路径里不含额外的 /"，不是靠通配符。
-            "$_vplat_dir/"*"$_vlib_ext"|"$_vplat_dir/"*.command|"$_vplat_dir/"*.cmd)
+            # 判据是"脚本类文件"这个**类别**，不是本平台的库扩展名：曾经只认 .sh（mac 当平台时）
+            # 与 .command/.cmd，于是 win 当平台时（_vlib_ext=.ps1）win/prompt-sync.sh 不在名单里，
+            # 每一份更新包都会被自己的校验器拒收。现在两个平台的全部脚本类型都认，
+            # 任一侧新增模板都不必再改这里。
+            # 但**只认直属**：任意深度的子目录脚本照样拒（下面那行判路径里有没有额外的 /），
+            # 否则等于给投毒包开了一扇后门。
+            "$_vplat_dir/"*.ps1|"$_vplat_dir/"*.sh|"$_vplat_dir/"*.command|"$_vplat_dir/"*.cmd)
                 case "${_vr#"$_vplat_dir/"}" in */*) return 1 ;; esac ;;
             *) return 1 ;;
         esac
     done <<_VPKG_
 $(find "$_vroot/$_vplat_dir" -type f 2>/dev/null)
 _VPKG_
-    _vlist=$(mktemp /tmp/envproxy_verify.XXXXXX 2>/dev/null) || return 1
+    _vlist=$(mktemp "${TMPDIR:-/tmp}/envproxy_verify.XXXXXX" 2>/dev/null) || return 1
     find "$_vroot" -type f \( -name '*.ps1' -o -name '*.sh' \) > "$_vlist" 2>/dev/null
     if [ ! -s "$_vlist" ]; then rm -f "$_vlist" 2>/dev/null || true; return 1; fi
     _vbad=0
@@ -123,7 +125,7 @@ install_package() {
     for _pd in $_peff; do
         find "$_pdest/$_pd" -type f -name '*.envproxy-new.*' -delete 2>/dev/null || true
     done
-    _plist=$(mktemp /tmp/envproxy_pkglist.XXXXXX 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 1; }
+    _plist=$(mktemp "${TMPDIR:-/tmp}/envproxy_pkglist.XXXXXX" 2>/dev/null) || { echo "更新失败：临时文件建不起，未做任何改动。"; return 1; }
     # 清单必须在备份之前生成：备份目录就在 $_pstage 里（真实调用处与 $_proot 是同一个目录），
     # 先生成清单会把 backup/** 当成"包内文件"一起拷进用户安装根（里面还带着上一版核心脚本）。
     _pok=1
@@ -227,7 +229,7 @@ install_package() {
             # 旧入口留在原地，更新入口于是认为本地比线上新，用户再也收不到新版）。
             # 逐字节比一遍，有不一致就改口径为"回滚未完成"，别让用户以为已经好了。
             _pbad="$_pstage/rollback-未还原清单.$$"
-            : > "$_pbad" 2>/dev/null || _pbad="/tmp/envproxy-rollback-未还原清单.$$"
+            : > "$_pbad" 2>/dev/null || _pbad="${TMPDIR:-/tmp}/envproxy-rollback-未还原清单.$$"
             for _pd in $_peff; do
                 _pb="$_pstage/backup/$_pd"
                 [ -d "$_pb" ] || continue

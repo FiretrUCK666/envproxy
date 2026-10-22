@@ -65,9 +65,9 @@
 
     <g id="outcome-off">
       <rect x="624" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">DOWN → delete the whole set</text>
+      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">10 s of failures → delete the set</text>
       <text x="648" y="452" dominant-baseline="central" font-size="18" fill="#94A6BE">"Disconnected" with the kernel alive</text>
-      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">lands here: nothing gets through → not proxying</text>
+      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">3 failures minimum; one bad probe never counts</text>
     </g>
   </g>
 

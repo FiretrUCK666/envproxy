@@ -133,7 +133,11 @@ update_source_id() {
 # curl -D 会跟着软链写，把响应头写进你有权写的任意文件；而且文件留在磁盘上没人清理。
 # 传不进变量是因为命令替换跑在子 shell 里，所以这里回显路径给调用方，由调用方负责删。
 _update_headers_new() {
-    mktemp "${TMPDIR:-/tmp}/envproxy-update-XXXXXX" 2>/dev/null || printf ''
+    # 前缀必须与清扫那一侧一致（envproxy_update.）：创建用什么、清扫认什么，
+    # 两边一旦分叉，被强杀留下的响应头文件就永远不会被 24 小时清扫捡走。
+    # ${X:-默认} 而不是 $X：这个函数定义在前面、基址变量在后面才赋值，
+    # 不兜底就变成"加载顺序一改就炸"的隐式依赖。
+    mktemp "${UPDATE_TMP_BASE:-${TMPDIR:-/tmp}}/envproxy_update.XXXXXX" 2>/dev/null || printf ''
 }
 
 # 取文本：先按当前环境（含代理变量）取，失败再直连重试一次。
@@ -766,14 +770,32 @@ _ENVPROXY_SRCS_
     return 1
 }
 
-# 清掉 24 小时以前留下的更新临时目录。
+# 更新临时物的**唯一基址**：创建与清扫必须用同一个，否则清扫永远找不到自己留下的东西。
+# 以前创建写死 /tmp、清扫读 ${TMPDIR:-/tmp}——macOS 上 TMPDIR 是 /var/folders/...，
+# 两边根本不是一个目录，清扫从来没生效过。
+UPDATE_TMP_BASE="${TMPDIR:-/tmp}"
+
+# 本次更新产生的临时物（空格分隔），由 trap 兜底删除。
+UPDATE_TMP_ITEMS=""
+
+_cleanup_update_tmp() {
+    if [ -n "$UPDATE_TMP_ITEMS" ]; then
+        for _cut in $UPDATE_TMP_ITEMS; do
+            [ -n "$_cut" ] && rm -rf "$_cut" 2>/dev/null || true
+        done
+    fi
+    UPDATE_TMP_ITEMS=""
+}
+
+# 清掉 24 小时以前留下的更新临时物。
 # 判据是**修改时间**，不是创建时间：目录里的文件被改过就说明它还在用。
 remove_stale_update_temp() {
-    _rst_base="${TMPDIR:-/tmp}"
-    [ -d "$_rst_base" ] || return 0
+    [ -d "$UPDATE_TMP_BASE" ] || return 0
     _rst_now=$(date +%s 2>/dev/null || echo 0)
-    for _rst_d in "$_rst_base"/envproxy_update.*; do
-        [ -d "$_rst_d" ] || continue
+    # 文件与目录都要清：下载的包是 <base>.tar.gz（文件）、.headers（文件），
+    # 解压目录是 <base>-src（目录）。只认目录会让被强杀/断电留下的包永久堆着。
+    for _rst_d in "$UPDATE_TMP_BASE"/envproxy_update.*; do
+        [ -e "$_rst_d" ] || continue
         _rst_m=$(stat -f '%m' "$_rst_d" 2>/dev/null || stat -c '%Y' "$_rst_d" 2>/dev/null || echo "")
         [ -n "$_rst_m" ] || continue
         [ "$_rst_now" -gt "$_rst_m" ] 2>/dev/null || continue
@@ -948,8 +970,15 @@ update_envproxy() {
     # 临时路径必须不可预测：固定名字 + 先删后建，攻击者可预置同名 symlink 把下载与解压引向别处。
     # 先清掉以前留下的临时目录：进程被强杀（或者断电）会留下，不清就一直堆着。
     remove_stale_update_temp
-    _rnd=$(mktemp /tmp/envproxy_update.XXXXXX 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 1; }
+    _rnd=$(mktemp "$UPDATE_TMP_BASE/envproxy_update.XXXXXX" 2>/dev/null) || { echo "更新失败：$(update_failure_message local "${REMOTE_SOURCE_NAME:-更新源}")"; return 1; }
     rm -f "$_rnd" 2>/dev/null || true
+    # 本次更新的临时物登记在案：正常路径各自会删，这里兜的是"被信号打断/断电前一刻"。
+    # 各次尝试的包与解压目录都挂在同一个 $_rnd 前缀下，通配一次就全清。
+    UPDATE_TMP_ITEMS="$_rnd"
+    # 只挂信号，**不挂 EXIT**：入口脚本 envproxy.sh 用 EXIT 删操作锁，
+    # 在这里覆盖 EXIT 会让锁永远留着，下一次安装/更新就被判成"另一个在进行"。
+    # 正常结束的清理由下面各分支自己负责。
+    trap '_cleanup_update_tmp' INT TERM HUP
     _tgz=""
     _exdir=""
     # 各次尝试的失败原因（空格分隔）：最后统一挑一个报给用户，
@@ -1137,6 +1166,8 @@ _ENVPROXY_PKG_
         echo "如果状态仍不对，请打开菜单选一次"安装 / 修复"。"
     fi
     rm -rf "$_exdir" 2>/dev/null || true
+    # 主体跑完，撤销信号兜底（不动外层的 EXIT trap）。
+    trap - INT TERM HUP
 }
 
 # 打印这一版改了什么：包内 release-notes/<标签>.md，最多 40 行；没有就跳过。

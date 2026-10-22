@@ -61,14 +61,17 @@ cd envproxy
 
 ## 提交前门禁
 
-改完必须全绿才算完成。**权威定义只有 `.github/workflows/check.yml` 一处**（门禁 1–10），
+改完必须全绿才算完成。**权威定义只有 `.github/workflows/check.yml` 一处**（门禁 1–10，另含 3b 与 4b 两条），
 下面只列本地最常跑的三条，不复制门禁清单。
 
 **Mac / Linux 上跑**：
 
 ```sh
-# 门禁 1：sh 语法
-bash -n mac/*.sh mac/lib/*.sh
+# 门禁 1：sh 语法。
+# 必须逐文件循环：`bash -n a.sh b.sh` 只解析**第一个**参数，后面的全部静默跳过
+# （实测：一个合法文件 + 一个语法错误的文件，按这个顺序调用返回 0）。
+# 写完命令没有任何输出就以为过了，直到推送后 CI 才红。
+for f in mac/*.sh mac/lib/*.sh mac/tests/*.sh win/*.sh; do bash -n "$f" || echo "语法错误：$f"; done
 # 门禁 10 的 Mac 侧：功能自检（沙箱跑，不碰你的 ~/.zshrc 与环境变量）
 bash mac/envproxy.sh self-test
 ```

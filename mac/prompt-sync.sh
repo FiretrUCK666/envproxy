@@ -118,7 +118,11 @@ if [ -z "${_ENVPROXY_SYNC_READY-}" ]; then
             _envproxy_clear_ours
             return 0
         fi
-        [ -r "$(_envproxy_home)/proxy.env" ] && . "$(_envproxy_home)/proxy.env"
+        # 路径只算一次：$( ) 每次都是一个 fork，同一行写两次就是两个。
+        # 这条在每次回车时执行，能少一个就少一个（本文件 _envproxy_clear_ours 早就这么做了）。
+        _ep_p="$(_envproxy_home)/proxy.env"
+        [ -r "$_ep_p" ] && . "$_ep_p"
+        unset _ep_p 2>/dev/null || true
         return 0
     }
 

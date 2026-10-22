@@ -282,7 +282,9 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
         $handler = New-Object System.Net.Http.HttpClientHandler
         if ($ProxyPort) {
             $handler.UseProxy = $true
-            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
+            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
+            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
         } else {
             $handler.UseProxy = $false
         }
@@ -425,7 +427,9 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
         $handler = New-Object System.Net.Http.HttpClientHandler
         if ($ProxyPort) {
             $handler.UseProxy = $true
-            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
+            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
+            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
         } else {
             $handler.UseProxy = $false
         }
@@ -644,7 +648,9 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         $handler = New-Object System.Net.Http.HttpClientHandler
         if ($ProxyPort) {
             $handler.UseProxy = $true
-            $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$ProxyPort")
+            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
+            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
+            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
         } else {
             $handler.UseProxy = $false
         }
@@ -719,15 +725,24 @@ function Test-UsableZip([string]$Path) {
 # 失败路径绝不给安装区留下任何东西。
 # 失败原因写进脚本级变量 $UpdateLastFailure：调用方要靠它决定给用户什么提示，
 # 在这里打印会让"每个源各说一句"和"最后一句总结"互相打架。
-# 清掉 24 小时以前留下的更新临时目录。
-# 判据是**修改时间**，不是创建时间：目录里的文件被改过就说明它还在用。
+# 清掉 24 小时以前留下的更新临时物。
+# 判据是**修改时间**，不是创建时间：文件被改过就说明它还在用。
+# 文件与目录**都要清**：下载的包是 <base>.zip（文件），解压目录是 <base>-pkg（目录）。
+# 只枚举 -Directory 会让被强杀/断电留下的 .zip 永久堆在临时目录里——用户看不到，
+# 但它一直在那儿。
 function Remove-StaleUpdateTemp {
     try {
         $root = [System.IO.Path]::GetTempPath()
         $cutoff = (Get-Date).AddHours(-24)
-        foreach ($d in (Get-ChildItem -LiteralPath $root -Directory -Filter "EnvProxyUpdate-*" -ErrorAction SilentlyContinue)) {
+        foreach ($it in (Get-ChildItem -LiteralPath $root -Filter "EnvProxyUpdate-*" -Force -ErrorAction SilentlyContinue)) {
             try {
-                if ($d.LastWriteTime -lt $cutoff) { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+                if ($it.LastWriteTime -lt $cutoff) {
+                    if ($it.PSIsContainer) {
+                        Remove-Item -LiteralPath $it.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                    } else {
+                        Remove-Item -LiteralPath $it.FullName -Force -ErrorAction SilentlyContinue
+                    }
+                }
             } catch {}
         }
     } catch {}
@@ -789,7 +804,10 @@ function Get-UpdatePackage([hashtable]$Remote) {
         if ($dl -eq "ok") {
             Write-Host "正在解压并校验..." -ForegroundColor Cyan
             try {
-                Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
+                # -LiteralPath 而不是 -Path：-Path 会把路径当通配模式，
+                # 临时目录里带方括号（如 [1]）时直接报 PathNotFound（实测），
+                # 而那会被误归成"内容不对"，让人以为是发布包有问题。
+                Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
             } catch {
                 $script:UpdateLastFailure = "bad-content"
                 Remove-ItemSafe $zipFile
@@ -887,7 +905,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     # 此时任何"比较"都是瞎猜，直接拒绝并指一条明路，而不是继续往下走。
     if (-not $local) {
         Write-Host "本地版本未知（安装根缺少 VERSION 文件），不敢自动更新，未做任何改动。" -ForegroundColor Yellow
-        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选"安装 / 修复"。" -ForegroundColor Yellow
+        Write-Host "请到 Releases 页面手动下载安装包覆盖一次，或打开菜单选「安装 / 修复」。" -ForegroundColor Yellow
         $script:UpdateExitCode = 1
         return
     }
@@ -1007,12 +1025,12 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         }
         if (-not $ok) {
             # 文件已经覆盖到位，但监控没起来：目的没达成，退出码要如实说"没成"。
-            Write-Host "监控未能确认运行，请打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
+            Write-Host "监控未能确认运行，请打开菜单选一次「安装 / 修复」。" -ForegroundColor Yellow
             $script:UpdateExitCode = 1
         }
     } catch {
         Write-Host ("更新失败：{0}" -f $_.Exception.Message) -ForegroundColor Yellow
-        Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次"安装 / 修复"。" -ForegroundColor Yellow
+        Write-Host "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次「安装 / 修复」。" -ForegroundColor Yellow
         $script:UpdateExitCode = 1
     } finally {
         # 取包失败时这两个变量还是 $null：没拿到包就说明临时物已经在取包函数里清过了。

@@ -25,128 +25,28 @@ $_localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.
 $LauncherDir      = Join-Path $_localAppData "EnvProxy"
 $LauncherPath     = Join-Path $LauncherDir "launcher.ps1"
 
-# 定位器脚本内容（安装时写入固定位置，由本脚本生成，保证一致）
+# 登录定位器的正文住在 win\locator.ps1 这个**真实文件**里，不再内嵌成字符串。
+#
+# 为什么必须是真实文件：它以前是一段 ~139 行的 here-string。字符串里的代码对解析器不可见，
+# 门禁 2（语法检查）与门禁 3（编码红线）都看不见它，测试也只验证"启动命令指向这个文件"。
+# 实测在那段字符串里删掉一个右花括号：门禁 2 仍然绿、单元测试仍然 ALL PASS、
+# 自愈判据仍然报"已是最新"——错误会一路绿灯发到用户机器上，表现为"开机自启静默失效"，
+# 而且不报任何错。变成真实文件后，门禁 1/2/3/9 自动覆盖它，改坏了当场就红。
+#
+# 返回模板正文；模板缺失时抛错而不是返回空串——写一份空定位器等于把开机自启静默关掉。
 function Get-LauncherContent {
-    return @'
-# EnvProxy 登录定位器（由 envproxy.ps1 安装时生成，请勿手改）
-$ErrorActionPreference = "SilentlyContinue"
-$reg = "HKCU:\Software\EnvProxy"
-$target = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).ScriptPath
-# 广播用的 P/Invoke 不能写成 @'...'@ here-string：外层模板本身就是单引号 here-string，
-# 内层再出现行首 '@ 会提前终结外层。这里用反引号转义拼单行 C# 源码。
-try {
-    $csSrc = "using System;`nusing System.Runtime.InteropServices;`npublic static class EnvProxyNative {`n [DllImport(`"user32.dll`", CharSet = CharSet.Auto)]`n public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);`n}"
-    Add-Type -TypeDefinition $csSrc -ErrorAction SilentlyContinue
-} catch {}
-function Send-LocatorBroadcast {
-    try {
-        $r = [UIntPtr]::Zero
-        [EnvProxyNative]::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero,
-            "Environment", 0x0002, 3000, [ref]$r) | Out-Null
-    } catch {}
-}
-
-# 记录必须指向入口脚本本身：指向别处（例如某个库文件）同样算失效。
-# 只判"文件在不在"不够——记录写坏了、而那个文件恰好存在时，会一直去启动一个跑不起来的
-# 文件，搜索却永远不触发，开机自启动就此静默失效。
-if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Leaf $target) -ne "envproxy.ps1")) {
-    # 记录失效（文件夹被移动/删除过，或记录指向的不是入口脚本）。先顺手清理旧位置的运行时残留：
-    # 覆盖"移动后立刻关机"的场景（监控来不及自退，旧位置可能残留 monitor 目录/空壳）。
-    if ($target -and -not (Test-Path -LiteralPath $target)) {
-        $oldDir = Split-Path -Parent $target
-        Remove-Item -LiteralPath (Join-Path $oldDir "monitor") -Recurse -Force -ErrorAction SilentlyContinue
-        $left = Get-ChildItem -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
-        if (-not $left) { Remove-Item -LiteralPath $oldDir -Force -ErrorAction SilentlyContinue }
+    $src = Join-Path $ScriptDir "locator.ps1"
+    if (-not (Test-Item $src)) {
+        throw ("找不到登录定位器模板：{0}（安装包不完整，请重新下载覆盖）" -f $src)
     }
-    # 分层自动搜索新位置
-    #   用户常用位置深搜 6 层；其他磁盘根浅搜 4 层。
-    #   注意：不从用户目录根整体递归——AppData 等大目录会因权限问题中断遍历。
-    $roots = @(
-        @{ Path = "$env:USERPROFILE\Desktop";   Depth = 6 },
-        @{ Path = "$env:USERPROFILE\Documents"; Depth = 6 },
-        @{ Path = "$env:USERPROFILE\Downloads"; Depth = 6 },
-        @{ Path = "$env:USERPROFILE\OneDrive";  Depth = 6 },
-        @{ Path = "$env:USERPROFILE\.config";   Depth = 6 }
-    )
-    $sysRoot = "$($env:SystemDrive)\"
-    Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
-        Where-Object { $_.Root -ne $sysRoot } |
-        ForEach-Object { $roots += @{ Path = $_.Root; Depth = 4 } }
-
-    # 先把所有搜索根的结果汇总，再统一按活跃度排序（与 Mac 侧 locator.sh 同一算法）。
-    # 不能"命中第一个根就收工"：那样排序只在一个根内成立，靠前的根（桌面/文稿/下载…）
-    # 里放着的陈旧备份会压过其他盘里真正在用的正本——而"活跃度优先"正是
-    # "备份目录不会被误选"的唯一依据。
-    $candidates = @()
-    foreach ($r in $roots) {
-        $candidates += @(Get-ChildItem -LiteralPath $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
-    }
-    if ($candidates.Count -gt 0) {
-        # 活跃度排序：monitor\monitor.log 最近写入的优先（无日志的排最后），
-        # 同活跃度再看脚本本身的修改时间。这样"真正在用的项目"永远胜出，
-        # 用户复制的备份（日志陈旧或没有日志）不会被误选。
-        foreach ($c in $candidates) {
-            $logPath = Join-Path (Split-Path -Parent $c.FullName) "monitor\monitor.log"
-            $logTime = if (Test-Path -LiteralPath $logPath) { ([System.IO.FileInfo]$logPath).LastWriteTime } else { [datetime]::MinValue }
-            $c | Add-Member -NotePropertyName EnvLogTime -NotePropertyValue $logTime -Force
-        }
-        $target = ($candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
-    }
-}
-if (-not $target -or -not (Test-Path -LiteralPath $target)) {
-    # 兜底：安装根找不到了（记录为空，或搜索后仍无可用候选、$target 留着旧的死路径），
-    # 没有活着的组件会再纠正变量——把我们写的东西清掉，新终端不再读到过期代理。
-    # 只删本机地址，用户自己的配置不动。判据与 Mac 侧同源（值非空且文件存在才算找到）。
-    # 清完必须广播：Explorer 在登录时已按旧注册表建好环境块，不广播则它之后起的
-    # 每个终端都继续继承死变量。保持静默（登录路径不打扰用户）。
-    #
-    # 这里为什么自己写注册表、不调 env 层的 Write-UserEnvValues / Remove-UserEnvNames：
-    # 这段是**生成的独立脚本**，运行在登录时、安装根已经找不到的场合——那时 env.ps1
-    # 根本不在身边，没有库可以依赖。所以它只能自带最小实现。
-    # 代价是归属判定这里是简版（只看"像不像本机地址"，没有快照比对）：那种情况下
-    # 已经没有任何记录可查，而留下的过期代理必须清掉，两害相权取清理。
-    $cleared = $false
-    $drop = @()
-    foreach ($n in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
-        $v = [Environment]::GetEnvironmentVariable($n, "User")
-        if ($v -like "http://127.0.0.1:*") { $drop += $n }
-    }
-    if ([Environment]::GetEnvironmentVariable("NODE_USE_ENV_PROXY", "User") -eq "1") { $drop += "NODE_USE_ENV_PROXY" }
-    # 直接写注册表，不走 [Environment]::SetEnvironmentVariable：后者每删一个变量都要同步
-    # 等一次 WM_SETTINGCHANGE 广播结束（单个约 11 秒）。这条路径在登录时为用户清残留，
-    # 让他为了删 4 个变量干等近一分钟是不可接受的；广播在下面统一发一次即可。
-    if ($drop.Count -gt 0) {
-        try {
-            $ek = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
-            if ($null -ne $ek) {
-                foreach ($n in $drop) { try { $ek.DeleteValue($n, $false) } catch {} }
-                $ek.Close()
-                $cleared = $true
-            }
-        } catch {}
-    }
-    if ($cleared) { Send-LocatorBroadcast }
-    exit
-}
-
-# 注册表上的 New-Item -Force 不是"已存在就跳过"，而是**清空重建**：
-# 连带删掉里面的 Backup 快照，那是卸载时还原使用者原值的唯一依据。
-# 所以只在键不存在时才建。
-if (-not (Test-Path -LiteralPath $reg)) { New-Item -Path $reg -Force -ErrorAction SilentlyContinue | Out-Null }
-Set-ItemProperty -Path $reg -Name "ScriptPath" -Value $target -ErrorAction SilentlyContinue
-
-# 监控进程识别判据：与核心脚本里的 $MonitorCmdLinePattern 保持同一语义。
-# 这里必须写字面量——本模板是单引号 here-string，变量在生成时不会被展开，
-# 写变量名会让生成的定位器引用一个未定义变量（空模式恒匹配，反而误判"监控已在跑"）。
-# 引号可有可无：引号是启动方式决定的，不是身份的一部分。
-$MonitorCmdLinePattern = '-File\s+"?[^"]*envproxy\.ps1"?\s*$'
-$running = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -match $MonitorCmdLinePattern }
-if (-not $running) {
-    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
-        -ArgumentList "-NoProfile","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-File","`"$target`""
-}
-'@
+    # 必须剥掉源文件的 BOM。Read-Text 是用 UTF8 解码的，它**不会**自动去掉 BOM，
+    # 而写入端（WriteAllText 带 UTF8Encoding($true)）会再加一个——
+    # 结果装出来的 launcher.ps1 是 EF BB BF EF BB BF 开头，PowerShell 只剥一个，
+    # 剩下的 U+FEFF 跟行首的 # 拼成一个"命令名"，5.1 直接报
+    # The term '# ' is not recognized，开机自启静默失效。
+    $body = (Read-Text $src)
+    if ($body.Length -gt 0 -and $body[0] -eq [char]0xFEFF) { $body = $body.Substring(1) }
+    return $body
 }
 
 # 把定位器写到固定位置，并把 Run 键指向定位器
@@ -184,6 +84,12 @@ function Update-ScriptPathRecord {
 function Test-LauncherCurrent {
     try {
         if (-not (Test-Item $LauncherPath)) { return $false }
+        # BOM 必须单独校验：Read-Text 会自动识别并剥掉 BOM，所以文本一致并不能证明
+        # BOM 还在。BOM 一丢（外部编辑器另存、杀软改文件、备份还原工具），
+        # PowerShell 5.1 会按 ANSI 读这个文件，中文注释撑破语法 -> 登录时启动项
+        # 静默失效，而「内容比对」却说一切正常。三字节单独断言一次。
+        $bytes = [System.IO.File]::ReadAllBytes($LauncherPath)
+        if (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) { return $false }
         # 行尾与首尾空白不比：落盘的行尾与源码里 here-string 的行尾
         # 不必逐字节相同，比"生成出来的代码"是否一致就够了。
         $want = (Get-LauncherContent) -replace "`r`n", "`n"
@@ -252,6 +158,12 @@ function Get-ProfileBlockLines {
     #      敲回车就跟着变"成立。只做第 1 件的话，敲回车不会触发任何东西，
     #      那一句承诺就是假的（Windows 没有 precmd 那种自动钩子，必须自己包 prompt）。
     #
+    # 写进使用者文件的那几行**必须是纯 ASCII**：我们不知道那个文件是什么编码
+    # （Get-TextFileEncoding 会沿用原文件；新建的通常是无 BOM 的 UTF-8）。
+    # 中文注释放进无 BOM 文件后，PowerShell 5.1 按 ANSI 读，全变乱码。
+    # 乱码只是注释、不影响功能，但使用者的配置文件里出现一堆看不懂的方块，
+    # 会让人以为装坏了。而替使用者改文件编码比乱码更糟。所以：这段说英文。
+    #
     # 包 prompt 的三条约束：
     #   a) 必须记住原函数并原样调用，否则 Oh My Posh / Starship / 自定义提示符全被顶掉；
     #   b) 同步逻辑整体 try/catch 包死——prompt 里抛异常会让整个提示符渲染失败；
@@ -259,8 +171,10 @@ function Get-ProfileBlockLines {
     $names = ($ProxyVarNames | ForEach-Object { "'$_'" }) -join ', '
     $body = @(
         $ProfileBlockStart
-        '# EnvProxy: 让已经开着的窗口跟着代理状态走（本块由安装程序写入，卸载时整块移除）',
-        '# 手动接管：$env:ENVPROXY_TERM = "off" 固定直连；Remove-Item Env:ENVPROXY_TERM 恢复自动',
+        '# EnvProxy: keeps already-open windows in sync with the proxy state.',
+        '# Written by the installer; removed as a whole on uninstall.',
+        '# Take over in one window: $env:ENVPROXY_TERM = "off" to go direct,',
+        '# Remove-Item Env:ENVPROXY_TERM to go back to automatic.',
         'try {',
         ("    `$__epNames = @(" + $names + ")"),
         '    $__epSync = {',
@@ -269,8 +183,8 @@ function Get-ProfileBlockLines {
         '            $__epOwn = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $false)',
         '            if ($null -ne $__epReg) {',
         '                if ($env:ENVPROXY_TERM -eq "off") {',
-        '                    # 固定直连：只清"确实是我们写下的那些值"。值是我们写的才清，',
-        '                    # 用户自己设的（哪怕是本机地址）一律不动——这是 README 的承诺。',
+        '                    # Direct mode: clear only values we actually wrote.',
+        '                    # Anything the user set themselves stays untouched.',
         '                    foreach ($__epN in $__epNames) {',
         '                        $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
         '                        $__epOurs = if ($null -ne $__epOwn) { $__epOwn.GetValue($__epN, $null) } else { $null }',
@@ -279,8 +193,8 @@ function Get-ProfileBlockLines {
         '                        }',
         '                    }',
         '                } else {',
-        '                    # 自动跟随：注册表有值就注入；没有值时只清我们自己写下的那些——',
-        '                    # 判据是归属记录里有这个名字且当前值相等，用户自己设的一律不动。',
+        '                    # Auto mode: inject what the registry holds. When it holds',
+        '                    # nothing, clear only our own values (ownership record matches).',
         '                    foreach ($__epN in $__epNames) {',
         '                        $__epVal = $__epReg.GetValue($__epN, $null)',
         '                        $__epCur = [Environment]::GetEnvironmentVariable($__epN, "Process")',
@@ -293,14 +207,13 @@ function Get-ProfileBlockLines {
         '                            }',
         '                            continue',
         '                        } else {',
-        '                            # 归属记录不存在（升级上来的老安装还没写过它）。',
-        '                            # 这里**不清任何东西**：没有记录就没有判据，猜就要猜错——',
-        '                            # 使用者自己起在任意端口的 mitmproxy 长得和我们的完全一样，',
-        '                            # 按形状猜只能二选一，必然误删其中一类。',
-        '                            # 宁可留一个过期值（下次 on 会覆盖；下次 off 时有记录就能清），',
-        '                            # 也不替他删掉自己的配置。',
-        '                            # 与 Mac 侧 write_off_sentinel 的"文件里没有可解析端口就退化成 no-op"',
-        '                            # 是同一条原则：判不了就不动。',
+        '                            # No ownership record (an older install that was',
+        '                            # upgraded never wrote one). Clear NOTHING here:',
+        '                            # without a record there is no test, and guessing',
+        '                            # always deletes the wrong one. A mitmproxy the user',
+        '                            # started on any port looks exactly like ours.',
+        '                            # Better to leave a stale value (the next on',
+        '                            # overwrites it) than to delete their own config.',
         '                            continue',
         '                        }',
         '                    }',
@@ -475,11 +388,21 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
         if ($Lines.Count -gt 0) { $text += $nl }
         [System.IO.File]::WriteAllText($tmp, $text, $enc)
         if (Test-Path -LiteralPath $Path) {
-            # 改用户文件之前先备份：改坏了还能手工还原。
-            # 与 Mac 侧改 rc 前留 *.envproxy.bak 是同一规矩（双端对等）。
-            try { Copy-Item -LiteralPath $Path -Destination ($Path + ".envproxy.bak") -Force -ErrorAction SilentlyContinue } catch {}
+            # 备份只在**第一次**写之前留下：它代表「装之前长什么样」，那才是能还原回去的东西。
+            # 每次写都覆盖的话，装第二次时 .bak 里已经是带我们那一块的版本，
+            # 使用者的原始内容在装+卸一轮之后就没了——README 承诺的「改坏了还能还原」落空。
+            $bak = $Path + ".envproxy.bak"
+            if (-not (Test-Path -LiteralPath $bak)) {
+                try { Copy-Item -LiteralPath $Path -Destination $bak -Force -ErrorAction SilentlyContinue } catch {}
+            }
             Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
         } else {
+            # 原本没有这个文件：留一张显式字条，卸载时据此判断「该删文件」而不是「该还原内容」。
+            # 否则「原来不存在」与「原来是空文件」分不开，而 0 字节的 .bak 看着像备份、其实什么都还原不了。
+            $bak = $Path + ".envproxy.bak"
+            if (-not (Test-Path -LiteralPath $bak)) {
+                try { [System.IO.File]::WriteAllText($bak, "# envproxy: 本文件在安装前不存在（卸载时应删除，不要还原内容）`n", (New-Object System.Text.UTF8Encoding($false))) } catch {}
+            }
             Move-Item -LiteralPath $tmp -Destination $Path -Force -ErrorAction Stop
         }
         return $true
@@ -495,6 +418,52 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
 # 本程序是被 powershell.exe(5.1) 启动的，只看当前 $PROFILE 就只会写 5.1 那个；
 # 日常用 pwsh 7 的人永远拿不到终端同步，而且没有任何报错——静默不兑现承诺。
 # 所以两边都写。路径现场从各自宿主问，不硬编码 Documents（OneDrive 重定向会让它变）。
+# 终端同步到底有没有在生效——给状态页用。
+# 光看「块写进去了」不算数：执行策略拦着、块不成对，都能让
+#「看起来装好了，实则每次开窗口都不同步」。
+function Get-TerminalSyncState {
+    $paths = @()
+    try { $paths = @(Get-ProfilePaths) } catch {}
+    if ($paths.Count -eq 0) { return @{ State = 'nohost'; Detail = '取不到配置文件路径' } }
+    $unpaired = 0
+    $current = 0
+    foreach ($p in $paths) {
+        if (-not (Test-Item $p)) { continue }
+        # Git Bash 的块用 bash 语法，判据也必须是它自己那套：
+        # 拿 PowerShell 的标记去比永远不成对，会让状态页把「已经装好」误报成「没有同步块」。
+        if (Test-IsBashrcPath $p) {
+            $lines = @(Read-ProfileLines $p)
+            $hs = -1; $he = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+                if ($lines[$i].Trim() -ceq $BashBlockStart -and $hs -lt 0) { $hs = $i }
+                if ($lines[$i].Trim() -ceq $BashBlockEnd -and $he -lt 0) { $he = $i }
+            }
+            if (($hs -ge 0) -ne ($he -ge 0)) { $unpaired++; continue }
+            if ($hs -ge 0 -and $he -gt $hs) {
+                $have = @($lines[$hs..$he] | ForEach-Object { $_.Trim() })
+                $want = @(Get-BashBlockLines | ForEach-Object { $_.Trim() })
+                if (($have -join "`n") -eq ($want -join "`n")) { $current++ }
+            }
+            continue
+        }
+        # 先判「有没有我们的标记」，再判成对。两件事必须分开：
+        # 用户自己的 profile（从没装过）里一个标记都没有，Test-ProfileBlockPaired 也返回 false，
+        # 于是「从没装过」会被报成「标记不成对」——而后者会让用户被告知"重跑安装可修复"，
+        # 他又不知道该删哪行。同一文件里的 Remove-OneShellProfile 就是先 Test-MarkerPresent
+        # 再判成对，这里与它对齐（同一件事只准有一处判据）。
+        if (-not (Test-MarkerPresent @(Read-ProfileLines $p) $ProfileBlockStart)) { continue }
+        if (-not (Test-ProfileBlockPaired $p)) { $unpaired++; continue }
+        if (Test-ProfileBlockCurrent $p) { $current++ }
+    }
+    # 执行策略会拦掉整个 profile 文件，块再对也跑不起来。判定优先于块本身。
+    $pol = ''
+    try { $pol = Get-ProfileExecutionPolicyWarning } catch {}
+    if ($pol) { return @{ State = 'blocked'; Detail = $pol } }
+    if ($current -gt 0) { return @{ State = 'ok'; Detail = '' } }
+    if ($unpaired -gt 0) { return @{ State = 'unpaired'; Detail = '配置文件里的标记不成对，未改动它' } }
+    return @{ State = 'missing'; Detail = '配置文件里没有同步块' }
+}
+
 function Get-ProfilePaths {
     # 自检可以设 $env:ENVPROXY_PROFILE_OVERRIDE（分号分隔）把落点改到沙箱，
     # 这样既能覆盖"多落点"这条逻辑，又不会碰用户真实的 profile。
@@ -520,7 +489,23 @@ function Get-ProfilePaths {
         $cur = $PROFILE
         if (-not [string]::IsNullOrWhiteSpace($cur) -and -not ($paths -contains $cur)) { [void]$paths.Add($cur) }
     } catch {}
+    # Git Bash 的 ~/.bashrc 也是一个落点：它靠提示符钩子重读状态镜像文件，
+    # 与 PowerShell 侧同一套「只清我们写下的值」判据，但块内容与钩子行不同，
+    # 由 Install-OneShellProfile 按路径分辨（见 Test-IsBashrcPath）。
+    try {
+        $home2 = [string]$env:USERPROFILE
+        if (-not [string]::IsNullOrWhiteSpace($home2)) {
+            $bashrc = Join-Path $home2 ".bashrc"
+            if (-not ($paths -contains $bashrc)) { [void]$paths.Add($bashrc) }
+        }
+    } catch {}
     return @($paths | Where-Object { $_ })
+}
+
+# 某个落点是不是 Git Bash 的启动文件（决定那一块的内容与钩子行）。
+function Test-IsBashrcPath([string]$Path) {
+    if (-not $Path) { return $false }
+    return ($Path -like "*.bashrc")
 }
 
 # 安装/修复：幂等。已经正确就零写入（不动用户的文件 mtime）。
@@ -543,8 +528,269 @@ function Install-ShellProfile {
     return @{ Ok = $true; Reason = $lastReason; Path = $shown }
 }
 
+# Git Bash 那一块的标记行（与 PowerShell 的标记分开，互不干扰）。
+$BashBlockStart = "# >>> EnvProxy >>>"
+$BashBlockEnd   = "# <<< EnvProxy <<<"
+
+# Git Bash 启动时执行的那一行：加载一次性复制到固定位置的脚本。
+# 不把逻辑写进 .bashrc：逻辑要跟着版本走，而 .bashrc 是使用者的文件。
+function Get-BashHookLine {
+    return '[ -r "$HOME/.envproxy/prompt-sync.sh" ] && . "$HOME/.envproxy/prompt-sync.sh"'
+}
+
+function Get-BashBlockLines {
+    return @($BashBlockStart, (Get-BashHookLine), $BashBlockEnd)
+}
+
+# Git Bash 终端同步脚本的正文。**以模板形式内嵌，安装时生成到 ~/.envproxy/prompt-sync.sh。**
+#
+# 为什么不作为独立文件随包发：包校验器（旧版和新版）只放行平台目录直接下级的
+# .ps1 / .cmd / .command。多一个 win/prompt-sync.sh（.sh）会让**所有 v2.1.0 及以前的
+# 用户点「检查更新」时被自己的旧校验器拒收**，报的还是「拿回来的东西没法用」——
+# 把版本代差说成网络问题。修复只在新版里，而新版正是被拒收的那个包，自锁。
+#
+# 内嵌的代价是这门脚本对 shell 语法检查不可见（它在字符串里）。所以门禁 1 会把
+# 这段抽出来单独 `bash -n` 一遍——生成式代码必须有门禁校验输出，否则改坏了没人知道。
+# 标记注释就是给那条门禁定位用的，不要删。
+function Get-PromptSyncContent {
+    # <<<PROMPT_SYNC_BEGIN>>>
+    return @'
+# ==============================================================================
+#  prompt-sync.sh — 让 Git Bash 里"已经开着的窗口"跟着代理状态走
+#  由 bash 启动时加载一次（~/.bashrc 里那一行）；它自己注册"每次提示符前重读"的钩子。
+#
+#  为什么需要它：环境变量只在进程启动那一刻从父进程复制，已开着的窗口拿不到新值。
+#  唯一可靠的时机是"每次回到提示符、准备执行下一条命令之前"。
+#
+#  DIVERGE(Win-GitBash): 与 PowerShell 侧的两处不同
+#    1) 挂载点——bash 有官方钩子 PROMPT_COMMAND，不用改写别人的函数；
+#    2) 状态来源——本侧读一个**普通状态文件**，不读注册表。
+#       原因：MSYS2 的 /proc/registry 只能在最顶层 shell 进程里读，任何函数里
+#       做重定向都会得到空值（实测）；绕开它要么用 cat（单次 57ms）要么用
+#       reg.exe（47ms），敲回车会明显卡。普通文件没这个限制，单次约 0.5ms。
+#       该文件由监控在每次状态变化时原子写入，是注册表状态的镜像。
+#
+#  ------------------------------------------------------------------------------
+#  三条设计原则（与 Mac 侧、PowerShell 侧完全一致）
+#  ------------------------------------------------------------------------------
+#  1) 只动"我们自己写下的那一个值"。
+#     只有当前值仍等于状态文件里记的值，才允许清除。
+#     于是使用者自己设的公司代理、本地 mitmproxy 一律不碰。
+#
+#  2) 使用者随时可以接管，命令只有两条：
+#       export ENVPROXY_TERM=off     这个终端固定直连
+#       unset  ENVPROXY_TERM         恢复自动跟随
+#
+#  3) 热路径不启动任何外部进程。
+#     只用 shell 内建的 read / case / export / unset（实测单次约 0.5 毫秒）。
+#
+#  钩子里一旦报错会打断使用者的输入，所以本文件：永不输出、永不返回非零、
+#  所有外部不确定性都吞掉。
+# ==============================================================================
+
+# 只在交互式 shell 里生效。
+#
+# PROMPT_COMMAND 只在交互式 bash 里会被执行，所以"多跑一次"本来不会发生；
+# 但**加载这个文件本身**也会触发末尾那次同步，而非交互调用（scp / rsync / git 的
+# 远端钩子、`bash -c '...'`）同样会 source ~/.bashrc。那里没有任何窗口需要跟随，
+# 白读一次文件、白改一次环境变量，纯属多余动作。
+# 判据用 $-（当前 shell 的选项串）：含 i 才是交互式。这是 bash 的标准写法，
+# 不依赖 PS1 是否已经被设置好（某些启动顺序下 PS1 后到）。
+case "$-" in
+    *i*) ;;
+    *) return 0 2>/dev/null || exit 0 ;;
+esac
+
+if [ -z "${_ENVPROXY_GB_READY-}" ]; then
+    _ENVPROXY_GB_READY=1
+
+    # 状态文件位置：与 PowerShell 侧共用同一个安装目录。
+    # 取值来源是 %LOCALAPPDATA%\EnvProxy\terminal.env（监控写）。
+    _ENVPROXY_GB_STATE=""
+    if [ -n "${LOCALAPPDATA-}" ]; then
+        _ENVPROXY_GB_STATE="$LOCALAPPDATA/EnvProxy/terminal.env"
+    fi
+
+    # 清掉"仍等于我们写下的那个"的变量。没有状态文件时一个都不动。
+    # 写入侧只有小写，但清除侧仍要认两套拼写：曾经写过大写的老版本窗口里
+    # 可能还留着大写那一份，不认它就会永远清不掉。
+    _envproxy_gb_clear() {
+        [ -n "$_ENVPROXY_GB_STATE" ] || return 0
+        [ -r "$_ENVPROXY_GB_STATE" ] || return 0
+        _epc_n=""
+        _epc_want=""
+        while IFS='=' read -r _epc_k _epc_v; do
+            case "$_epc_k" in
+                owned_HTTP_PROXY|owned_HTTPS_PROXY|owned_ALL_PROXY|owned_NO_PROXY|owned_NODE_USE_ENV_PROXY) ;;
+                *) continue ;;
+            esac
+            _epc_n="${_epc_k#owned_}"
+            _epc_want="$_epc_v"
+            [ -n "$_epc_want" ] || continue
+            eval "_epc_cur=\"\${$_epc_n-}\""
+            # 两种拼写都要看：只看大写的话，"只有小写还在"的窗口永远清不干净。
+            # Git Bash 里 curl 恰恰认小写，那种窗口会一直走一个已经死掉的代理，
+            # 而使用者以为"敲回车就跟上了"——状态文件明明写的是断开。
+            _epc_lc=""
+            case "$_epc_n" in
+                HTTP_PROXY)  eval "_epc_lc=\"\${http_proxy-}\"" ;;
+                HTTPS_PROXY) eval "_epc_lc=\"\${https_proxy-}\"" ;;
+                ALL_PROXY)   eval "_epc_lc=\"\${all_proxy-}\"" ;;
+                NO_PROXY)    eval "_epc_lc=\"\${no_proxy-}\"" ;;
+            esac
+            if [ "$_epc_cur" = "$_epc_want" ] || { [ -n "$_epc_lc" ] && [ "$_epc_lc" = "$_epc_want" ]; }; then
+                unset "$_epc_n" 2>/dev/null || true
+                case "$_epc_n" in
+                    HTTP_PROXY)  unset http_proxy 2>/dev/null || true ;;
+                    HTTPS_PROXY) unset https_proxy 2>/dev/null || true ;;
+                    ALL_PROXY)   unset all_proxy 2>/dev/null || true ;;
+                    NO_PROXY)    unset no_proxy 2>/dev/null || true ;;
+                esac
+            fi
+        done < "$_ENVPROXY_GB_STATE"
+        unset _epc_n _epc_want _epc_cur _epc_k _epc_v 2>/dev/null || true
+        return 0
+    }
+
+    # 同步一次：把状态文件里的值应用到当前 shell。全程 shell 内建，零 fork。
+    _envproxy_gb_apply() {
+        [ -n "$_ENVPROXY_GB_STATE" ] || return 0
+        [ -r "$_ENVPROXY_GB_STATE" ] || return 0
+
+        # 使用者要求这个终端固定直连
+        if [ "${ENVPROXY_TERM-}" = "off" ]; then
+            _envproxy_gb_clear
+            return 0
+        fi
+
+        _epa_http=""
+        _epa_np=""
+        _epa_node=""
+        while IFS='=' read -r _epa_k _epa_v; do
+            case "$_epa_k" in
+                HTTP_PROXY)          _epa_http="$_epa_v" ;;
+                NO_PROXY)            _epa_np="$_epa_v" ;;
+                NODE_USE_ENV_PROXY)  _epa_node="$_epa_v" ;;
+            esac
+        done < "$_ENVPROXY_GB_STATE"
+
+        # **只写小写一种拼写**，绝不两套都写。
+        #
+        # 这是项目红线（AGENTS.md：不许在 Windows 侧重引入大小写成对的变量名）。
+        # 理由不是洁癖：bash 的变量名区分大小写，两套都会进环境块；而 Windows 进程
+        # 拿到的环境块里就有两条只差大小写的同名项。PowerShell 5.1 的
+        # `Get-ChildItem Env:` 用不分大小写的字典装它们，直接抛
+        # "An item with the same key has already been added"——从这样一个 Git Bash
+        # 窗口里启动任何 5.1 会话，枚举环境变量就崩。实测复现过。
+        #
+        # 只写小写的代价是零：Windows 的环境变量查找**不区分大小写**，
+        # 从 bash 启的 powershell.exe 用 HTTP_PROXY 一样读得到；而 MSYS 的工具
+        # （curl 等）本来就只认小写。所以小写是唯一两边都满足的写法。
+        if [ -n "$_epa_http" ]; then
+            export http_proxy="$_epa_http"
+            export https_proxy="$_epa_http"
+            export all_proxy="$_epa_http"
+            if [ -n "$_epa_np" ]; then export no_proxy="$_epa_np"; fi
+            # NODE_USE_ENV_PROXY 没有小写变体，且它和上面四个不构成"同名两套"。
+            if [ -n "$_epa_node" ]; then export NODE_USE_ENV_PROXY="$_epa_node"; fi
+        else
+            _envproxy_gb_clear
+        fi
+        unset _epa_http _epa_np _epa_node _epa_k _epa_v 2>/dev/null || true
+        return 0
+    }
+
+    # bash 的官方钩子。保留使用者自己的 PROMPT_COMMAND 前缀，不覆盖。
+    _envproxy_gb_prompt() {
+        _epbp_rc=$?
+        _envproxy_gb_apply
+        return $_epbp_rc
+    }
+
+    case "${PROMPT_COMMAND-};" in
+        *_envproxy_gb_prompt*) ;;
+        *) PROMPT_COMMAND="_envproxy_gb_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+    esac
+
+    # 加载时先同步一次：新开的窗口立刻就是对的
+    _envproxy_gb_apply
+fi
+'@
+    # <<<PROMPT_SYNC_END>>>
+}
+
+# 把模板复制到 ~/.envproxy/prompt-sync.sh。
+# 判据是内容比对，与 Mac 侧 install_prompt_sync 同一套：模板变了副本才更新。
+function Install-BashrcPromptSync {
+    # 正文来自内嵌模板（见 Get-PromptSyncContent 上方的说明），不再读随包文件。
+    $dstDir = Join-Path ([string]$env:USERPROFILE) ".envproxy"
+    $dst = Join-Path $dstDir "prompt-sync.sh"
+    try {
+        if (-not (Test-Item $dstDir)) { [System.IO.Directory]::CreateDirectory($dstDir) | Out-Null }
+        $wantText = ((Get-PromptSyncContent) -replace "`r`n", "`n")
+        if (Test-Item $dst) {
+            $haveText = ([System.IO.File]::ReadAllText($dst, [System.Text.Encoding]::UTF8) -replace "`r`n", "`n")
+            if ($haveText -eq $wantText) { return $true }
+        }
+        $tmp = "$dst.tmp$PID"
+        [System.IO.File]::WriteAllText($tmp, $wantText, (New-Object System.Text.UTF8Encoding($false)))
+        if (Test-Item $dst) {
+            try { [System.IO.File]::Replace($tmp, $dst, [NullString]::Value) }
+            catch { [System.IO.File]::Copy($tmp, $dst, $true); [System.IO.File]::Delete($tmp) }
+        } else {
+            [System.IO.File]::Move($tmp, $dst)
+        }
+        return $true
+    } catch { return $false }
+}
+
+# 装 Git Bash 的终端同步：先放副本，再在 ~/.bashrc 里放一对标记。
+# 块内容与 PowerShell 那套完全不同（bash 语法），所以走独立实现。
+function Install-BashrcProfile([string]$path) {
+    if (-not $path) { return @{ Ok = $false; Reason = 'no-profile'; Path = '' } }
+    if (-not (Install-BashrcPromptSync)) {
+        return @{ Ok = $false; Reason = 'copy-failed'; Path = $path }
+    }
+    try {
+        $existing = @()
+        if (Test-Item $path) { $existing = @(Read-ProfileLines $path) }
+        $want = @(Get-BashBlockLines)
+        $s = -1; $e = -1
+        for ($i = 0; $i -lt $existing.Count; $i++) {
+            if ($existing[$i].Trim() -ceq $BashBlockStart -and $s -lt 0) { $s = $i }
+            if ($existing[$i].Trim() -ceq $BashBlockEnd -and $e -lt 0) { $e = $i }
+        }
+        # 标记不配对：绝不猜测，原样不动（与 PowerShell 侧同一护栏）。
+        if (($s -ge 0) -ne ($e -ge 0)) { return @{ Ok = $false; Reason = 'unpaired'; Path = $path } }
+        if ($s -ge 0 -and $e -gt $s) {
+            $have = @($existing[$s..$e] | ForEach-Object { $_.Trim() })
+            if (($have -join "`n") -eq ((@($want) | ForEach-Object { $_.Trim() }) -join "`n")) {
+                return @{ Ok = $true; Reason = 'current'; Path = $path }
+            }
+            $keep = New-Object System.Collections.ArrayList
+            for ($i = 0; $i -lt $existing.Count; $i++) {
+                if ($i -ge $s -and $i -le $e) { continue }
+                [void]$keep.Add($existing[$i])
+            }
+        } else {
+            $keep = New-Object System.Collections.ArrayList
+            foreach ($l in $existing) { [void]$keep.Add($l) }
+        }
+        if ($keep.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($keep[$keep.Count - 1])) { [void]$keep.Add('') }
+        foreach ($l in $want) { [void]$keep.Add($l) }
+        if (-not (Write-TextAtomic -Path $path -Lines @($keep))) {
+            return @{ Ok = $false; Reason = 'write-failed'; Path = $path }
+        }
+        return @{ Ok = $true; Reason = 'installed'; Path = $path }
+    } catch {
+        return @{ Ok = $false; Reason = $_.Exception.Message; Path = $path }
+    }
+}
+
 function Install-OneShellProfile([string]$path) {
     if (-not $path) { return @{ Ok = $false; Reason = 'no-profile'; Path = '' } }
+    # Git Bash 的 .bashrc 用 bash 语法，块内容与 PowerShell 完全不同，走自己的实现。
+    if (Test-IsBashrcPath $path) { return (Install-BashrcProfile $path) }
     if (Test-ProfileBlockCurrent $path) { return @{ Ok = $true; Reason = 'current'; Path = $path } }
     try {
         $existing = @()
@@ -618,15 +864,25 @@ function Remove-OneShellProfile([string]$path) {
     if (-not (Test-ProfileBlockPaired $path)) {
         return @{ Ok = $false; Reason = 'unpaired'; Path = $path }
     }
-    $s = -1; $e = -1
-    for ($i = 0; $i -lt $existing.Count; $i++) {
-        if ($existing[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
-        if ($existing[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
-    }
+    # 把所有成对的块都摘掉，不是只摘第一对。
+    # 装过两次（或从不同位置装过）的机器上会留下两对标记，只摘一对的话
+    # 卸载会「看着成功、余下一块」，下一次卸载才干净——用户以为没卸掉。
+    # Mac 侧那边是一次摘干净的（awk 反复开关），这里对齐它。
     $keep = New-Object System.Collections.ArrayList
+    $skipping = $false
+    $removed = 0
     for ($i = 0; $i -lt $existing.Count; $i++) {
-        if ($i -ge $s -and $i -le $e) { continue }
-        [void]$keep.Add($existing[$i])
+        $line = $existing[$i]
+        if (-not $skipping -and $line -ceq $ProfileBlockStart) {
+            $skipping = $true
+            $removed++
+            continue
+        }
+        if ($skipping) {
+            if ($line -ceq $ProfileBlockEnd) { $skipping = $false }
+            continue
+        }
+        [void]$keep.Add($line)
     }
     # 摘完若只剩结尾空行，一并收掉，别给用户留个空白尾巴
     while ($keep.Count -gt 0 -and [string]::IsNullOrWhiteSpace($keep[$keep.Count - 1])) {
@@ -635,9 +891,14 @@ function Remove-OneShellProfile([string]$path) {
     # 摘完若什么都不剩，说明这个文件里原本只有我们那一块（或者本来就是空的）。
     # 再擦成空文件就是"卸载回到安装前"没做到位：装之前它不存在，卸完却多一个空文件。
     # 只在确实为空时删除，用户自己写过内容的一个字节都不动。
+    # 卸载把 .bak 也带走：它是我们安装时留下的快照，卸载就是"回到我们没来之前"。
+    # 留着它既违背 README「卸载后不留残留」，也和 .bak 里自己写的那句
+    #「卸载时应删除」对不上——写了却没人执行，等于给用户一句空承诺。
+    $bakPath = $path + ".envproxy.bak"
     if ($keep.Count -eq 0) {
         try {
             Remove-Item -LiteralPath $path -Force -ErrorAction Stop
+            try { if (Test-Path -LiteralPath $bakPath) { Remove-Item -LiteralPath $bakPath -Force -ErrorAction SilentlyContinue } } catch {}
             return @{ Ok = $true; Reason = 'removed-empty'; Path = $path }
         } catch {
             # 删不掉就退回"写空文件"：留一个空文件也强过报错让人没法收尾。
@@ -649,18 +910,55 @@ function Remove-OneShellProfile([string]$path) {
     if ((Test-MarkerPresent @(Read-ProfileLines $path) $ProfileBlockStart)) {
         return @{ Ok = $false; Reason = 'verify-failed'; Path = $path }
     }
+    try { if (Test-Path -LiteralPath $bakPath) { Remove-Item -LiteralPath $bakPath -Force -ErrorAction SilentlyContinue } } catch {}
     return @{ Ok = $true; Reason = 'removed'; Path = $path }
 }
 
 # 执行策略检查：Restricted 下 profile 根本不执行且无提示。
 # 静默失败最糟——用户以为在同步，实际一次都没同步过。
+# 解析「真正生效的」执行策略，以及它能不能被本地改掉。
+# 不能只看 -Scope CurrentUser：那个 scope 没设过时返回 Undefined，而真正拦住 $PROFILE 的
+# 可能是 MachinePolicy/UserPolicy（组策略，优先级最高、改本地设置无效），也可能是
+# LocalMachine（管理员设过）。实测本机 CurrentUser=Undefined 而生效值 RemoteSigned——
+# 只看 CurrentUser 会在最需要提醒的场景里一句话都不说。
+# 优先级：MachinePolicy > UserPolicy > Process > CurrentUser > LocalMachine。
+# 全为 Undefined 时，Windows 客户端的有效策略就是 Restricted（微软文档明确）。
+function Get-EffectiveExecutionPolicy {
+    # 要回答的问题是「**新开的窗口**会不会执行配置文件」，不是「当前这个进程现在能不能跑脚本」。
+    # 这两个问题有完全不同的答案来源：
+    #   - Process 层只是本进程的临时覆盖（安装器自己就是用 -ExecutionPolicy Bypass 拉起的），
+    #     它随进程消失，对下一个窗口毫无影响。把它算进来，等于让"我自己能跑"冒充"用户能跑"。
+    #     实测：安装器以 Bypass 启动时 EffectivePolicy 会被解析成 Bypass，于是即使用户把
+    #     CurrentUser 设成 Restricted（配置文件一次都不执行），状态页照样报"已生效"。
+    #   - 新窗口继承的是持久化的那几层：组策略 > 用户设置 > 机器设置。
+    # 所以这里刻意**跳过 Process**，只在持久化三层里按优先级取。
+    # 全为 Undefined 时，Windows 客户端的有效策略就是 Restricted（微软文档明确）。
+    $scopes = @{}
+    try {
+        foreach ($e in (Get-ExecutionPolicy -List)) {
+            $scopes[[string]$e.Scope] = [string]$e.ExecutionPolicy
+        }
+    } catch {}
+    foreach ($n in @('MachinePolicy', 'UserPolicy', 'CurrentUser', 'LocalMachine')) {
+        $v = $scopes[$n]
+        if ($v -and $v -ne 'Undefined') {
+            return @{ Policy = $v; Enforced = ($n -eq 'MachinePolicy' -or $n -eq 'UserPolicy'); Scope = $n }
+        }
+    }
+    return @{ Policy = 'Restricted'; Enforced = $false; Scope = '(未设置)' }
+}
+
 function Get-ProfileExecutionPolicyWarning {
     try {
-        $p = Get-ExecutionPolicy -Scope CurrentUser
-        if ($p -eq 'Restricted' -or $p -eq 'AllSigned') {
-            return ("当前执行策略是 $p，PowerShell 不会运行配置文件（$PROFILE）——" +
-                    "终端同步不会生效。改成 RemoteSigned 即可：Set-ExecutionPolicy RemoteSigned -Scope CurrentUser")
+        $eff = Get-EffectiveExecutionPolicy
+        $p = $eff.Policy
+        if ($p -ne 'Restricted' -and $p -ne 'AllSigned') { return '' }
+        if ($eff.Enforced) {
+            return ("当前执行策略是 $p（由组策略强制，本地改不了），PowerShell 不会运行" +
+                    "配置文件（$PROFILE）——终端同步不会生效。需要管理员放开脚本执行。")
         }
+        return ("当前执行策略是 $p，PowerShell 不会运行配置文件（$PROFILE）——" +
+                "终端同步不会生效。改成 RemoteSigned 即可：Set-ExecutionPolicy RemoteSigned -Scope CurrentUser")
     } catch {}
     return ''
 }
@@ -674,6 +972,11 @@ function Get-ProfileExecutionPolicyWarning {
 # 卸载时整目录删除，一个都不残留。
 $MonitorDir = Join-Path $ScriptDir "monitor"
 $PidFile    = Join-Path $MonitorDir "monitor.pid"
+# "是使用者主动停的"这个意图要落盘。监控进程被外部结束（任务管理器、崩溃）和用户点「停止」
+# 在事后完全无法区分：pid 没了、自启动还在，两种情况长得一模一样。
+# 不区分就只能二选一：都说"你停的"（用户没停，会以为点错了），或都不说（真停过的人会以为坏了）。
+# 所以由执行停止的那一方写下这个标记，监控自己启动时删掉它。
+$StopIntentFile = Join-Path $MonitorDir "stopped.intent"
 $StopFlag   = Join-Path $MonitorDir "stop.flag"
 
 function Ensure-MonitorDir {
@@ -715,11 +1018,9 @@ function Get-MonitorProcess {
     # 本项目的测试会在 ubuntu 上跑这份代码（门禁 10），退不回来就会抛异常、
     # 整份自检中断在这里。非 Windows 上直接当作"没有命令行线索"。
     if ($env:OS -ne "Windows_NT") { return $null }
-    return Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.ProcessId -ne $PID -and
-            $_.CommandLine -match $MonitorCmdLinePattern
-        } | Select-Object -First 1
+    $list = @(Get-OwnMonitorProcesses)
+    if ($list.Count -gt 0) { return $list[0] }
+    return $null
 }
 
 # 监控启动参数的唯一来源：命令行必须以 -File "<入口路径>" 结尾——这既是监控进程的识别判据
@@ -764,9 +1065,8 @@ function Start-Monitor([bool]$Force = $false) {
     # 说清楚另一份在哪，使用者才知道该进哪个文件夹——只说"可能被占着"，等于把排查推回去。
     $other = $null
     try {
-        $other = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -match $MonitorCmdLinePattern } |
-            Select-Object -First 1
+        $otherList = @(Get-OwnMonitorProcesses)
+        if ($otherList.Count -gt 0) { $other = $otherList[0] }
     } catch {}
     if ($other) {
         $otherPath = ""
@@ -783,7 +1083,14 @@ function Start-Monitor([bool]$Force = $false) {
 
 function Stop-Monitor {
     $w = Get-MonitorProcess
-    if (-not $w) { Write-Host "监控进程未在运行。" -ForegroundColor Yellow; return }
+    if (-not $w) {
+        # 监控本来就没在跑，但使用者确实表达了"停"的意图——照样记下来。
+        # 不记的话，状态页会把这台机器报成"进程不在了（可能被结束任务关掉）"，
+        # 而真相是使用者刚刚点过停止。意图比进程状态更权威。
+        try { Write-Text -Path $StopIntentFile -Text "user" } catch {}
+        Write-Host "监控进程未在运行。" -ForegroundColor Yellow
+        return
+    }
     # 从目标监控的命令行动态解析它的脚本位置 → 把停止标志写到"它自己"的 monitor 目录。
     # 处理文件夹被移动/复制后新旧位置不一致的场景：让旧位置的监控优雅退出，而非强杀。
     $targetDir = $MonitorDir
@@ -813,6 +1120,8 @@ function Stop-Monitor {
     }
     Remove-ItemSafe $targetFlag
     Remove-ItemSafe $StopFlag
+    # 记下"这是使用者主动停的"，状态页据此区分它与"进程被外部结束"。
+    try { Write-Text -Path $StopIntentFile -Text "user" } catch {}
     # 跨位置停止的零残留：若停止标志写在"别的" monitor 目录、且该目录已空
     # （旧监控退出时已清理自己的 pid/flag），则把这个重建的空目录一并移除
     if ($targetDir -ne $MonitorDir) {
@@ -836,7 +1145,11 @@ $LogFile = Join-Path $MonitorDir "monitor.log"
 function Write-MonitorLog([string]$msg) {
     try {
         Ensure-MonitorDir
-        $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
+        # 时间戳必须用固定区域性：Get-Date -Format 受当前区域设置影响，
+        # 泰语（th-TH）下写成佛历年份（实测 "2569-10-22"），阿拉伯语写回历（"1448-05-11"）。
+        # 日志是给人对时间用的，年份错位会让整条线索作废。mac 侧 date 输出本就是数字，这边对齐它。
+        $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+        $line = "{0}  {1}" -f $stamp, $msg
         # 共享写模式（FileShare.ReadWrite）：多进程追加写入互不阻塞，零锁脆弱点。
         # 改用共享文件流后，任何进程（含监控自身截断）互不阻塞，零锁脆弱点。
         $fs = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Append,
@@ -878,7 +1191,11 @@ function Run-MonitorLoop {
 
     Remove-ItemSafe $StopFlag
     Ensure-MonitorDir
-    try { Write-Text -Path $PidFile -Text ([string]$PID) } catch {}
+    try {
+        Write-Text -Path $PidFile -Text ([string]$PID)
+        # 监控活着就等于"不是停止状态"，把上次的停止意图清掉。
+        Remove-ItemSafe $StopIntentFile
+    } catch {}
     Update-ScriptPathRecord
     Write-MonitorLog "==== 监控启动 ===="
 
@@ -905,6 +1222,20 @@ function Run-MonitorLoop {
     }
 
     while (-not (Test-Item $StopFlag)) {
+        # 运行时目录自愈。它只在启动时建过一次，被外部删掉（清理工具、误删、同步软件）之后
+        # 日志与 pid 文件就再也写不出来了：进程还在正常干活，状态页却因为读不到 pid 而报
+        # "未运行"——用户看到的是"明明在跑却说没跑"，于是又去点安装，起第二份被单实例锁挡掉，
+        # 彻底卡死。每轮先确认目录在，是这件事的唯一收敛点（mkdir -p 是幂等的、不产生 IO）。
+        if (-not (Test-Item $MonitorDir)) { Ensure-MonitorDir }
+        # pid 文件同理：它一旦丢失，对外就"查不到自己在跑"。重新写一份，代价是一次小文件写。
+        if (-not (Test-Item $PidFile)) { try { Write-Text -Path $PidFile -Text ([string]$PID) } catch {} }
+        # 日志文件也要补。它只在"状态有变化"时才写，稳态下一条都不产生——
+        # 只补目录和 pid 的话，删过目录之后 monitor.log 会一直不存在，
+        # 等到真出问题时用户手上没有任何线索可查（"日志永远是空的"比"没日志"更误导）。
+        # 写一条记录本身就是最好的补法：文件建起来了，而且留下了"这里被重建过"的痕迹。
+        if (-not (Test-Item $LogFile)) {
+            try { Write-MonitorLog "运行时目录被外部删除，已重建（进程未受影响，继续按原状态工作）" } catch {}
+        }
         # 自退检测：脚本文件不存在 = 文件夹被移动/删除 → 旧位置不再需要本监控。
         # 静默退出并清理旧位置的一切运行时痕迹（下次开机定位器会从新位置启动）。
         if (-not $ScriptPath -or -not (Test-Item $ScriptPath)) { $selfExit = $true; break }
@@ -1015,8 +1346,44 @@ function Run-MonitorLoop {
         } catch {}
     } else {
         Write-MonitorLog "==== 监控退出（收到停止信号）===="
+        # 退出前把 off 态落到状态镜像文件。这一步不能省：停止流程由**本进程**执行 Apply-State off
+        # （Stop-Monitor 是另一个进程，它只写 stop.flag），所以这里是唯一能把"现在没代理了"
+        # 告诉 Git Bash 钩子的地方。漏了它，已开着的 Git Bash 窗口永远不会被清空。
+        try { Write-TerminalStateFile "off" } catch {}
         try { Remove-ItemSafe $PidFile } catch {}
         try { Remove-ItemSafe $StopFlag } catch {}
     }
     $mutex.ReleaseMutex()
+}
+
+# 查「本用户的」监控进程。**必须按 SID 过滤**：Win32_Process 返回的是全机器所有
+# 用户的进程，不过滤会认领别人的监控——状态页报出别人的 PID，
+# Start-Monitor 还会把别人的监控当成「旧位置」停掉（写 stop.flag + 强杀）。
+function Get-OwnMonitorProcesses {
+    if ($env:OS -ne "Windows_NT") { return @() }
+    $mySid = ""
+    try {
+        $mySid = ([System.Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+    } catch {}
+    if (-not $mySid) { return @() }
+    $all = @()
+    try {
+        $all = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue)
+    } catch { return @() }
+    $mine = @()
+    foreach ($p in $all) {
+        if ($p.ProcessId -eq $PID) { continue }
+        if (-not ($p.CommandLine -match $MonitorCmdLinePattern)) { continue }
+        # SID 必须走 Invoke-CimMethod：Get-CimInstance 返回的是 CimInstance，
+        # 上面并没有 GetOwnerSid() 这个方法（它属于旧的 Get-WmiObject 对象）。
+        # 直接点方法会抛 "does not contain a method named 'GetOwnerSid'"，被 catch 吞掉后
+        # $sid 恒为空 —— 于是**每一个**监控进程都被判成"不是我的"，状态页永远报"未运行"，
+        # 而进程明明活着。这是把整段探测变成空操作，比不做过滤更糟。
+        # 取不到 SID 时跳过而不是收下：宁可认不出自己的监控（下次启动会再起一份，
+        # 单实例锁会挡住），也不要把别人的杀错。
+        $sid = ""
+        try { $sid = [string](Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop).Sid } catch {}
+        if ($sid -and $sid -eq $mySid) { $mine += $p }
+    }
+    return $mine
 }

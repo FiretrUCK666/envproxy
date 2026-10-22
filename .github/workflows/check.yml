@@ -25,7 +25,8 @@ jobs:
         run: |
           fail=0
           # 目录级通配：mac/ 根与 lib/ 下的脚本一起查，新增文件自动纳入，不需要改这里。
-          for f in mac/*.sh mac/lib/*.sh; do
+          # win/ 根下若再出现 .sh 也要过语法（目前没有：Git Bash 的脚本已内嵌，见下方模板检查）。
+          for f in mac/*.sh mac/lib/*.sh win/*.sh; do
             [ -f "$f" ] || continue
             # 逐文件报出文件名再解析：CI 上出错时日志要能直接指向是哪个文件，
             # 否则只看到一行 "bash: syntax error" 分不清来源。
@@ -35,6 +36,24 @@ jobs:
               fail=1
             fi
           done
+
+          # Git Bash 的终端同步脚本以模板形式内嵌在 win/lib/runtime.ps1 里（见 Get-PromptSyncContent），
+          # 安装时生成到 ~/.envproxy/。它在字符串里，上面那轮 bash -n 看不见它——
+          # 所以这里把它抽出来单独解析一遍。生成式代码必须有这道检查，否则改坏了没人知道。
+          _pstpl=$(mktemp "${TMPDIR:-/tmp}/envproxy_pstpl.XXXXXX" 2>/dev/null) || { echo "临时文件建不出来"; fail=1; }
+          if [ -n "${_pstpl:-}" ]; then
+            # 标记注释夹住整段：去掉两行标记、再去掉 return @' 与 '@ 两行，剩下的就是脚本正文。
+            sed -n '/<<<PROMPT_SYNC_BEGIN>>>/,/<<<PROMPT_SYNC_END>>>/p' win/lib/runtime.ps1 \
+              | sed '1d;$d' | sed '1d;$d' > "$_pstpl"
+            if [ ! -s "$_pstpl" ]; then
+              echo "抽不出 Git Bash 同步脚本模板（win/lib/runtime.ps1 里的标记被改了？）"
+              fail=1
+            elif ! err=$(bash -n "$_pstpl" 2>&1); then
+              echo "内嵌的 Git Bash 同步脚本有语法错误：$err"
+              fail=1
+            fi
+            rm -f "$_pstpl"
+          fi
           # 壳↔核心：.command 直调入口，用的子命令必须在核心分派里；
           # mac/ 根下只留入口与定位器模板，多出来的 .sh 就是没回家的传话层。
           for f in mac/*.command; do
@@ -49,9 +68,17 @@ jobs:
             case "$f" in
               # 根下三种都有家：入口自身；定位器模板（被复制到固定位置）；
               # prompt-sync（被使用者的 shell source，不由入口加载，所以不进 CORE_LIBS）。
-              mac/envproxy.sh|mac/locator.sh|mac/prompt-sync.sh) ;;
-              *) echo "$f 在 mac/ 根下没有家：根下只留入口、定位器模板与 shell 集成脚本"; fail=1;;
+              mac/envproxy.sh|mac/locator.sh|mac/prompt-sync.sh|mac/test-mac-pure.sh) ;;
+              *) echo "$f 在 mac/ 根下没有家：根下只留入口、定位器模板、shell 集成脚本与自检脚本"; fail=1;;
             esac
+          done
+          # win/ 根下不允许出现 .sh。Git Bash 的同步脚本是**安装时从内嵌模板生成**的，不随包发。
+          # 原因：包校验器只放行平台目录直接下级的 .ps1/.cmd/.command。多一个 .sh 会让
+          # **旧版本用户点「检查更新」时被自己的旧校验器拒收**，而修复只在新版里——自锁。
+          for f in win/*.sh; do
+            [ -f "$f" ] || continue
+            echo "$f 不该存在：win/ 根下不许有 shell 脚本（Git Bash 的脚本走内嵌模板）"
+            fail=1
           done
           # 入口声明的库清单必须与 lib/ 实际内容一致：加库忘改入口、删库留空壳、改名漏一处都拦住。
           # 比的是集合（都排序后比），不比顺序——入口里的顺序是加载依赖顺序，不必等于字母序。
@@ -198,17 +225,44 @@ jobs:
         shell: pwsh
         run: |
           $fail = 0
-          # win：入口与 lib\ 下的每个 .ps1 都必须带 UTF-8 BOM
-          # （PowerShell 5.1 在中文系统按 ANSI 读无 BOM 文件会语法报错）
-          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
+          # 全仓库每个 .ps1 都必须带 UTF-8 BOM（不只管 win/）：
+          # PowerShell 5.1 在中文系统按 ANSI 读无 BOM 文件会语法报错。
+          # 曾经只扫 win/，于是 tests/test-win-pure.ps1 落在覆盖之外——
+          # 那个文件自己第 2 行就写着 "UTF-8 with BOM"，去掉 BOM 后门禁全绿，
+          # 而 5.1 跑它直接崩在中文乱码上（pwsh 7 不受影响，本地照样绿）。
+          # 判据应该是"文件类型"而不是"它在哪个目录"。
+          # 用 git 索引取文件清单，而不是 Get-ChildItem 扫目录：
+          # 扫目录会把本地临时脚本（以及 _g\ 这类提审产物）一起算进来，
+          # 于是"本地跑门禁"永远红、"CI 上"却是绿的——两边看到的不是同一批文件。
+          # 索引里的就是仓库内容，与 CI 完全一致。
+          $ps1Files = @(git ls-files '*.ps1')
+          foreach ($rel in $ps1Files) {
+            if (-not (Test-Path -LiteralPath $rel)) { continue }
+            $f = Get-Item -LiteralPath $rel
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
-            if (-not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)) {
-              Write-Host ("{0} 缺少 UTF-8 BOM" -f $f.FullName.Replace($PWD.Path + [System.IO.Path]::DirectorySeparatorChar, ''))
-              $fail = 1
-            }
+              $hasBom = ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+              if (-not $hasBom) {
+                Write-Host ("{0} 缺少 UTF-8 BOM" -f $f.FullName.Replace($PWD.Path + [System.IO.Path]::DirectorySeparatorChar, ''))
+                $fail = 1
+              }
+              # 双 BOM 必须单独拦：只验证「前 3 字节是 BOM」的话，EF BB BF EF BB BF 照样通过，
+              # 而 PowerShell 只剥掉一个，剩下的 U+FEFF 会跟行首的 # 拼成一个「命令名」，
+              # 5.1 报 The term '# ' is not recognized —— 整个脚本加载不了，工具直接不可用。
+              # 这种文件「看起来有 BOM」，正是最容易被判为合格的一种。
+              elseif ($b.Length -ge 6 -and $b[3] -eq 0xEF -and $b[4] -eq 0xBB -and $b[5] -eq 0xBF) {
+                Write-Host ("{0} 有重复的 UTF-8 BOM" -f $f.FullName.Replace($PWD.Path + [System.IO.Path]::DirectorySeparatorChar, ''))
+                $fail = 1
+              }
           }
           # mac：入口、定位器、菜单壳与 lib\ 下的每个 .sh 都必须 LF、无 BOM
           foreach ($f in @(Get-ChildItem mac/*.sh) + @(Get-ChildItem mac/*.command) + @(Get-ChildItem mac/lib/*.sh)) {
+            $b = [System.IO.File]::ReadAllBytes($f.FullName)
+            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
+            if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
+          }
+          # win 根下的 .sh（prompt-sync.sh）是给 Git Bash source 的，同样必须 LF、无 BOM：
+          # BOM 会变成脚本的第一个字符、顶掉 shebang；CRLF 会让行尾的续行符断掉。
+          foreach ($f in @(Get-ChildItem win/*.sh -ErrorAction SilentlyContinue)) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
             if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
             if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
@@ -297,6 +351,153 @@ jobs:
             }
           }
           Write-Host '分发包内容通过'
+
+      # 门禁 4b：拿真实的分包去跑**运行时**的包校验器。
+      #
+      # 为什么必须有这一条：门禁 4 校验的是"包内容 = 仓库文件集 − export-ignore"，
+      # 而用户端更新时跑的是另一套代码（Test-Package / verify_package）。
+      # 两套规则各写各的，漂移了没人看得见——曾经 win/prompt-sync.sh 加了进来，
+      # CI 全绿，但运行时校验器把它判成"清单外的文件"，于是每一份更新包都被自己拒收，
+      # 所有老用户永远升不上去。这条门禁让"真实的包"必须被"真实的校验器"接受。
+      # 门禁 3b：中文文案里不许用 ASCII 双引号包中文短语。
+      #
+      # 这类写法是"能编译通过的定时炸弹"：`Write-Host "…选"安装 / 修复"。"` 在纯 Write-Host
+      # 上下文里恰好构成合法的多参数调用、能正常跑；可一旦这段文案被改写成表达式
+      # （加个 -f、加个变量插值、塞进括号），解析器立刻报 "Unexpected token"，
+      # 而错误指向的是中文，肉眼极难看出是引号问题。
+      # 判据：一个双引号，左边是中文、右边（同一行内）还有中文——说明它在给中文短语加引号。
+      # 正常用法（"字符串" 结尾、"字符串 + $var" 等）两边不会同时是中文。
+      - name: 门禁 3b：中文文案不用 ASCII 引号包中文
+        shell: pwsh
+        run: |
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $fail = 0
+          foreach ($f in @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)) {
+            $ln = 0
+            # here-string 里的内容是**模板正文**（会被原样写进生成的文件），不是本文件的代码。
+            # 它里面出现中文引号是模板自己的文案问题，与"这行 PowerShell 会不会因引号截断"无关；
+            # 而且模板正文里的引号形态取决于被生成的脚本，不能拿本文件的规则去套。
+            # 所以整段跳过：从 "@'/@" 开头到成对的 '@/"@ 结束。
+            $inHere = $false
+            foreach ($line in (Get-Content -LiteralPath $f.FullName -Encoding UTF8)) {
+              $ln++
+              $trimmed = $line.Trim()
+              if ($trimmed -eq "'@" -or $trimmed -eq '"@') { $inHere = $false; continue }
+              if ($inHere) { continue }
+              if ($trimmed.EndsWith("@'") -or $trimmed.EndsWith('@"')) { $inHere = $true; continue }
+              # 再排除「字符串数组里的模板正文」：profile 块的内容是按行写成 '....', 的字符串数组，
+              # 那些行同样不是本文件的代码（它们会被原样写进用户的配置文件），
+              # 里面的引号形态由被生成的内容决定，不能拿本文件的规则去套。
+              # 形态：整行以单引号开头、以 ', 或 ' 结尾。
+              if ($trimmed.StartsWith("'") -and ($trimmed.EndsWith("'," ) -or $trimmed.EndsWith("'"))) { continue }
+              if ($trimmed.StartsWith('#')) { continue }
+              if ($line -match '[\u4e00-\u9fff]"[^"]*[\u4e00-\u9fff]') {
+                Write-Host ("{0}:{1} 中文里出现 ASCII 双引号（改用「」）" -f $f.Name, $ln)
+                Write-Host ("    " + $line.Trim())
+                $fail = 1
+              }
+            }
+          }
+          if ($fail) { exit 1 }
+          Write-Host '中文引号检查通过'
+
+      - name: 门禁 4b：真实分包能被运行时校验器接受（Windows 侧）
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = (Get-Content VERSION -Raw).Trim()
+          $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("pkgate_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+          New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+          try {
+            $sub = Join-Path $tmp 'pkg'
+            New-Item -ItemType Directory -Path $sub -Force | Out-Null
+            $dst = Join-Path $sub 'win'
+            New-Item -ItemType Directory -Path $dst -Force | Out-Null
+            # monitor/ 是本机运行时状态、永不进包，拼包时必须排除——否则测的不是用户会收到的东西。
+            Copy-Item -Path 'win/*' -Destination $dst -Recurse -Force
+            Remove-Item -LiteralPath (Join-Path $dst 'monitor') -Recurse -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path 'VERSION' -Destination $sub -Force
+
+            # 「必须发出去」的最小清单。只声明"不要发什么"是不够的：那份清单自己就是标准，
+            # 误加一行就等于少发一个文件——包和清单两边永远一致、永远绿。
+            # 判据取 export-ignore 属性本身，不取"文件在不在包里"：后者与"有没有提交"耦合，
+            # 新增文件还没 commit 时必然不在 HEAD 的包里，那是正常中间状态，不该红。
+            # 库清单直接取入口声明的那一份（唯一权威处），不在这里另抄。
+            # **不能靠点源来读 $CoreLibs**：它定义在入口 win/envproxy.ps1 里，不在 base.ps1。
+            # 点源 base.ps1 拿到的 $CoreLibs 是空的，循环一次都不跑——清单里少了全部库，
+            # 门禁照样绿。实测踩过：给 lib/ops.ps1 标 export-ignore 时这条仍报"通过"。
+            $coreLine = (Select-String -Path 'win/envproxy.ps1' -Pattern '^\$CoreLibs\s*=\s*@\((.*)\)').Matches[0].Groups[1].Value
+            if (-not $coreLine) { Write-Host 'win：读不出口声明的库清单（$CoreLibs）'; exit 1 }
+            $CoreLibs = @($coreLine -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") } | Where-Object { $_ })
+            if ($CoreLibs.Count -eq 0) { Write-Host 'win：入口声明的库清单是空的'; exit 1 }
+            . (Join-Path (Get-Location) 'win/lib/base.ps1')
+            $must = New-Object System.Collections.ArrayList
+            [void]$must.Add('win/envproxy.ps1')
+            [void]$must.Add('win/打开菜单.cmd')
+            [void]$must.Add('win/locator.ps1')
+            [void]$must.Add('VERSION')
+            foreach ($lib in $CoreLibs) { [void]$must.Add(('win/lib/{0}.ps1' -f $lib)) }
+            $bad = @()
+            foreach ($m in $must) {
+              $v = & git check-attr export-ignore -- $m 2>$null
+              if ($v -match ': export-ignore: set') { $bad += $m }
+            }
+            if ($bad.Count -gt 0) {
+              Write-Host ('win：这些文件必须随包发出去，却被标成了 export-ignore -> ' + ($bad -join ', '))
+              exit 1
+            }
+
+            . (Join-Path (Get-Location) 'win/lib/package.ps1')
+            try {
+              $null = Test-Package -Root $sub -Platform 'win' -WantVersion $ver
+              Write-Host 'win：必须清单未被排除，且拼包通过运行时校验器'
+            } catch {
+              Write-Host ('win：分包被运行时校验器拒绝 -> ' + $_.Exception.Message)
+              exit 1
+            }
+          } finally {
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: 门禁 4b：真实分包能被运行时校验器接受（macOS 侧）
+        shell: bash
+        run: |
+          set -u
+          ver=$(cat VERSION | tr -d " \r\n")
+          tmp=$(mktemp -d "${TMPDIR:-/tmp}/pkgate.XXXXXX") || { echo "临时目录建不出来"; exit 1; }
+          trap 'rm -rf "$tmp"' EXIT
+          mkdir -p "$tmp/pkg"
+          cp -R mac "$tmp/pkg/mac"
+          rm -rf "$tmp/pkg/mac/monitor"
+          cp VERSION "$tmp/pkg/VERSION"
+
+          # 「必须发出去」的最小清单。判据取 export-ignore 属性本身，不取"文件在不在包里"：
+          # 后者与"有没有提交"耦合，新增文件还没 commit 时必然不在 HEAD 的包里。
+          declared=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//')
+          bad=""
+          for m in mac/envproxy.sh mac/locator.sh mac/prompt-sync.sh mac/test-mac-pure.sh VERSION; do
+              case "$(git check-attr export-ignore -- "$m" 2>/dev/null)" in
+                  *"export-ignore: set"*) bad="$bad $m" ;;
+              esac
+          done
+          for lib in $declared; do
+              case "$(git check-attr export-ignore -- "mac/lib/$lib.sh" 2>/dev/null)" in
+                  *"export-ignore: set"*) bad="$bad mac/lib/$lib.sh" ;;
+              esac
+          done
+          if [ -n "$bad" ]; then
+              echo "mac：这些文件必须随包发出去，却被标成了 export-ignore ->$bad"
+              exit 1
+          fi
+
+          # 只加载纯函数库（base 提供常量，package 提供 verify_package），不碰运行时状态。
+          # 退出码必须显式判断：写成 `( ... verify_package ... )` 然后往下走的话，
+          # 子 shell 返回非零没人管、脚本又没有 set -e，最后那句 rm 成功了，整步就以 0 收场。
+          if ! ( . ./mac/lib/base.sh; . ./mac/lib/package.sh; verify_package "$tmp/pkg" "$ver" ); then
+              echo "mac：分包被运行时校验器拒绝"
+              exit 1
+          fi
+          echo "mac：必须清单未被排除，且拼包通过运行时校验器"
 
       - name: 门禁 5：文档一致性
         shell: pwsh
@@ -469,10 +670,25 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # 常量住在哪一个库里不是门禁该管的事：把整个脚本集拼起来再找。
           # 于是新增库、把常量挪到别的库、入口变薄，都不会让这条门禁误报或失明。
-          $ps = (@(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse | Sort-Object Name |
-              ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
-          $sh = (@(Get-ChildItem 'mac' -Filter *.sh -File -Recurse | Sort-Object Name |
-              ForEach-Object { Get-Content $_.FullName -Raw -Encoding UTF8 }) -join "`n")
+          # 拼语料之前必须先剥掉注释。
+          #
+          # 不剥的话，这些"结构存在性"断言能被注释满足：把真正的代码删掉、注释原样留着，
+          # 门禁照样绿。实测删掉 Headers = @{ Accept = "application/octet-stream" } 那一行、
+          # 只留解释它的注释，门禁 6 通过——而那条头是 API 资产端点能不能拿到二进制的关键，
+          # 删了之后用户点"检查更新"会报连不上，被叫去开代理。
+          # 剥注释用保守规则（只跳整行 # 开头的行）：宁可漏掉行尾注释，也不能误删字符串里的 #
+          # （本项目日志文案里就有 # 开头的行）。
+          function Get-CodeOnly([string]$path) {
+              $out = New-Object System.Collections.Generic.List[string]
+              foreach ($line in (Get-Content -LiteralPath $path -Encoding UTF8)) {
+                  if ($line.TrimStart().StartsWith('#')) { continue }
+                  [void]$out.Add($line)
+              }
+              return ($out -join "`n")
+          }
+          # 用 git 索引取清单：与 CI 看到的完全一致，不会把本地临时脚本算进来。
+          $ps = (@(git ls-files 'win/*.ps1' | Sort-Object | ForEach-Object { Get-CodeOnly $_ }) -join "`n")
+          $sh = (@(git ls-files 'mac/*.sh' 'mac/lib/*.sh' | Sort-Object | ForEach-Object { Get-CodeOnly $_ }) -join "`n")
           $fail = 0
           # 语料是"整个脚本集拼起来"的，同一模式可能在多处命中；取第一个匹配就等于悄悄
           # 选了一个未必是运行时那个的值。所以命中数必须恰好为 1，模棱两可就当场失败。
@@ -902,6 +1118,80 @@ jobs:
           # 相邻两项之间「文字右沿 → 下一图标中心」也应相等。
           # 这条挡住的是一类真实缺陷：横杠用 em dash 字形画会偏下且占满全宽，
           # 于是它和文字的间距比别的项窄，而且看着像没对齐——肉眼能看出，机器却没查。
+            # 复杂图标（勾、正负号、回转箭头）画成矢量图形，不用字体字形：用字形画的话，
+            # 换个字体（手机上尤其明显）就整体往上飘，而同格的圆点是按坐标画的一动不动，
+            # 同一行里两种垂直位置，肉眼一看就乱。图形自带中心声明 data-cx/data-cy；
+            # 下面除了拿它排版，还要核对"声明的中心"与"实际画出的包围盒"一致，
+            # 否则那句声明就成了可以随便写的话。
+            # 量图形：返回 @(minX, minY, maxX, maxY)；量不出来返回 $null。
+            # 图标必须能用几何事实核对——只写一句"我居中"是不够的，声明和画出来的东西可能对不上。
+            function Get-PathPoints([string]$d) {
+              $pts = New-Object System.Collections.ArrayList
+              $toks = @([regex]::Matches($d, '[MLHVACZ]|-?\d+\.?\d*') | ForEach-Object { $_.Value })
+              $cx = 0.0; $cy = 0.0
+              $k = 0
+              while ($k -lt $toks.Count) {
+                $t = $toks[$k]
+                if ($t -eq 'M' -or $t -eq 'L') {
+                  $cx = [double]$toks[$k + 1]; $cy = [double]$toks[$k + 2]
+                  [void]$pts.Add(@($cx, $cy)); $k += 3
+                } elseif ($t -eq 'H') {
+                  $cx = [double]$toks[$k + 1]; [void]$pts.Add(@($cx, $cy)); $k += 2
+                } elseif ($t -eq 'V') {
+                  $cy = [double]$toks[$k + 1]; [void]$pts.Add(@($cx, $cy)); $k += 2
+                } elseif ($t -eq 'A') {
+                  $cx = [double]$toks[$k + 6]; $cy = [double]$toks[$k + 7]
+                  [void]$pts.Add(@($cx, $cy)); $k += 8
+                } else { $k += 1 }
+              }
+              return $pts
+            }
+            function Get-ShapeBox($n) {
+              if ($n.LocalName -eq 'circle') {
+                $cy = [double]$n.cy; $r = [double]$n.r; $cx = [double]$n.cx
+                return @(($cx - $r), ($cy - $r), ($cx + $r), ($cy + $r))
+              }
+              if ($n.LocalName -eq 'rect') {
+                $x = [double]$n.x; $y = [double]$n.y
+                return @($x, $y, ($x + [double]$n.width), ($y + [double]$n.height))
+              }
+              if ($n.LocalName -eq 'path') {
+                $pts = Get-PathPoints ([string]$n.d)
+                if (-not $pts -or $pts.Count -eq 0) { return $null }
+                $xs = @($pts | ForEach-Object { $_[0] })
+                $ys = @($pts | ForEach-Object { $_[1] })
+                return @(($xs | Measure-Object -Minimum).Minimum, ($ys | Measure-Object -Minimum).Minimum,
+                         ($xs | Measure-Object -Maximum).Maximum, ($ys | Measure-Object -Maximum).Maximum)
+              }
+              if ($n.LocalName -eq 'text') {
+                $size = [double]$n.'font-size'; if (-not $size) { $size = 20 }
+                $x = [double]$n.x; $y = [double]$n.y
+                $w = 0.0
+                foreach ($ch in ([string]$n.InnerText).ToCharArray()) {
+                  if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.55 }
+                }
+                $w = $w * $size
+                if ([string]$n.'text-anchor' -eq 'middle') { $x = $x - $w / 2 }
+                return @($x, ($y - $size * 0.78), ($x + $w), ($y + $size * 0.22))
+              }
+              return $null
+            }
+            # 一个图标 = 它的全部图形合起来的最小外接矩形
+            function Get-IconBox($g) {
+              $box = $null
+              foreach ($c in $g.ChildNodes) {
+                if ($c.NodeType -ne 'Element') { continue }
+                $b = Get-ShapeBox $c
+                if ($null -eq $b) { continue }
+                if ($null -eq $box) { $box = @($b[0], $b[1], $b[2], $b[3]); continue }
+                if ($b[0] -lt $box[0]) { $box[0] = $b[0] }
+                if ($b[1] -lt $box[1]) { $box[1] = $b[1] }
+                if ($b[2] -gt $box[2]) { $box[2] = $b[2] }
+                if ($b[3] -gt $box[3]) { $box[3] = $b[3] }
+              }
+              return $box
+            }
+
           function Get-TextW([string]$s, [double]$size) {
             $w = 0.0
             foreach ($ch in $s.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.55 } }
@@ -919,6 +1209,17 @@ jobs:
               elseif ($n.LocalName -eq 'text') { $iconCenters += [double]$n.x }
               elseif ($n.LocalName -eq 'circle') { $iconCenters += [double]$n.cx }
               elseif ($n.LocalName -eq 'rect') { $iconCenters += ([double]$n.x + [double]$n.width / 2) }
+              elseif ($n.LocalName -eq 'g' -and $n.GetAttribute('data-cx')) {
+                $declared = [double]$n.GetAttribute('data-cx')
+                $box = Get-IconBox $n
+                if ($null -eq $box) {
+                  Write-Host ("{0} 图例里的图标没有可量的图形（data-cx={1}）" -f $f.Name, $declared); $fail = 1
+                } elseif ([math]::Abs(($box[0] + $box[2]) / 2 - $declared) -gt 1.5) {
+                  Write-Host ("{0} 图标声明的中心与图形不符：声明 x={1}，实际 {2:N1}" -f $f.Name, $declared, (($box[0] + $box[2]) / 2))
+                  $fail = 1
+                }
+                $iconCenters += $declared
+              }
             }
             if ($iconCenters.Count -ne $labelXs.Count -or $labelXs.Count -lt 2) { continue }
             # 图标 → 文字：应为同一常数
@@ -967,28 +1268,22 @@ jobs:
               if ($h -ge 30 -and $h -le 50) { $bands += ($lines[$i] + $h / 2) }
             }
             if ($bands.Count -eq 0) { continue }
-            foreach ($n in (Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='marks']//*" | ForEach-Object { $_.Node })) {
+            # 只量 #marks 的直接子元素：一个标记 = 一个元素，或者一个图标组。
+            # 组内部的每段路径不单独参与判决（否则一个正负号会被当成三段分别判一次，判据就失真）。
+            $markNodes = @((Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='marks']").Node.ChildNodes |
+                           Where-Object { $_.NodeType -eq 'Element' })
+            foreach ($n in $markNodes) {
               $top = $null; $bot = $null
-              if ($n.LocalName -eq 'circle') { $cy = [double]$n.cy; $r = [double]$n.r; $top = $cy - $r; $bot = $cy + $r }
-              elseif ($n.LocalName -eq 'path') {
-                $d = [string]$n.d
-                $ys = @()
-                $parts = [regex]::Matches($d, '[MLHVACZ]|-?\d+\.?\d*') | ForEach-Object { $_.Value }
-                $k = 0
-                while ($k -lt $parts.Count) {
-                  switch ($parts[$k]) {
-                    'M' { $ys += [double]$parts[$k + 2]; $k += 3 }
-                    'L' { $ys += [double]$parts[$k + 2]; $k += 3 }
-                    'V' { $ys += [double]$parts[$k + 1]; $k += 2 }
-                    'H' { $k += 2 }
-                    'A' { $ys += [double]$parts[$k + 6]; $k += 8 }
-                    default { $k += 1 }
+              $box = if ($n.LocalName -eq 'g') { Get-IconBox $n } else { Get-ShapeBox $n }
+              if ($null -ne $box) {
+                if ($n.LocalName -eq 'g' -and $n.GetAttribute('data-cy')) {
+                  $dcy = [double]$n.GetAttribute('data-cy')
+                  if ([math]::Abs(($box[1] + $box[3]) / 2 - $dcy) -gt 1.5) {
+                    Write-Host ("{0} 图标声明的中心与图形不符：声明 y={1}，实际 {2:N1}" -f $f.Name, $dcy, (($box[1] + $box[3]) / 2))
+                    $fail = 1
                   }
                 }
-                if ($ys.Count) { $top = ($ys | Measure-Object -Minimum).Minimum; $bot = ($ys | Measure-Object -Maximum).Maximum }
-              }
-              elseif ($n.LocalName -eq 'text' -and $n.'dominant-baseline' -eq 'central') {
-                $cy = [double]$n.y; $size = [double]$n.'font-size'; $top = $cy - $size / 2; $bot = $cy + $size / 2
+                $top = $box[1]; $bot = $box[3]
               }
               if ($null -eq $top) { continue }
               $mid = ($top + $bot) / 2
@@ -1017,6 +1312,9 @@ jobs:
             $mode = $p[0]; $path = $p[3]
             if (($path -match '^mac/.*\.(sh|command)$') -and ($mode -ne '100755')) { Write-Host ("应为可执行 100755：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
             if (($path -match '^win/.*\.(cmd|ps1)$') -and ($mode -ne '100644')) { Write-Host ("不应可执行 100644：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
+            # win/ 下的 .sh 是给 Git Bash source 的（prompt-sync.sh），不双击运行、不需要可执行位；
+            # 与 win 侧其他文件同档 100644，避免 Windows 上 checkout 出来模式飘。
+            if (($path -match '^win/.*\.sh$') -and ($mode -ne '100644')) { Write-Host ("win 下的 .sh 应为 100644：{0}（当前 {1}）" -f $path, $mode); $fail = 1 }
           }
           if ($fail) { exit 1 }
           Write-Host '文件模式通过'
@@ -1031,7 +1329,19 @@ jobs:
           # 先把环境打出来：远端失败时，宿主版本、工作目录、bash 位置这三样决定排查方向。
           Write-Host ("宿主: {0}" -f $PSVersionTable.PSVersion.ToString())
           Write-Host ("工作目录: {0}" -f (Get-Location).Path)
-          $bashPath = (Get-Command bash -ErrorAction SilentlyContinue).Source
+          # Windows 上 PATH 里的 bash 常常是 WSL 的转发壳（system32\bash.exe）。没装发行版时
+          # 它对任何命令都回 execvpe(/bin/bash) failed，看上去像 Mac 自检失败，实际根本没跑起来。
+          # 那种情况下这条门禁会永远红、没人看，等于没有。所以显式优先找 Git Bash（MSYS2 的真 bash）。
+          $bashPath = $null
+          if ($env:OS -eq 'Windows_NT') {
+            foreach ($cand in @("$env:ProgramFiles\Git\bin\bash.exe", "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe")) {
+              if ($cand -and (Test-Path -LiteralPath $cand)) { $bashPath = $cand; break }
+            }
+          }
+          if (-not $bashPath) {
+            $cmd = Get-Command bash -ErrorAction SilentlyContinue
+            if ($cmd) { $bashPath = $cmd.Source }
+          }
           Write-Host ("bash: {0}" -f $(if ($bashPath) { $bashPath } else { '找不到' }))
           # Windows 上 bash 可能指向 WSL 的空壳（没装发行版时跑什么都说找不到文件）。
           # 那不是 Mac 自检真的失败，说清楚能省掉一次误判。
@@ -1043,7 +1353,7 @@ jobs:
           $winRc = $LASTEXITCODE
           $winOut | Write-Host
           if ($winRc -ne 0) { Write-Host ("Win 功能自检失败，退出码 {0}" -f $winRc); exit 1 }
-          $macOut = bash mac/envproxy.sh self-test
+          $macOut = & $bashPath mac/envproxy.sh self-test
           $macRc = $LASTEXITCODE
           $macOut | Write-Host
           if ($macRc -ne 0) { Write-Host ("Mac 功能自检失败，退出码 {0}" -f $macRc); exit 1 }
@@ -1117,3 +1427,24 @@ jobs:
           $rc = $LASTEXITCODE
           if ($rc -ne 0) { Write-Host ("Win 功能自检（5.1）失败，退出码 {0}" -f $rc); exit 1 }
           Write-Host '5.1 语法与功能自检通过'
+
+  # macOS 实跑。加这个 job 的原因：在此之前 mac 侧代码只做过 bash -n 语法检查，
+  # 真正的自检（mac/envproxy.sh self-test，含沙箱安装/注入/恢复/卸载回归）
+  # 从来没在 CI 上执行过。于是 lsof 退出码、nc 的参数、stat 的两种写法、
+  # launchctl 的子命令这些"只有真机能证明"的东西，全靠人读代码推断。
+  # 一条真实失败胜过十次推理。
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 报告环境
+        run: |
+          sw_vers
+          uname -m
+          /bin/bash --version | head -1
+          /bin/zsh --version
+          which -a nc lsof stat curl
+          nc -h 2>&1 | head -3 || true
+      - name: mac 侧自检（真实运行）
+        run: |
+          /bin/bash mac/envproxy.sh self-test

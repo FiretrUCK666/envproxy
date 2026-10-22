@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="490" viewBox="0 0 1200 490" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">What each menu item affects</title>
-  <desc id="buttonsDesc">A six-row, five-column comparison table. The rows are the six menu items: install or repair, show status, check for updates, help, stop the monitor, and full restore. The columns are start at login, monitor process, environment variables, log, and locator with path record. A check mark means kept, a dash means cleared, a solid dot means read-only, a plus-minus means it depends on whether you are currently behind the proxy, a circular arrow means the monitor restarts when a new version is installed, and a hollow circle means nothing happens when the version is already current. Install corrects the environment variables; stop clears the monitor and the variables while leaving start at login and the locator; full restore clears everything except the log; show status and help change nothing at all; check for updates only when a newer version exists replaces the program files and restarts the monitor on the new version (circular arrow), and does nothing at all when already up to date (hollow circle).</desc>
+  <desc id="buttonsDesc">A six-row, five-column comparison table. The rows are the six menu items: install or repair, show status, check for updates, help, stop the monitor, and full restore. The columns are start at login, monitor process, environment variables, log, and locator with path record. A check mark means kept, a dash means cleared, a solid dot means read-only, a plus-minus means it depends on whether you are currently behind the proxy, a circular arrow means it is rebuilt or restarted when a new version is installed. Install corrects the environment variables; stop clears the monitor and the variables while leaving start at login and the locator; full restore clears everything except the log; show status and help change nothing at all; check for updates only when a newer version exists replaces the program files and restarts the monitor on the new version (circular arrow).</desc>
 
   <rect width="1200" height="490" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="488.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -8,19 +8,17 @@
   <g id="heading">
     <text x="56" y="80" font-size="32" font-weight="700" fill="#E9EFF8">What each menu item affects</text>
   </g>
-  <g id="legend">
-    <text x="85" y="119" text-anchor="middle" dominant-baseline="central" font-size="24" font-weight="700" fill="#34D399">✓</text>
+      <g id="legend">
+    <g class="icon" data-cx="85" data-cy="119"><path d="M77.0 119.5L82.5 125.5L93.0 112.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/></g>
     <text x="112" y="126" font-size="20" fill="#94A6BE">kept</text>
-    <rect x="172" y="117.8" width="18" height="2.4" rx="1.2" fill="#94A6BE"/>
-    <text x="208" y="126" font-size="20" fill="#94A6BE">cleared</text>
-    <circle cx="310" cy="119" r="4.5" fill="#7A8CA6"/>
-    <text x="337" y="126" font-size="20" fill="#94A6BE">read-only</text>
-    <text x="461" y="119" text-anchor="middle" dominant-baseline="central" font-size="24" font-weight="700" fill="#C7D3E3">±</text>
-    <text x="488" y="126" font-size="20" fill="#94A6BE">state-dependent</text>
-    <text x="678" y="119" text-anchor="middle" dominant-baseline="central" font-size="24" font-weight="700" fill="#60A5FA">↻</text>
-    <text x="705" y="126" font-size="20" fill="#94A6BE">restarts on install</text>
-    <circle cx="939" cy="119" r="5.5" fill="none" stroke="#94A6BE" stroke-width="1.6"/>
-    <text x="966" y="126" font-size="20" fill="#94A6BE">no-op if current</text>
+    <g class="icon" data-cx="196" data-cy="119"><path d="M187.0 119.0H205.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/></g>
+    <text x="223" y="126" font-size="20" fill="#94A6BE">cleared</text>
+    <g class="icon" data-cx="340" data-cy="119"><circle cx="340" cy="119" r="4.5" fill="#7A8CA6"/></g>
+    <text x="367" y="126" font-size="20" fill="#94A6BE">read-only</text>
+    <g class="icon" data-cx="506" data-cy="119"><path d="M497.5 114.8L514.5 114.8L514.5 117.2L497.5 117.2ZM504.8 110.5L507.2 110.5L507.2 121.5L504.8 121.5ZM497.5 125.3L514.5 125.3L514.5 127.7L497.5 127.7Z" fill="#C7D3E3" stroke="none"/></g>
+    <text x="533" y="126" font-size="20" fill="#94A6BE">state-dependent</text>
+    <g class="icon" data-cx="738" data-cy="119"><path d="M745.0 121.5L743.7 123.8L741.7 125.4L739.3 126.3L736.7 126.3L734.3 125.4L732.3 123.8L731.0 121.5L730.6 119.0L731.0 116.5L732.3 114.2L734.3 112.6L736.7 111.7L739.3 111.7L741.7 112.6L743.7 114.2L745.0 116.5M742.2 117.0L745.9 119.2M747.4 115.2L745.9 119.2" fill="none" stroke="#60A5FA" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="765" y="126" font-size="20" fill="#94A6BE">rebuilt on upgrade</text>
   </g>
 
 <g id="grid" fill="none" stroke-width="1.5">
@@ -38,48 +36,48 @@
   </g>
 
   <g id="row-labels" font-size="21" fill="#E9EFF8">
-    <text x="56" y="222">1 Install / Repair</text>
-    <text x="56" y="262">2 Show status</text>
-    <text x="56" y="302">3 Check for updates</text>
+    <text x="56" y="222">1 Install</text>
+    <text x="56" y="262">2 Status</text>
+    <text x="56" y="302">3 Update</text>
     <text x="56" y="342">4 Help</text>
-    <text x="56" y="382">5 Stop monitor</text>
-    <text x="56" y="422">6 Full restore</text>
+    <text x="56" y="382">5 Stop</text>
+    <text x="56" y="422">6 Restore</text>
   </g>
 
   <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
     <path d="M56 234H1144M56 274H1144M56 314H1144M56 394H1144"/>
   </g>
 
-  <g id="marks">
-    <path d="M282.5 214.5L288 220.5L298.5 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M462.5 214.5L468 220.5L478.5 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M650 205V215 M643 210H657 M643 222H657" fill="none" stroke="#C7D3E3" stroke-width="2.4" stroke-linecap="round"/>
-    <path d="M822.5 214.5L828 220.5L838.5 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1002.5 214.5L1008 220.5L1018.5 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <g id="marks">
+    <path d="M282.0 214.5L287.5 220.5L298.0 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M462.0 214.5L467.5 220.5L478.0 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M641.5 209.8L658.5 209.8L658.5 212.2L641.5 212.2ZM648.8 205.5L651.2 205.5L651.2 216.5L648.8 216.5ZM641.5 220.3L658.5 220.3L658.5 222.7L641.5 222.7Z" fill="#C7D3E3" stroke="none"/>
+    <path d="M822.0 214.5L827.5 220.5L838.0 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1002.0 214.5L1007.5 220.5L1018.0 207.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="290" cy="254" r="4.5" fill="#7A8CA6"/>
     <circle cx="470" cy="254" r="4.5" fill="#7A8CA6"/>
     <circle cx="650" cy="254" r="4.5" fill="#7A8CA6"/>
     <circle cx="830" cy="254" r="4.5" fill="#7A8CA6"/>
     <circle cx="1010" cy="254" r="4.5" fill="#7A8CA6"/>
-    <circle cx="290" cy="294" r="4.5" fill="#7A8CA6"/>
-    <text x="470" y="294" text-anchor="middle" dominant-baseline="central" font-size="26" font-weight="700" fill="#60A5FA">↻</text>
+    <path d="M297.0 296.5L295.7 298.8L293.7 300.4L291.3 301.3L288.7 301.3L286.3 300.4L284.3 298.8L283.0 296.5L282.6 294.0L283.0 291.5L284.3 289.2L286.3 287.6L288.7 286.7L291.3 286.7L293.7 287.6L295.7 289.2L297.0 291.5M294.2 292.0L297.9 294.2M299.4 290.2L297.9 294.2" fill="none" stroke="#60A5FA" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M477.0 296.5L475.7 298.8L473.7 300.4L471.3 301.3L468.7 301.3L466.3 300.4L464.3 298.8L463.0 296.5L462.6 294.0L463.0 291.5L464.3 289.2L466.3 287.6L468.7 286.7L471.3 286.7L473.7 287.6L475.7 289.2L477.0 291.5M474.2 292.0L477.9 294.2M479.4 290.2L477.9 294.2" fill="none" stroke="#60A5FA" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="650" cy="294" r="4.5" fill="#7A8CA6"/>
     <circle cx="830" cy="294" r="4.5" fill="#7A8CA6"/>
-    <circle cx="1010" cy="294" r="4.5" fill="#7A8CA6"/>
+    <path d="M1017.0 296.5L1015.7 298.8L1013.7 300.4L1011.3 301.3L1008.7 301.3L1006.3 300.4L1004.3 298.8L1003.0 296.5L1002.6 294.0L1003.0 291.5L1004.3 289.2L1006.3 287.6L1008.7 286.7L1011.3 286.7L1013.7 287.6L1015.7 289.2L1017.0 291.5M1014.2 292.0L1017.9 294.2M1019.4 290.2L1017.9 294.2" fill="none" stroke="#60A5FA" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="290" cy="334" r="4.5" fill="#7A8CA6"/>
     <circle cx="470" cy="334" r="4.5" fill="#7A8CA6"/>
     <circle cx="650" cy="334" r="4.5" fill="#7A8CA6"/>
     <circle cx="830" cy="334" r="4.5" fill="#7A8CA6"/>
     <circle cx="1010" cy="334" r="4.5" fill="#7A8CA6"/>
-    <path d="M282.5 374.5L288 380.5L298.5 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M461 374H479" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M641 374H659" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M822.5 374.5L828 380.5L838.5 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1002.5 374.5L1008 380.5L1018.5 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M281 414H299" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M461 414H479" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M641 414H659" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
-    <path d="M822.5 414.5L828 420.5L838.5 407.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1001 414H1019" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M282.0 374.5L287.5 380.5L298.0 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M461.0 374.0H479.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M641.0 374.0H659.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M822.0 374.5L827.5 380.5L838.0 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1002.0 374.5L1007.5 380.5L1018.0 367.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M281.0 414.0H299.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M461.0 414.0H479.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M641.0 414.0H659.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
+    <path d="M822.0 414.5L827.5 420.5L838.0 407.5" fill="none" stroke="#34D399" stroke-width="2.9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1001.0 414.0H1019.0" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/>
   </g>
 </svg>

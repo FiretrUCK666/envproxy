@@ -50,10 +50,14 @@ function Broadcast-EnvironmentChange {
 # 类型还是 REG_EXPAND_SZ，但里面已经没有可展开的东西——用户换用户名或改路径后失效。
 # 这里直接读注册表原文，引用保持原样。
 
-# 读安装快照里的原始值（不做环境变量展开）。
-# 为什么不能用 Get-ItemProperty：它对 REG_EXPAND_SZ 同样会展开——实测快照里存的
-# %USERPROFILE%\abc 读出来是 C:\Users\某人\abc。快照的用途正是"原样存、原样还"，
-# 一旦读的时候被展开，还原回去的就是一张写死的路径，用户换用户名后就失效。
+# 读安装快照里的原始值（不做环境变量展开）。快照里所有读取都必须走这里。
+#
+# 为什么不直接用 Get-ItemProperty：它对 REG_EXPAND_SZ 会展开。当前快照的值是用
+# Set-ItemProperty 写进去的（落成 REG_SZ，不含类型信息），所以读出来恰好不展开——
+# 但那是**存储方式的副作用，不是读取方的保证**。快照里同时记着 __Kind 字段、
+# 还原时按原类型写回，说明这套设计本来就打算保留类型；哪天写入端改成保留
+# REG_EXPAND_SZ，这几处读取就会静默开始展开，用户换用户名或改路径后失效，
+# 而且不报任何错。用不展开的 API 读，行为就不再依赖写入端存成什么类型。
 function Get-PrevEnvRaw([string]$Name) {
     $key = $null
     try {
@@ -145,7 +149,8 @@ function Sync-UserEnvVars([string]$Port) {
     # 幂等判据是**整套变量**是否都已就位，不是只看代理地址：
     # 只看地址会让"代理值对、但别的变量缺失或漂移"的半代理状态一直无人纠正。
     # 返回是否真的写了东西——调用方据此决定要不要广播（静默时零广播、零写入）。
-    $desired = Get-ProxyVarTable $Port
+    # 地址现场探测：只绑 ::1 的代理在 IPv4 上连不上，写死 127.0.0.1 会注入一个用不了的地址。
+    $desired = Get-ProxyVarTable $Port (Get-ProxyUrlForPort ([int]$Port))
     # 用不展开的读法：用户原有值里的 %USERPROFILE% 这类引用必须原样保留，
     # 用 GetEnvironmentVariable 会把它展开成字面路径，合并写回后引用就永久丢了。
     $existingNoProxy = Get-UserEnvRaw "NO_PROXY"
@@ -267,7 +272,7 @@ function Test-OwnedProxyShape([string]$Name, [string]$Value) {
         return $false
     }
     if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
-    return ($Value -like "http://127.0.0.1:*")
+    return (Test-LoopbackProxyUrl $Value)
 }
 
 # 第 2 层：安装快照里本来就记着它吗？记着 = 使用者自己的，我们永远不许动。
@@ -276,9 +281,19 @@ function Test-OwnedProxyShape([string]$Name, [string]$Value) {
 function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     try {
         if (-not (Test-RegKey $PrevEnvRegKey)) { return $false }
-        $raw = (Get-ItemProperty -Path $PrevEnvRegKey -Name $Name -ErrorAction SilentlyContinue).$Name
+        $raw = Get-PrevEnvRaw $Name
         if ($null -eq $raw) { return $false }
-        if ($Name -ne "NO_PROXY") { return ($Value -eq [string]$raw) }
+        # 判据是「快照里**记过这个名字**」，不是「值恰好相等」。
+        #
+        # 这一条以前写成值相等，逻辑是反的：使用者装之前在用户环境变量里手设了
+        # HTTP_PROXY=http://127.0.0.1:8080（本地 mitmproxy、公司内网跳板、自己写的转发都长这样），
+        # 我们注入时把它改成 127.0.0.1:<翻墙端口>，于是「值不相等」-> 判成不是他的 ->
+        # off 的那一刻把它删掉。他原本能用的东西某天开始不通，没人告诉他；
+        # 卸载时按快照还原回来，于是症状变成「时好时坏、重装一次就好了」。
+        # 快照里出现过的名字就是使用者的地盘，我们永不动它——这才是这条函数的本意
+        #（NO_PROXY 分支下面的注释讲的是同一件事，代理地址分支当年没跟上）。
+        # 快照里没有这个名字 = 装前是空的 = 现在这个值必然是我们写的。
+        if ($Name -ne "NO_PROXY") { return $true }
         # NO_PROXY 要逐条比，而且判据必须与 Remove-UserEnvVars 同一套：
         # 那边是"逐项减掉默认集，快照里本来就有的条目原样留"。
         # 如果这里改成"任一条目命中就算使用者的"，就会出现
@@ -321,7 +336,7 @@ function Test-SnapshotSkip([string]$Name, [string]$Value, [bool]$FirstInstall) {
     if (-not $Value) { return $false }
     if ($FirstInstall) { return $false }
     if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
-    if ($Name -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) { return ($Value -like "http://127.0.0.1:*") }
+    if ($Name -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) { return (Test-LoopbackProxyUrl $Value) }
     return $false
 }
 
@@ -361,9 +376,9 @@ function Restore-PrevEnv {
         if (-not (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue)) { return }
         $plain = @{}
         foreach ($n in $ProxyVarNames) {
-            $bak = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
+            $bak = Get-PrevEnvRaw $n
             if ($null -ne $bak) {
-                $kindName = (Get-ItemProperty -Path $PrevEnvRegKey -Name ("{0}__Kind" -f $n) -ErrorAction SilentlyContinue).("{0}__Kind" -f $n)
+                $kindName = Get-PrevEnvRaw ("{0}__Kind" -f $n)
                 if ($kindName -eq "ExpandString") {
                     Set-ItemProperty -Path "HKCU:\Environment" -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
                 } else {
@@ -408,7 +423,8 @@ function Apply-State([string]$state) {
             }
         } else {
             $port = $state.Substring(3)
-            $want = "http://127.0.0.1:$port"
+            # 期望值要与实际注入的地址同源，否则 IPv6-only 的代理会被判成"没写成"。
+            $want = Get-ProxyUrlForPort ([int]$port)
             if (-not (Sync-UserEnvVars $port)) {
                 # Sync-UserEnvVars 返回 false 有两种情况：本来就齐（正常）、或者写失败。
                 # 靠"值到底齐了没有"再确认一次，才能区分这两者。
@@ -426,5 +442,73 @@ function Apply-State([string]$state) {
             try { $gate.Dispose() } catch {}
         }
     }
+    # 给 Git Bash 那份终端同步看的镜像文件。注册表它读不了（MSYS2 的 /proc/registry
+    # 只能在最顶层 shell 进程里读，函数里读到的是空），所以这里额外落一份普通文件。
+    # 写失败不影响任何判定：读不到文件时那份钩子什么都不做。
+    try { Write-TerminalStateFile $state } catch {}
     return $appliedOk
+}
+
+# 把当前状态落到 LOCALAPPDATA 下的 EnvProxy 目录，文件名 terminal.env，供 Git Bash 的提示符钩子读。
+# 格式是每行 KEY=VALUE：无前缀行是「当前该注入的值」，owned_ 前缀行是「归属记录」
+# （值仍等于它才允许清除，与注册表 Owned 键同一套判据）。
+# 一次性整份重写：读的一方只会看到写之前或写之后的完整内容，不会看到半份。
+function Write-TerminalStateFile([string]$State) {
+    # 这个文件的语义是「归属通道」，不是「当前状态快照」。
+    # 两者的差别决定 off 态该写什么：当快照看就该清空；可清空之后钩子手上再没有任何依据
+    # 判断「窗口里那几个值是不是我们写的」，于是它只能什么都不做——结果是关掉代理后，
+    # 已经开着的 Git Bash 窗口永远停在死端口上，git/curl/npm 全部 ECONNREFUSED，
+    # 而错误信息里根本不出现本工具的名字，用户会去查网络、防火墙、DNS。
+    # 所以 off 态也要留 owned_*：钩子据此知道「这些值当初是我们写下的，现在可以安全撤掉」。
+    # owned_* 存的是**当初写下的那个值**，不是当前值：撤除判据是「窗口里的值仍等于它」，
+    # 与我们后来改了什么无关。
+    # 取值来源分两种，都必须有明确出处：
+    #   on          -> 本轮要注入的值（就是它本身）
+    #   其他（off/unknown/空）-> 注册表 Owned 键里的历史值
+    #                          （此时变量已删，只能从记录取；绝不拿当前环境变量顶替——
+    #                            那可能是用户自己的公司代理，冒充"我们写的"会让钩子删掉它）
+    $dir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "EnvProxy"
+    $path = Join-Path $dir "terminal.env"
+    $names = @("HTTP_PROXY","HTTPS_PROXY","ALL_PROXY","NO_PROXY","NODE_USE_ENV_PROXY")
+    $lines = @()
+    $own = @{}
+    if ($State -and $State -ne "unknown" -and $State.StartsWith("on:")) {
+        # 与注入端同源：镜像文件里写的地址必须就是变量里那个，否则 Git Bash 跟着它写进
+        # 窗口的地址会连不上（只绑 ::1 的代理在 IPv4 上是拒绝的）。
+        $url = Get-ProxyUrlForPort ([int]$State.Substring(3))
+        $np = [string](Get-UserEnvRaw "NO_PROXY")
+        $node = [string](Get-UserEnvRaw "NODE_USE_ENV_PROXY")
+        $lines += "HTTP_PROXY=$url"
+        $lines += "HTTPS_PROXY=$url"
+        $lines += "ALL_PROXY=$url"
+        if ($np) { $lines += "NO_PROXY=$np" }
+        if ($node) { $lines += "NODE_USE_ENV_PROXY=$node" }
+        $own["HTTP_PROXY"] = $url
+        $own["HTTPS_PROXY"] = $url
+        $own["ALL_PROXY"] = $url
+        if ($np) { $own["NO_PROXY"] = $np }
+        if ($node) { $own["NODE_USE_ENV_PROXY"] = $node }
+    } else {
+        try {
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $false)
+            if ($null -ne $k) {
+                foreach ($n in $names) {
+                    $v = $k.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                    if ($null -ne $v -and -not [string]::IsNullOrEmpty([string]$v)) { $own[$n] = [string]$v }
+                }
+                $k.Close()
+            }
+        } catch {}
+    }
+    foreach ($n in $names) {
+        if ($own.ContainsKey($n)) { $lines += ("owned_" + $n + "=" + $own[$n]) }
+    }
+    # 落盘。用 base 层的 Write-Text（同目录临时文件 + 整体替换），不在这里再写一遍
+    # 那套原子逻辑：本项目已经因为 File.Replace 的第三参数踩过一次坑，而这个模式
+    # 在仓库里已经有三份，不该有第四份。
+    # 明确不带 BOM（Write-Text 的默认）：这个文件是给 bash 读的，行首多一个 BOM 会让
+    # 第一行变成「\uFEFFowned_HTTP_PROXY」，钩子从此认不出那条记录，变量也就清不掉。
+    $text = ""
+    if ($lines.Count -gt 0) { $text = (($lines -join "`n") + "`n") }
+    Write-Text -Path $path -Text $text
 }

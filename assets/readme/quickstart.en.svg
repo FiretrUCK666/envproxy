@@ -44,7 +44,7 @@
     <text x="840" y="212" font-size="19" fill="#C7D3E3">Reopen it once.</text>
     <text x="840" y="242" font-size="19" fill="#C7D3E3">The sync script was</text>
     <text x="840" y="272" font-size="19" fill="#C7D3E3">never loaded into it.</text>
-    <text x="840" y="326" font-size="17" fill="#94A6BE">To skip reopening, load the script</text>
-    <text x="840" y="352" font-size="17" fill="#38BDF8">once; it is in section 3.5.</text>
+    <text x="840" y="326" font-size="17" fill="#94A6BE">To skip: load the script</text>
+    <text x="840" y="352" font-size="17" fill="#38BDF8">once; it is in section 3.4.</text>
   </g>
 </svg>

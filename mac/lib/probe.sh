@@ -21,6 +21,11 @@ PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shado
 # 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
 CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org twitter.com"
 CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 / /"
+# 每个端点自己声明期望应答，与 Windows 侧端点表逐项一致（门禁 6 核查）。
+# /generate_204 类只认 204：被强制门户劫持时会回 200 或 302，那都不是「通」。
+# wikipedia/twitter 只认 3xx：它们正常就回重定向，按 204 判会让这两个跨域段兜底端点
+# 永远判死、端点池退化成纯 Google 段——那正是它们存在的意义所在。
+CHECK_EXPECTS="204 204 204 204 204 3xx 3xx"
 
 # 监控状态（进程内变量，不落地）
 LAST_GOOD_ENDPOINT=0
@@ -28,7 +33,56 @@ LAST_NODE_CHECK=0
 NODE_CACHE_PORT=""
 NODE_ALIVE=0
 NODE_FAIL_COUNT=0
-NODE_FIRST_FAIL_AT=0     # 本轮连续失败的起点（epoch 秒），成功后清零
+# 判定用的"当前时刻"（秒）。**必须单调**，不能用墙上时钟：
+#   NTP 校时 / 夏令时 / 休眠唤醒都会让 date +%s 跳变；
+#   向后跳 -> (now - last) 为负 -> "还不到探测间隔"恒成立 -> 停止探测（实测冻结）；
+#   向前跳 -> 失败计数被 IdleReset 清零 -> 判据永远凑不够。
+# 注意 epoch 秒变量（zsh 5.0+/bash 5+）与 date +%s 是**同一个墙上时钟**，
+# 解决不了跳变——实测两者差值恒为 0。
+# 这里用 CLOCK_MONOTONIC：perl 是 macOS 自带的，一次 fork 约 15ms。
+# 这个开销放在**监控进程**里（每 2-3 秒一轮，占 0.5%~0.75%），
+# 不在终端回车热路径上，所以不影响"敲回车不卡"那条契约。
+# 取不到时退回 date +%s：宁可保留跳变风险，也不能让监控起不来。
+# 一次 fork 约 15ms（macOS），一轮里多处要"现在"时不能各算一次——
+# 用 $_MONO_LAST 做轮内缓存：同一个调用者（同一轮）复用同一个读数。
+# 每轮开始由调用方执行 mono_tick 明确刷新一次，之后 monotonic_now 直接复用，
+# 于是每轮至多一次 fork，而不是每个判定点一次。
+_MONO_LAST=""
+_MONO_READY=0
+
+# 刷新一次单调钟，**只写全局、不输出**。
+#
+# 不输出是刻意的：任何 `x=$(mono_tick)` 都跑在子 shell 里，函数里的全局赋值出不来，
+# 于是缓存永远建不起来、每个判定点各 fork 一次。这正是之前那份实现的实际状态——
+# 注释承诺"每轮至多一次 fork"，代码里 mono_tick 被 $( ) 包着，缓存从没生效过。
+# 现在改成"调用方直接调它（不包 $( )），之后一律用 monotonic_now 取"。
+mono_tick() {
+    _mn=""
+    if command -v perl >/dev/null 2>&1; then
+        _mn=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%d", clock_gettime(CLOCK_MONOTONIC)' 2>/dev/null)
+    fi
+    case "$_mn" in
+        ''|*[!0-9]*) _mn=$(date +%s 2>/dev/null || echo 0) ;;
+    esac
+    _MONO_LAST="$_mn"
+    _MONO_READY=1
+    return 0
+}
+
+# 取"现在"，结果放进 $MONO_NOW。
+#
+# **不 printf 输出**，因为任何 `x=$(monotonic_now)` 都会开子 shell：
+# 子 shell 读不到父 shell 的 $_MONO_LAST，于是每次都真去 fork 一个 perl。
+# 实测那样写 100 次取用要 1583ms（等于没缓存）；改成"直接调 + 读 $MONO_NOW"
+# 之后是 24ms，快 66 倍。调用方一律写成：
+#     monotonic_now; _t=$MONO_NOW
+monotonic_now() {
+    if [ "$_MONO_READY" != "1" ] || [ -z "$_MONO_LAST" ]; then mono_tick; fi
+    MONO_NOW="$_MONO_LAST"
+    return 0
+}
+
+NODE_FIRST_FAIL_AT=0     # 本轮连续失败的起点（单调秒），成功后清零
 NODE_FAST_UNTIL=0        # 刚下结论后的加密观察窗口截止时刻（epoch 秒）
 CACHED_PORT=""
 LAST_SEEN_SET=""
@@ -85,11 +139,101 @@ test_port_listening() {
     lsof -iTCP:"$1" -sTCP:LISTEN -n -P >/dev/null 2>&1
 }
 
-# 单端口 CONNECT 握手：只有真正的 HTTP 代理才回 "200"
+# ------------------------------------------------------------------------------
+# nc 的能力探测（只做一次，结果缓存）。
+#
+# macOS 自带的 /usr/bin/nc 是 BSD 版，支持 -G <conntimeout>；
+# 但 Homebrew 的 netcat（GNU 版）**没有 -G**，而且它在 PATH 里可能排在 /usr/bin 前面。
+# 那种情况下 nc 会直接报错退出，错误被 2>/dev/null 吞掉 -> 握手永远失败 ->
+# 候选集永远为空 -> 工具整个失效，而且不报任何错。
+#
+# 所以先探一次"这台机器的 nc 认不认 -G"，不认就换成等价写法：
+# 用 curl 的 --connect-timeout 完成同一个 CONNECT 握手（curl 两边都有、参数一致）。
+# ------------------------------------------------------------------------------
+NC_HAS_G=""
+# 缓存必须按值分派。曾经写成 `[ -n "$NC_HAS_G" ] && { [ "$NC_HAS_G" = "1" ]; return 0; }`：
+# "0" 是非空字符串，所以那一行成立、进块，内层判等为假，可后面那句 return 0 **无条件执行**
+# ——于是"这台机器的 nc 不认 -G"这个结论从第二次调用起被读成"认 -G"。
+# 后果不是少一次降级，而是：第一次握手走 curl（对），之后全部退回 nc -G（错）→ 握手永远失败
+# → 候选集永远为空 → 工具彻底失效，而且不报任何错。这正是这段能力探测本来要防的事。
+nc_supports_G() {
+    case "$NC_HAS_G" in
+        1) return 0 ;;
+        0) return 1 ;;
+    esac
+    NC_HAS_G=0
+    # 拿一个必然连不上的端口探语法：认 -G 的 nc 会安静失败（退出码非 0 但没有 usage 报错），
+    # 不认的会打印 "invalid option" 之类。判据是"错误输出里有没有提到 G"。
+    _ncg_err=$(printf '' | nc -G 1 -w 1 127.0.0.1 1 2>&1 >/dev/null)
+    case "$_ncg_err" in
+        *[Ii]nvalid*|*[Ii]llegal*|*[Uu]nknown*|*usage*|*Usage*) NC_HAS_G=0 ;;
+        *) NC_HAS_G=1 ;;
+    esac
+    unset _ncg_err 2>/dev/null || true
+    [ "$NC_HAS_G" = "1" ]
+}
+
+# 探测本机代理要试两个回环地址（IPv4 与 IPv6，按序）。
+# 只绑 IPv6 回环的代理（mihomo / sing-box 配 bind-address: "::1"）对 IPv4 主动拒绝，
+# 只试一个会让这类用户永远检测不到代理、也不报任何错——最难被发现的那种失效。
+# 与 Windows 侧 $LoopbackProbes 同义。
+LOOPBACK_PROBES="127.0.0.1 ::1"
+
+# 把回环地址转成 URL 里的写法：IPv6 字面量必须加方括号，
+# 否则 "http://::1:7078" 里的端口会被解析成地址的一部分，代理地址整个作废。
+url_host_for() {
+    case "$1" in
+        *:*) printf '[%s]' "$1" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# 在指定地址上做一次 CONNECT 握手。$1=地址 $2=端口。只有真代理才回 200。
+_handshake_at() {
+    if nc_supports_G; then
+        _ha_resp=$(printf 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n' | nc -G 1 -w 2 "$1" "$2" 2>/dev/null | head -n 1)
+    else
+        # 降级：同一个 CONNECT 握手改用 curl 做。
+        # 两个参数缺一不可：
+        #   --noproxy ''  让 curl 真的去连我们指定的这个代理（写 '*' 是"绕过代理直连目标"，
+        #                 语义正好相反——那样 curl 去连 127.0.0.1:9，必然失败，判据恒假）。
+        #   -p            让 curl 用 CONNECT 建隧道。不加它，curl 对 http 目标发的是普通 GET，
+        #                 于是"任何会回 200 的 HTTP 服务"都能通过握手门，判据就认错了东西。
+        _ha_resp=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl --disable -s -o /dev/null -D - --connect-timeout 1 --max-time 2 \
+            --noproxy '' -p -x "http://$(url_host_for "$1"):$2" "http://127.0.0.1:9/" 2>/dev/null | head -n 1)
+    fi
+    printf '%s' "$_ha_resp" | grep -qE '^HTTP/1\.[01] +200'
+}
+
+# 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
+# 命中的地址放进 $LOOPBACK_HIT（注入端要用它拼 URL）。
 test_http_proxy() {
-    _p="$1"
-    _resp=$(printf 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n' | nc -G 1 -w 2 127.0.0.1 "$_p" 2>/dev/null | head -n 1)
-    printf '%s' "$_resp" | grep -qE '^HTTP/1\.[01] +200'
+    LOOPBACK_HIT=""
+    for _tp_addr in $LOOPBACK_PROBES; do
+        if _handshake_at "$_tp_addr" "$1"; then
+            LOOPBACK_HIT="$_tp_addr"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 这个端口该按哪个地址注入？现场探测，取第一个连得上的。
+# 不能固定写 127.0.0.1：只绑 ::1 的代理在 IPv4 上连不上，用户会拿到一个用不了的地址，
+# 终端里每条命令 ECONNREFUSED，而状态页显示"已注入、正常"——比检测不到更糟。
+# 结果放进 $PROXY_URL_HIT（不 printf：$( ) 是子 shell，全局赋值出不来）。
+proxy_url_for_port() {
+    _pufp_addr=""
+    for _pufp_a in $LOOPBACK_PROBES; do
+        if _handshake_at "$_pufp_a" "$1"; then _pufp_addr="$_pufp_a"; break; fi
+    done
+    [ -n "$_pufp_addr" ] || _pufp_addr="$1_PLACEHOLDER"
+    case "$_pufp_addr" in
+        *_PLACEHOLDER) _pufp_addr=$(printf '%s' "$LOOPBACK_PROBES" | cut -d' ' -f1) ;;
+    esac
+    PROXY_URL_HIT="http://$(url_host_for "$_pufp_addr"):$1"
+    return 0
 }
 
 # 批量探测 worker（参数展开在父进程完成，避免后台子 shell 闭包竞态）。
@@ -106,7 +250,7 @@ _probe_proxy_one() {
 # 并行批量 CONNECT 探测：多个端口同时握手，~2 秒内出结果
 test_http_proxy_batch() {
     [ $# -eq 0 ] && return 1
-    _bdir=$(mktemp -d /tmp/envproxy_found.XXXXXX 2>/dev/null) || return 1
+    _bdir=$(mktemp -d ${TMPDIR:-/tmp}/envproxy_found.XXXXXX 2>/dev/null) || return 1
     for _p in "$@"; do
         _probe_proxy_one "$_p" "$_bdir" &
     done
@@ -180,8 +324,8 @@ get_listening_ports() {
 # 解析只用一次 awk：pid→comm 映射与监听行匹配在同一次扫描里完成，
 # 不再对每一行各起 awk/grep/head（原来每行 6–7 个进程，空转时最费电的就是它）。
 get_suspect_ports() {
-    _psmap=$(mktemp /tmp/envproxy_ps.XXXXXX 2>/dev/null) || return 0
-    _lsofout=$(mktemp /tmp/envproxy_lsof.XXXXXX 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
+    _psmap=$(mktemp ${TMPDIR:-/tmp}/envproxy_ps.XXXXXX 2>/dev/null) || return 0
+    _lsofout=$(mktemp ${TMPDIR:-/tmp}/envproxy_lsof.XXXXXX 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
     ps -ax -o pid=,comm= 2>/dev/null | tr '[:upper:]' '[:lower:]' > "$_psmap" 2>/dev/null || true
     if ! lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null > "$_lsofout"; then
         rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
@@ -263,47 +407,67 @@ find_candidate_ports() {
 # ------------------------------------------------------------------------------
 # 4. 真实节点连通性（快路优先 + 失败并行兜底；有状态，直接调用禁命令替换）
 # ------------------------------------------------------------------------------
-test_single_endpoint() {
-    _port="$1"; _host="$2"; _path="$3"
-    # --disable（= -q）：不读用户 ~/.curlrc——否则用户配过的 proxy 会劫持这次探测，判据作废。
-    _out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy \
-        curl --disable -s -D - -o /dev/null --head --connect-timeout 5 --max-time 6 -x "http://127.0.0.1:$_port" "http://$_host$_path" 2>/dev/null)
-    [ -n "$_out" ] || return 1
-    printf '%s' "$_out" | grep -qi "Connection Established" && return 1
-    _first=$(printf '%s' "$_out" | head -n 1)
-    _code=$(printf '%s' "$_first" | grep -oE ' [0-9]{3} ' | tr -cd '0-9')
-    case "$_code" in
-        # 与 Windows 侧同一口径：只认"正常响应"——200 / 204（连通性检查端点）与 3xx 重定向。
-        # 不把 2xx 全收进来：其它 2xx 语义不明，宁可判"断"——错判"通"会把终端流量送进坏节点，
-        # 错判"断"只是不注入（终端走直连），两个代价不对称。
-        200|204|30[0-9]) return 0;;
+# 端点应答的状态码判定（唯一的判据实现，与 Windows 侧 Test-EndpointStatus 同义）。
+# $1 = 状态码，$2 = 该端点声明的期望值（204 / 3xx）。
+# 只认端点自己声明的那种应答：/generate_204 只认 204（被强制门户劫持时回 200 或 302，
+# 那两种都不是"节点通"）；wikipedia/twitter 只认 3xx（它们的正常应答就是重定向，
+# 收 204 会让这两个跨域段兜底端点永远判死、端点池退化成纯 Google 段）。
+test_endpoint_status() {
+    case "$2" in
+        204) [ "$1" = "204" ] && return 0; return 1;;
+        3xx) [ "$1" -ge 300 ] 2>/dev/null && [ "$1" -le 399 ] 2>/dev/null && return 0; return 1;;
         *) return 1;;
     esac
 }
 
+test_single_endpoint() {
+    _port="$1"; _host="$2"; _path="$3"; _expect="${4:-204}"
+    # 走哪个回环地址由调用方算好放在 $EP_PROXY_URL 里（每个端口探一次，不是每个端点探一次）。
+    # 不设时退回 127.0.0.1：只绑 ::1 的代理在 IPv4 上连不上，写死会让端点探测对它永远失败。
+    _px="${EP_PROXY_URL:-http://127.0.0.1:$_port}"
+    # --disable（= -q）：不读用户 ~/.curlrc——否则用户配过的 proxy 会劫持这次探测，判据作废。
+    _out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy \
+        curl --disable -s -D - -o /dev/null --head --connect-timeout 5 --max-time 6 -x "$_px" "http://$_host$_path" 2>/dev/null)
+    [ -n "$_out" ] || return 1
+    printf '%s' "$_out" | grep -qi "Connection Established" && return 1
+    _first=$(printf '%s' "$_out" | head -n 1)
+    # 只取第一行里的三位数字：不要求状态码前后都有空格。
+    # 以前用 ' [0-9]{3} ' 要求尾部空格，服务端偶尔不发原因短语（"HTTP/1.1 204"）就解析成空 -> 误判断。
+    _code=$(printf '%s' "$_first" | sed -n 's/^HTTP\/[0-9.]*[[:space:]]\{1,\}\([0-9]\{3\}\).*/\1/p')
+    [ -n "$_code" ] || return 1
+    test_endpoint_status "$_code" "$_expect"
+}
+
 _probe_endpoint_one() {
-    _port="$1"; _h="$2"; _pa="$3"; _idx="$4"; _dir="$5"
-    if test_single_endpoint "$_port" "$_h" "$_pa"; then
+    _port="$1"; _h="$2"; _pa="$3"; _idx="$4"; _dir="$5"; _exp="$6"
+    if test_single_endpoint "$_port" "$_h" "$_pa" "$_exp"; then
         printf '%s' "$_idx" > "$_dir/win" 2>/dev/null || true
     fi
 }
 
 test_real_connectivity() {
     _port="$1"
+    # 先定下这个端口该走哪个回环地址（只算一次，下面所有端点共用）。
+    # 只绑 ::1 的代理在 IPv4 上主动拒绝——不在这里定，下面每个端点都会连错地址。
+    proxy_url_for_port "$_port"
+    EP_PROXY_URL="$PROXY_URL_HIT"
     # 快路端点按索引取值（cut 实现，避免 set -- 篡改位置参数；索引越界则回退并行）
     _fast_host=$(printf '%s' "$CHECK_HOSTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
     _fast_path=$(printf '%s' "$CHECK_PATHS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
+    _fast_exp=$(printf '%s' "$CHECK_EXPECTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
+    # 期望值必须跟着端点走：不传就吃默认 204，wikipedia/twitter（期望 3xx）会永远判死。
     if [ -n "$_fast_host" ] && [ -n "$_fast_path" ] \
-        && test_single_endpoint "$_port" "$_fast_host" "$_fast_path"; then
+        && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}"; then
         return 0
     fi
-    _tmpdir=$(mktemp -d /tmp/envproxy_conn.XXXXXX 2>/dev/null) || return 1
+    _tmpdir=$(mktemp -d ${TMPDIR:-/tmp}/envproxy_conn.XXXXXX 2>/dev/null) || return 1
     # 逐个按索引展开 host/path，避免后台闭包竞态（参数在父进程展开后传值）
     _idx=0
     for _h in $CHECK_HOSTS; do
         _pa_for_idx=$(printf '%s' "$CHECK_PATHS" | cut -d' ' -f$((_idx + 1)) 2>/dev/null)
+        _exp_for_idx=$(printf '%s' "$CHECK_EXPECTS" | cut -d' ' -f$((_idx + 1)) 2>/dev/null)
         if [ $_idx -ne $LAST_GOOD_ENDPOINT ] && [ -n "$_pa_for_idx" ]; then
-            _probe_endpoint_one "$_port" "$_h" "$_pa_for_idx" "$_idx" "$_tmpdir" &
+            _probe_endpoint_one "$_port" "$_h" "$_pa_for_idx" "$_idx" "$_tmpdir" "${_exp_for_idx:-204}" &
         fi
         _idx=$((_idx + 1))
     done
@@ -338,7 +502,10 @@ test_real_connectivity() {
 # 失败起点会让新端口的 dwell 立刻满足——那条差异就从"可能早判几秒"收窄成"不成立"。
 test_node_alive() {
     _port="$1"; _force="${2:-0}"
-    _now=$(date +%s)
+    # 每轮开头刷新一次单调读数（一次 fork），本轮其余判定点复用。
+    mono_tick            # 本轮刷新一次（不包 $( )，否则全局缓存出不来）
+    monotonic_now
+    _now=$MONO_NOW
     if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then
         _age=$((_now - LAST_NODE_CHECK))
         node_probe_interval "$NODE_FAIL_COUNT" "$NODE_FAIL_THRESHOLD" "$NODE_FAST_UNTIL" "$_now" \

@@ -83,8 +83,8 @@ function Install-EnvProxy {
     $prof = $null
     try { $prof = Install-ShellProfile } catch { $prof = [pscustomobject]@{ Reason = "error"; Path = "" } }
     switch ($prof.Reason) {
-        'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 配置文件里写入钩子" -ForegroundColor Green }
-        'current'    { Write-Host "[4/4] 终端同步：已是最新" -ForegroundColor Green }
+        'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 和 Git Bash 的配置文件里写入钩子" -ForegroundColor Green }
+        'current'    { Write-Host "[4/4] 终端同步：已是最新（PowerShell 与 Git Bash 都已在位）" -ForegroundColor Green }
         'no-profile' { Write-Host "[4/4] 终端同步：取不到 $PROFILE 路径，跳过（新窗口仍会生效）" -ForegroundColor Yellow }
         'unpaired'   {
             Write-Host "[4/4] 终端同步：配置文件里的标记不成对，未改动它（安全起见一个字节都没动）" -ForegroundColor Yellow
@@ -104,7 +104,8 @@ function Install-EnvProxy {
     Show-Status
     Write-Host ""
     Write-Host "提示：之后新开的终端/程序自动获得代理；" -ForegroundColor Green
-    Write-Host "      已经开着的窗口敲一下回车就会跟上，退出翻墙软件后同样。" -ForegroundColor Green
+    Write-Host "      装完之后一直开着的窗口，敲一下回车就跟上（cmd 窗口只能重开）。" -ForegroundColor Green
+    Write-Host "      装之前就开着的窗口没有同步代码，要重开一个。退出翻墙软件后同样。" -ForegroundColor Green
     Write-Host "      想让某个窗口固定直连：在它里面执行 `$env:ENVPROXY_TERM = 'off'" -ForegroundColor DarkGray
     Write-Host "      （改回跟着翻墙软件走：Remove-Item Env:ENVPROXY_TERM）。" -ForegroundColor DarkGray
 }
@@ -118,7 +119,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 只摘我们那一块，用户 profile 里其余内容一字不动（不成对时一个字节都不改）。
     $profRm = Remove-ShellProfile
     if ($profRm.Ok) {
-        if ($profRm.Reason -eq 'removed') { Write-Host "终端同步：已从 PowerShell 配置文件里移除钩子" -ForegroundColor Green }
+        if ($profRm.Reason -eq 'removed') { Write-Host "终端同步：已从 PowerShell 和 Git Bash 的配置文件里移除钩子" -ForegroundColor Green }
     } else {
         Write-Host ("终端同步：未能移除钩子（" + $profRm.Reason + "），可手动删除下面文件里 EnvProxy 标记的那几行：") -ForegroundColor Yellow
         Write-Host ("  " + $profRm.Path) -ForegroundColor DarkGray
@@ -133,7 +134,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 它既不是残留也不能删）；没快照的名字才按"有无我们的痕迹"判。
     $restoredWant = @{}
     foreach ($n in $ProxyVarNames) {
-        $bv = (Get-ItemProperty -Path $PrevEnvRegKey -Name $n -ErrorAction SilentlyContinue).$n
+        $bv = Get-PrevEnvRaw $n
         if ($null -ne $bv) { $restoredWant[$n] = [string]$bv }
     }
     # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
@@ -142,7 +143,23 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     Broadcast-EnvironmentChange
     Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
+    # Git Bash 同步用的状态镜像也在定位器目录里：它由本工具新引入，卸载必须带走。
+    # 先删文件再删目录，否则目录非空、Remove-Item 不带 -Recurse 会失败（原来就是这样漏的）。
+    Remove-Item -LiteralPath (Join-Path $LauncherDir "terminal.env") -Force -ErrorAction SilentlyContinue
+    # %LOCALAPPDATA%\EnvProxy 是我们**独占**的目录（只有 launcher.ps1 / terminal.env / *.tmp*），
+    # 必须带 -Recurse：5.1 上删非空目录不带它会抛 NullReferenceException 且目录纹丝不动，
+    # 于是"卸载未完成"永远修不好——用户再点一次也删不掉，因为没人去删那些残留。
+    Remove-Item -LiteralPath $LauncherDir -Recurse -Force -ErrorAction SilentlyContinue
+    # Git Bash 的同步脚本副本也要清：它装在 ~/.envproxy 下，不属于安装目录，
+    # 单靠删安装夹带不走。与 Mac 侧 uninstall 删 prompt-sync.sh 再 rmdir 同一套动作。
+    # 目录只在空的时候才删——里面若有使用者自己放的东西，一个字节都不动。
+    $epHome = Join-Path ([string]$env:USERPROFILE) '.envproxy'
+    Remove-Item -LiteralPath (Join-Path $epHome 'prompt-sync.sh') -Force -ErrorAction SilentlyContinue
+    try {
+        if ((Test-Item $epHome) -and -not (Get-ChildItem -LiteralPath $epHome -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+            Remove-Item -LiteralPath $epHome -Force -ErrorAction SilentlyContinue
+        }
+    } catch {}
     # 日志去留：黑匣子保留还是彻底删除？
     #   - 交互模式（菜单里选 一键恢复）：询问用户，默认保留
     #   - 自动化模式（-Uninstall -Purge）：直接彻底删除，不询问
@@ -183,11 +200,15 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 卸载末尾回读复检：上面每一步都可能静默失败，定论必须由复读结果决定。
     # DIVERGE(Win): 复检项按平台映射——Run 键对应 Mac 的 plist，
     # 注册表变量对应 proxy.env，其余同源。
+    # 每条残留都带上**具体位置**。只写"路径记录仍在"再加一句"手动删除上述位置"，
+    # 用户看着空白不知道删什么——提示得能照着做才算提示。
     $dirty = @()
-    try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop; $dirty += "开机自启动项仍在" } catch {}
-    if (Test-Item $LauncherPath) { $dirty += "定位器文件仍在" }
-    if (Test-Item $LauncherDir) { $dirty += "定位器目录仍在" }
-    if (Test-RegKey $ScriptPathRegKey) { $dirty += "路径记录仍在" }
+    try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop
+          $dirty += ("开机自启动项仍在：" + $RunKeyPath + " 里的 " + $RunKeyName) } catch {}
+    if (Test-Item $LauncherPath) { $dirty += ("定位脚本仍在：" + $LauncherPath) }
+    if (Test-Item $LauncherDir) { $dirty += ("定位脚本所在目录仍在：" + $LauncherDir) }
+    if (Test-RegKey $ScriptPathRegKey) { $dirty += ("路径记录仍在：注册表 " + $ScriptPathRegKey) }
+    if (Test-Item (Join-Path ([string]$env:USERPROFILE) ".envproxy\prompt-sync.sh")) { $dirty += "Git Bash 同步脚本副本仍在" }
     if ((Test-Item $PidFile) -or (Test-Item $StopFlag)) { $dirty += "监控运行时文件仍在" }
     # 变量复检不用整表判据：有快照的名字必须与快照一致（用户原值含重合项也算干净），
     # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。
@@ -209,8 +230,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
         }
         Write-Host "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。" -ForegroundColor Green
     } else {
-        Write-Host ("[未完成] 以下残留请手动处理：{0}" -f ($dirty -join "；")) -ForegroundColor Yellow
-        Write-Host "        可再打开菜单选 6（一键恢复），或手动删除上述位置。" -ForegroundColor Yellow
+        Write-Host "[未完成] 这几处没清干净：" -ForegroundColor Yellow
+        foreach ($d in $dirty) { Write-Host ("        - " + $d) -ForegroundColor Yellow }
+        Write-Host "        再打开菜单选 6（一键恢复）试一次；还不行就照上面列出的位置手动删。" -ForegroundColor Yellow
     }
 }
 
@@ -234,8 +256,16 @@ function Show-Status {
     } else {
         Write-Host "监控进程 : 未运行" -ForegroundColor Yellow
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
-        # 不说清这一点，用户会看到"自启已启用"和"监控未运行"并列，以为装坏了。
-        if ($autoRunOk) { Write-Host "           （已按你的选择停止，下次登录会自动恢复）" -ForegroundColor DarkGray }
+        # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
+        # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
+        # 不分辨就只能猜：说成"你停的"，被强杀的人会以为自己点错了；什么都不说，
+        # 真停过的人会以为坏了。
+        if (Test-Item $StopIntentFile) {
+            if ($autoRunOk) { Write-Host "           （已按你的选择停止，下次登录会自动恢复）" -ForegroundColor DarkGray }
+        } else {
+            Write-Host "           （不是点了停止，是进程不在了：可能被「结束任务」关掉，或崩溃）" -ForegroundColor Yellow
+            Write-Host "           打开菜单选 1（安装 / 修复）可以让它重新跑起来。" -ForegroundColor DarkGray
+        }
     }
 
     if ($run) {
@@ -265,6 +295,23 @@ function Show-Status {
         Write-Host "翻墙代理 : 未检测到（当前无翻墙代理在运行）" -ForegroundColor Yellow
     }
 
+    # 终端同步：已开着的窗口靠它跟上变化。这一项缺了，用户会在「监控运行中」的
+    # 假象里以为一切正常，其实每次开窗口都不同步（执行策略、块不成对、宿主不支持）。
+    $ts = $null
+    try { $ts = Get-TerminalSyncState } catch {}
+    if ($ts) {
+        switch ($ts.State) {
+            'ok'       { Write-Host "终端同步 : 已生效（已开着的窗口敲回车即跟上）" -ForegroundColor Green }
+            'blocked'  { Write-Host "终端同步 : 装了但跑不起来" -ForegroundColor Yellow
+                         Write-Host ("            " + $ts.Detail) -ForegroundColor Yellow }
+            'unpaired' { Write-Host "终端同步 : 配置文件里的标记不成对，未改动它" -ForegroundColor Yellow
+                         Write-Host "            打开菜单选 1 可以修复" -ForegroundColor Yellow }
+            'missing'  { Write-Host "终端同步 : 配置文件里没有同步块" -ForegroundColor Yellow
+                         Write-Host "            打开菜单选 1 可以写入" -ForegroundColor Yellow }
+            default    { Write-Host "终端同步 : 这一轮读不到配置文件路径，无法判断" -ForegroundColor Yellow }
+        }
+    }
+
     $cur = Get-EnvProxyValue
     if ($cur) {
         # 光看"变量有值"不够：变量可能指向一个已经不存在的端口。
@@ -287,10 +334,16 @@ function Show-Status {
         }
         if ($varAlive) {
             Write-Host ("代理变量 : 已注入 ({0})" -f $cur) -ForegroundColor Green
+            # 变量已经写进系统，但没有任何进程在维护它们。翻墙软件一关，这些变量就指向
+            # 一个死端口，curl/git 会一直失败到手工处理或下次登录——用户不知道要找这里。
+            if (-not $m) {
+                Write-Host "           但这些变量现在没人维护：翻墙软件断开后不会自动清掉，终端会连不上。" -ForegroundColor Yellow
+                Write-Host "           打开菜单选 1（安装 / 修复）恢复监控；或选 5（停止监控）把这批变量一并清掉。" -ForegroundColor DarkGray
+            }
         } else {
             Write-Host ("代理变量 : 指向的端口已不在（{0}）" -f $cur) -ForegroundColor Yellow
             Write-Host ("           终端里联网会报 ECONNREFUSED 127.0.0.1:{0}，那是这里造成的。" -f $varPort) -ForegroundColor Yellow
-            Write-Host "           等几秒会自动清掉；想立刻清掉就打开菜单选 1（安装 / 修复）。" -ForegroundColor DarkGray
+            Write-Host "           监控在跑的话，几秒内会自动清掉；想立刻清掉、或者监控本来就没在跑，就打开菜单选 1（安装 / 修复）。" -ForegroundColor DarkGray
         }
     } else {
         Write-Host "代理变量 : 无（直连状态）" -ForegroundColor DarkGray
@@ -339,7 +392,7 @@ function Show-Status {
         } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
             Write-Host "更新状态 : 本地版本比最新发布版新" -ForegroundColor Green
         } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
-            Write-Host "更新状态 : 发现新版，可打开菜单选 检查更新 升级" -ForegroundColor Yellow
+            Write-Host "更新状态 : 发现新版，打开菜单选 3（检查更新）即可升级" -ForegroundColor Yellow
         } else {
             Write-Host "更新状态 : 已是最新" -ForegroundColor Green
         }
@@ -388,7 +441,7 @@ $MenuItems = @(
     @{ Key = "4"; Name = "帮助";       Switch = "Help";      Group = "日常"; Hint = "忘了怎么用就看它" },
     @{ Key = "5"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "先停掉，下次开机自己回来" },
     @{ Key = "6"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
-    @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出" }
+    @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出"; Hint = "关掉这个窗口" }
 )
 
 # 菜单里名字那一列要按最长的自动对齐：写死宽度会在改文案后错位，
@@ -510,7 +563,10 @@ function Get-HelpMenuLines {
             if ($mi.Hint) {
                 [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW) + '  ' + $mi.Hint))
             } else {
-                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW) + '  什么都不做。直接按回车等于查看状态'))
+                # 每个菜单项都必须有 Hint（上面那张表里写全）。这里留空只是兜底，
+                # 不再拼"什么都不做。直接按回车等于查看状态"——那句话本身就自相矛盾
+                # （0 明明会关掉窗口，而在帮助页里回车是退回上一级，不是查看状态）。
+                [void]$out.Add(('  ' + $mi.Key + '  ' + (Format-MenuCell $mi.Name $nameW)))
             }
         }
     }
@@ -554,7 +610,9 @@ function Get-HelpTopics {
                 '     同步代码还没装进去。PowerShell 输入下面这条，或者重开窗口：',
                 '         . $PROFILE',
                 '',
-                '     cmd 和 Git Bash 没有这个办法，重开窗口就行。',
+                '     Git Bash 输入：source ~/.bashrc',
+                '',
+                '     cmd 没有这个办法，重开窗口就行。',
                 '',
                 '为什么要按一次回车',
                 '  每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，',
@@ -568,18 +626,20 @@ function Get-HelpTopics {
                 '一、固定直连（这个窗口不再自动跟随）',
                 '  PowerShell 输入：',
                 '      $env:ENVPROXY_TERM = ''off''',
+                '  Git Bash 输入：',
+                '      export ENVPROXY_TERM=off',
+                '  设上之后这个窗口一直直连，你自己设的值（比如公司代理）不动。',
                 '',
-                '  cmd 输入，一行贴完（& 两边不能有空格）：',
+                '  cmd 没有这个开关，自己把 5 个变量清掉（& 两边别留空格）：',
                 '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
                 '',
-                '  Git Bash 输入：',
-                '      unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY',
+                '  别用 unset HTTP_PROXY：钩子写进 Git Bash 的是小写拼写，',
+                '  unset 大写的清不掉小写，curl 照样走代理，下个提示符还会写回来。',
                 '',
                 '二、恢复自动跟随',
-                '  PowerShell 输入：',
-                '      Remove-Item Env:ENVPROXY_TERM',
-                '',
-                '  cmd 和 Git Bash 没有这个开关，重开窗口就是自动跟随。',
+                '  PowerShell：Remove-Item Env:ENVPROXY_TERM',
+                '  Git Bash：unset ENVPROXY_TERM',
+                '  cmd：重开窗口就是自动跟随',
                 '  窗口一关，上面这些改动全部失效。'
             )
         },
@@ -608,7 +668,8 @@ function Get-HelpTopics {
                 '  Git Bash 输入：',
                 '      echo $HTTPS_PROXY',
                 '',
-                '端口去哪找：翻墙软件的「端口」或「局域网端口」那一栏。',
+                '端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。',
+                '注意：这里不是翻墙软件那个端口，别去那儿找。',
                 '你手设的值不会被删，只清和工具写入值相同的那些。'
             )
         },
@@ -655,15 +716,15 @@ function Get-HelpTopics {
                 '  2. 有值还是连不上：看菜单顶上「监控」是不是未运行。',
                 '     未运行就选 1（安装 / 修复）。',
                 '',
-                '  3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。',
-                '     你自己清过变量，npm 就不走了。',
+                '  3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
                 '',
                 '状态页怎么读',
                 '  监控进程  后台程序在不在跑',
                 '  开机自启  下次登录会不会自动起来',
                 '  翻墙代理  本机有没有翻墙软件在监听端口',
+                '  终端同步  已经开着的窗口会不会跟着变',
                 '  代理变量  这个工具往终端里设代理了没有',
-                '  后两行一「有」一「无」= 翻墙在跑、工具被你停了，不是坏了。',
+                '  「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被你停了，不是坏了。',
                 '  其余几行是系统代理、版本号、更新状态。',
                 '',
                 '日志和 AI 排查',

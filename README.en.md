@@ -36,12 +36,12 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 ## 0. What happens after installing
 
-Almost always nothing. Of the rows below, only the middle one needs anything from you, and that is at most one Enter press.
+Almost always nothing. Of the three cases below, only the first needs nothing from you; the other two cost at most reopening one window.
 
 | Your situation | What happens | What you do |
 |---|---|---|
 | **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
-| **Opened after installing, proxy changed later** | It needs to read again | Press Enter once |
+| **A window kept open, proxy changed later** | The window still holds the old state | Press Enter once (a cmd window has to be reopened) |
 | **A window opened before installing** | The sync code was never loaded into it | Open a new window, or run the command in 3.4 |
 
 ### Why an open window needs one Enter press
@@ -64,7 +64,7 @@ Two need a restart: it was already open before you installed EnvProxy, or it run
 
 Installing does four things: it saves your current variable values (restored on uninstall), registers start at login, adds a small sync script to your terminal's startup configuration, and starts the monitor plus corrects the variables once.
 
-Progress is reported step by step on screen: four steps on both platforms, matching those four.
+Progress is reported as steps 1–4. The order differs: Windows does (1) start at login, (2) monitor, (3) variables, (4) terminal sync; Mac does (1) start at login, (2) terminal sync, (3) monitor, (4) variables. Saving your original values happens before step 1, so it has no number of its own.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the package for your platform, double-click the menu and choose 1 Install / Repair, see the monitor started message; below, a side by side comparison: a window opened after the install takes effect right away, and a window that was open before also catches up once you reopen it or load the sync script by hand">
 
@@ -88,8 +88,8 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 |---|---|---|
 | **Everyday** | | |
 | **1 Install / Repair** | Use it the first time, and whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
-| **2 Show status** | Monitor, proxy, environment variables, version | Read-only, changes nothing |
-| **3 Check for updates** | Explains what changed first, installs only if you agree | Program files only |
+| **2 Show status** | Monitor, proxy, terminal sync, environment variables, version | Read-only, changes nothing |
+| **3 Check for updates** | Explains what changed first, installs only if you agree | Program files only, then the monitor restarts on the new code |
 | **4 Help** | Read it when you forget how something works | Prints text only, changes nothing |
 | **Upkeep** | | |
 | **5 Stop the monitor** | Temporary; it returns at next login | Monitor process + environment variables |
@@ -101,7 +101,7 @@ The numbers run top to bottom and are grouped by how often you need them, so the
 
 **Pressing Enter directly means show status**, the item you look at most. The menu header shows whether the monitor is running and the current version, so you do not need to go in.
 
-The menu and help use only two actions: **type a number** to do that thing, **press Enter** to go back one level. There are no other keys to remember.
+The menu and help use only two actions: **type a number** to do that thing; **press Enter** to go back — in the main menu that means show status, in help it means go back one level. There are no other keys to remember.
 
 Pick `4` for help: one entry answers one question, chosen by what you are stuck on.
 
@@ -138,23 +138,29 @@ First, work out which terminal you are in. The syntax differs completely:
 | `C:\...>` | cmd (Command Prompt) | Opening Command Prompt by hand |
 | `name@host $` | Git Bash / Mac Terminal | Git Bash, macOS Terminal app |
 
-**Only PowerShell and the Mac Terminal auto-follow.** The installer drops a small piece of code into their profile that re-checks the state every time the prompt comes back. cmd and Git Bash have no such code, so a state change never reaches them by itself.
+**PowerShell, Git Bash and the Mac Terminal all auto-follow.** The installer drops a small piece of code into their profile that re-checks the state every time the prompt comes back.
+
+**cmd is the only exception.** It has no "run this before every prompt" hook, so a state change never reaches it by itself — clear the variables yourself, or just reopen the window.
 
 ### 3.1 Pin this window to a direct connection / go back to automatic
 
-**PowerShell** — that code sees `off` and clears the five variables itself, so one line is enough:
+To keep **this one window** off the proxy, set a switch inside it.
+
+**PowerShell**
 
 ```
 $env:ENVPROXY_TERM = 'off'
 ```
 
-**cmd** — no such code, so you clear them yourself. No spaces around `&`: a space leaves a value containing just that space, which looks cleared while requests still go through the proxy.
+**Git Bash**
 
 ```
-set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
+export ENVPROXY_TERM=off
 ```
 
-If that line feels long, do one per line instead, stopping at the equals sign — all five are needed:
+Once the switch is set, the proxy variables in that window are cleared at the next prompt, and it stays direct from then on (a command run on the same line still sees the old values).
+
+**cmd has no such switch** (it has no prompt hook), so clear the five variables yourself. One per line:
 
 ```
 set HTTP_PROXY=
@@ -164,19 +170,29 @@ set NO_PROXY=
 set NODE_USE_ENV_PROXY=
 ```
 
-**Git Bash** — one line:
+All on one line also works:
 
 ```
-unset HTTP_PROXY HTTPS_PROXY ALL_PROXY NO_PROXY NODE_USE_ENV_PROXY
+set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
 ```
 
-**Going back to automatic:** in PowerShell use `Remove-Item Env:ENVPROXY_TERM`. cmd and Git Bash have no switch to unset — reopening the window is the way back. Closing the window also discards every change above.
+Leave no spaces around `&`. A space makes the value a single space instead of empty, and the proxy keeps working.
+
+**Do not use `unset HTTP_PROXY ...`**: the hook writes the lower-case spellings (`http_proxy` and friends) into Git Bash. Unsetting the upper-case one leaves the lower-case one behind, and curl in Git Bash honours it — so you would still be going through the proxy. The next prompt puts them all back too. The switch above is the only real takeover.
+
+**Going back to automatic**
+
+- PowerShell: `Remove-Item Env:ENVPROXY_TERM`
+- Git Bash: `unset ENVPROXY_TERM`
+- cmd: reopen the window and it follows automatically again
+
+These changes only live in that window. Close it and they are gone.
 
 ### 3.2 Send this window through a corporate proxy
 
 Two steps, **in this order**: pin to direct in 3.1 first, then set the address. Without stopping auto-follow, the next change the proxy app makes overwrites the address you just set.
 
-Replace `your-host:port` with what your company gave you. The port is on the proxy app's "port" or "LAN port" line.
+Replace `your-host:port` with what your company gave you — ask IT; they usually hand you a proxy setup note. This is **not** the local proxy app's port, so do not go looking there.
 
 **PowerShell**:
 
@@ -231,28 +247,41 @@ These flags belong to each tool, not to EnvProxy. Without them, the tools read t
 | Your window | What happens | What to do |
 |---|---|---|
 | Opened after install | Already correct | Nothing |
-| Opened after install, but the proxy changed later | Still holds the old state | Press Enter once (PowerShell) / reopen (cmd) |
+| Opened after install, but the proxy changed later | Still holds the old state | Press Enter once (PowerShell / Git Bash / Mac Terminal) / reopen (cmd) |
 | Opened before install | The sync code was never installed | Reopen it |
 
-**cmd and Git Bash can only reopen the window**: they copy the environment at start-up, and no command afterwards makes them read it again.
+**cmd can only reopen the window**: it copies the environment at start-up, and no command afterwards makes it read it again.
 
-If you would rather not reopen in PowerShell or the Mac Terminal, run this once in that window:
+If you would rather not reopen in PowerShell, Git Bash or the Mac Terminal, run this once in that window:
 
 | | Command |
 |---|---|
 | PowerShell | `. $PROFILE` |
+| Git Bash | `source ~/.bashrc` |
 | Mac Terminal | `. ~/.envproxy/prompt-sync.sh` |
 
 Four things to watch:
 
 - The leading `.` and the space after it are both required. `.` means "run this file in the current window".
-- Applies to PowerShell and to zsh or bash. fish on Mac is not supported.
+- Applies to PowerShell, Git Bash, and zsh or bash. fish on Mac is not supported.
 - Affects that one window only. Other open windows each need it, or just reopen them.
 - If EnvProxy was never installed from that window, the file `$PROFILE` points at may not exist and you will see red "cannot find path" text. That is normal; reopen a window.
 
-### 3.5 Use it without the menu (scripts, remote sessions)
+### 3.5 How to confirm it really took
 
-The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line switches. They match the menu numbers one to one.
+Pick **2 Check status** in the menu and look at the "terminal sync" line:
+
+| Shown | Meaning | What to do |
+|---|---|---|
+| Active | Normal | Nothing |
+| Installed but cannot run (reason given) | Windows execution policy stops PowerShell from running the profile. Windows only | Follow the hint on the second line (see section 4), then open a new window |
+| Markers in the profile are unpaired | Something else edited your profile | Run **1 Install / repair** once |
+| No sync block in the profile | Never installed, or it was cleaned away | Run **1 Install / repair** once |
+| Cannot read the profile path this time (Windows only) | Rare; this run cannot tell | Look again in a few seconds; if it stays, run **1 Install / repair** once |
+
+### 3.6 Use it without the menu (scripts, remote sessions)
+
+The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first six rows match the six menu items one to one; the last two have no menu entry.
 
 | Goal | Windows | Mac |
 |---|---|---|
@@ -263,8 +292,9 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Stop the monitor | `-Stop` | `stop` |
 | Full restore | `-Uninstall` | `uninstall` |
 | Open the menu | `-Menu` | `menu` |
+| Self-check (troubleshooting) | — | `self-test` |
 
-The order matches the menu: four everyday items first, then the two upkeep ones.
+The order matches the menu: four everyday items first, then the two upkeep ones. The last row is a Mac-only troubleshooting command: it runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables.
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
 
@@ -298,6 +328,7 @@ bash envproxy.sh status
 | "Installation incomplete, missing program files" | The folder was not copied in full, or files were deleted | Download again from the Releases page and unzip over this folder. **Upgrading through Check for updates removes the old files for your platform automatically** |
 | Environment variables reappear after being removed | The node itself is unstable, and the monitor writes what it observes | Expected. If it keeps happening the node is poor; switch to another |
 | Variables linger after disconnecting | The app's "disconnect" does not stop its core, and the node is still reachable | Expected. Quit the proxy app to stop it immediately |
+| "Terminal sync" in the status shows "installed but cannot run" | Windows execution policy stops PowerShell from running the profile | Follow the hint on the second line, then open a new window. If you only need the variables to work, you can leave this alone for now |
 | Everything above tried and it still fails | — | Open the menu, pick 2 and screenshot the status; then pick 1 to repair |
 
 > Most problems are solved by **picking 1** in the menu. It does not install a second copy, does not cut your network, and does not lose your own settings.
@@ -316,7 +347,7 @@ All three must hold before any variable is written. A web server on your machine
 
 It does not rely on brands, process names or port numbers — those only speed up scanning; the decision always goes through these three.
 
-<img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 6 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 8 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are left intact">
+<img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 6 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 8 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are rewritten to the new port">
 
 **Deciding "disconnected" is far more cautious than deciding "connected"**: one failed probe is not a disconnect; it takes 10 seconds of continuous failure and at least 3 probes. A single success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
 
@@ -346,7 +377,7 @@ Windows gets 5, macOS gets 9 (the same 5 plus lowercase spellings). Windows vari
 - Why Windows gets only one spelling: the two spellings are the same variable there, and a duplicate makes .NET hosts fail while building their table with `An item with the same key has already been added`, affecting everything running in that terminal window.
 - IPv6 addresses inside `NO_PROXY` must be written as bare `::1`. Written as `[::1]`, httpx treats it as an ordinary domain, builds an invalid pattern, and every request afterwards fails with `InvalidURL`. Brackets are URL literal syntax, in the wrong position here.
 - Your own `NO_PROXY` entries are never removed, only added to. Uninstalling reclaims only what this tool wrote.
-- If another program corrupts the variables (overwrites, clears, or drops an entry), nothing needs doing: the monitor re-checks the whole table every 30 rounds and fills in whatever is missing.
+- If another program corrupts the variables (overwrites, clears, or drops an entry), nothing needs doing: the monitor re-checks the whole table every 30 rounds and writes back only what is missing.
 - The tools below do not read those 5 variables and need separate configuration. This is not a defect in this tool:
 
 | Tool | Where to configure it |
@@ -374,9 +405,9 @@ The rule is: **when unsure, do nothing.**
 ## 7. Performance and traffic
 
 - **Almost no overhead once stable**: each port is probed at most once every 15 seconds, reading only response headers, under 1KB each time.
-- **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold it probes every 5 seconds, returning to 15 once the conclusion is settled.
+- **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold it probes every 5 seconds. After the conclusion flips it keeps watching for another 60 seconds at that rate (so it does not flip straight back), then returns to 15 seconds.
 - **No residue after uninstalling**: variables, start at login, the locator script and the sync block are all removed, leaving only the log if you kept it.
-- **Delay at the prompt is imperceptible**: before each prompt it reads the local state once (the registry on Windows, `proxy.env` on Mac) and starts no external process at all.
+- **Delay at the prompt is imperceptible**: before each prompt it reads the local state once (PowerShell reads the registry, Git Bash reads a small state file, Mac reads `proxy.env`) and starts no external process at all.
 
 ## 8. What is in the folder
 
@@ -387,11 +418,13 @@ EnvProxy\
   win\                   Windows version
     打开菜单.cmd         the only file you double-click
     envproxy.ps1         the program
+    locator.ps1          source for the login locator (generated into %LOCALAPPDATA%\EnvProxy\launcher.ps1)
     lib\                 program library (leave it alone)
     monitor\             created at runtime, holds the log
-  mac\                   Mac version, same layout, plus two templates:
-    locator.sh           the locator script
-    prompt-sync.sh       the terminal sync script
+  mac\                   Mac version, same layout, plus three files Windows does not ship:
+    locator.sh           the locator (counterpart of win's locator.ps1)
+    test-mac-pure.sh     self-test script (used by self-test; ships with the package)
+    prompt-sync.sh       the terminal sync script (zsh/bash; the Windows one is generated at install time)
   README.md  README.en.md  Chinese and English docs
   LICENSE  VERSION         license and version
   release-notes\          what changed per release (shown by Check for updates)
@@ -417,7 +450,7 @@ Two ways to bring it back:
 - **Wait for the next login**: the locator script finds the new location and takes over.
 - **Bring it back now**: double-click Install / Repair once.
 
-The search covers **six levels** down from the common locations (Desktop, Documents, Downloads, OneDrive, `.config`) and **four levels** under each drive root. Outside those, such as `C:\Projects\EnvProxy`, the locator script cannot find it and you must double-click Install once.
+The search covers two areas: **six levels** down from the common locations (Desktop, Documents, Downloads, OneDrive, `.config`), and **four levels** under the root of each non-system drive (the system drive's root is skipped, so it does not walk the whole disk). That is why `C:\Projects\EnvProxy` is not found but `D:\Projects\EnvProxy` is. Move it outside those areas and you have to double-click Install once.
 
 A copied backup **is never mistaken for the live one**, since log activity decides which is running, so backups can stay in place.
 
@@ -467,17 +500,19 @@ The numbers, behaviour and what each item affects are identical to Windows, incl
 
 ### 12.4 What is in the `mac` folder
 
-See the folder structure in section 8. Mac has two extra template files: `locator.sh` (the locator script) and `prompt-sync.sh` (the terminal sync script).
+See the folder structure in section 8. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
+
+The locator has a source file on each platform — `locator.sh` on Mac, `win\locator.ps1` on Windows. The installer uses it to generate the copy that actually runs at login, in a fixed location (Windows: `%LOCALAPPDATA%\EnvProxy\launcher.ps1`).
 
 ### 12.5 Three problems you may hit on first install on a Mac
 
-<img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on first install on a Mac: the downloaded file is quarantined, the script is not executable, and system settings block the background item">
+<img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on first install on a Mac: the downloaded file is quarantined, the script is not executable, and macOS asks to access your Documents folderhe background item">
 
 | Symptom | Cause | What to do |
 |---|---|---|
 | Double-clicking does nothing, or "cannot be opened" | The downloaded file is quarantined by the system | Right-click, then Open; or run `xattr -d com.apple.quarantine 打开菜单.command` in a terminal |
 | "Permission denied" | The script is not executable | Run `chmod +x 打开菜单.command` in a terminal |
-| Installed, but the status says it is not running | System settings blocked the background item | System Settings, General, Login Items & Extensions, allow it to run |
+| Installed, but the status says it is not running | macOS blocked the background item, or the "access your Documents folder" prompt was denied | Background item: System Settings, General, Login Items & Extensions, allow it to run. Folder access: System Settings, Privacy & Security, Files and Folders. Then run Install / Repair once more from the menu |
 
 ### 12.6 What lands in `~/.envproxy/` after installing
 
@@ -487,10 +522,12 @@ See the folder structure in section 8. Mac has two extra template files: `locato
 | `prompt-sync.sh` | the terminal sync script, referenced by one line in the rc files |
 | `path.conf` | records the project path |
 | `proxy.env` | the environment variables for the terminal path and the current state |
-| `owned.env` | the values we wrote, so clearing removes only those |
+| `owned.env` | the values we wrote, so clearing removes only those (absent if the proxy has never been on) |
 | `prev.env` | the original values saved at install time, restored on uninstall |
+| `monitor.stdout.log` | launchd standard-output redirection |
+| `monitor.stderr.log` | launchd standard-error redirection (look here when login start-up misbehaves) |
 
-There are also the launchd output redirection files. The project folder can be moved elsewhere and is located again at the next login; a backup folder is never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` you chose to keep.
+ The project folder can be moved elsewhere and is located again at the next login; a backup folder is never picked up by mistake. Uninstalling removes all of these, keeping only the `monitor.log` you chose to keep.
 
 ### 12.7 Setting it up for a friend or a new Mac
 

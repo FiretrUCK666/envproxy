@@ -3,6 +3,19 @@
 #
 # The core is loaded through its real entry point: that exercises the library loader and its
 # completeness check, and the entry returns immediately when dot-sourced.
+
+# 本自检要在「干净的环境」里跑：使用者机器上可能已经把 ENVPROXY_TERM 设成 off，
+# 或别处导出了代理变量。那些是真实状态，但会让这里的断言在不同的机器上得出不同结论——
+# 同一个提交在 CI 通过、在用户机器上失败（或反过来），是最难查的一类红。
+# 记下原值，跑完还原，全程只在进程层动，不碰使用者真正设置。
+$__savedTerm = $env:ENVPROXY_TERM
+$__savedProxy = @{}
+foreach ($__n in @('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','NODE_USE_ENV_PROXY',
+                  'http_proxy','https_proxy','all_proxy','no_proxy')) {
+    $__savedProxy[$__n] = [Environment]::GetEnvironmentVariable($__n, 'Process')
+}
+Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
+foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $null, 'Process') }
 $ErrorActionPreference = 'Stop'
 $script:fails = 0
 . (Join-Path $PSScriptRoot '../win/envproxy.ps1')
@@ -124,6 +137,21 @@ $t = Get-ProxyVarTable '17890'
 Assert-Eq 'var table count' '5' ($t.Count)
 Assert-Eq 'var table value' 'http://127.0.0.1:17890' ($t['HTTP_PROXY'])
 
+# 这一组必须跑在沙箱里。Test-IsOwnedProxyValue 内部会去读**安装快照**（Backup 键）
+# 判断「这个名字装前就有了吗」。直接裸测的话，结论取决于这台机器装没装过本工具：
+# 装过 -> 快照里有这几个名字 -> 判成使用者的 -> 断言拿到 False -> 本地必红。
+# 而 CI 的干净容器永远没有快照，于是永远绿 —— 同一份测试两边结论相反，
+# 「本地全绿」这个前提对维护者自己就不成立，门禁最终会被忽略。
+# 做法：把快照指向一个临时空键，测完还原。判据本身的行为由下一段专门测。
+$__bakOrig = $PrevEnvRegKey
+$__bakTmp = 'HKCU:\Software\EnvProxy\__test_empty_snapshot'
+$__bakMade = $false
+if ($env:OS -eq 'Windows_NT') {
+    if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) { New-Item -Path 'HKCU:\Software\EnvProxy' -Force | Out-Null; $__bakMade = $true }
+    Remove-Item -Path $__bakTmp -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path $__bakTmp -Force | Out-Null
+    Set-Variable -Name PrevEnvRegKey -Value $__bakTmp -Scope Global
+}
 Write-Host '[2] ownership convention (real predicate)'
 Assert-Eq 'local counts as ours' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7890')
 Assert-Eq 'corp does not' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://corp:8080')
@@ -132,6 +160,11 @@ Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 
 Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
 Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
 Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
+if ($env:OS -eq 'Windows_NT') {
+    Set-Variable -Name PrevEnvRegKey -Value $__bakOrig -Scope Global
+    Remove-Item -Path $__bakTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+Remove-Variable __bakOrig, __bakTmp, __bakMade -ErrorAction SilentlyContinue
 
 # 归属判定的第二层：安装快照里本来就记着的值，哪怕长得像我们的，也永远是使用者的。
 # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy（127.0.0.1:8080）
@@ -164,6 +197,32 @@ if ($env:OS -eq 'Windows_NT') {
 
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
+
+    # ---- 正向覆盖：判决三层的前两层必须真的能被认出来 ----
+    # 这一段是补历史欠账：原来 Test-HttpProxy / Test-EndpointStatus 只有否定断言
+    #（关闭的端口不是代理），没有任何一条说真代理要认得出来。
+    # 后果是这两个函数可以被改成恒返回 $false 而全部门禁全绿——
+    # 那等于工具在最核心的功能上彻底失效，用户只会看到检测不到代理。
+    # 假服务器返回的是 @{Port=...; Ps=...; Rs=...}，用 $srv.Port 取端口、用 Stop-OneShotServer 收尾。
+    $realProxy = Start-OneShotServer 200 @{} ''
+    try {
+        Assert-Eq 'a real CONNECT proxy is recognised' $true (Test-HttpProxy $realProxy.Port)
+        $batchHit = Test-HttpProxyBatch @($realProxy.Port)
+        Assert-Eq 'the batch path finds the same proxy' ([string]$realProxy.Port) ([string]$batchHit)
+    } finally { Stop-OneShotServer $realProxy }
+    $refusing = Start-OneShotServer 403 @{} 'no'
+    try {
+        Assert-Eq 'a proxy that refuses is not accepted' $false (Test-HttpProxy $refusing.Port)
+    } finally { Stop-OneShotServer $refusing }
+
+    # 端点判据的三态：204 类只认 204，3xx 类只认 3xx。
+    # 这两条曾在两侧都没有任何断言——把 204 放宽成 200..399 会全绿，
+    # 而那正好放进强制门户返回 200 登录页这个最该挡的场景。
+    Assert-Eq 'endpoint 204 accepts 204' $true (Test-EndpointStatus 204 '204')
+    Assert-Eq 'endpoint 204 rejects 200 (captive portal)' $false (Test-EndpointStatus 200 '204')
+    Assert-Eq 'endpoint 204 rejects 302' $false (Test-EndpointStatus 302 '204')
+    Assert-Eq 'endpoint 3xx accepts 301' $true (Test-EndpointStatus 301 '3xx')
+    Assert-Eq 'endpoint 3xx rejects 204' $false (Test-EndpointStatus 204 '3xx')
 Assert-Eq 'batch closed finds nothing' '' (Test-HttpProxyBatch @(9, 1))
 
 Write-Host '[4] source copy detection and cleanup'
@@ -456,7 +515,9 @@ foreach ($t in $helpTopics) {
 # from the real output (a locally rebuilt string would keep passing after a redesign).
 $menuOut = Format-MenuText
 foreach ($k in $menuKeys) { Assert-Eq ('menu prints key ' + $k) $true ($menuOut -match ('(?m)^\s*' + [regex]::Escape($k) + '\s{2}')) }
-Assert-Eq 'every action has a hint' $true (@($MenuItems | Where-Object { $_.Switch }).Count -eq @($MenuItems | Where-Object { $_.Hint }).Count)
+# 每一项都要有一句人话解释，包括「0 退出」。按 Switch 计数会漏掉退出项（它没有子命令），
+# 于是"加了一项却没写提示"这种疏漏反而检查不到。
+Assert-Eq 'every menu item has a hint' $true (@($MenuItems | Where-Object { -not $_.Hint }).Count -eq 0)
 # Grouping is presentation only: every entry belongs to a declared group, and the
 # groups keep their order so the screen reads 日常 -> 维护 -> 退出.
 foreach ($mi in $MenuItems) { Assert-Eq ('menu item ' + $mi.Key + ' has a group') $true ($mi.Group -in @('日常', '维护', '退出')) }
@@ -721,6 +782,10 @@ Assert-Eq 'a broken bracket is rejected' '1' ([int]($null -eq (ConvertTo-ListenE
 if ($env:OS -eq 'Windows_NT') {
     $global:NetstatStub = @()
     function global:netstat.exe { $global:NetstatStub }
+    # 枚举默认走 $env:SystemRoot\System32\netstat.exe 这个绝对路径（不依赖 PATH）。
+    # 用 ENVPROXY_NETSTAT 把它换成按名字找，下面这个函数桩才生效。
+    $script:SavedNetstat = $env:ENVPROXY_NETSTAT
+    $env:ENVPROXY_NETSTAT = 'netstat.exe'
     $shapeCases = @(
         @{ Name = 'an extra column'; Lines = @('  Proto Local Foreign State PID InHost', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTENING    6544    -') },
         @{ Name = 'a state made of two words'; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTEN  6544') },
@@ -740,6 +805,7 @@ if ($env:OS -eq 'Windows_NT') {
     $noTcpThrew = $false
     try { [void](Get-ListeningTcpConnections) } catch { $noTcpThrew = $true }
     Assert-Eq 'output without a single TCP row is refused instead of reported as empty' '1' ([int]$noTcpThrew)
+    if ($null -ne $script:SavedNetstat) { $env:ENVPROXY_NETSTAT = $script:SavedNetstat } else { Remove-Item Env:ENVPROXY_NETSTAT -ErrorAction SilentlyContinue }
     Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
     Remove-Variable -Name NetstatStub -Scope Global -ErrorAction SilentlyContinue
 }
@@ -766,10 +832,12 @@ if ($probeThrew) {
     Assert-Eq 'the enumeration exposes the owning process' '1' ([int]($probeNames -contains 'OwningProcess'))
     if (@($probeListen).Count -gt 0) {
         $somePort = @($probeListen)[0].LocalPort
-        Assert-Eq 'a port the system reports as listening is found' '1' ([int](Test-PortListening $somePort))
+        # Test-PortListening 是三态（listening / absent / unknown），不是布尔：
+        # 「读不出来」必须与「没在听」分开，否则一次读失败会被判成代理没了。
+        Assert-Eq 'a port the system reports as listening is found' 'listening' ([string](Test-PortListening $somePort))
         Assert-Eq 'the same port is found in the port list' '1' ([int](@($probeListen.LocalPort) -contains $somePort))
     }
-    Assert-Eq 'a port nothing listens on is not reported' '0' ([int](Test-PortListening 1))
+    Assert-Eq 'a port nothing listens on is absent, not unknown' 'absent' ([string](Test-PortListening 1))
 }
 
 # ------------------------------------------------------------------------------
@@ -835,14 +903,18 @@ Assert-Eq '入口：空参数要报用法错误（不能当成没传参数）' 2
 # 用法判定本身是纯函数（base 层 Get-UsageError，两端同形），两个方向都要钉住：
 # "必须拒"不许放过，"必须放行"不许误伤。
 # "放行"这一向只能在这里测：真跑一次入口就会真的卸载或更新，副作用落在用户机器上。
-$null = Get-UsageError -Command 'status' -CommandCount 1
-Assert-Eq '用法判定：普通命令放行' '' $null
-$null = Get-UsageError -Command '' -CommandCount 0
-Assert-Eq '用法判定：无命令（监控模式）放行' '' $null
-$null = Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('purge')
-Assert-Eq '用法判定：卸载带 -Purge 放行' '' $null
-$null = Get-UsageError -Command 'update' -CommandCount 1 -Switches @('yes')
-Assert-Eq '用法判定：更新带 -Yes 放行' '' $null
+# 必须把返回值接住再断言。写成 `$null = Get-UsageError ...` 然后断言 $null 的话，
+# 断言比的是字面量 $null，永远通过——这四条是「合法用法必须放行」这条契约的
+# 唯一执行者（真跑一次入口就会真的卸载或更新，副作用落在用户机器上，只能在纯函数层断言），
+# 它们恒真等于这条契约没人守。
+$e = Get-UsageError -Command 'status' -CommandCount 1
+Assert-Eq '用法判定：普通命令放行' '' $e
+$e = Get-UsageError -Command '' -CommandCount 0
+Assert-Eq '用法判定：无命令（监控模式）放行' '' $e
+$e = Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('purge')
+Assert-Eq '用法判定：卸载带 -Purge 放行' '' $e
+$e = Get-UsageError -Command 'update' -CommandCount 1 -Switches @('yes')
+Assert-Eq '用法判定：更新带 -Yes 放行' '' $e
 function Usage-Rejected($e) { if ($e) { '真' } else { '假' } }
 Assert-Eq '用法判定：-Purge 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'install' -CommandCount 1 -Switches @('purge')))
 Assert-Eq '用法判定：-Yes 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Switches @('yes')))
@@ -855,11 +927,15 @@ Assert-Eq '用法判定：一次给两个命令要拒' '真' (Usage-Rejected (Ge
 # 读不出来却被当成空表，状态机会判 off -> 把用户的代理环境变量删掉。
 # 两侧的判据必须一样：枚举失败要传上去，状态机据此沿用上一状态。
 if ($env:OS -eq 'Windows_NT') {
+    # 同上：换成按名字找，才会用到下面这两个函数桩。
+    $script:SavedNetstat2 = $env:ENVPROXY_NETSTAT
+    $env:ENVPROXY_NETSTAT = 'netstat.exe'
     function global:netstat.exe { throw "netstat is not available" }
     function global:Get-NetTCPConnection { throw "Get-NetTCPConnection is not recognized" }
     $script:CachedPort = $null
     $unknownState = Get-CurrentState
     Assert-Eq '端口枚举失败时状态是"不知道"而不是 off' 'unknown' $unknownState
+    if ($null -ne $script:SavedNetstat2) { $env:ENVPROXY_NETSTAT = $script:SavedNetstat2 } else { Remove-Item Env:ENVPROXY_NETSTAT -ErrorAction SilentlyContinue }
     Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
     Remove-Item function:global:Get-NetTCPConnection -ErrorAction SilentlyContinue
 }
@@ -954,14 +1030,14 @@ Assert-Eq '双条件：更多次、更久当然判断' $true (Test-NodeVerdict (
 # 采样间隔跟着"有没有结论"走：稳定态省流量，正在收集证据和刚下结论时加密。
 # 关键是最后两条：失败已达阈值（结论已定）时必须回到稳定档——只按"有没有失败"
 # 决定间隔的话，节点一直死时计数会无界增长、间隔永远钉在快速档（实测 2.5 倍流量）。
-$tNow = [datetime]::Now
+$tNow = Get-MonotonicSeconds
 $thr = $NodeFailThreshold
-Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $thr $tNow.AddSeconds(1) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr $tNow.AddSeconds(-1) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：失败已达阈值（结论已定）回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval $thr $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：失败远超阈值也仍是稳定档（计数不会让间隔永远快下去）' $NodeCheckThrottleSec (Get-NodeProbeInterval 999 $thr ([datetime]::MinValue) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr -1.0 $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 $thr -1.0 $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $thr ($tNow + 1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr ($tNow + -1) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败已达阈值（结论已定）回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval $thr $thr (-1.0) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败远超阈值也仍是稳定档（计数不会让间隔永远快下去）' $NodeCheckThrottleSec (Get-NodeProbeInterval 999 $thr (-1.0) $tNow $NodeCheckThrottleSec $NodeFastSec)
 
 # 常量自身的形状：加密必须比稳定快，否则"加密"没有意义；判据时长必须是可解释的小数秒。
 if ($NodeFastSec -lt $NodeCheckThrottleSec) { Write-Host '  ok   加密间隔确实比稳定态快' } else { Write-Host '  FAIL 加密间隔不比稳定态快，加密没有意义'; $script:fails++ }
@@ -975,11 +1051,11 @@ $script:ProbeOk = $false
 ${function:Test-RealConnectivity} = { param([int]$p) return $script:ProbeOk }
 [void](Test-NodeAlive 7078)                       # 先失败一次，建立失败起点
 $slot = $script:NodeState['7078']
-$slot.LastCheck = (Get-Date).AddMinutes(-10)      # 模拟这个端口很久没被探过
-$slot.FirstFailAt = (Get-Date).AddMinutes(-10)
+$slot.LastCheck = ((Get-MonotonicSeconds) - 600)      # 模拟这个端口很久没被探过
+$slot.FirstFailAt = ((Get-MonotonicSeconds) - 600)
 $slot.FailCount = 1
 [void](Test-NodeAlive 7078)                       # 闲置之后再来一次失败
-$span = ((Get-Date) - $script:NodeState['7078'].FirstFailAt).TotalSeconds
+$span = ((Get-MonotonicSeconds) - $script:NodeState['7078'].FirstFailAt)
 Assert-Eq '闲置太久的旧失败起点被丢弃（跨度从 0 重算，不是 600 秒）' $true ($span -lt 60)
 Assert-Eq '闲置后失败计数从 1 重新算' 1 $script:NodeState['7078'].FailCount
 
@@ -987,19 +1063,19 @@ Assert-Eq '闲置后失败计数从 1 重新算' 1 $script:NodeState['7078'].Fai
 # 走不到——实测会退化成每 5-6 秒一探，流量变成承诺值的 3 倍。钉住这个闭环：
 $script:ProbeOk = $true
 $script:NodeState = @{}
-$script:NodeState['7078'] = @{ LastCheck = [datetime]::Now.AddSeconds(-20); Alive = $true
-    FailCount = 0; FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
+$script:NodeState['7078'] = @{ LastCheck = ((Get-MonotonicSeconds) - 20); Alive = $true
+    FailCount = 0; FirstFailAt = -1.0; FastUntil = -1.0 }
 for ($i = 0; $i -lt 4; $i++) {
     [void](Test-NodeAlive 7078)
-    $script:NodeState['7078'].LastCheck = (Get-Date).AddSeconds(-2)   # 模拟每轮 2 秒的节奏
+    $script:NodeState['7078'].LastCheck = ((Get-MonotonicSeconds) - 2)   # 模拟每轮 2 秒的节奏
 }
-Assert-Eq '连续成功时不会反复开窗（窗口保持过期，间隔才能回到稳态）' $true ($script:NodeState['7078'].FastUntil -eq [datetime]::MinValue)
+Assert-Eq '连续成功时不会反复开窗（窗口保持过期，间隔才能回到稳态）' $true ($script:NodeState['7078'].FastUntil -eq -1.0)
 
 $script:NodeState = @{}
-$script:NodeState['7078'] = @{ LastCheck = [datetime]::Now.AddSeconds(-20); Alive = $false
-    FailCount = 3; FirstFailAt = [datetime]::Now.AddSeconds(-30); FastUntil = [datetime]::MinValue }
+$script:NodeState['7078'] = @{ LastCheck = ((Get-MonotonicSeconds) - 20); Alive = $false
+    FailCount = 3; FirstFailAt = ($tNow - 30); FastUntil = -1.0 }
 [void](Test-NodeAlive 7078)                       # 断->通 翻转
-Assert-Eq '断->通翻转后确实开窗' $true ($script:NodeState['7078'].FastUntil -gt (Get-Date))
+Assert-Eq '断->通翻转后确实开窗' $true ($script:NodeState['7078'].FastUntil -gt (Get-MonotonicSeconds))
 
 # 换端口时新端口必须重新判定，不能沿用上一个端口的结论。
 # Win 侧按端口分槽本来就不会串；这条挡的是"将来有人把分槽改成单槽"——
@@ -1019,13 +1095,13 @@ Assert-Eq '新端口的槽从零开始计数' 1 $script:NodeState['7897'].FailCo
 # 闲置清零，而不是它声称的"抖动不累积"，把"成功即清零"删掉它照样绿。
 $probeGap = [int](($NodeCheckThrottleSec + $NodeIdleResetSec) / 2)
 $script:NodeState = @{}
-$script:NodeState['7078'] = @{ LastCheck = [datetime]::MinValue; Alive = $true
-    FailCount = 0; FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
+$script:NodeState['7078'] = @{ LastCheck = -1.0; Alive = $true
+    FailCount = 0; FirstFailAt = -1.0; FastUntil = -1.0 }
 $everDown = $false
 $maxFails = 0
 for ($i = 0; $i -lt 20; $i++) {
     $script:ProbeOk = ($i % 2 -eq 0)
-    $script:NodeState['7078'].LastCheck = (Get-Date).AddSeconds(-$probeGap)
+    $script:NodeState['7078'].LastCheck = ((Get-MonotonicSeconds) - $probeGap)
     if (-not (Test-NodeAlive 7078)) { $everDown = $true }
     if ($script:NodeState['7078'].FailCount -gt $maxFails) { $maxFails = $script:NodeState['7078'].FailCount }
 }
@@ -1134,7 +1210,9 @@ try {
         $txtAfter = $c.Enc.GetString([System.IO.File]::ReadAllBytes($fp))
         Assert-Eq ("{0} 安装成功" -f $c.Name) $true $rI.Ok
         Assert-Eq ("{0} 用户原有中文保住" -f $c.Name) $true ($txtAfter -match '我的 PowerShell 配置')
-        Assert-Eq ("{0} 钩子块写入" -f $c.Name) $true ($txtAfter -match 'EnvProxy: 让已经开着的窗口')
+        # 块里那几行刻意是纯 ASCII：我们不知道目标文件是什么编码，
+        # 中文注释放进无 BOM 文件会被 5.1 当 ANSI 读成乱码。
+        Assert-Eq ("{0} 钩子块写入" -f $c.Name) $true ($txtAfter -match 'EnvProxy: keeps already-open windows')
         # 行尾风格在安装后必须没变：LF 夹具里不该出现 CR。
         if ($c.Nl -eq "`n") {
             $afterBytes = [System.IO.File]::ReadAllBytes($fp)
@@ -1165,7 +1243,20 @@ $hookFile = Join-Path $hookSBox 'hook.ps1'
 [System.IO.File]::WriteAllLines($hookFile, (Get-ProfileBlockLines), (New-Object System.Text.UTF8Encoding($false)))
 $savedEnv = @{}
 foreach ($n in $ProxyVarNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVariable($n, 'User') }
+# 归属记录要整份存下来再还原，只记「存不存在」不够：
+# 它是「哪些值是我们写的」的唯一凭据，而真实安装过的机器上它是有内容的。
+# 测试中途会把它删掉（模拟「没有归属记录」那一档），跑完必须原样放回——
+# 否则跑一次自检就把用户机器的归属记录清空，Git Bash 的钩子从此再也清不掉变量
+#（契约：没有归属记录时一个都不动），而且不报任何错。
 $savedOwnedExist = Test-Path $OwnedRegKey
+$savedOwnedValues = @{}
+if ($savedOwnedExist) {
+    $__so = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $false)
+    if ($null -ne $__so) {
+        foreach ($__sn in $__so.GetValueNames()) { $savedOwnedValues[$__sn] = [string]$__so.GetValue($__sn) }
+        $__so.Close()
+    }
+}
 # 直接写注册表，不走 [Environment]::SetEnvironmentVariable：后者每写一次都会等
 # WM_SETTINGCHANGE 广播超时（实测 5 个变量约 26 秒），自检会卡到超时。
 # 钩子读的就是注册表这一层，直接写它等价，而且更快。
@@ -1301,8 +1392,20 @@ try {
         }
         if ($emptyNow -and (-not $savedBakExist)) { Remove-Item $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    # 归属记录：测试前没有就整棵删掉，别把 HKCU\Software\EnvProxy 留在用户机器上。
-    if (-not $savedOwnedExist) {
+    # 归属记录：整份放回原样。
+    # 测试中途会删掉它（模拟「没有归属记录」那一档），跑完必须还原——
+    # 它是「哪些值是我们写的」的唯一凭据：清空了，Git Bash 的钩子就再也清不掉变量
+    #（契约：没有归属记录时一个都不动），而且不报任何错。
+    if ($savedOwnedExist) {
+        if (-not (Test-Path $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
+        $__ro = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $true)
+        if ($null -ne $__ro) {
+            foreach ($__rn in $savedOwnedValues.Keys) {
+                $__ro.SetValue($__rn, $savedOwnedValues[$__rn], [Microsoft.Win32.RegistryValueKind]::String)
+            }
+            $__ro.Close()
+        }
+    } else {
         if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue }
         # 只有它空了才删父键（父键可能装着真实的 ScriptPath）。
         if ((Test-Path $ScriptPathRegKey) -and -not (@(Get-ChildItem $ScriptPathRegKey -ErrorAction SilentlyContinue).Count)) {
@@ -1528,6 +1631,117 @@ foreach ($pair in @(@('README.md', $false), @('README.en.md', $true))) {
         }
     }
 }
+
+# ------------------------------------------------------------------------------
+# [9w] 接线（源码级）：这些地方"删掉一行就静默失效"
+# ------------------------------------------------------------------------------
+# 破坏测试的结论：这套门禁擅长拦「格式 / 常量 / 纯函数」，不擅长拦「减法」——
+# 删掉一行关键调用、或者让某个门槛恒假，所有门禁仍然全绿，而产品彻底不能用。实测的
+# 三个 P0：把入口最后的 Run-MonitorLoop 注释掉（开机自启静默退出 0）；让
+# Test-ProxyVarsPresent 恒返回 $false（变量永远删不掉、连卸载都清不干净）；
+# 去掉 Confirm-CandidatePort 里的节点验证（死代理被判成翻墙中）。
+#
+# 这里补的是最窄的一层防线：读源码断言「调用还在」。它不验行为、只验接线没被剪断，
+# 代价近零。真正的行为验证仍然靠上面那些纯函数用例。
+function Test-SourceMatch([string]$file, [string]$pattern) {
+    $p = Join-Path (Get-Location) $file
+    if (-not (Test-Path -LiteralPath $p)) { return $false }
+    return [bool]([regex]::IsMatch([System.IO.File]::ReadAllText($p), $pattern))
+}
+# 取出某个函数的函数体（按花括号配对，不靠行数窗口）。
+# 用窗口会漏判：Confirm-CandidatePort 里有两个 Test-NodeAlive 调用，删掉其中一个，
+# 另一个还在窗口内，断言照样过——而这正是"删掉一半接线"这类破坏的特征。
+# 按花括号配对取到的是确切的函数体，"里面还剩几个调用"数得清。
+function Get-FunctionBody([string]$file, [string]$name) {
+    $p = Join-Path (Get-Location) $file
+    if (-not (Test-Path -LiteralPath $p)) { return '' }
+    $src = [System.IO.File]::ReadAllText($p)
+    $i = $src.IndexOf('function ' + $name)
+    if ($i -lt 0) { return '' }
+    $open = $src.IndexOf('{', $i)
+    if ($open -lt 0) { return '' }
+    $depth = 0
+    for ($j = $open; $j -lt $src.Length; $j++) {
+        if ($src[$j] -eq '{') { $depth++ }
+        elseif ($src[$j] -eq '}') {
+            $depth--
+            if ($depth -eq 0) { return $src.Substring($open, $j - $open + 1) }
+        }
+    }
+    return ''
+}
+function Test-BodyHas([string]$file, [string]$name, [string]$needle, [int]$min = 1) {
+    $b = Get-FunctionBody $file $name
+    if (-not $b) { return $false }
+    return ([regex]::Matches($b, [regex]::Escape($needle))).Count -ge $min
+}
+# "先问后答"：函数体里必须先真的去问那个判据，再返回结论。
+# 只查"函数体里出现过那个判据"不够——有人在函数第一行写 return $false，
+# 判据还在下面、永远走不到，一样会让清理功能整个失效。
+function Test-BodyAsksFirst([string]$file, [string]$name, [string]$needle) {
+    $b = Get-FunctionBody $file $name
+    if (-not $b) { return $false }
+    $iAsk = $b.IndexOf($needle)
+    if ($iAsk -lt 0) { return $false }
+    # 函数体里所有"直接返回某个常量"的位置：只要有一个在询问之前，就不算先问后答。
+    foreach ($m in [regex]::Matches($b, 'return\s+\$(false|true)\b')) {
+        if ($m.Index -lt $iAsk) { return $false }
+    }
+    return $true
+}
+
+# 装配：入口最后一句必须是进入监控主循环（无参数 = 开机自启那条路）。
+Assert-Eq '接线：入口会进入监控主循环' $true (Test-SourceMatch 'win/envproxy.ps1' '(?m)^Run-MonitorLoop\s*$')
+# 装配：候选端口确认必须过"真实节点连通"这一层，不能只凭 CONNECT 握手就判 on。
+# 两个分支（优先端口、其余端口）各要一次：删掉其中一个，另一个还在，照样能跑，
+# 但"优先端口"那条路上就绕过了节点验证。
+Assert-Eq '接线：候选确认会验证真实节点（两处分支）' $true (Test-BodyHas 'win/lib/probe.ps1' 'Confirm-CandidatePort' 'Test-NodeAlive' 2)
+# 装配：清理门槛必须被真正调用（至少 apply-state 与监控自愈两处）。
+$script:pvpHits = 0
+foreach ($f in @('win/lib/env.ps1', 'win/lib/runtime.ps1')) {
+    $p = Join-Path (Get-Location) $f
+    $script:pvpHits += ([regex]::Matches([System.IO.File]::ReadAllText($p), 'Test-ProxyVarsPresent')).Count
+}
+# 定义本身算一次，所以两处调用点意味着至少 3 次命中。
+Assert-Eq '接线：清理门槛被至少两处调用' $true ($script:pvpHits -ge 3)
+# 装配：门槛本身必须真的去问归属记录，不能是恒假的空壳。
+# "恒返回 $false"这一种破坏，光数调用点看不出来（调用还在，只是永远说不该清）。
+Assert-Eq '接线：清理门槛会问归属记录' $true (Test-BodyHas 'win/lib/env.ps1' 'Test-ProxyVarsPresent' 'Test-IsOwnedProxyValue' 1)
+# 还要"先问后答"：函数体里如果先 return $false 再说要问归属记录，那条询问永远走不到，
+# 清理功能整个失效（变量再也删不掉，连卸载都清不干净）。
+Assert-Eq '接线：清理门槛先问后答' $true (Test-BodyAsksFirst 'win/lib/env.ps1' 'Test-ProxyVarsPresent' 'Test-IsOwnedProxyValue')
+# 装配：状态去抖必须比的是常量，不是字面量（改成 1 就等于去掉去抖，抖动即翻）。
+Assert-Eq '接线：去抖比的是常量' $true (Test-SourceMatch 'win/lib/runtime.ps1' '\$pendingCount\s+-ge\s+\$StateDebounceRounds')
+# 装配：覆盖安装走的必须是"临时文件 + 整体替换"，不是直接覆盖（断电留半截）。
+# 机制是 .NET 的 File::Replace / File::Move（同目录临时文件 + 整体替换），
+# 不是 Copy-Item —— 后者先截断再写，中途被杀就留半截文件。
+Assert-Eq '接线：文件覆盖是原子替换' $true (Test-BodyHas 'win/lib/package.ps1' 'Copy-FileAtomic' 'File]::Replace(' 1)
+# 装配：菜单壳里引用的脚本必须真的存在。
+# 壳里写错一个文件名，用户双击就是"找不到文件"；而门禁 2 的正则只找
+# "envproxy\.ps1 -<开关>"，名字一改就一条都不匹配——不是报错，是静默跳过。
+$cmdSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/打开菜单.cmd'))
+# 先把 %~dp0 这类"脚本所在目录"前缀去掉再找文件名，否则 dp0envproxy.ps1 会被当成文件名。
+$cmdSrc = [regex]::Replace($cmdSrc, '%~dp0', '')
+$cmdRefs = @([regex]::Matches($cmdSrc, '([A-Za-z0-9_\-]+\.ps1)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$cmdMissing = @()
+foreach ($r in $cmdRefs) {
+    if (-not (Test-Path -LiteralPath (Join-Path (Get-Location) ('win/' + $r)))) { $cmdMissing += $r }
+}
+Assert-Eq '接线：菜单壳引用的脚本都存在' 0 $cmdMissing.Count
+# 状态页必须只读：它在"查看状态"里被调用，写文件或改变量都是越界。
+foreach ($fn in @('Show-Status')) {
+    $p = Join-Path (Get-Location) 'win/lib/ops.ps1'
+    $src = [System.IO.File]::ReadAllText($p)
+    $i = $src.IndexOf('function ' + $fn)
+    if ($i -ge 0) {
+        $chunk = $src.Substring($i, [Math]::Min(9000, $src.Length - $i))
+        Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable')))
+    }
+}
+
+# 还原跑之前记下的环境（见文件开头那段守卫）：自检不该改变调用它的那个 shell 的状态。
+foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $__savedProxy[$__n], 'Process') }
+if ($null -ne $__savedTerm) { $env:ENVPROXY_TERM = $__savedTerm } else { Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue }
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

@@ -36,7 +36,10 @@ function Write-Text([string]$Path, [string]$Text, [bool]$WithBom = $false) {
     $tmp = "$Path.tmp$PID"
     [System.IO.File]::WriteAllText($tmp, $Text, $enc)
     if ([System.IO.File]::Exists($Path)) {
-        try { [System.IO.File]::Replace($tmp, $Path, $null) }
+        # 第三参数是「备份文件路径」：传 $null 会被绑成空字符串并抛异常（5.1 与 7 都如此，
+        # 实测 "The path is not of a legal form"），于是每次都落到下面的非原子兜底分支。
+        # 必须用 [NullString]::Value 才是真正的"不要备份"。
+        try { [System.IO.File]::Replace($tmp, $Path, [NullString]::Value) }
         catch { [System.IO.File]::Copy($tmp, $Path, $true); [System.IO.File]::Delete($tmp) }
     } else {
         [System.IO.File]::Move($tmp, $Path)
@@ -124,11 +127,27 @@ function Merge-NoProxy([string]$Existing, [string]$Default) {
     return ($parts -join ',')
 }
 
-function Get-ProxyVarTable([string]$Port) {
+# 本机回环地址的两种写法。注入端按"实际能连上的那个地址"拼 URL：只绑 ::1 的代理
+# 在 IPv4 上主动拒绝，所以注入值可能是 http://[::1]:port。
+# 归属判定的"形状"这一层必须同时认这两种——只认 127.0.0.1 的话，IPv6 注入的值会被判成
+# "不是我们的"，既清不掉、也认不出，两个后果都是静默的。
+function Test-LoopbackProxyUrl([string]$Value) {
+    if (-not $Value) { return $false }
+    # 必须用 StartsWith，不能用 -like：PowerShell 通配符里 [ ] 是字符类的定界符，
+    # "http://[::1]:*" 会被解释成"http://" + 一个属于 {:,1} 的字符 + ":任意"，
+    # 于是它既不匹配真正的 http://[::1]:7078，反而可能匹配上别的东西。
+    # 这里要的是字面前缀，就用字面比较。
+    return ($Value.StartsWith("http://127.0.0.1:") -or $Value.StartsWith("http://[::1]:"))
+}
+
+function Get-ProxyVarTable([string]$Port, [string]$ProxyUrl = "") {
     # 代理值统一用 http:// 协议写法：本地代理端口（MonoCloud/Clash 等）几乎都是
     # 混合端口，HTTP 与 SOCKS5 都能应答；而部分工具（如 dsh/新版 Node 系）只认
     # http:// 写法、不支持 socks5://（会提示不支持并跳过）。统一 http:// 兼容面最大。
-    $http = "http://127.0.0.1:$Port"
+    # 地址由调用方现场探测后传进来（见 probe 层 Get-ProxyUrlForPort）：只绑 ::1 的代理
+    # 在 IPv4 上连不上，写死 127.0.0.1 会注入一个用不了的地址。
+    # 不传时按 127.0.0.1 走——纯函数调用（测试）保持这个默认值，行为不变。
+    $http = if ($ProxyUrl) { $ProxyUrl } else { "http://127.0.0.1:$Port" }
     $table = [ordered]@{}
     foreach ($n in $ProxyVarNames) { $table[$n] = $http }
     # 本机地址直连（与 README 变量表一致）

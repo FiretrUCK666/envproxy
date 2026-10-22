@@ -35,7 +35,10 @@ set_user_env_vars() {
     # DIVERGE(Mac): 双路写入——终端读 ~/.envproxy/proxy.env（由 shell hook 加载），
     #   Dock 启动的 App 读 launchctl setenv；Windows 侧是注册表 + 全系统广播。
     _port="$1"
-    _http="http://127.0.0.1:$_port"
+    # 地址现场探测：只绑 ::1 的代理在 IPv4 上连不上，写死 127.0.0.1 会注入一个用不了的地址——
+    # 终端里每条命令 ECONNREFUSED，而状态页显示"已注入、正常"，比检测不到更糟。
+    proxy_url_for_port "$_port"
+    _http="$PROXY_URL_HIT"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
     _npq=$(shell_escape_sq "$_np")
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
@@ -101,12 +104,17 @@ write_off_sentinel() {
         _oh=$(awk -F'\t' '$1 == "HTTP_PROXY" { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
     fi
     if [ -z "$_oh" ]; then
-        _op=$(sed -n 's/^export HTTP_PROXY="http:\/\/127\.0\.0\.1:\([0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
-        [ -n "$_op" ] && _oh="http://127.0.0.1:$_op"
+        # 整条 URL 取回来（含地址），不再只取端口再拼 127.0.0.1：注入值可能是
+        # http://[::1]:port，只认 IPv4 那种写法会让这份兼容路径对它失效。
+        _op=$(sed -n 's/^export HTTP_PROXY="\(http:\/\/\(127\.0\.0\.1\|\[::1\]\):[0-9][0-9]*\)"$/\1/p' "$PROXY_ENV" 2>/dev/null | head -n 1)
+        [ -n "$_op" ] && _oh="$_op"
     fi
     _onp=""
+    _onode=""
     if [ -f "$OWNED_ENV" ]; then
         _onp=$(awk -F'\t' '$1 == "NO_PROXY" { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+        # NODE_USE_ENV_PROXY 的归属值同样只来自 owned.env：没有记录就不清。
+        _onode=$(awk -F'\t' '$1 == "NODE_USE_ENV_PROXY" { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
     fi
     if [ -z "$_onp" ]; then
         _onp=$(sed -n 's/^export NO_PROXY=//p' "$PROXY_ENV" 2>/dev/null | head -n 1)
@@ -114,8 +122,13 @@ write_off_sentinel() {
     _tmp="$PROXY_ENV.tmp.$$"
     {
         printf '# envproxy-state: off\n'
-        # NODE_USE_ENV_PROXY 与端口无关，永远要清——不能因为它落在端口分支里而被漏掉。
-        printf '[ "${NODE_USE_ENV_PROXY-}" = "1" ] && unset NODE_USE_ENV_PROXY\n'
+        # NODE_USE_ENV_PROXY 的值是我们写下的 "1"，判据也是"值仍等于我们写下的那个"，
+        # 不是"永远清"。它以前写在归属守卫外面，结果没有 owned.env 的机器上
+        # （早期版本升级上来的、或从没装过时）会把使用者自己设的 1 删掉——
+        # 违反"没有归属记录时一个都不动"。现在与其它变量同一套判据。
+        if [ -n "$_onode" ]; then
+            printf '[ "${NODE_USE_ENV_PROXY-}" = "%s" ] && unset NODE_USE_ENV_PROXY\n' "$_onode"
+        fi
         if [ -n "$_oh" ]; then
             # 一律写成 ${VAR-}：使用者可能开着 set -u / setopt nounset，
             # 裸写 $VAR 在变量未定义时会直接报 "unbound variable"，
@@ -141,7 +154,9 @@ write_off_sentinel() {
 env_vars_in_sync() {
     _port="$1"
     [ -f "$PROXY_ENV" ] || return 1
-    _http="http://127.0.0.1:$_port"
+    # 与写入端同源：判"已就位"用的地址必须就是当初写下去的那个。
+    proxy_url_for_port "$_port"
+    _http="$PROXY_URL_HIT"
     _np=$(merge_no_proxy "$(get_existing_no_proxy)" "$DEFAULT_NO_PROXY")
     _npq=$(shell_escape_sq "$_np")
     for _v in $PROXY_ADDR_VAR_NAMES; do
@@ -199,7 +214,7 @@ snapshot_skip_value() {
     case "$1" in
         NODE_USE_ENV_PROXY) [ "$2" = "1" ] && return 0 ;;
         HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|ALL_PROXY|all_proxy)
-            case "$2" in http://127.0.0.1:*) return 0 ;; esac ;;
+            case "$2" in http://127.0.0.1:*|http://\[::1\]:*) return 0 ;; esac ;;
     esac
     return 1
 }
@@ -371,7 +386,7 @@ apply_state() {
         _port=$(printf '%s' "$_state" | sed 's/^on://')
         if ! env_vars_in_sync "$_port"; then
             set_user_env_vars "$_port"
-            log_msg "检测到本地代理端口 $_port -> 已注入代理 http://127.0.0.1:$_port"
+            log_msg "检测到本地代理端口 $_port -> 已注入代理 $_http"
         fi
     fi
 }

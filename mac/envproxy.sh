@@ -168,7 +168,17 @@ case "$_CMD_NORM" in
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     help) show_help;;
-    self-test) self_test;;
+    self-test)
+        # 自检的正文住在 tests/ 下，不随运行时库加载：它有 1100 多行，是"沙箱里跑断言"，
+        # 不是使用者每次 install/status 都要解析的逻辑。Windows 侧的对应物一直是独立文件。
+        _st="$SCRIPT_DIR/test-mac-pure.sh"
+        if [ -f "$_st" ]; then
+            . "$_st"
+            self_test
+        else
+            echo "自检脚本缺失：$_st（安装包不完整，请到 Releases 页面重新下载覆盖）" >&2
+            exit 1
+        fi;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
     *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test} [--purge] [--yes]"; exit 2;;

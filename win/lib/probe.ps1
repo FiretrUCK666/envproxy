@@ -55,7 +55,26 @@ function ConvertTo-ListenEndpoint([string]$Local) {
 # 返回与 Get-NetTCPConnection 同形的对象（LocalAddress / LocalPort / OwningProcess）。
 function Get-ListeningTcpConnections {
     $raw = $null
-    try { $raw = & netstat.exe -ano -p TCP 2>$null } catch { $raw = $null }
+    # 必须用全量 -ano（**不带** -p TCP）：-p TCP 只回 IPv4 表，IPv6 的监听口一行都不出现
+    # （实测本机 -p TCP 含 "[::" 的行 0 条、不带 -p 有 44 条）。而 mihomo / sing-box 这类
+    # 客户端配 bind-address: "::1" 时只绑 IPv6 回环——枚举看不到它，候选集就是空的，
+    # 状态机判 off，然后把用户的代理变量删掉。下面按协议列过滤（^\s*TCP\s）本来就能
+    # 同时容纳 TCP 与 TCPv6 两种行，多几行 UDP 不影响判决，只是多几十毫秒解析。
+    # 用绝对路径找 netstat，不走 PATH。
+    #
+    # 实测过：同一台机器、同一份代码，前台跑枚举成功（476 行、66 个监听口），
+    # 而由常驻监控跑就报"两次都没成功：Get-NetTCPConnection is not recognized"——
+    # 出现 55 次，等于监控全程失明，只是没人发现。原因是那个进程的 PATH 里没有
+    # System32（它由哪个父进程拉起、继承了谁的 PATH 决定的，不受本程序控制）。
+    # 系统工具的位置是确定的，就不该靠一个可能被别人改过的搜索路径去找。
+    # ENVPROXY_NETSTAT 是给测试和疑难排查用的逃生口：自检要模拟"netstat 输出形状变了""、
+    # 自检要模拟"根本调不到 netstat"，都得能换掉这条路径；真实运行不设这个变量。
+    $netstat = [string]$env:ENVPROXY_NETSTAT
+    if (-not $netstat) {
+        $netstat = Join-Path ([string]$env:SystemRoot) "System32\netstat.exe"
+        if (-not (Test-Path -LiteralPath $netstat)) { $netstat = "netstat.exe" }
+    }
+    try { $raw = & $netstat -ano 2>$null } catch { $raw = $null }
     if (-not $raw) {
         return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
     }
@@ -101,15 +120,21 @@ function Get-ListeningTcpConnections {
 function Test-PortListening([int]$Port) {
     # 命令本身可能不可用（被裁剪的系统、极老版本）：-ErrorAction 拦不住 CommandNotFoundException，
     # 必须包 try，否则 -Install 与监控主循环都会被一条终端命令打断（与 Find-CandidatePorts 同一套处理）。
+    # 返回值是**三态**，不是布尔：
+    #   "listening"  端口确实在监听
+    #   "absent"     读到了端口表，里面没有这个端口（真的没在听）
+    #   "unknown"    两次都读不出来（读不出来 ≠ 没在听）
+    # 把 unknown 混成 absent，会让"读失败"被判成"代理没了"-> 删掉用户的代理变量。
+    # Mac 侧 get_listening_ports 用同样的三态（0/1/非0）表达同一件事。
     for ($i = 0; $i -lt 2; $i++) {
         try {
             foreach ($l in (Get-ListeningTcpConnections)) {
-                if ($l.LocalPort -eq $Port) { return $true }
+                if ($l.LocalPort -eq $Port) { return "listening" }
             }
-            return $false
+            return "absent"
         } catch {}
     }
-    return $false
+    return "unknown"
 }
 
 # CONNECT 探测：向端口发一个 HTTP CONNECT 请求，只有真正的 HTTP 代理才回 "200"。
@@ -118,10 +143,9 @@ function Test-HttpProxy([int]$Port) {
     $client = $null
     $stream = $null
     try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $client.ReceiveTimeout = 500
-        $client.SendTimeout = 500
-        $client.Connect("127.0.0.1", $Port)
+        $conn = Connect-Loopback $Port 500
+        if (-not $conn) { return $false }
+        $client = $conn.Client
         $stream = $client.GetStream()
         $stream.ReadTimeout = 500
         $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT 127.0.0.1:9 HTTP/1.1`r`nHost: 127.0.0.1:9`r`n`r`n")
@@ -146,13 +170,26 @@ function Test-HttpProxy([int]$Port) {
 # 用于全端口兜底扫描——避免"逐个串行等超时"导致的几十秒延迟。
 # 两阶段都用"同时开工 + 统一截止"：连接阶段总共最多等 800ms，
 # 读响应阶段总共最多等 500ms（谁先回 200 就用谁），耗时不再随端口数线性增长。
-function Test-HttpProxyBatch([int[]]$Ports) {
+function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
+    # 地址族要显式选：默认（IPv4）套接字连 IPv6 地址会抛 "socket is not connected"，
+    # 而不是"连不上"——那样并行批量探测对 IPv6-only 端口永远返回空。
+    if (-not $Address) { $Address = $LoopbackProbes[0] }
+    $family = if ($Address -like "*:*") {
+        [System.Net.Sockets.AddressFamily]::InterNetworkV6
+    } else {
+        [System.Net.Sockets.AddressFamily]::InterNetwork
+    }
+    $addrObj = [System.Net.IPAddress]::Parse($Address)
     $pending = @()
     foreach ($p in $Ports) {
         $c = $null
         try {
-            $c = New-Object System.Net.Sockets.TcpClient
-            $ar = $c.BeginConnect("127.0.0.1", $p, $null, $null)
+            # 必须把 $family 传进去。不传就是默认的 IPv4 套接字，拿它去连 ::1 会抛
+            # "This protocol version is not supported"，被下面的 catch 静默吞掉——
+            # 于是批量探测对 IPv6-only 的端口**永远返回空**，而调用方把它读成"这些端口上没有代理"。
+            # 上面那两行注释早就写明了要显式选地址族，实现却漏了这一步（$family 成了死变量）。
+            $c = New-Object System.Net.Sockets.TcpClient($family)
+            $ar = $c.BeginConnect($addrObj, $p, $null, $null)
             $pending += [PSCustomObject]@{ Port = $p; Client = $c; Async = $ar }
         } catch { try { if ($c) { $c.Close() } } catch {} }
     }
@@ -234,11 +271,24 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
             $listeners = Get-ListeningTcpConnections
             $enumerated = $true
         } catch {
+            # 留一份原因给日志用：这里吞掉异常是对的（不能让一轮探测中断监控），
+            # 但"吞掉"不等于"丢掉"——不记下来就永远查不出为什么。
+            $script:PortEnumerationError = $_.Exception.Message
             if ($attempt -eq 0) { Start-Sleep -Milliseconds 300 }
         }
     }
     $script:PortEnumerationFailed = (-not $enumerated)
-    if (-not $enumerated -and -not $NoLog) { try { Write-MonitorLog "端口枚举失败（两次都没成功）-> 本轮沿用上一状态，不动环境变量" } catch {} }
+    # 失败原因必须写进日志：只写"两次都没成功"等于把唯一的线索丢掉，
+    # 事后既分不清是 netstat 形状变了、被裁剪、还是权限问题，也无法判断严重程度。
+    # 异常消息可能很长/带换行，压成一行并截断，避免把日志撑爆。
+    if (-not $enumerated -and -not $NoLog) {
+        $why = ""
+        try { $why = "$($script:PortEnumerationError)" } catch {}
+        $why = ($why -replace "\s+", " ").Trim()
+        if ($why.Length -gt 200) { $why = $why.Substring(0, 200) + "..." }
+        if (-not $why) { $why = "（无异常消息）" }
+        try { Write-MonitorLog ("端口枚举失败（两次都没成功：" + $why + "）-> 本轮沿用上一状态，不动环境变量") } catch {}
+    }
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
 
@@ -252,11 +302,17 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
         # 来源 2 第一轮：疑似翻墙软件的进程监听的端口（始终执行，覆盖 99% 常见软件）
         # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
         #       第二轮的"全端口 CONNECT 探测"也能发现它（见下）。
+        # 键必须显式转 [int]：Get-Process.Id 是 Int32，而 Get-NetTCPConnection 的
+        # OwningProcess 是 UInt32（netstat 路径已是 Int32，见上面的 [int]$Matches[4]）。
+        # 哈希表键类型严格——[uint32]1234 查不到 [int]1234——不转的话，走 WMI 兜底
+        # 的非英文系统上这个进程名过滤整段失效（只剩全端口兜底，收敛变慢）。
+        # 名字转小写必须用 ToLowerInvariant：ToLower 受当前区域设置影响，
+        # 土耳其语下 HIDDIFY 会变成 hıddıfy（无点 ı），匹配不到 *hiddify*。
         $procMap = @{}
-        Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[$_.Id] = $_.ProcessName.ToLower() }
+        Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[[int]$_.Id] = $_.ProcessName.ToLowerInvariant() }
         $suspectPorts = @()
         foreach ($l in ($listeners | Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") })) {
-            $pname = $procMap[$l.OwningProcess]
+            $pname = $procMap[[int]$l.OwningProcess]
             if (-not $pname) { continue }
             foreach ($pat in $ProxyProcessPatterns) {
                 if ($pname -like "*$pat*") { $suspectPorts += $l.LocalPort; break }
@@ -280,8 +336,12 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
                 if ($ordered -notcontains $lp) { $restPorts += $lp }
             }
             if ($restPorts.Count -gt 0) {
-                $tail = Test-HttpProxyBatch ($restPorts | Sort-Object -Unique)
-                if ($tail -and ($ordered -notcontains $tail)) { $ordered += $tail }
+                # 两个回环地址各扫一遍：只绑 ::1 的代理在 IPv4 上是主动拒绝的。
+                $uniq = $restPorts | Sort-Object -Unique
+                foreach ($addr in $LoopbackProbes) {
+                    $tail = Test-HttpProxyBatch $uniq $addr
+                    if ($tail -and ($ordered -notcontains $tail)) { $ordered += $tail; break }
+                }
             }
         }
     } catch {}
@@ -321,26 +381,101 @@ function Confirm-CandidatePort([int[]]$Candidates, $Preferred) {
 # 任何一个域段被干扰（DNS 污染、节点线路问题、站点封锁节点出口 IP）时其余幸存；
 # 只有"所有域段全部不通"才判节点死——杜绝单域段盲区导致的误删。
 # 上次成功的端点优先复用——稳定的端点持续走快路，异常时自动切换。
+# 探测用的本机回环地址，按顺序尝试。
+# 只绑 IPv6 回环的代理（mihomo / sing-box 的 bind-address: "::1"）对 127.0.0.1 是
+# 主动拒绝的（实测 "actively refused"），只试 IPv4 会让这类用户永远检测不到代理、
+# 而且不报任何错。两个地址语义等价，都试一遍即可覆盖。
+# 注入的代理值仍统一写 http://127.0.0.1:<port>（端口在两个协议上都能连通）；
+# 只有"代理只监听 ::1"的极端情况才需要用 ::1 拼地址，见 Get-ProxyUrlFor。
+$LoopbackProbes = @("127.0.0.1", "::1")
+
+# 探测某一端口时，按 $LoopbackProbes 顺序尝试连接，返回第一个连上的地址。
+# 返回 $null = 两个地址都连不上。调用方据此判断"这个端口上没有代理"。
+function Connect-Loopback([int]$Port, [int]$TimeoutMs = 500) {
+    foreach ($addr in $LoopbackProbes) {
+        $c = $null
+        try {
+            # TcpClient 默认是 IPv4 套接字，拿去连 IPv6 地址不会报"地址不可达"，
+            # 而是抛 "socket is not connected"（实测）——必须按地址族显式建套接字。
+            $family = if ($addr -like "*:*") {
+                [System.Net.Sockets.AddressFamily]::InterNetworkV6
+            } else {
+                [System.Net.Sockets.AddressFamily]::InterNetwork
+            }
+            $c = New-Object System.Net.Sockets.TcpClient($family)
+            $c.ReceiveTimeout = $TimeoutMs
+            $c.SendTimeout = $TimeoutMs
+            $c.Connect([System.Net.IPAddress]::Parse($addr), $Port)
+            if ($c.Connected) { return @{ Client = $c; Address = $addr } }
+            try { $c.Close() } catch {}
+        } catch {
+            if ($c) { try { $c.Close() } catch {} }
+        }
+    }
+    return $null
+}
+
+# 给已选定的回环地址拼代理 URL：IPv6 字面量要加方括号。
+function Get-ProxyUrlFor([string]$Address, [int]$Port) {
+    if ($Address -like "*:*") { return ("http://[{0}]:{1}" -f $Address, $Port) }
+    return ("http://{0}:{1}" -f $Address, $Port)
+}
+
+# 这个端口该按哪个回环地址注入？现场探测，取第一个连得上的。
+#
+# 为什么不能固定写 127.0.0.1：只绑 ::1 的代理（mihomo / sing-box 配 bind-address: "::1"）
+# 在 IPv4 上是主动拒绝的。检测那一层已经能发现它了，但注入端如果还写 127.0.0.1，
+# 用户拿到的是一个连不上的地址——终端里每条命令 ECONNREFUSED，状态页却显示"已注入、正常"。
+# 那比"检测不到"更糟：检测不到至少还是直连。
+# 探测只在状态**变化**时发生（不是每轮），两次连接的开销可以忽略。
+function Get-ProxyUrlForPort([int]$Port) {
+    $addr = $LoopbackProbes[0]
+    $conn = Connect-Loopback $Port 500
+    if ($conn) {
+        $addr = $conn.Address
+        try { $conn.Client.Close() } catch {}
+    }
+    return (Get-ProxyUrlFor $addr $Port)
+}
+
+# 每个端点声明它**该回什么**，判据不再各处各写一套。
+# /generate_204 这类连通性检查端点的契约就是 204：正常返 204；被强制门户劫持时
+# 回 200 + 登录页、或 302 跳登录页——那两种都不是"节点通"，必须判断。
+# wikipedia / twitter 是跨域段的兜底端点，它们的正常应答就是 3xx（跟随与否都算通），
+# 收 204 会让这两个端点永远判死、端点池退化成纯 Google 段。
+# 所以 Expect 只有两种取值：
+#   204  -> 只认 204
+#   3xx  -> 只认 300-399（**不认裸 200**：200 是门户劫持的典型应答）
+# 把 2xx 全收进来、或三处各写一套，会让同一节点因走了哪条判定路径而结论不同。
 $CheckEndpoints = @(
-    @{ Host = "clients3.google.com";            Path = "/generate_204" },
-    @{ Host = "connectivitycheck.gstatic.com";  Path = "/generate_204" },
-    @{ Host = "www.gstatic.com";                Path = "/generate_204" },
-    @{ Host = "youtubei.googleapis.com";        Path = "/generate_204" },
-    @{ Host = "www.google.com";                 Path = "/generate_204" },
-    @{ Host = "www.wikipedia.org";              Path = "/" },
-    @{ Host = "twitter.com";                    Path = "/" }
+    @{ Host = "clients3.google.com";            Path = "/generate_204"; Expect = "204" },
+    @{ Host = "connectivitycheck.gstatic.com";  Path = "/generate_204"; Expect = "204" },
+    @{ Host = "www.gstatic.com";                Path = "/generate_204"; Expect = "204" },
+    @{ Host = "youtubei.googleapis.com";        Path = "/generate_204"; Expect = "204" },
+    @{ Host = "www.google.com";                 Path = "/generate_204"; Expect = "204" },
+    @{ Host = "www.wikipedia.org";              Path = "/";           Expect = "3xx" },
+    @{ Host = "twitter.com";                    Path = "/";           Expect = "3xx" }
 )
+
+# 单个端点应答的状态码判定（唯一的判据实现）。$Expect 取自端点表。
+function Test-EndpointStatus([int]$Code, [string]$Expect) {
+    if ($Expect -eq "204") { return ($Code -eq 204) }
+    if ($Expect -eq "3xx") { return ($Code -ge 300 -and $Code -le 399) }
+    return $false
+}
 $script:LastGoodEndpoint = 0
 
 # 单端点探测：通过代理发真实 HTTP 请求，成功返回 $true
-function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path) {
+function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path, [string]$Expect = "204") {
     $client = $null
     $stream = $null
     try {
         $client = New-Object System.Net.Sockets.TcpClient
         $client.ReceiveTimeout = 6000
         $client.SendTimeout = 6000
-        $client.Connect("127.0.0.1", $Port)
+        $conn = Connect-Loopback $Port 500
+        if (-not $conn) { return $false }
+        $client = $conn.Client
         $stream = $client.GetStream()
         # 超时 6 秒：节点慢/重连中时 mihomo 转发可能长达数秒；过短会把"慢但通"误判为"断"
         $stream.ReadTimeout = 6000
@@ -359,7 +494,10 @@ function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path) {
         # 说明对方不是真实转发代理（可能是残留进程/异常程序）→ 判定节点断
         if ($resp -match "Connection Established") { return $false }
         # 204 / 200 / 3xx = 节点通；502/504/超时/拒绝 = 节点断（内核可能仍活着）
-        return ($resp -match "^\s*HTTP/1\.[01]\s+(204|200|30[0-9])")
+        # 判据只有一个地方（Test-EndpointStatus），按端点自己声明的期望值判。
+        $m = [regex]::Match($resp, "^\s*HTTP/1\.[01]\s+(\d{3})")
+        if (-not $m.Success) { return $false }
+        return (Test-EndpointStatus ([int]$m.Groups[1].Value) $Expect)
     } catch {
         return $false
     } finally {
@@ -380,7 +518,7 @@ function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path) {
 function Test-RealConnectivity([int]$Port) {
     # ---- 快路：只测上次成功的端点（正常路径，毫秒级，1 个请求）----
     $last = $script:LastGoodEndpoint
-    if (Test-SingleEndpoint $Port $CheckEndpoints[$last].Host $CheckEndpoints[$last].Path) {
+    if (Test-SingleEndpoint $Port $CheckEndpoints[$last].Host $CheckEndpoints[$last].Path $CheckEndpoints[$last].Expect) {
         return $true
     }
 
@@ -394,7 +532,12 @@ function Test-RealConnectivity([int]$Port) {
         }
         $handler = New-Object System.Net.Http.HttpClientHandler
         $handler.UseProxy = $true
-        $handler.Proxy = New-Object System.Net.WebProxy("http://127.0.0.1:$Port")
+        # 代理串必须用实际能连上的那个回环地址：只绑 ::1 的代理在 127.0.0.1 上是
+        # 主动拒绝的，写死 IPv4 会让这条兜底路径对它们永远失败。
+        $conn = Connect-Loopback $Port 500
+        $proxyAddr = if ($conn) { $conn.Address } else { $LoopbackProbes[0] }
+        if ($conn) { try { $conn.Client.Close() } catch {} }
+        $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlFor $proxyAddr $Port))
         $handler.AllowAutoRedirect = $false
         $client = New-Object System.Net.Http.HttpClient($handler)
         $client.Timeout = [TimeSpan]::FromSeconds(6)
@@ -418,8 +561,11 @@ function Test-RealConnectivity([int]$Port) {
                     try {
                         $resp = $t.Result
                         $code = [int]$resp.StatusCode
-                        # 204 / 200 / 3xx = 节点通；502/504/超时/异常 = 节点断（内核可能仍活着）
-                        if ($code -ge 200 -and $code -lt 400) { $ok = $true }
+                        # 与快路**同一判据**：按端点自己声明的期望值判。
+                        # 这里以前收"全部 2xx"（-ge 200 -lt 400），而快路只认 200/204/30x，
+                        # 于是同一个节点"走哪条路"会得出不同结论；而且 201/202/206 语义不明，
+                        # 判"通"会把终端流量送进坏节点（两个方向的代价不对称）。
+                        $ok = (Test-EndpointStatus $code $CheckEndpoints[$k].Expect)
                         $resp.Dispose()
                     } catch { $ok = $false }
                     if ($ok) {
@@ -437,7 +583,10 @@ function Test-RealConnectivity([int]$Port) {
         # HttpClient 不可用等极端环境：回退串行 TCP 探测（原逻辑）
         foreach ($i in 0..($CheckEndpoints.Count - 1)) {
             if ($i -eq $last) { continue }
-            if (Test-SingleEndpoint $Port $CheckEndpoints[$i].Host $CheckEndpoints[$i].Path) {
+            # 第 4 个参数（期望值）必须传：不传就吃默认 204，而 wikipedia/twitter 的
+            # 期望值是 3xx——它们正常就回重定向，按 204 判会永远判死，端点池退化成纯 Google 段。
+            # 同一判断只准有一处实现：这条串行兜底与上面的并行兜底必须同判据。
+            if (Test-SingleEndpoint $Port $CheckEndpoints[$i].Host $CheckEndpoints[$i].Path $CheckEndpoints[$i].Expect) {
                 $script:LastGoodEndpoint = $i
                 return $true
             }
@@ -492,11 +641,62 @@ $NodeIdleResetSec     = 30
 # 第三条是关键：只按"有没有失败"决定间隔的话，节点一直死时失败计数会无界增长、
 # 间隔永远钉在快速档——实测 3600 秒探测 601 次，是承诺值的 2.5 倍。
 # "已经得出结论"就不必再勤问：多问几次不会改变结论。
-function Get-NodeProbeInterval([int]$FailCount, [int]$Threshold, [datetime]$FastUntil, [datetime]$Now,
+# 时刻参数一律是单调秒数（Get-MonotonicSeconds 的结果），不是墙上时钟。
+function Get-NodeProbeInterval([int]$FailCount, [int]$Threshold, [double]$FastUntil, [double]$Now,
                                [int]$Steady, [int]$Fast) {
     if ($FailCount -gt 0 -and $FailCount -lt $Threshold) { return $Fast }
     if ($Now -lt $FastUntil) { return $Fast }
     return $Steady
+}
+
+# 单调时钟（秒，double）。**所有"两个时刻相减"的判定都必须用它。**
+# 原因：Get-Date 是墙上时钟，NTP 校时/夏令时/休眠唤醒都会跳变。
+#   时钟向后跳 -> (now - last) 变负数 -> "还不到探测间隔"恒成立 -> 停止探测，
+#                 代理状态再也不更新（实测 -3600 秒时彻底冻结）；
+#   时钟向前跳 -> 失败计数被 IdleReset 清零 -> 判据永远凑不够。
+# 用 TickCount 相减则不受任何跳变影响。64 位避免 32 位的 49.7 天回绕。
+# 单调时钟的取值口径。TickCount64 只在 .NET 4.5+/PowerShell 7 上有；
+# Windows PowerShell 5.1 的 [System.Environment] 没有这个属性，取值会得到 $null
+# 而不是抛异常（实测），所以不能用 try/catch 判可用性，必须判值本身。
+$script:HasTickCount64 = $null
+function Test-HasTickCount64 {
+    if ($null -ne $script:HasTickCount64) { return $script:HasTickCount64 }
+    $script:HasTickCount64 = $false
+    try {
+        $v = [System.Environment]::TickCount64
+        if ($null -ne $v -and [double]$v -gt 0) { $script:HasTickCount64 = $true }
+    } catch {}
+    return $script:HasTickCount64
+}
+
+# 32 位 TickCount 会 49.7 天回绕。所有跨调用比较都经 ConvertTo-MonotonicDelta
+# 做无符号回绕校正，避免"开机满 49.7 天后时间倒流"。
+function Get-MonotonicRaw {
+    if (Test-HasTickCount64) {
+        try { return [double][System.Environment]::TickCount64 } catch {}
+    }
+    try { return [double][System.Environment]::TickCount } catch {}
+    return 0.0
+}
+
+function Get-MonotonicSeconds {
+    return ((Get-MonotonicRaw) / 1000.0)
+}
+
+# 两个单调读数（**毫秒原始值**）之间的秒差，带 32 位回绕校正。$From 在前、$To 在后时返回正数。
+# 返回值单位是秒：调用方传进来的通常是毫秒（TickCount 的原始单位），出去的是秒。
+# 校正只对 32 位值域生效：判据是"读数本身落在 32 位范围外就没有回绕问题"，
+# 而不是"有没有 TickCount64"——后者会让正常的大数值被误当成回绕。
+function ConvertTo-MonotonicDelta([double]$FromRaw, [double]$ToRaw) {
+    $d = $ToRaw - $FromRaw
+    $max32 = 4294967296.0
+    $half32 = 2147483648.0
+    # 只有当两个读数都在 32 位值域内、且差跨越了回绕时才校正。
+    if ($FromRaw -lt $max32 -and $ToRaw -lt $max32) {
+        if ($d -lt -$half32) { $d += $max32 }
+        elseif ($d -gt $half32) { $d -= $max32 }
+    }
+    return ($d / 1000.0)
 }
 
 # 这一轮能不能判"断"（纯函数）：次数与时长两个条件都满足才算。
@@ -506,11 +706,12 @@ function Test-NodeVerdict([int]$FailCount, [double]$FailSpanSec, [int]$Threshold
 }
 
 function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
-    $now = Get-Date
+    $now = Get-MonotonicSeconds
     $st = $script:NodeState["$Port"]
     if (-not $st) {
-        $st = @{ LastCheck = [datetime]::MinValue; Alive = $false; FailCount = 0
-                 FirstFailAt = [datetime]::MinValue; FastUntil = [datetime]::MinValue }
+        # 时刻一律用单调秒数：-1 表示"从未"（单调时钟起点是开机，不会是负数）。
+        $st = @{ LastCheck = -1.0; Alive = $false; FailCount = 0
+                 FirstFailAt = -1.0; FastUntil = -1.0 }
         $script:NodeState["$Port"] = $st
     }
     # "连续"失败必须先真的连续观测：这个端口很久没被探过（槽位留着旧账），
@@ -518,10 +719,16 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进，也和 Mac 侧不等价。
     # 门限用独立的常量，不借用节流档位：判定的节奏是快档（5 秒），而节流档位说的是"多久探一次"，
     # 两者含义不同，绑在一起会让以后调任一个都牵动另一个。
-    $idle = ($now - $st.LastCheck).TotalSeconds
+    # LastCheck = -1 表示这个槽位还没被探过：$idle 取一个大于任何门限的值即可，
+    # 但不能参与后面的减法（-1 - now 会得到很大的负数）。
+    # 相减走 ConvertTo-MonotonicDelta 做 32 位回绕校正。5.1 上没有 TickCount64，用的是 Int32 的
+    # TickCount，开机满 49.7 天它归零：直接相减会得到很大的负数，$age -lt $iv 恒成立，
+    # 于是再也不做真实探测、代理状态永久冻结（用户关掉翻墙软件也不删变量）。
+    # 校正函数早就写好了却没接线，等于没有——这里接上它。
+    $idle = if ($st.LastCheck -lt 0) { [double]::MaxValue } else { ConvertTo-MonotonicDelta ($st.LastCheck * 1000.0) ($now * 1000.0) }
     if ($st.FailCount -gt 0 -and $idle -gt $NodeIdleResetSec) {
         $st.FailCount = 0
-        $st.FirstFailAt = [datetime]::MinValue
+        $st.FirstFailAt = -1.0
     }
     if (-not $Force) {
         $age = $idle
@@ -533,20 +740,20 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     $result = Test-RealConnectivity $Port
     if ($result) {
         $st.FailCount = 0
-        $st.FirstFailAt = [datetime]::MinValue
+        $st.FirstFailAt = -1.0
         $st.Alive = $true
         # 只在结论翻转（断->通）时开加密观察窗。若每次成功都重开，窗口永远不结束，
         # 稳态间隔就永远走不到——实测会退化成每 6 秒一探，流量是承诺值的 3 倍。
-        if (-not $wasAlive) { $st.FastUntil = $now.AddSeconds($NodeFastWindowSec) }
+        if (-not $wasAlive) { $st.FastUntil = $now + $NodeFastWindowSec }
     } else {
         $st.FailCount++
-        if ($st.FirstFailAt -eq [datetime]::MinValue) { $st.FirstFailAt = $now }
-        $span = ($now - $st.FirstFailAt).TotalSeconds
+        if ($st.FirstFailAt -lt 0) { $st.FirstFailAt = $now }
+        $span = ConvertTo-MonotonicDelta ($st.FirstFailAt * 1000.0) ($now * 1000.0)
         # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则双条件都满足才判死
         if ($Force -or (Test-NodeVerdict $st.FailCount $span $NodeFailThreshold $NodeFailDwellSec)) {
             $st.Alive = $false
             # 只在结论翻转（通->断）时开窗：判错的话 5 秒内就能探到成功、把变量补回来。
-            if ($wasAlive) { $st.FastUntil = $now.AddSeconds($NodeFastWindowSec) }
+            if ($wasAlive) { $st.FastUntil = $now + $NodeFastWindowSec }
         }
     }
     return $st.Alive
@@ -571,7 +778,11 @@ function Get-CurrentState {
     $port = $script:CachedPort
 
     if ($port) {
-        if (Test-PortListening $port) {
+        $listenState = Test-PortListening $port
+        # 读不出来（unknown）时这一轮**是"不知道"**：既不能当"还在听"（可能早没了），
+        # 也不能当"没在听"（那会判 off、删掉用户的代理变量）。原地不动最安全。
+        if ($listenState -eq "unknown") { return "unknown" }
+        if ($listenState -eq "listening") {
             # 在位复核（约每 10 轮一次，本机零流量）：代理退出后若有别的程序
             # 占了同一端口，握手不过立即丢缓存，不等 15 秒节点节流。
             # 返回的 off 照常进调用方的双轮去抖，不会单轮抖动。

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="387" viewBox="0 0 1200 387" role="img" aria-labelledby="heroTitle heroDesc">
   <title id="heroTitle">EnvProxy — 终端自动翻墙（环境变量代理）</title>
-  <desc id="heroDesc">左侧是项目名与一句话价值：翻墙软件开着，终端就自动翻墙；关掉，终端自动恢复直连。右侧是菜单"查看状态"的真实输出节选：监控进程运行中、开机自启已启用、翻墙代理已开启、代理变量已注入。</desc>
+  <desc id="heroDesc">左侧是项目名与一句话价值：翻墙软件开着，终端就自动翻墙；关掉，终端自动恢复直连。右侧是菜单「查看状态」的真实输出节选：监控进程运行中、开机自启已启用、翻墙代理已开启、代理变量已注入。</desc>
 
   <rect width="1200" height="387" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="385.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>

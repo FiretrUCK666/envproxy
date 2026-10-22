@@ -91,6 +91,18 @@ jobs:
       - name: 校验安装包（与仓库逐字节一致、编码红线在容器里没被改）
         shell: pwsh
         run: |
+          # 逐字节比对用的哈希，自己算（纯 .NET），不用 Get-FileHash。
+          # 理由是它属于 PowerShell 模块命令：模块自动加载挑不到版本时会静默缺失，
+          # 返回 $null 而不是报错，于是 $null -ne $null 为假、逐字节一致对任何包都放行。
+          # 本步骤是独立内联脚本、没有加载项目库，所以自带一份（同一个算法，不引入依赖）。
+          function Get-Sha256Hex([string]$Path) {
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            try {
+              $fs = [System.IO.File]::OpenRead($Path)
+              try { return ([System.BitConverter]::ToString($sha.ComputeHash($fs)) -replace '-', '').ToLowerInvariant() }
+              finally { $fs.Dispose() }
+            } finally { $sha.Dispose() }
+          }
           $ErrorActionPreference = 'Stop'
           $fail = 0
           $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
@@ -126,8 +138,9 @@ jobs:
               if ($r -match '^(win|mac)/monitor/') { Write-Host ("运行时目录进了分包：" + $r); $ok = $false; continue }
               $rel = $r.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
               if (-not (Test-Path -LiteralPath $rel)) { Write-Host ("分包里有仓库没有的文件：" + $r); $ok = $false; continue }
-              $a = (Get-FileHash (Join-Path $d $rel) -Algorithm SHA256).Hash
-              $b = (Get-FileHash $rel -Algorithm SHA256).Hash
+              $a = Get-Sha256Hex (Join-Path $d $rel)
+              $b = Get-Sha256Hex $rel
+              if (-not $a -or -not $b) { Write-Host ("算不出校验值：" + $r); $ok = $false; continue }
               if ($a -ne $b) { Write-Host ("分包与仓库字节不一致：" + $r); $ok = $false }
             }
             if ($have -notcontains $ownEntry) { Write-Host ("分包缺自己平台入口：" + $ownEntry); $ok = $false }
