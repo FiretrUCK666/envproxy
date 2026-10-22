@@ -1185,41 +1185,39 @@ EOF
     # 与 Windows 侧同一套理由：破坏测试发现这套门禁擅长拦格式与常量，不擅长拦"减法"——
     # 删掉一行关键调用，所有门禁照绿，产品却彻底不能用。这里读源码确认调用还在。
     # 只验接线，不验行为；行为由上面的纯函数用例负责。
-    _wiring_has() { # 文件 起始正则 至少命中次数
-        _wf="$SCRIPT_DIR/lib/$1"
-        [ -r "$_wf" ] || { echo 0; return; }
-        _wc=$(grep -cE "$2" "$_wf" 2>/dev/null || echo 0)
-        [ "$_wc" -ge "$3" ] && echo 1 || echo 0
+    # 只用 POSIX 可移植写法：grep -c -F 数字面量、sed 取函数体、shell 算术。
+    # 不用 awk：GNU awk 与 BSD awk 对动态正则、转义、区间表达式的处理不一致，
+    # 结果是"在 Git Bash 上通过、在真正的 macOS 上失败"——测试本身成了故障源。
+    _wiring_count() { # 文件 字面量
+        _wc=$(grep -c -F -- "$2" "$1" 2>/dev/null || true)
+        [ -n "$_wc" ] || _wc=0
+        echo "$_wc"
     }
-    # 只数**某个函数体里**的命中次数。整文件计数会漏判：test_node_alive 在 probe.sh
-    # 里有 4 处（确认函数里 2 处、别处 2 处），把确认函数里的两处都删掉，整文件计数
-    # 仍然够——而"候选确认不再验证节点"正是要防的那种破坏。
-    _wiring_fn_has() { # 文件 函数名 正则 至少命中次数
-        _wf="$SCRIPT_DIR/lib/$1"
-        [ -r "$_wf" ] || { echo 0; return; }
-        _wc=$(awk -v fn="$2" -v re="$3" '
-            $0 ~ "^"fn"[ \\t]*\\(\\)[ \\t]*\\{" { inf=1; next }
-            inf && $0 ~ "^[ \\t]*\\}" { inf=0; next }
-            inf { if ($0 ~ re) c++ }
-            END { print c+0 }
-        ' "$_wf" 2>/dev/null || echo 0)
-        [ "$_wc" -ge "$4" ] && echo 1 || echo 0
+    _wiring_fn_count() { # 文件 函数名 字面量
+        _fc=$(sed -n "/^$2 *() *{/,/^}/p" "$1" 2>/dev/null | grep -c -F -- "$3" || true)
+        [ -n "$_fc" ] || _fc=0
+        echo "$_fc"
     }
     # 装配：入口无参数时必须进监控主循环（开机自启走的就是这条路）。
-    _selftest_assert_eq "接线：入口会进入监控主循环" 1 \
-        "$(grep -cE '^[[:space:]]*""\)[[:space:]]*run_monitor_loop' "$SCRIPT_DIR/envproxy.sh" 2>/dev/null || echo 0)"
+    _w1=$(_wiring_count "$SCRIPT_DIR/envproxy.sh" run_monitor_loop)
+    _selftest_assert_eq "接线：入口会进入监控主循环" 1 "$([ "$_w1" -ge 1 ] && echo 1 || echo 0)"
     # 装配：候选端口确认必须过"真实节点连通"，两个分支各一次。
-    _selftest_assert_eq "接线：候选确认会验证真实节点（两处分支）" 1 \
-        "$(_wiring_fn_has probe.sh confirm_candidate_port 'test_node_alive' 2)"
+    # 只数函数体里的命中：整文件计数会漏判（probe.sh 里另有几处同名调用）。
+    _w2=$(_wiring_fn_count "$SCRIPT_DIR/lib/probe.sh" confirm_candidate_port test_node_alive)
+    _selftest_assert_eq "接线：候选确认会验证真实节点（两处分支）" 1 "$([ "$_w2" -ge 2 ] && echo 1 || echo 0)"
     # 装配：清理门槛会被真正调用（定义 + apply-state + 监控自愈 = 至少 3 次）。
-    _selftest_assert_eq "接线：清理门槛被至少两处调用" 1 \
-        "$(grep -cE 'proxy_vars_present' "$SCRIPT_DIR/lib/env.sh" "$SCRIPT_DIR/lib/runtime.sh" 2>/dev/null | awk -F: '{s+=$2} END {print (s>=3)?1:0}')"
+    _w3a=$(_wiring_count "$SCRIPT_DIR/lib/env.sh" proxy_vars_present)
+    _w3b=$(_wiring_count "$SCRIPT_DIR/lib/runtime.sh" proxy_vars_present)
+    _w3=$((_w3a + _w3b))
+    _selftest_assert_eq "接线：清理门槛被至少两处调用" 1 "$([ "$_w3" -ge 3 ] && echo 1 || echo 0)"
     # 装配：门槛本身必须真的去问归属记录。
-    _selftest_assert_eq "接线：清理门槛会问归属记录" 1 \
-        "$(_wiring_has env.sh 'is_owned_proxy_value' 1)"
+    _w4=$(_wiring_count "$SCRIPT_DIR/lib/env.sh" is_owned_proxy_value)
+    _selftest_assert_eq "接线：清理门槛会问归属记录" 1 "$([ "$_w4" -ge 1 ] && echo 1 || echo 0)"
     # 装配：状态去抖必须比的是常量，不是字面量。
-    _selftest_assert_eq "接线：去抖比的是常量" 1 \
-        "$(grep -cE 'pending_n.*-ge.*STATE_DEBOUNCE_ROUNDS' "$SCRIPT_DIR/lib/runtime.sh" 2>/dev/null || echo 0)"
+    # 判据是"比较的是那个常量"，不是"文件里出现过它"——定义那一行也会出现，
+    # 只数出现次数的话，把比较改成字面量 1 照样通过。
+    _w5=$(_wiring_count "$SCRIPT_DIR/lib/runtime.sh" '-ge "$STATE_DEBOUNCE_ROUNDS"')
+    _selftest_assert_eq "接线：去抖比的是常量" 1 "$([ "$_w5" -ge 1 ] && echo 1 || echo 0)"
 
     rm -rf "$_sandbox" 2>/dev/null || true
     if [ "$_selftest_fails" -eq 0 ]; then
