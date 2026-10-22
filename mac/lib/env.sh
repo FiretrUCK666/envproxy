@@ -123,9 +123,9 @@ write_off_sentinel() {
     {
         printf '# envproxy-state: off\n'
         # NODE_USE_ENV_PROXY 的值是我们写下的 "1"，判据也是"值仍等于我们写下的那个"，
-        # 不是"永远清"。它以前写在归属守卫外面，结果没有 owned.env 的机器上
-        # （早期版本升级上来的、或从没装过时）会把使用者自己设的 1 删掉——
-        # 违反"没有归属记录时一个都不动"。现在与其它变量同一套判据。
+        # 不是"永远清"：它必须与其它变量共用同一套归属守卫。
+        # 写在守卫外面时，没有 owned.env 的机器上（早期版本升级上来的、
+        # 或从没装过时）会把使用者自己设的 1 删掉——违反"没有归属记录时一个都不动"。
         if [ -n "$_onode" ]; then
             printf '[ "${NODE_USE_ENV_PROXY-}" = "%s" ] && unset NODE_USE_ENV_PROXY\n' "$_onode"
         fi

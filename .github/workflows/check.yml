@@ -764,6 +764,18 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
+          # d1b) 帮助一屏的行数上限：两侧必须同一个数。
+          # 它决定「帮助会不会被终端切掉底部」，一侧改了另一侧没改，两个平台就会
+          # 一屏放得下、另一屏放不下——同一个产品两种体验，而且原因很难查。
+          $helpLinesWin = Grab $ps '\$HelpMaxLines\s*=\s*(\d+)' 'Win 帮助行数上限'
+          $helpLinesMac = Grab $sh 'HELP_MAX_LINES=(\d+)' 'Mac 帮助行数上限'
+          if ((-not $helpLinesWin) -or (-not $helpLinesMac)) {
+            Write-Host '帮助行数上限常量缺失（两侧都要有具名常量，不许写死在测试里）'
+            $fail = 1
+          } elseif ($helpLinesWin -ne $helpLinesMac) {
+            Write-Host ("帮助行数上限两侧不一致：Win {0} / Mac {1}" -f $helpLinesWin, $helpLinesMac)
+            $fail = 1
+          }
           # d1c) 失败后"换出口重试"的判据：两侧必须是同一批原因。
           # 这条判据决定"要不要再花一次网络往返"，两侧不一致的后果是同一个失败
           # 在一个平台上会退代理、在另一个平台上直接放弃——用户看到的就是
@@ -793,18 +805,6 @@ jobs:
             Write-Host ("换出口重试判据应当是 network quota，实际 [{0}]" -f $rkWin); $fail = 1
           } else {
             Write-Host '换出口重试判据两侧一致：network quota'
-          }
-          # d1b) 帮助一屏的行数上限：两侧必须同一个数。
-          # 它决定「帮助会不会被终端切掉底部」，一侧改了另一侧没改，两个平台就会
-          # 一屏放得下、另一屏放不下——同一个产品两种体验，而且原因很难查。
-          $helpLinesWin = Grab $ps '\$HelpMaxLines\s*=\s*(\d+)' 'Win 帮助行数上限'
-          $helpLinesMac = Grab $sh 'HELP_MAX_LINES=(\d+)' 'Mac 帮助行数上限'
-          if ((-not $helpLinesWin) -or (-not $helpLinesMac)) {
-            Write-Host '帮助行数上限常量缺失（两侧都要有具名常量，不许写死在测试里）'
-            $fail = 1
-          } elseif ($helpLinesWin -ne $helpLinesMac) {
-            Write-Host ("帮助行数上限两侧不一致：Win {0} / Mac {1}" -f $helpLinesWin, $helpLinesMac)
-            $fail = 1
           }
           # d2) 终端同步的标记块必须两侧同字面：卸载靠它精确摘除，两侧不一致就摘不干净。
           #     这是一个字符串常量，不是数字，所以不进上面那张 $pairs 表。
