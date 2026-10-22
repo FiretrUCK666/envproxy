@@ -47,102 +47,138 @@ function ConvertTo-ListenEndpoint([string]$Local) {
     return @{ Address = $addr; Port = $port }
 }
 
+# 把 netstat -ano 的输出解析成监听口列表。
+#
+# 为什么单独成一个纯函数：解析要能被逐条钉死（多一列、状态带空格、被本地化、
+# 一行 TCP 都没有），而"取值"要能被单独换掉（进程内 API / netstat / WMI 三层）。
+# 两者混在一个函数里时，测试只能靠给外部命令打桩——而打桩又会被上层的新取值路径绕过去，
+# 于是"测了解析"变成"测了个寂寞"。分开之后，解析可以拿一段固定的文本直接验，
+# 与这台机器上有没有 netstat、走的是哪条路完全无关。
+#
+# 返回值：解析出的监听口列表（可能为空）。空 != 读不出来——读不出来的情况一律抛：
+#   - 有 LISTENING 行却没解析出端口（行形状变了）
+#   - 有 TCP 行但没有 LISTENING 行
+#   - 一条 TCP 行都没有（协议列不是 TCP，说明拿到的根本不是 netstat 输出）
+# 这三种都必须抛，不许返回空表：空表会被上层读成"本机没有端口在监听"→ 判 off →
+# 把用户的代理变量删掉。解析失败绝不能长得像"没有端口"。
+function ConvertFrom-NetstatOutput([string[]]$Raw) {
+    $listeners = New-Object System.Collections.ArrayList
+    $sawListening = $false
+    $sawTcp = $false
+    foreach ($line in $Raw) {
+        # "有没有 TCP 行"必须**独立于**整行的解析结果来判断。
+        # 若只有整行匹配上才置真，"行形状变了"会一行都匹配不上 → 直接返回空数组。
+        # 宽松判据只认协议列（"TCP"这个 token 不会被本地化）。
+        if ($line -match '^\s*TCP\s') { $sawTcp = $true }
+        # 行尾**不锚定**：PID 之后允许还有列。
+        # 为什么：Windows 更新可能给 netstat 加一列（历史上加过 InHost 那种）。
+        # 锚定行尾的话，加一列就整行匹配不上 → 一个监听口都解析不出来 → 这一轮"读不出来"。
+        # 而我们要的信息全在前 5 列里，多出来的列与我们无关，不该因此罢工。
+        # 要求 PID 后面是空白或行尾，是为了不把 "LISTENING 6544abc" 这种半截数字当成 PID。
+        if ($line -notmatch '^\s*TCP\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)(\s|$)') { continue }
+        if ($Matches[3] -ne "LISTENING") { continue }
+        $sawListening = $true
+        $endpoint = ConvertTo-ListenEndpoint $Matches[1]
+        if (-not $endpoint) { continue }
+        [void]$listeners.Add([pscustomobject]@{
+            LocalAddress  = $endpoint.Address
+            LocalPort     = $endpoint.Port
+            OwningProcess = [int]$Matches[4]
+        })
+    }
+    if ($listeners.Count -gt 0) { return $listeners }
+    if ($sawListening) { throw "netstat 有 LISTENING 行但没解析出端口（行形状变了）" }
+    if ($sawTcp) { throw "netstat 有 TCP 行但没有 LISTENING 行（状态列可能被本地化了）" }
+    throw "netstat 输出里没有 TCP 行（拿到的可能不是 netstat 的输出）"
+}
+
 # 列出本机所有处于监听状态的 TCP 连接。
-# 用 netstat 而不是 Get-NetTCPConnection：后者每次 1.7–2.3 秒（WMI 启动开销），
-# 而监控每 2–3 秒跑一轮、在位复核每轮还要查一次端口——这一项就吃掉了整个周期。
-# 同一台机器实测 netstat 30–50 毫秒，快 40 倍以上。
-# netstat 不可用（被裁剪的系统）或状态列被本地化时，退回 WMI：慢，但可靠。
 # 返回与 Get-NetTCPConnection 同形的对象（LocalAddress / LocalPort / OwningProcess）。
+#
+# 三层取值，从"最不依赖外部环境"往"最依赖"排：
+#   ① .NET 的 IPGlobalProperties.GetActiveTcpListeners() —— **进程内**，不起子进程、不读文本
+#   ② netstat.exe —— 起一个外部进程 + 解析文本
+#   ③ Get-NetTCPConnection —— WMI，最后兜底
+#
+# 为什么把 ① 提到第一层（这是这一版的关键修正）：
+# ② 依赖三件事同时成立——那个 exe 真被调起来、输出没被安全软件吞掉、行格式与解析假设一致。
+# 任何一件不成立，这一轮就"枚举失败"。实测踩过：常驻监控连续几十次失败，
+# 而同一份代码在前台每次都正常——差别只在进程环境（PATH、安全软件注入、句柄配额）。
+# ① 不碰这三件事：它就在当前进程里问操作系统要一张表，实测平均 1.2 毫秒
+# （netstat 27 毫秒起，还要加上建进程和解析），并且实测 62 个监听口与 netstat 逐项一致、
+# IPv4 与 IPv6 都覆盖（47 + 15）。
+#
+# ③ 与 ① 不是一回事：③ 是 PowerShell 的 Get-NetTCPConnection（要拉起 WMI，实测 1.7–2.3 秒），
+# ① 是 .NET 原生接口（同一个信息，不用 WMI）。两者被当成一件事时，"必须起外部进程"
+# 就成了唯一选择——而它正是"在别人机器上悄悄失效"的那一类。
+#
+# PID 不是必需项：只有"按进程名提速"那一步要用它，而那一步只是加速（见 Find-CandidatePorts
+# 里的两轮来源）。所以 ① 不带 PID 完全够用；需要 PID 时再单独取一次（只在候选端口不空时）。
 function Get-ListeningTcpConnections {
-    $raw = $null
+    # ---- ① 进程内 .NET 接口 ----
+    $apiWhy = ""
+    try {
+        $eps = [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpListeners()
+        if ($eps -and @($eps).Count -gt 0) {
+            $list = New-Object System.Collections.ArrayList
+            foreach ($e in $eps) {
+                [void]$list.Add([pscustomobject]@{
+                    LocalAddress  = $e.Address.ToString()
+                    LocalPort     = [int]$e.Port
+                    # 0 = 未知。调用方按"拿不到 PID"处理，不许当成"属于 0 号进程"。
+                    OwningProcess = 0
+                })
+            }
+            return $list
+        }
+        # 一个监听口都没有：可能是真的没有（此时下面两条路也会给出同样的答案），
+        # 也可能是这台系统的 NET 实现拿不到。留个原因，继续往下试——宁可多花 30 毫秒，
+        # 也不要在"其实有代理"的机器上把空表当成结论。
+        $apiWhy = "GetActiveTcpListeners 返回空（$([System.Environment]::OSVersion.Version)）"
+    } catch {
+        $apiWhy = "GetActiveTcpListeners 失败：" + $_.Exception.Message
+    }
+
+    # ---- ② netstat.exe ----
     # 必须用全量 -ano（**不带** -p TCP）：-p TCP 只回 IPv4 表，IPv6 的监听口一行都不出现
     # （实测本机 -p TCP 含 "[::" 的行 0 条、不带 -p 有 44 条）。而 mihomo / sing-box 这类
     # 客户端配 bind-address: "::1" 时只绑 IPv6 回环——枚举看不到它，候选集就是空的，
-    # 状态机判 off，然后把用户的代理变量删掉。下面按协议列过滤（^\s*TCP\s）本来就能
-    # 同时容纳 TCP 与 TCPv6 两种行，多几行 UDP 不影响判决，只是多几十毫秒解析。
-    # 用绝对路径找 netstat，不走 PATH。
-    #
-    # 实测过：同一台机器、同一份代码，前台跑枚举成功（476 行、66 个监听口），
-    # 而由常驻监控跑就报"两次都没成功：Get-NetTCPConnection is not recognized"——
-    # 出现 55 次，等于监控全程失明，只是没人发现。原因是那个进程的 PATH 里没有
-    # System32（它由哪个父进程拉起、继承了谁的 PATH 决定的，不受本程序控制）。
-    # 系统工具的位置是确定的，就不该靠一个可能被别人改过的搜索路径去找。
-    # ENVPROXY_NETSTAT 是给测试和疑难排查用的逃生口：自检要模拟"netstat 输出形状变了""、
-    # 自检要模拟"根本调不到 netstat"，都得能换掉这条路径；真实运行不设这个变量。
+    # 状态机判 off，然后把用户的代理变量删掉。
+    # 用绝对路径找 netstat，不走 PATH（那个进程的 PATH 由父进程决定，不受本程序控制）。
+    # ENVPROXY_NETSTAT 是给测试用的逃生口：要模拟"netstat 输出形状变了""根本调不到 netstat"，
+    # 都得能换掉这条路径；真实运行不设这个变量。
     $netstat = [string]$env:ENVPROXY_NETSTAT
     if (-not $netstat) {
         $netstat = Join-Path ([string]$env:SystemRoot) "System32\netstat.exe"
         if (-not (Test-Path -LiteralPath $netstat)) { $netstat = "netstat.exe" }
     }
-    # 失败原因要分开记，不许糊成一条。
-    #
-    # 实测踩过：常驻监控连续几十次记"两次都没成功：Get-NetTCPConnection is not recognized"，
-    # 而那句话来自下面 WMI 兜底那一路——真正失败的其实是 netstat 这一次调用。
-    # 两条不同原因的路径共用一个措辞，事后就永远分不清"系统工具没了"还是"行格式变了"，
-    # 而排查方向完全不同。所以每条路各自保留自己的原因（$netstatWhy / $wmiWhy），
-    # 最后由抛出的那条消息把两段都带上。
     $netstatWhy = ""
-    $wmiWhy = ""
+    $raw = $null
     try {
         $raw = & $netstat -ano 2>$null
-        # 命令没抛异常、但一行都没拿到：netstat 被换掉了、被策略挡住、或者输出被吞。
-        # 这与"抛异常"是两回事，同样要留下原因——否则会静默走 WMI 兜底然后只说 WMI 失败。
         if (-not $raw) { $netstatWhy = "netstat 没有输出（$netstat）" }
     } catch {
         $raw = $null
         $netstatWhy = "netstat 调用失败：" + $_.Exception.Message
     }
-    if (-not $raw) {
-        # netstat 这条路不通，退到 WMI（慢，但可靠）。它自己也失败时要把两条原因都带出去。
+    if ($raw) {
         try {
-            return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+            return (ConvertFrom-NetstatOutput $raw)
         } catch {
-            $wmiWhy = "Get-NetTCPConnection 也不可用：" + $_.Exception.Message
-            throw ("端口枚举失败（" + $netstatWhy + "；" + $wmiWhy + "）")
+            # 解析失败只记原因，继续往 WMI 兜底——"这条取值路走不通"不等于"读不出来"。
+            $netstatWhy = $_.Exception.Message
         }
     }
-    $listeners = New-Object System.Collections.ArrayList
-    $sawListening = $false
-    $sawTcp = $false
-    foreach ($line in $raw) {
-        # "有没有 TCP 行"必须**独立于**整行的解析结果来判断。
-        # $sawTcp 必须独立于整行解析结果判断：若只有整行匹配上才置真，"行形状变了"（多一列、状态列带空格、
-        # 别的 netstat 构建）会一行都匹配不上 → $sawTcp 为假 → 直接返回空数组。
-        # 空数组会被上层读成"本机没有端口在监听" → 状态机下一轮判 off →
-        # 把用户的代理环境变量删掉。解析失败绝不能长得像"没有端口"。
-        # 宽松判据只认协议列（"TCP"这个 token 不会被本地化），形状怎么变都认得出。
-        if ($line -match '^\s*TCP\s') { $sawTcp = $true }
-        if ($line -notmatch '^\s*TCP\s+(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s*$') { continue }
-        $state = $Matches[3]
-        if ($state -ne "LISTENING") { continue }
-        $sawListening = $true
-        $endpoint = ConvertTo-ListenEndpoint $Matches[1]
-        if (-not $endpoint) { continue }
-        [void]$listeners.Add([pscustomobject]@{
-            LocalAddress = $endpoint.Address
-            LocalPort = $endpoint.Port
-            OwningProcess = [int]$Matches[4]
-        })
+
+    # ---- ③ WMI 兜底 ----
+    try {
+        return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
+    } catch {
+        # 三条路都失败，把三段的真实原因一起报出去。
+        # 不许塌缩成一句"读不出来"：那会让人去查系统权限，而真正的问题可能是
+        # netstat 被安全软件吞了输出——两件事的排查方向完全不同。
+        throw ("端口枚举失败（" + $apiWhy + "；" + $netstatWhy + "；Get-NetTCPConnection 也不可用：" + $_.Exception.Message + "）")
     }
-    if ($listeners.Count -gt 0) { return $listeners }
-    if ($sawListening) { throw "netstat 解析出错：有 LISTENING 行但没解析出端口" }
-    if ($sawTcp) {
-        # 有 TCP 行、却一个监听口都没解析出来：状态列被本地化了，或者行形状变了。
-        # 两种都走 WMI 那一路（慢，但可靠）。WMI 也失败时，原因必须写明是"行形状变了"，
-        # 而不是笼统一句"读不出来"——那会让人去查系统和权限，真正的问题在解析。
-        try {
-            return @(Get-NetTCPConnection -State Listen -ErrorAction Stop)
-        } catch {
-            throw ("netstat 有 TCP 行但没解析出监听口（行格式可能变了）；Get-NetTCPConnection 也不可用：" + $_.Exception.Message)
-        }
-    }
-    # 一条 TCP 行都没有：协议列不是 "TCP"，这在 netstat 的输出里不会出现
-    # （协议名不会被本地化）。要么这台机器真的一个 TCP 连接都没有，
-    # 要么 netstat 被换成了别的东西——后者会把用户的代理变量误删。
-    # 认不出来就抛出去，交给上层的"重试一次 + 记一条枚举失败"处理：
-    # 那条路是保守的（这一轮沿用上一状态、不动用户的环境变量），
-    # 而返回空数组是静默地把用户的环境变量删掉。
-    throw "netstat 输出里没有 TCP 行，无法枚举监听端口"
 }
 
 function Test-PortListening([int]$Port) {
@@ -336,14 +372,30 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
         # 的非英文系统上这个进程名过滤整段失效（只剩全端口兜底，收敛变慢）。
         # 名字转小写必须用 ToLowerInvariant：ToLower 受当前区域设置影响，
         # 土耳其语下 HIDDIFY 会变成 hıddıfy（无点 ı），匹配不到 *hiddify*。
-        $procMap = @{}
-        Get-Process -ErrorAction SilentlyContinue | ForEach-Object { $procMap[[int]$_.Id] = $_.ProcessName.ToLowerInvariant() }
+        # 这一整段只是**提速**，不是正确性的必要条件：即使一个端口都认不出来，
+        # 下面第二轮的"全端口并行握手探测"照样能发现代理（只是慢一点）。
+        # 所以它出任何问题都必须静默跳过，绝不能让整轮枚举失败。
+        #
+        # 为什么要单独说这件事：OwningProcess = 0 表示"取不到 PID"（进程内那条路拿不到）。
+        # 以前这里直接按 PID 去查名字，拿不到就 continue——逻辑上没错，但前提是
+        # "一定有 PID"。现在前提变了，就得把"没有 PID"写成正常的、预期内的情况。
         $suspectPorts = @()
-        foreach ($l in ($listeners | Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") })) {
-            $pname = $procMap[[int]$l.OwningProcess]
-            if (-not $pname) { continue }
-            foreach ($pat in $ProxyProcessPatterns) {
-                if ($pname -like "*$pat*") { $suspectPorts += $l.LocalPort; break }
+        $hasPid = @($listeners | Where-Object { [int]$_.OwningProcess -gt 0 }).Count -gt 0
+        if ($hasPid) {
+            # 键必须显式转 [int]：Get-Process.Id 是 Int32，而 Get-NetTCPConnection 的
+            # OwningProcess 是 UInt32。哈希表键类型严格——[uint32]1234 查不到 [int]1234。
+            # 名字转小写必须用 ToLowerInvariant：ToLower 受当前区域设置影响，
+            # 土耳其语下 HIDIFY 会变成 hıdıfy（无点 ı），匹配不到 *hiddify*。
+            $procMap = @{}
+            foreach ($pr in @(Get-Process -ErrorAction SilentlyContinue)) {
+                try { $procMap[[int]$pr.Id] = $pr.ProcessName.ToLowerInvariant() } catch {}
+            }
+            foreach ($l in ($listeners | Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") })) {
+                $pname = $procMap[[int]$l.OwningProcess]
+                if (-not $pname) { continue }
+                foreach ($pat in $ProxyProcessPatterns) {
+                    if ($pname -like "*$pat*") { $suspectPorts += $l.LocalPort; break }
+                }
             }
         }
         foreach ($p in ($suspectPorts | Sort-Object -Unique)) {

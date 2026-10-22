@@ -20,6 +20,18 @@ $ErrorActionPreference = 'Stop'
 $script:fails = 0
 . (Join-Path $PSScriptRoot '../win/envproxy.ps1')
 
+# 日志隔离：把 $LogFile 换到临时目录，绝不写进仓库里的 win\monitor\monitor.log。
+#
+# 为什么必须有这一步：有些用例要走"枚举失败 / 状态 unknown"这条真实路径，
+# 而那条路径会调 Write-MonitorLog。默认的 $LogFile 指向仓库内的运行时目录——
+# 于是"跑一次自检"会在使用者的真实日志里留下几条 simulated 的假失败记录，
+# 事后排查时看到的是自己测试造出来的噪声。测试改坏被测对象的现场，是最坏的一种。
+# 换到临时目录后：既照常验证了"失败会记一条日志"，又不污染真实运行时状态。
+$script:SavedLogFile = $LogFile
+$script:TestLogDir = Join-Path ([System.IO.Path]::GetTempPath()) ('envproxy_testlog_' + [guid]::NewGuid().ToString('N').Substring(0,8))
+New-Item -Path $script:TestLogDir -ItemType Directory -Force | Out-Null
+$LogFile = Join-Path $script:TestLogDir 'monitor.log'
+
 function Assert-Eq([string]$Name, $Want, $Have) {
     if ("$Want" -eq "$Have") { Write-Host ("  PASS {0}" -f $Name) }
     else { Write-Host ("  FAIL {0} (want [{1}] have [{2}])" -f $Name, $Want, $Have); $script:fails++ }
@@ -795,36 +807,56 @@ Assert-Eq 'a broken bracket is rejected' '1' ([int]($null -eq (ConvertTo-ListenE
 # would be read as "no port is listening" -- the state machine would then call off and delete
 # the user's proxy variables. The protocol column is never localised, so a loose match on it
 # survives every shape change.
-if ($env:OS -eq 'Windows_NT') {
-    $global:NetstatStub = @()
-    function global:netstat.exe { $global:NetstatStub }
-    # 枚举默认走 $env:SystemRoot\System32\netstat.exe 这个绝对路径（不依赖 PATH）。
-    # 用 ENVPROXY_NETSTAT 把它换成按名字找，下面这个函数桩才生效。
-    $script:SavedNetstat = $env:ENVPROXY_NETSTAT
-    $env:ENVPROXY_NETSTAT = 'netstat.exe'
-    $shapeCases = @(
-        @{ Name = 'an extra column'; Lines = @('  Proto Local Foreign State PID InHost', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTENING    6544    -') },
-        @{ Name = 'a state made of two words'; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTEN  6544') },
-        @{ Name = 'a localised state'; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    ABHÖREN    6544') }
-    )
-    foreach ($case in $shapeCases) {
-        $global:NetstatStub = $case.Lines
-        $shapeThrew = $false
-        $shapeCount = -1
-        try { $shapeCount = @(Get-ListeningTcpConnections).Count } catch { $shapeThrew = $true }
-        # Falling back to WMI is the right answer: it is slow but it is right.
-        Assert-Eq ('a netstat row shape that changed is handled, not swallowed: ' + $case.Name) '0' ([int]$shapeThrew)
+# 解析是纯函数，所以直接喂文本验，不需要给 netstat 打桩。
+# 为什么改成这样：取值现在是三层（进程内 .NET API / netstat / WMI），
+# 打桩只能影响中间那一层，而第一层会先返回真数据——桩就被绕过去了，
+# 于是"测了行形状"变成"测了个寂寞"。解析单独抽出来之后，与机器上有没有 netstat 无关。
+$shapeCases = @(
+    @{ Name = 'an extra column'; Expected = 1; Lines = @('  Proto Local Foreign State PID InHost', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTENING    6544    -') },
+    @{ Name = 'a state made of two words'; Expected = 0; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    LISTEN  6544') },
+    @{ Name = 'a localised state'; Expected = 0; Lines = @('  Proto Local Foreign State PID', '  TCP    0.0.0.0:22    0.0.0.0:0    ABHÖREN    6544') }
+)
+foreach ($case in $shapeCases) {
+    $got = -1
+    $threw = $false
+    try { $got = @(ConvertFrom-NetstatOutput $case.Lines).Count } catch { $threw = $true }
+    if ($case.Expected -gt 0) {
+        # 多一列但状态仍是 LISTENING：能解析出来就解析（宽松匹配本来就该容忍多出来的列）。
+        Assert-Eq ('a netstat row with an extra column still parses: ' + $case.Name) '0' ([int]$threw)
+        Assert-Eq ('and it finds the listener: ' + $case.Name) '1' $got
+    } else {
+        # 状态认不出来：必须抛，不能悄悄返回空表——空表长得跟"没有端口在监听"一模一样。
+        Assert-Eq ('an unreadable state is refused, not reported as empty: ' + $case.Name) '1' ([int]$threw)
     }
-    # Output that carries no TCP row at all is not something we can read: say so instead of
-    # handing back an empty list, which looks exactly like "nothing is listening".
-    $global:NetstatStub = @('  Proto Local Foreign State PID')
-    $noTcpThrew = $false
-    try { [void](Get-ListeningTcpConnections) } catch { $noTcpThrew = $true }
-    Assert-Eq 'output without a single TCP row is refused instead of reported as empty' '1' ([int]$noTcpThrew)
-    if ($null -ne $script:SavedNetstat) { $env:ENVPROXY_NETSTAT = $script:SavedNetstat } else { Remove-Item Env:ENVPROXY_NETSTAT -ErrorAction SilentlyContinue }
-    Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
-    Remove-Variable -Name NetstatStub -Scope Global -ErrorAction SilentlyContinue
 }
+# 一条 TCP 行都没有：拿到的根本不是 netstat 输出，必须拒绝。
+$noTcpThrew = $false
+try { [void](ConvertFrom-NetstatOutput @('  Proto Local Foreign State PID')) } catch { $noTcpThrew = $true }
+Assert-Eq 'output without a single TCP row is refused instead of reported as empty' '1' ([int]$noTcpThrew)
+# 空输出同样是"读不出来"，不是"没有端口"。
+$emptyThrew = $false
+try { [void](ConvertFrom-NetstatOutput @()) } catch { $emptyThrew = $true }
+Assert-Eq 'empty output is refused instead of reported as empty' '1' ([int]$emptyThrew)
+# 正常输出：IPv4 与 IPv6 都要认，非监听行要丢掉。
+$goodLines = @(
+    '',
+    'Active Connections',
+    '',
+    '  Proto  Local Address          Foreign Address        State           PID',
+    '  TCP    0.0.0.0:22             0.0.0.0:0              LISTENING       8052',
+    '  TCP    127.0.0.1:7078         0.0.0.0:0              LISTENING       4416',
+    '  TCP    [::]:135               [::]:0                 LISTENING       2160',
+    '  TCP    [::1]:7890             [::]:0                 LISTENING       9001',
+    '  TCP    127.0.0.1:50000        127.0.0.1:7078         ESTABLISHED     4416',
+    '  UDP    0.0.0.0:500              *:*                                    1234'
+)
+$parsed = @(ConvertFrom-NetstatOutput $goodLines)
+Assert-Eq 'a real netstat block yields only the listening sockets' '4' $parsed.Count
+Assert-Eq 'IPv4 loopback keeps its address' '1' ([int](@($parsed | Where-Object { $_.LocalAddress -eq '127.0.0.1' -and $_.LocalPort -eq 7078 }).Count))
+Assert-Eq 'IPv6 loopback keeps its address' '1' ([int](@($parsed | Where-Object { $_.LocalAddress -eq '::1' -and $_.LocalPort -eq 7890 }).Count))
+Assert-Eq 'the any-address IPv6 form is kept' '1' ([int](@($parsed | Where-Object { $_.LocalAddress -eq '::' -and $_.LocalPort -eq 135 }).Count))
+Assert-Eq 'an established connection is not a listener' '0' ([int](@($parsed | Where-Object { $_.LocalPort -eq 50000 }).Count))
+Assert-Eq 'the parse carries the owning pid when the row has one' '4416' (@($parsed | Where-Object { $_.LocalPort -eq 7078 })[0].OwningProcess)
 
 # The enumeration has to agree with the system: a port that is really listening must be found,
 # and a port that is not must not be. This is the one check that would catch a parse that
@@ -942,18 +974,22 @@ Assert-Eq '用法判定：一次给两个命令要拒' '真' (Usage-Rejected (Ge
 # ------------------------------------------------------------------------------
 # 读不出来却被当成空表，状态机会判 off -> 把用户的代理环境变量删掉。
 # 两侧的判据必须一样：枚举失败要传上去，状态机据此沿用上一状态。
-if ($env:OS -eq 'Windows_NT') {
-    # 同上：换成按名字找，才会用到下面这两个函数桩。
-    $script:SavedNetstat2 = $env:ENVPROXY_NETSTAT
-    $env:ENVPROXY_NETSTAT = 'netstat.exe'
-    function global:netstat.exe { throw "netstat is not available" }
-    function global:Get-NetTCPConnection { throw "Get-NetTCPConnection is not recognized" }
+# 枚举失败时状态必须是"不知道"，不是 off——这一条与"哪一层失败"无关，所以直接
+# 覆盖枚举函数本身来制造失败，而不是给 netstat 打桩。
+#
+# 为什么不再打 netstat 的桩：取值现在是三层（进程内 .NET API / netstat / WMI）。
+# 桩只能盖住后两层，第一层照样会返回真数据，于是"模拟失败"根本没发生，
+# 这条断言就会假绿（或者像刚才那样反过来红）。覆盖最外层的枚举函数，
+# 才是"无论内部怎么实现都会失败"的确定性做法。
+$script:SavedEnum = ${function:Get-ListeningTcpConnections}
+try {
+    function Get-ListeningTcpConnections { throw "simulated: every enumeration path failed" }
     $script:CachedPort = $null
     $unknownState = Get-CurrentState
     Assert-Eq '端口枚举失败时状态是"不知道"而不是 off' 'unknown' $unknownState
-    if ($null -ne $script:SavedNetstat2) { $env:ENVPROXY_NETSTAT = $script:SavedNetstat2 } else { Remove-Item Env:ENVPROXY_NETSTAT -ErrorAction SilentlyContinue }
-    Remove-Item function:global:netstat.exe -ErrorAction SilentlyContinue
-    Remove-Item function:global:Get-NetTCPConnection -ErrorAction SilentlyContinue
+} finally {
+    Set-Item -Path Function:Get-ListeningTcpConnections -Value $script:SavedEnum
+    Remove-Variable -Name SavedEnum -Scope Script -ErrorAction SilentlyContinue
 }
 
 # ------------------------------------------------------------------------------
@@ -1771,6 +1807,14 @@ foreach ($fn in @('Show-Status')) {
 # 还原跑之前记下的环境（见文件开头那段守卫）：自检不该改变调用它的那个 shell 的状态。
 foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $__savedProxy[$__n], 'Process') }
 if ($null -ne $__savedTerm) { $env:ENVPROXY_TERM = $__savedTerm } else { Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue }
+
+# 测试结束：删掉临时日志目录，并把 $LogFile 还原。
+try {
+    if ($script:TestLogDir -and (Test-Path -LiteralPath $script:TestLogDir)) {
+        Remove-Item -LiteralPath $script:TestLogDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($script:SavedLogFile) { $LogFile = $script:SavedLogFile }
+} catch {}
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
