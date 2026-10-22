@@ -133,13 +133,22 @@ EnvProxy 自动维护这组设置。翻墙软件开着，它把代理地址写�
 
 每一小节都能单独看，不用按顺序读。
 
-先认一下你在用哪个终端，三者的写法完全不同：
+先认一下你在用哪个终端。四种写法不一样，命令也不一样：
 
-| 提示符长这样 | 你是 | 举例 |
+| 提示符长这样 | 你用的是 | 怎么打开 |
 |---|---|---|
-| `PS C:\...>` | PowerShell | 开始菜单搜 PowerShell、Windows Terminal、VS Code 终端 |
-| `C:\...>` | cmd（命令提示符） | 手动打开「命令提示符」 |
-| `名字@主机 $` | Git Bash / Mac 终端 | Git Bash、macOS 的「终端」App |
+| `PS C:\...>` | PowerShell（Windows 自带） | 开始菜单搜 PowerShell |
+| `C:\...>` | cmd（命令提示符，Windows 自带） | 开始菜单搜「命令提示符」 |
+| `名字@主机 MINGW64 ~ $` | Git Bash（**Windows 上的** bash） | 开始菜单搜 Git Bash |
+| `名字@主机 ~ %` | Mac 的「终端」（默认是 zsh） | 启动台搜「终端」 |
+
+三个容易搞混的地方：
+
+- **Git Bash 是 Windows 的东西**，装 Git for Windows 时一起装的，Mac 上没有这个名字。它和 Mac 的终端都用 bash 那套写法，所以下面经常合在一起讲。
+- **Mac 的「终端」默认不是 bash 是 zsh**，提示符结尾是 `%` 而不是 `$`。写法和 bash 一样，按下面的命令敲就行。
+- Windows Terminal 只是「装终端窗口的壳」，里面开的是 PowerShell、cmd 还是 Git Bash 由你选——它本身不是一种终端。
+
+**会自动跟随的**：PowerShell、Git Bash、Mac 终端（zsh 和 bash 都行）。**不会的**：cmd（没有钩子可用）和 fish（Mac 上另一个 shell，钩子读不到它）。
 
 ### 3.1 已经开着的窗口，敲一下回车就更新
 
@@ -177,7 +186,7 @@ EnvProxy 跟着翻墙软件走：软件连上，终端就用代理；软件断�
 $env:ENVPROXY_TERM = 'off'
 ```
 
-**Git Bash**
+**Git Bash / Mac 终端**
 
 ```
 export ENVPROXY_TERM=off
@@ -214,7 +223,7 @@ unset 大写的那个清不掉小写的，Git Bash 里的 curl 认小写，照�
 | 窗口 | 命令 |
 |---|---|
 | PowerShell | `Remove-Item Env:ENVPROXY_TERM` |
-| Git Bash | `unset ENVPROXY_TERM` |
+| Git Bash / Mac 终端 | `unset ENVPROXY_TERM` |
 | cmd | 重开一个窗口 |
 
 这些改动只在这个窗口有效，窗口一关就没了。
@@ -489,6 +498,8 @@ Mac 侧多一条：**`launchctl` 的环境变量在登录和重启时清空**，
 ### 12.1 与 Windows 版的区别
 
 Windows 写注册表并广播通知，Mac 写 `~/.envproxy/proxy.env` 并调用 `launchctl setenv`。两条路径同时更新，看到的行为一致。
+
+终端这边，Mac 的默认 shell 是 `zsh`（macOS 10.15 起），系统里也留着 `bash` 3.2。**两个都支持**：安装时往 `.zshenv`/`.zshrc` 和 `.bash_profile`/`.bashrc` 里各放一行，用哪种 shell 都会跟上。`fish` 不支持——它不读这些文件。
 
 <img src="./assets/readme/mac-paths.svg" width="100%" alt="macOS 双路写入：终端读取 ~/.envproxy/proxy.env，从 Dock 启动的程序读取 launchctl 环境变量，两条路径同时更新">
 

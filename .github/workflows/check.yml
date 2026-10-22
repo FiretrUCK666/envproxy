@@ -1349,11 +1349,17 @@ jobs:
             Write-Host '提示：Windows 上跑 Mac 自检需要可用的 bash（Git Bash 或装了发行版的 WSL）。'
             Write-Host '      若 bash 指向 C:\WINDOWS\system32\bash.exe 且没有发行版，这一步会失败。'
           }
-          $winOut = pwsh -NoProfile -File tests/test-win-pure.ps1
+          # 子进程的 stderr 必须一起收：自检崩溃时错误信息就在 stderr 里。
+          # 只收 stdout 会把"静默 exit 1"变成一条没有任何线索的红灯——这段时间就是这么被耽误的。
+          $winOut = pwsh -NoProfile -File tests/test-win-pure.ps1 2>&1
           $winRc = $LASTEXITCODE
           $winOut | Write-Host
-          if ($winRc -ne 0) { Write-Host ("Win 功能自检失败，退出码 {0}" -f $winRc); exit 1 }
-          $macOut = & $bashPath mac/envproxy.sh self-test
+          if ($winRc -ne 0) {
+            Write-Host ("Win 功能自检失败，退出码 {0}" -f $winRc)
+            $winOut | Select-Object -Last 12 | ForEach-Object { Write-Host ('  | ' + $_) }
+            exit 1
+          }
+          $macOut = & $bashPath mac/envproxy.sh self-test 2>&1
           $macRc = $LASTEXITCODE
           $macOut | Write-Host
           if ($macRc -ne 0) { Write-Host ("Mac 功能自检失败，退出码 {0}" -f $macRc); exit 1 }

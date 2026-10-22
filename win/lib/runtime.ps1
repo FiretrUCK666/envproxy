@@ -1274,9 +1274,9 @@ function Run-MonitorLoop {
                 try {
                     $pr = Install-ShellProfile
                     if ($pr.Reason -eq 'installed') {
-                        Write-MonitorLog "已自动更新终端同步钩子（配置块内容与当前版本不一致）"
+                        Write-MonitorLog "已自动更新终端同步（配置块内容与当前版本不一致）"
                     } elseif ($pr.Reason -eq 'unpaired') {
-                        Write-MonitorLog ("终端同步钩子未更新：配置文件里的标记不成对，未改动它：" + $pr.Path)
+                        Write-MonitorLog ("终端同步没有更新：配置文件里的标记不成对，没动它：" + $pr.Path)
                     }
                 } catch {}
                 # 变量自检：Apply-State 只在状态翻转时动手，稳态下它永远不会被调用，

@@ -83,7 +83,7 @@ function Install-EnvProxy {
     $prof = $null
     try { $prof = Install-ShellProfile } catch { $prof = [pscustomobject]@{ Reason = "error"; Path = "" } }
     switch ($prof.Reason) {
-        'installed'  { Write-Host "[4/4] 终端同步：已在 PowerShell 和 Git Bash 的配置文件里写入钩子" -ForegroundColor Green }
+        'installed'  { Write-Host "[4/4] 终端同步：已写进 PowerShell 和 Git Bash 的配置文件" -ForegroundColor Green }
         'current'    { Write-Host "[4/4] 终端同步：已是最新（PowerShell 与 Git Bash 都已在位）" -ForegroundColor Green }
         'no-profile' { Write-Host "[4/4] 终端同步：取不到 $PROFILE 路径，跳过（新窗口仍会生效）" -ForegroundColor Yellow }
         'unpaired'   {
@@ -119,9 +119,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     # 只摘我们那一块，用户 profile 里其余内容一字不动（不成对时一个字节都不改）。
     $profRm = Remove-ShellProfile
     if ($profRm.Ok) {
-        if ($profRm.Reason -eq 'removed') { Write-Host "终端同步：已从 PowerShell 和 Git Bash 的配置文件里移除钩子" -ForegroundColor Green }
+        if ($profRm.Reason -eq 'removed') { Write-Host "终端同步：已从 PowerShell 和 Git Bash 的配置文件里移除" -ForegroundColor Green }
     } else {
-        Write-Host ("终端同步：未能移除钩子（" + $profRm.Reason + "），可手动删除下面文件里 EnvProxy 标记的那几行：") -ForegroundColor Yellow
+        Write-Host ("终端同步：没能移除（" + $profRm.Reason + "），可手动删掉下面文件里 EnvProxy 标记的那几行：") -ForegroundColor Yellow
         Write-Host ("  " + $profRm.Path) -ForegroundColor DarkGray
     }
     # 顺序是定的：先清我们写的值，再按快照还用户原值。
@@ -604,7 +604,7 @@ function Get-HelpTopics {
                 '     启动时读到的就是当前状态，什么都不用做。',
                 '',
                 '  2. 装完之后打开的窗口，后来代理又变了',
-                '     按一次回车即可。',
+                '     按一次回车即可（cmd 窗口只能重开，见下面第 3 条）。',
                 '',
                 '  3. 装之前就已经开着的窗口',
                 '     同步代码还没装进去。PowerShell 输入下面这条，或者重开窗口：',
@@ -633,7 +633,7 @@ function Get-HelpTopics {
                 '  cmd 没有这个开关，自己把 5 个变量清掉（& 两边别留空格）：',
                 '      set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
                 '',
-                '  别用 unset HTTP_PROXY：钩子写进 Git Bash 的是小写拼写，',
+                '  别用 unset HTTP_PROXY：我们写进 Git Bash 的是小写拼写，',
                 '  unset 大写的清不掉小写，curl 照样走代理，下个提示符还会写回来。',
                 '',
                 '二、恢复自动跟随',

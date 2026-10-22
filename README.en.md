@@ -134,13 +134,20 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 Each subsection stands on its own; there is no need to read them in order.
 
-First, work out which terminal you are in. The three differ completely:
+First, work out which terminal you are in. The four take different commands:
 
-| Prompt looks like | You are in | Examples |
+| Prompt looks like | What you are using | How to open it |
 |---|---|---|
-| `PS C:\...>` | PowerShell | Start menu search, Windows Terminal, VS Code terminal |
-| `C:\...>` | cmd (Command Prompt) | Opening Command Prompt by hand |
-| `name@host $` | Git Bash / Mac Terminal | Git Bash, macOS Terminal app |
+| `PS C:\...>` | PowerShell (ships with Windows) | Start menu, search PowerShell |
+| `C:\...>` | cmd (Command Prompt, ships with Windows) | Start menu, search Command Prompt |
+| `name@host MINGW64 ~ $` | Git Bash (a bash shell **on Windows**) | Start menu, search Git Bash |
+| `name@host ~ %` | Mac Terminal (zsh by default) | Launchpad, search Terminal |
+
+Three things that trip people up:
+
+- **Git Bash is a Windows thing.** It comes with Git for Windows; there is no such name on a Mac. It and the Mac Terminal both use bash-style syntax, which is why the sections below often cover them together.
+- **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
+- Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
 
 ### 3.1 A window you already have open needs one Enter press
 
@@ -178,7 +185,7 @@ To keep **this one window** off the proxy, set a switch inside it.
 $env:ENVPROXY_TERM = 'off'
 ```
 
-**Git Bash**
+**Git Bash / Mac Terminal**
 
 ```
 export ENVPROXY_TERM=off
@@ -213,7 +220,7 @@ Leave no spaces around `&`. A space makes the value a single space instead of em
 | Window | Command |
 |---|---|
 | PowerShell | `Remove-Item Env:ENVPROXY_TERM` |
-| Git Bash | `unset ENVPROXY_TERM` |
+| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` |
 | cmd | Reopen the window |
 
 These changes only live in that window. Close it and they are gone.
@@ -488,6 +495,8 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 ### 12.1 Difference from the Windows version
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
+
+On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped. **Both are supported**: the installer drops one line into `.zshenv`/`.zshrc` and into `.bash_profile`/`.bashrc`, so either shell follows along. `fish` is not supported: it does not read those files.
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="macOS writes two paths: terminals read ~/.envproxy/proxy.env, and programs launched from the Dock read the launchctl environment; both paths are updated together">
 

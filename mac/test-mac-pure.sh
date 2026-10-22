@@ -66,6 +66,18 @@ _selftest_assert_contains() {
 # 加载代价实测可忽略：7 个库全部点源共 40ms（shell 只解析函数定义，不执行函数体）。
 
 self_test() {
+    # 自检**不能**跑在 `set -eu` 下面。
+    #
+    # 入口为了自己在运行期"任何意外都别硬撑"开了 set -u；但同一套选项套在测试上就变成
+    # 反效果：任何一处意外的非零——包括某个被测函数内部的临时失败——都会让**整个套件
+    # 静默中止**，日志停在一句 PASS 后面，既没有 FAIL 也没有错误信息。真实症状：
+    # CI 上跑到一半就 exit 1，本地（Git Bash）却全绿，两边都看不出是哪一步出的问题。
+    # 测试的职责是把问题**报出来**，不是自己先倒下。所以这里显式关掉，并且留一个
+    # 兜底 trap：真有人再让 shell 中途退出，也要在日志里点出是哪一行。
+    set +eu
+    _selftest_done=0
+    # shellcheck disable=SC2064
+    trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检在第 ${LINENO} 行意外中止（退出码 $?）"; fi' EXIT
     _selftest_fails=0
     _sandbox=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_selftest.XXXXXX" 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
     # 运行期改道：HOME 管 hook 落点，ENVPROXY_HOME 管 proxy.env/快照，MONITOR_DIR 管日志。
@@ -1220,6 +1232,8 @@ EOF
     _selftest_assert_eq "接线：去抖比的是常量" 1 "$([ "$_w5" -ge 1 ] && echo 1 || echo 0)"
 
     rm -rf "$_sandbox" 2>/dev/null || true
+    _selftest_done=1
+    trap - EXIT
     if [ "$_selftest_fails" -eq 0 ]; then
         echo "自检全部通过"
         return 0
