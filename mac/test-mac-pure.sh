@@ -371,14 +371,42 @@ self_test() {
     _selftest_assert_eq "还原后快照删除" "0" "$_s6"
 
     echo "[4b] 快照归属判定"
-    # "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
-    # 首次安装时把使用者的手设变量当成我们的跳过，卸载时会被删掉又无从还原。
+    # "像我们写的"不够——还要能分辨"这到底是不是我们写下的"。
+    # 判据有两条，优先级由硬到软：
+    #   1) 归属记录（owned.env）里逐字记着这个值  → 一定是我们的，永远不进快照
+    #   2) 机器上已有安装记录 + 形状像本机地址      → 可能是我们上次写下的，跳过
+    # 第 1 条排在最前，因为第 2 条的推断前提（"首次安装时机器上还没有我们的东西"）
+    # 在卸载没清干净时不成立——残留值会在下一次全新安装时被当成使用者的、存进快照、
+    # 再按快照还原，于是永远清不掉（Windows 侧实测踩过，这边同一套机制同一个洞）。
+    #
+    # 这一组必须在**已知的 owned.env 状态**下跑：先记下真实文件、单独造一份受控的，
+    # 跑完还原。不这样做的话，同一条断言在"装过的机器"和"干净的机器"上会得出相反结论。
+    _sk_owned_backup=""
+    if [ -f "$OWNED_ENV" ]; then
+        _sk_owned_backup="$OWNED_ENV.testbak.$$"
+        cp "$OWNED_ENV" "$_sk_owned_backup" 2>/dev/null || _sk_owned_backup=""
+    fi
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    # 空记录：首次安装时，形状像本机地址的也得进快照（否则把使用者的手设值删掉）
+    : > "$OWNED_ENV" 2>/dev/null
     if snapshot_skip_value HTTP_PROXY 'http://127.0.0.1:7890' 1; then _sk1=1; else _sk1=0; fi
-    _selftest_assert_eq "首次安装：本机地址要快照" "0" "$_sk1"
+    _selftest_assert_eq "首次安装且无记录：本机地址要快照" "0" "$_sk1"
     if snapshot_skip_value NODE_USE_ENV_PROXY 1 1; then _sk2=1; else _sk2=0; fi
-    _selftest_assert_eq "首次安装：NODE_USE_ENV_PROXY=1 要快照" "0" "$_sk2"
+    _selftest_assert_eq "首次安装且无记录：NODE_USE_ENV_PROXY=1 要快照" "0" "$_sk2"
+    # 有记录：那个值是我们的，即使是首次安装也不进快照
+    printf 'HTTP_PROXY\thttp://127.0.0.1:7890\nNODE_USE_ENV_PROXY\t1\n' > "$OWNED_ENV" 2>/dev/null
+    if snapshot_skip_value HTTP_PROXY 'http://127.0.0.1:7890' 1; then _sk2b=1; else _sk2b=0; fi
+    _selftest_assert_eq "首次安装但有记录：那个值不进快照" "1" "$_sk2b"
+    if snapshot_skip_value NODE_USE_ENV_PROXY 1 1; then _sk2c=1; else _sk2c=0; fi
+    _selftest_assert_eq "首次安装但有记录：NODE_USE_ENV_PROXY=1 不进快照" "1" "$_sk2c"
+    # 重装（非首次）：形状像本机地址的跳过
     if snapshot_skip_value https_proxy 'http://127.0.0.1:7890' 0; then _sk3=1; else _sk3=0; fi
     _selftest_assert_eq "重装：本机地址是我们上次写的，跳过" "1" "$_sk3"
+    # 还原真实文件
+    rm -f "$OWNED_ENV" 2>/dev/null || true
+    if [ -n "$_sk_owned_backup" ] && [ -f "$_sk_owned_backup" ]; then
+        mv "$_sk_owned_backup" "$OWNED_ENV" 2>/dev/null || true
+    fi
     if snapshot_skip_value NODE_USE_ENV_PROXY 1 0; then _sk4=1; else _sk4=0; fi
     _selftest_assert_eq "重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过" "1" "$_sk4"
     if snapshot_skip_value HTTP_PROXY 'http://10.0.0.1:8080' 0; then _sk5=1; else _sk5=0; fi
@@ -750,6 +778,38 @@ self_test() {
         esac
         _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"
     done
+    # 快照归属：归属记录里有的值，即使是"首次安装"也不该进快照。
+    #
+    # 为什么：首次安装的推断前提是"机器上还没有我们的东西"，而卸载没清干净时
+    # 那个前提不成立——残留的本机地址代理值会在下一次全新安装时被当成使用者的、
+    # 存进快照、再按快照还原，于是永远清不掉（Windows 侧实测踩过，
+    # ALL_PROXY 与 NODE_USE_ENV_PROXY 活过了两次卸载）。两边同一套机制，同一个洞。
+    #
+    # 这一组要在受控的 owned.env 下跑：先备份真实文件、单独造一份，跑完还原。
+    # 不这样做的话，同一条断言在"装过的机器"和"干净的机器"上会得出相反结论。
+    _ss_owned_backup=""
+    if [ -f "$OWNED_ENV" ]; then
+        _ss_owned_backup="$OWNED_ENV.testbak.$$"
+        cp "$OWNED_ENV" "$_ss_owned_backup" 2>/dev/null || _ss_owned_backup=""
+    fi
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    printf 'HTTP_PROXY\thttp://127.0.0.1:7890\nNODE_USE_ENV_PROXY\t1\n' > "$OWNED_ENV" 2>/dev/null
+    if snapshot_skip_value HTTP_PROXY "http://127.0.0.1:7890" 1; then _ss1=1; else _ss1=0; fi
+    _selftest_assert_eq "首次安装：归属记录里有的值不进快照" "1" "$_ss1"
+    if snapshot_skip_value NODE_USE_ENV_PROXY "1" 1; then _ss2=1; else _ss2=0; fi
+    _selftest_assert_eq "首次安装：NODE_USE_ENV_PROXY=1 在记录里，不进快照" "1" "$_ss2"
+    # 记录里没有的值：首次安装时只可能是使用者自己设的，必须进快照（否则丢配置）。
+    if snapshot_skip_value HTTPS_PROXY "http://127.0.0.1:9999" 1; then _ss3=1; else _ss3=0; fi
+    _selftest_assert_eq "首次安装：记录里没有的本机地址仍算使用者的" "0" "$_ss3"
+    # 别人的代理地址从来不跳过。
+    if snapshot_skip_value HTTP_PROXY "http://10.0.0.1:8080" 0; then _ss4=1; else _ss4=0; fi
+    _selftest_assert_eq "别人的代理地址从来不跳过" "0" "$_ss4"
+    # 还原真实文件。
+    rm -f "$OWNED_ENV" 2>/dev/null || true
+    if [ -n "$_ss_owned_backup" ] && [ -f "$_ss_owned_backup" ]; then
+        mv "$_ss_owned_backup" "$OWNED_ENV" 2>/dev/null || true
+    fi
+
     # 失败后要不要"换个出口再试一次"，判据只有一条：这个失败是不是由出口决定的。
     # 与 Windows 侧 Test-RetryWithProxy 同一批结论（门禁 6 再核一次两侧同形）。
     # 判错的代价不对称：该换不换（quota）只能去走更慢的兜底——实测直连配额用尽时

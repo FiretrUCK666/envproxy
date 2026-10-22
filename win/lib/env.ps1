@@ -334,10 +334,47 @@ function Test-ProxyVarsPresent {
 # 卸载时会被删掉又无从还原——用了几年的手设配置就这么凭空没了。
 function Test-SnapshotSkip([string]$Name, [string]$Value, [bool]$FirstInstall) {
     if (-not $Value) { return $false }
+    # 归属记录里逐字记着这个值 = 这就是我们自己写下的，永远不是使用者的原值。
+    # 这一条必须排在"首次安装"之前，因为它比那个推断更硬：
+    # 首次安装的推断前提是"机器上还没有我们的东西"，而**卸载没清干净时那个前提不成立**——
+    # 残留的本机地址代理值会在下一次全新安装时被当成使用者的、存进快照、再按快照还原，
+    # 于是永远清不掉。实测踩过：ALL_PROXY 与 NODE_USE_ENV_PROXY 两项就这样活过了两次卸载，
+    # 卸载每次都报"已恢复到安装前的状态"。
+    #
+    # 判据是**值相等**（对 NO_PROXY 是逐项被默认集覆盖），不是"快照里记过这个名字"——
+    # 后者是 Test-SnapshotRecorded 的语义，它回答的是"使用者的地盘里有没有这个名字"，
+    # 拿它来判归属会把使用者的公司代理也判成我们的（那样他就永久丢了自己的配置）。
+    # 归属记录记的才是"我们写下过哪些值"，与终端钩子用的是同一份记录。
+    if (Test-IsOurOwnedValue $Name $Value) { return $true }
     if ($FirstInstall) { return $false }
     if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
     if ($Name -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) { return (Test-LoopbackProxyUrl $Value) }
     return $false
+}
+
+# 这个值是不是"我们写下过的那个"（只查归属记录，不查快照）。
+# 与 Test-SnapshotRecorded 的区别要说清，两者答的不是同一个问题：
+#   Test-SnapshotRecorded  "使用者装之前有没有设过这个名字"——有就是他的地盘，我们永不删
+#   本函数                "这个值是不是我们自己写下来的"——是就不该进快照
+# 混用会把使用者的配置当成我们的（丢配置），或把我们的当成使用者的（永远清不掉）。
+function Test-IsOurOwnedValue([string]$Name, [string]$Value) {
+    try {
+        if (-not (Test-RegKey $OwnedRegKey)) { return $false }
+        $k = Get-Item -LiteralPath $OwnedRegKey -ErrorAction SilentlyContinue
+        if (-not $k) { return $false }
+        $rec = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        if ($null -eq $rec) { return $false }
+        if ($Name -eq "NO_PROXY") {
+            # NO_PROXY 是"逐项合并"的：只有当前值里每一项都还在我们记下的那份里，
+            # 才说明整份都是我们写的。多出来的条目是使用者自己加的，那就不是我们的。
+            $recSet = Get-NormalizedNoProxyEntries ([string]$rec)
+            foreach ($e in (Get-NormalizedNoProxyEntries $Value)) {
+                if (-not ($recSet -contains $e)) { return $false }
+            }
+            return $true
+        }
+        return ([string]$rec -eq [string]$Value)
+    } catch { return $false }
 }
 
 # 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
@@ -377,6 +414,12 @@ function Restore-PrevEnv {
         $plain = @{}
         foreach ($n in $ProxyVarNames) {
             $bak = Get-PrevEnvRaw $n
+            # 快照里这一条如果就是"我们写下过的那个值"，它从来不是使用者的原值——
+            # 不能还原回去。老版本的快照确实可能存着这种条目（首次安装时把本机地址的
+            # 代理值也一起存了），还原它等于把我们的东西当成他的配置装回去：
+            # 卸载报"已恢复原状"，而 ALL_PROXY / NODE_USE_ENV_PROXY 一直留着。
+            # 这条判断在还原侧做，所以**已经存在的坏快照也会被自愈**，不用等用户重装。
+            if ($null -ne $bak -and (Test-IsOurOwnedValue $n ([string]$bak))) { continue }
             if ($null -ne $bak) {
                 $kindName = Get-PrevEnvRaw ("{0}__Kind" -f $n)
                 if ($kindName -eq "ExpandString") {

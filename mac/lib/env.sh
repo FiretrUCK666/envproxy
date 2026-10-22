@@ -210,6 +210,19 @@ sync_user_env_vars() {
 # 卸载时会被删掉又无从还原——用了几年的手设配置就这么凭空没了。
 snapshot_skip_value() {
     [ -n "$2" ] || return 1
+    # 归属记录里逐字记着这个值 = 这就是我们自己写下的，永远不是使用者的原值。
+    # 这一条必须排在"首次安装"之前，因为它比那个推断更硬：
+    # 首次安装的推断前提是"机器上还没有我们的东西"，而**卸载没清干净时那个前提不成立**——
+    # 残留的本机地址代理值会在下一次全新安装时被当成使用者的、存进快照、再按快照还原，
+    # 于是永远清不掉。Windows 侧实测踩过（ALL_PROXY 与 NODE_USE_ENV_PROXY 活过了两次卸载），
+    # 这边是同一套机制，同一个洞。
+    # 与 Windows 侧 Test-IsOurOwnedValue 同判据：查 owned.env，不是查快照。
+    # 查快照会问错问题——那问的是"使用者的地盘里有没有这个名字"，拿它判归属
+    # 会把使用者的公司代理也判成我们的，那样他就永久丢了自己的配置。
+    _ssv_owned=$(awk -F'\t' -v k="$1" '$1 == k { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+    if [ -n "$_ssv_owned" ]; then
+        [ "$_ssv_owned" = "$2" ] && return 0
+    fi
     [ "$3" = "1" ] && return 1
     case "$1" in
         NODE_USE_ENV_PROXY) [ "$2" = "1" ] && return 0 ;;
@@ -256,6 +269,13 @@ restore_prev_env() {
     [ -f "$PREV_ENV" ] || return 0
     while IFS='	' read -r _k _v; do
         [ -n "$_k" ] || continue
+        # 快照里这一条如果就是"我们写下过的那个值"，它从来不是使用者的原值——
+        # 不能还原回去。老版本的快照确实可能存着这种条目（首次安装时把本机地址的
+        # 代理值也一起存了），还原它等于把我们的东西当成他的配置装回去：
+        # 卸载报"已恢复原状"，而值一直留着。
+        # 这条判断在还原侧做，所以**已经存在的坏快照也会被自愈**，不用等用户重装。
+        _rpe_owned=$(awk -F'	' -v k="$_k" '$1 == k { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+        if [ -n "$_rpe_owned" ] && [ "$_rpe_owned" = "$_v" ]; then continue; fi
         if [ -n "$_v" ]; then launchctl setenv "$_k" "$_v" 2>/dev/null || true
         else launchctl unsetenv "$_k" 2>/dev/null || true; fi
     done < "$PREV_ENV" 2>/dev/null || true

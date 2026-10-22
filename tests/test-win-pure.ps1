@@ -1057,12 +1057,61 @@ Assert-Eq '监控判据认不得命令行中间提到脚本的进程' $false ('p
 # ------------------------------------------------------------------------------
 # "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
 # 首次安装时把使用者的手设变量当成我们的跳过，卸载时会被删掉又无从还原。
-Assert-Eq '首次安装：本机地址的代理变量要快照' $false (Test-SnapshotSkip 'HTTP_PROXY' 'http://127.0.0.1:7890' $true)
-Assert-Eq '首次安装：NODE_USE_ENV_PROXY=1 要快照' $false (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $true)
-Assert-Eq '重装：本机地址是我们上次写的，跳过' $true (Test-SnapshotSkip 'HTTPS_PROXY' 'http://127.0.0.1:7890' $false)
-Assert-Eq '重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过' $true (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $false)
-Assert-Eq '别人的代理地址从来不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' 'http://10.0.0.1:8080' $false)
-Assert-Eq '空值不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' '' $false)
+# 归属记录优先于"首次安装"这个推断。
+#
+# 为什么必须这样：首次安装的推断前提是"机器上还没有我们的东西"，而**卸载没清干净时
+# 那个前提不成立**。残留的本机地址代理值会在下一次全新安装时被当成使用者的、存进快照、
+# 再按快照还原——于是永远清不掉（实测踩过：ALL_PROXY 与 NODE_USE_ENV_PROXY 两项
+# 就这样活过了两次卸载，而卸载每次都报"已恢复到安装前的状态"）。
+# 归属记录记的是"我们写下过哪些值"，它比推断更硬：记录里有，就一定不是使用者的原值。
+#
+# 这一组断言要在**已知的归属记录状态**下跑：先记下真实记录、单独造一份受控的，
+# 跑完还原。不这样做的话，同一条断言在"装过一次的机器"和"干净机器"上会得出相反结论——
+# 那是最难查的一类红。
+$script:SavedOwned = $null
+$script:SavedOwnedNames = @()
+try {
+    if (Test-RegKey $OwnedRegKey) {
+        $ok0 = Get-Item -LiteralPath $OwnedRegKey -ErrorAction SilentlyContinue
+        if ($ok0) {
+            foreach ($n in $ok0.GetValueNames()) {
+                if ($script:SavedOwned -eq $null) { $script:SavedOwned = @{} }
+                $script:SavedOwned[$n] = $ok0.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $script:SavedOwnedNames += $n
+            }
+        }
+    }
+    # 造一份受控记录：只记 HTTP_PROXY 与 NODE_USE_ENV_PROXY（两个代表值）
+    if (Test-RegKey $OwnedRegKey) { Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -Path $OwnedRegKey -Force | Out-Null
+    Set-ItemProperty -Path $OwnedRegKey -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:7890'
+    Set-ItemProperty -Path $OwnedRegKey -Name 'NODE_USE_ENV_PROXY' -Value '1'
+
+    # 归属记录里有的值：即使是"首次安装"，也不该进快照（否则卸载还原时又装回去）。
+    Assert-Eq '首次安装：归属记录里有的值不进快照' $true (Test-SnapshotSkip 'HTTP_PROXY' 'http://127.0.0.1:7890' $true)
+    Assert-Eq '首次安装：NODE_USE_ENV_PROXY=1 在记录里，不进快照' $true (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $true)
+    # 归属记录里没有的值：首次安装时它只可能是使用者自己设的，必须进快照（否则丢配置）。
+    Assert-Eq '首次安装：记录里没有的本机地址仍算使用者的' $false (Test-SnapshotSkip 'HTTPS_PROXY' 'http://127.0.0.1:9999' $true)
+    # 别人的代理地址从来不跳过（与记录无关）。
+    Assert-Eq '别人的代理地址从来不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' 'http://10.0.0.1:8080' $false)
+    Assert-Eq '空值不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' '' $false)
+
+    # 清掉记录，验证"重装时靠形状判"那条老规则仍然成立（记录缺失时的降级）。
+    Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    Assert-Eq '重装：本机地址是我们上次写的，跳过' $true (Test-SnapshotSkip 'HTTPS_PROXY' 'http://127.0.0.1:7890' $false)
+    Assert-Eq '重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过' $true (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $false)
+} finally {
+    # 还原真实归属记录：这一组断言不该改动这台机器上的安装状态。
+    Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    if ($script:SavedOwnedNames.Count -gt 0) {
+        New-Item -Path $OwnedRegKey -Force | Out-Null
+        foreach ($n in $script:SavedOwnedNames) {
+            Set-ItemProperty -Path $OwnedRegKey -Name $n -Value $script:SavedOwned[$n] -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Variable -Name SavedOwned -Scope Script -ErrorAction SilentlyContinue
+    Remove-Variable -Name SavedOwnedNames -Scope Script -ErrorAction SilentlyContinue
+}
 
 # ------------------------------------------------------------------------------
 # [11] 注册表判断：文件系统那套对 HKCU:\ 永远说"不存在"
