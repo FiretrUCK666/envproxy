@@ -732,6 +732,39 @@ jobs:
               }
             }
           }
+          # 表格宽度上限：超过 110 个显示列，GitHub 上就要横向拖动才能读完一行。
+          # 本项目的 README 面向"注意力容易被拉走"的读者，横向滚动是最劝退的形态之一
+          # （一行看不到尾，眼睛要靠拖滚动条记住位置）。实测过最宽的行到过 354 列。
+          # 宽度按"中日韩字符算 2 列"计，与代码里的显示宽度判据同源。
+          foreach ($f in @('README.md', 'README.en.md')) {
+            $pp = $f
+            if (-not (Test-Path -LiteralPath $pp)) { continue }
+            $ln = 0
+            foreach ($line in [System.IO.File]::ReadAllLines($pp, [System.Text.Encoding]::UTF8)) {
+              $ln++
+              if ($line -notmatch '^\|') { continue }
+              $w = 0
+              foreach ($ch in $line.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 2 } else { $w += 1 } }
+              if ($w -gt 110) { Write-Host ("{0}:{1} 表格行宽 {2} 列（上限 110），GitHub 上要横向拖动才能读" -f $f, $ln, $w); $fail = 1 }
+            }
+          }
+          # 散文段上限：连续 6 行以上的纯文本（不是表格、不是列表、不是代码块）在屏幕上
+          # 就是一大片密集文字，读两句就跟丢。该拆成小标题或列表。
+          foreach ($f in @('README.md', 'README.en.md')) {
+            $pp = $f
+            if (-not (Test-Path -LiteralPath $pp)) { continue }
+            $lines2 = [System.IO.File]::ReadAllLines($pp, [System.Text.Encoding]::UTF8)
+            $run = 0; $start = 0; $fence = $false
+            for ($i = 0; $i -lt $lines2.Count; $i++) {
+              $L = $lines2[$i]
+              if ($L -match '^\s*```') { $fence = -not $fence; $run = 0; continue }
+              if ($fence) { continue }
+              $isText = ($L.Trim() -ne '') -and ($L -notmatch '^(#|\||>|<|\s*[-*]\s|\s*\d+\.\s)')
+              if ($isText) { if ($run -eq 0) { $start = $i + 1 }; $run++ }
+              else { if ($run -ge 6) { Write-Host ("{0}:{1} 起有 {2} 行连续散文（上限 5 行）" -f $f, $start, $run); $fail = 1 }; $run = 0 }
+            }
+            if ($run -ge 6) { Write-Host ("{0}:{1} 起有 {2} 行连续散文（上限 5 行）" -f $f, $start, $run); $fail = 1 }
+          }
           if ($fail) { exit 1 }
           Write-Host '文档一致性通过'
 

@@ -7,13 +7,13 @@ English | [简体中文](./README.md)
 [![license](https://img.shields.io/github/license/FiretrUCK666/envproxy?v=1)](LICENSE)
 [![stars](https://img.shields.io/github/stars/FiretrUCK666/envproxy?v=1)](https://github.com/FiretrUCK666/envproxy/stargazers)
 
-<img src="./assets/readme/hero.en.svg" width="100%" alt="EnvProxy: with the proxy app running, git, npm and curl in your terminal go through it automatically; when you quit it, they return to a direct connection with no extra steps">
+<img src="./assets/readme/hero.en.svg" width="100%" alt="EnvProxy at a glance: the terminal uses the proxy while the app is connected, and goes direct when it is off">
 
 A proxy app covers your browser but not your terminal. `git`, `npm` and `curl` learn the proxy address from a set of settings called "environment variables", and without them they cannot reach the internet.
 
 EnvProxy maintains those settings for you. While the proxy app is running it writes the proxy address in; when you quit it, it removes them. Day to day there are no commands to remember.
 
-<img src="./assets/readme/quickstart.en.svg" width="100%" alt="After installing, only three things matter: a new window needs no action; a window that is already open catches up after one Enter press; if something feels wrong, open the menu and pick 1 Install / Repair, which fixes most problems without touching your own settings">
+<img src="./assets/readme/quickstart.en.svg" width="100%" alt="Three cases after installing: a new window needs nothing, an open one needs one Enter, and menu item 1 repairs most problems">
 
 ## Table of contents
 
@@ -42,9 +42,9 @@ Almost always nothing. Of the three cases below, only the first needs nothing fr
 
 | Your situation | What happens | What you do |
 |---|---|---|
-| **A window or program opened after installing** | It reads the current state when it starts | **Nothing** |
-| **A window kept open, proxy changed later** | The window still holds the old state | Press Enter once (a cmd window has to be reopened) |
-| **A window opened before installing** | The sync code was never loaded into it | Open a new window; to avoid reopening, load it by hand with the command in 3.1 |
+| **Opened after installing** | It reads the state at startup | **Nothing** |
+| **Kept open, proxy changed later** | It still holds the old state | Press Enter (cmd must be reopened) |
+| **Opened before installing** | The sync code was never loaded | Open a new window, or load it as in 3.1 |
 
 ### Why an open window needs one Enter press
 
@@ -68,7 +68,7 @@ Installing does four things: it saves your current variable values (restored on 
 
 Progress is reported as steps 1–4, and each number means the same thing on both platforms: (1) start at login, (2) monitor, (3) variables, (4) terminal sync. Saving your original values happens before step 1, so it has no number of its own.
 
-<img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the package for your platform, double-click the menu and choose 1 Install / Repair, see the monitor started message; below, a side by side comparison: a window opened after the install takes effect right away, and a window that was open before also catches up once you reopen it or load the sync script by hand">
+<img src="./assets/readme/first-run.en.svg" width="100%" alt="The three install steps, and whether an already-open window must be reopened">
 
 If something goes wrong, open the menu and pick **`1 Install / Repair`**. It fixes most problems, does not install a second copy, does not cut your network, and does not lose your settings.
 
@@ -86,18 +86,22 @@ Open the menu and pick **`3 Check for updates`**. It reports the latest version 
 
 Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes the number you pick to the real program; it does not modify any file itself.
 
+> **The menu and the program output are in Chinese.** This table gives the exact label you will see
+> on screen first, then its English meaning: **`5 停止监控`** means **Stop the monitor**.
+> The number is what you type; the label is what you will be looking at.
+
 | Menu item | What it does | What it affects |
 |---|---|---|
 | **Everyday** | | |
-| **1 Install / Repair** | Use it the first time, and whenever something feels wrong | Start at login + terminal sync script + environment variables + background monitor |
-| **2 Show status** | Monitor, proxy, terminal sync, environment variables, version | Read-only, changes nothing |
-| **3 Check for updates** | Explains what changed first, installs only if you agree | Program files only, then the monitor restarts on the new code |
-| **4 Help** | Read it when you forget how something works | Prints text only, changes nothing |
+| **1 Install / Repair** (`安装 / 修复`) | First time, or when in doubt | Startup, sync, vars, monitor |
+| **2 Show status** (`查看状态`) | Monitor, proxy, sync, variables, version | Read-only |
+| **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
+| **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Upkeep** | | |
-| **5 Stop the monitor** | Temporary; it returns at next login | Monitor process + environment variables |
-| **6 Full restore** | Complete uninstall, back to before installing | Everything (log optionally kept) |
+| **5 Stop the monitor** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
+| **6 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
 | **Quit** | | |
-| **0 Quit** | Closes the menu | Nothing |
+| **0 Quit** (`退出`) | Closes the menu | Nothing |
 
 The numbers run top to bottom and are grouped by how often you need them, so there is nothing to memorise.
 
@@ -120,7 +124,7 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
-<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects: install changes start at login, the terminal sync script, environment variables and the background monitor; status is read-only; stop clears the monitor and the environment variables; full restore clears everything but the log; show status and help change nothing; check for updates only when a newer version exists replaces program files and restarts the monitor, and does nothing when already current">
+<img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects">
 
 ### Logs
 
@@ -149,9 +153,17 @@ Three things that trip people up:
 - **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
 - Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
 
-**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (no prompt hook available) and fish (another Mac shell; the hook cannot reach it).
+**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 12.7).
 
 ### 3.1 A window you already have open needs one Enter press
+
+> **A cmd window is the exception: pressing Enter does nothing, you have to reopen it.**
+>
+> cmd has no "run this on every prompt" mechanism, so it follows nothing at all.
+> PowerShell, Git Bash and the Mac Terminal all catch up when you press Enter; cmd does not.
+> If you work in cmd, reopen the window once after installing, and again each time the proxy app switches.
+
+**For every other terminal:**
 
 EnvProxy follows the proxy app: connect it and the terminal uses the proxy; disconnect it and the terminal goes direct again. **A newly opened window is always current.**
 
@@ -162,6 +174,7 @@ A window that was already open does not change on its own. Every program reads t
 | Opened after installing | Already current | Nothing |
 | Kept open while the proxy app was switched | The old state | Press Enter once |
 | Opened before installing EnvProxy | The sync code was never loaded | Open a new window |
+
 
 **A cmd window can only be reopened.** Pressing Enter does nothing there: cmd has no "run this before every prompt" mechanism.
 
@@ -288,10 +301,10 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 | Shown | Meaning | What to do |
 |---|---|---|
 | Active | Normal | Nothing |
-| Installed but cannot run (reason given) | Windows execution policy stops PowerShell from running the profile. Windows only | Follow the hint on the second line (see section 4), then open a new window |
-| Markers in the profile are unpaired | Something else edited your profile and left half a marker | Delete that lone `# >>> EnvProxy >>>` (or `# <<< EnvProxy <<<`) line — the status page gives its line number — then pick 1 |
-| No sync block in the profile | Never installed, or it was cleaned away | Run **1 Install / repair** once |
-| Cannot read the profile path this time (Windows only) | Rare; this run cannot tell | Look again in a few seconds; if it stays, run **1 Install / repair** once |
+| Installed but cannot run | Execution policy blocks it | Follow that hint (section 4) |
+| Markers are unpaired | Something left half a marker | Delete that lone marker line, then pick 1 |
+| No sync block in the profile | Never installed, or cleaned away | Run **1 Install / repair** |
+| Cannot read the profile path | Rare; this run cannot tell | Look again shortly; if it stays, run 1 |
 
 ### 3.6 Use it without the menu (scripts, remote sessions)
 
@@ -336,14 +349,14 @@ bash envproxy.sh status
 
 | What you see | Most likely cause | What to do |
 |---|---|---|
-| "Unrecognized switch" (Windows) or "unrecognized argument" (Mac) | A typo, or an abbreviation | Parameters must be written in full; abbreviations are rejected. Compare with the forms listed in the menu |
-| The terminal still cannot use the proxy | This window was opened before installing | Open a new window. To avoid reopening, load it as shown in 3.1 |
-| Still cannot use the proxy, and a new window does not help | The monitor is not running | Open the menu and pick 1 (Install / Repair) |
-| "Installation incomplete, missing program files" | The folder was not copied in full, or files were deleted | Download again from the Releases page and unzip over this folder. **Upgrading through Check for updates removes the old files for your platform automatically** |
-| Environment variables reappear after being removed | The node itself is unstable, and the monitor writes what it observes | Expected. If it keeps happening the node is poor; switch to another |
-| Variables linger after disconnecting | The app's "disconnect" does not stop its core, and the node is still reachable | Expected. Quit the proxy app to stop it immediately |
-| "Terminal sync" in the status shows "installed but cannot run" | Windows execution policy stops PowerShell from running the profile | Follow the hint on the second line, then open a new window. If you only need the variables to work, you can leave this alone for now |
-| Everything above tried and it still fails | — | Open the menu, pick 2 and screenshot the status; then pick 1 to repair |
+| "Unrecognized switch" / "argument" | A typo, or an abbreviation | Write parameters in full |
+| Proxy still not used | Window opened before installing | Open a new window, or see 3.1 |
+| Still failing after that | The monitor is not running | Menu, pick 1 (Install / Repair) |
+| "Missing program files" | Folder not copied in full, or deleted | Re-download and unzip over it |
+| Variables come back after removal | Node is unstable | Expected. If it persists, switch nodes |
+| Variables linger after disconnect | "Disconnect" leaves the core running | Expected. Quit the app |
+| Sync "installed but cannot run" | Execution policy blocks it | Follow that line's hint |
+| All of the above tried | — | Pick 2, screenshot, then pick 1 |
 
 > Most problems are solved by **picking 1** in the menu. It does not install a second copy, does not cut your network, and does not lose your own settings.
 
@@ -351,7 +364,7 @@ bash envproxy.sh status
 
 It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does not trust a port just because it exists**. Three conditions must hold:
 
-<img src="./assets/readme/mechanism.en.svg" width="100%" alt="Three-condition flow: every 2 to 3 seconds it enumerates listening ports and keeps those that answer a CONNECT handshake; then it tests each candidate for real connectivity; only then are the proxy variables written">
+<img src="./assets/readme/mechanism.en.svg" width="100%" alt="Three verification layers: listening ports, the CONNECT handshake, and a real connectivity test">
 
 1. **A port is listening** — some program on this machine opened a proxy port
 2. **It really is a proxy** — a `CONNECT` handshake must answer `HTTP/1.x 200`. This rules out development servers and ordinary web servers
@@ -361,9 +374,14 @@ All three must hold before any variable is written. A web server on your machine
 
 It does not rely on brands, process names or port numbers — those only speed up scanning; the decision always goes through these three.
 
-<img src="./assets/readme/states.en.svg" width="100%" alt="Three everyday states: connecting the proxy app writes the full set of proxy variables in 6 to 10 seconds; disconnecting or quitting removes them and restores a direct connection, in about 8 seconds after quitting or 15 to 50 seconds after disconnecting only, and reconnecting takes about 10 to 25 seconds; new ports, new apps and flapping are followed automatically and the variables are rewritten to the new port">
+<img src="./assets/readme/states.en.svg" width="100%" alt="The three everyday states and how fast each one settles">
 
-**Deciding "disconnected" is far more cautious than deciding "connected"**: one failed probe is not a disconnect; it takes 10 seconds of continuous failure and at least 3 probes. A single success counts as connected immediately. Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
+**Deciding "disconnected" is far more cautious than deciding "connected"**:
+
+- One failed probe is **not** a disconnect; it takes 10 seconds of continuous failure and at least 3 probes
+- A single success counts as connected immediately
+
+Removing your variables by mistake costs more than waiting a little. After a conclusion it keeps watching for another 1 minute, so a wrong call corrects itself.
 
 | Action | Takes effect in |
 |---|---|
@@ -464,18 +482,18 @@ All of it is **outside** this folder, so an update that overwrites the program f
 
 | Where | What | What it is for |
 |---|---|---|
-| `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | the locator script; the login item uses it to find the program |
+| `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | locator; the login item uses it to find the program |
 | | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
 | `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
-| `HKCU\Software\EnvProxy` | the `Owned` and `Backup` keys | which values we wrote, and what yours were before |
+| `HKCU\Software\EnvProxy` | `Owned` and `Backup` keys | what we wrote, and what yours were |
 | `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
-| Your PowerShell profile | one small block (marked `EnvProxy` at both ends) | syncs once on every return to the prompt |
-| Your Git Bash `~/.bashrc` | one small block (same markers) | Git Bash reads the mirror file on every prompt |
+| Your PowerShell profile | one block marked `EnvProxy` | syncs on every return to the prompt |
+| Your Git Bash `~/.bashrc` | one block, same markers | Git Bash reads the mirror on every prompt |
 | `win\monitor\` | `monitor.log`, `monitor.pid` | the decisions it made, and the process id |
 
 Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
 
-<img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder (overwritten by updates, do not keep your files there), the runtime folder (logs and run markers never overwritten or deleted), and the top level (only same-name files are overwritten, your things are never deleted)">
+<img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder, the runtime folder, and the folder root">
 
 ## 9. Copying and backing up the folder
 
@@ -486,7 +504,12 @@ Two ways to bring it back:
 - **Wait for the next login**: the locator script finds the new location and takes over.
 - **Bring it back now**: double-click Install / Repair once.
 
-The search covers two areas: **six levels** down from the common locations (Desktop, Documents, Downloads, OneDrive, `.config`), and **four levels** under the root of each non-system drive (the system drive's root is skipped, so it does not walk the whole disk). That is why `C:\Projects\EnvProxy` is not found but `D:\Projects\EnvProxy` is. Move it outside those areas and you have to double-click Install once.
+The search covers two areas:
+
+- **Desktop, Documents, Downloads, OneDrive, `.config`**: **six levels** down
+- **The root of each non-system drive**: **four levels** down (the system drive's root is skipped, so it does not walk the whole disk)
+
+That is why `C:\Projects\EnvProxy` is not found but `D:\Projects\EnvProxy` is. Move it outside those areas and you have to double-click Install once.
 
 A copied backup **is never mistaken for the live one**, since log activity decides which is running, so backups can stay in place.
 
@@ -500,15 +523,15 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 
 ## 11. Technical limits (5)
 
-<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits: pure TUN mode is not handled, system proxy settings are never modified, already-running programs are not changed, tools that need their own proxy configuration are out of scope, and there is no interface">
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">
 
 | Limit | Reason | Effect |
 |---|---|---|
-| **Pure TUN mode is not handled** | No local port to judge | Its traffic already goes through the app, so nothing is needed |
-| **System proxy settings are not modified** | Doing so would affect browsers and other programs | Only user-level environment variables are written, and you can confirm in system settings that nothing else was touched |
-| **Already-running programs are not changed** | Variables are read once, at startup | Windows opened earlier need one Enter press (section 0) |
-| **Tools that need their own proxy configuration are out of scope** | They do not read these variables | Maven, Gradle, Docker and others are covered by the collapsed table in section 5 |
-| **No interface** | Zero dependencies is the install premise | There is only a menu: no tray icon and no window |
+| **Pure TUN mode is not handled** | No local port to judge | Its traffic already goes through the app |
+| **System proxy is not modified** | It would affect browsers | Only user-level variables |
+| **Running programs are not changed** | Read once at startup | Open windows need one Enter |
+| **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
+| **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
 
 Why pure TUN mode is left alone: it cannot be told apart from a corporate VPN. A wrong decision there would remove your only proxy path, so it is better to do nothing.
 
@@ -520,9 +543,13 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
 
-On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped. **Both are supported**: the installer drops one line into `.zshenv`/`.zshrc` and into `.bash_profile`/`.bashrc`, so either shell follows along. `fish` is not supported: it does not read those files.
+On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped.
 
-<img src="./assets/readme/mac-paths.en.svg" width="100%" alt="macOS writes two paths: terminals read ~/.envproxy/proxy.env, and programs launched from the Dock read the launchctl environment; both paths are updated together">
+**Both are supported**: the installer drops one line into `.zshenv`/`.zshrc` and into `.bash_profile`/`.bashrc`, so either shell follows along.
+
+**`fish` is not supported**, and the honest reason is that we have not written that implementation yet — not that fish cannot do it. fish has its own mechanism (`conf.d` auto-loading plus the `fish_prompt` event); we simply do not hook it. If you use fish, pin the window to the proxy value you want (see 3.2).
+
+<img src="./assets/readme/mac-paths.en.svg" width="100%" alt="Two write paths on macOS: proxy.env for terminals, launchctl for Dock-launched apps">
 
 ### 12.2 Install (3 steps)
 
@@ -544,13 +571,29 @@ The locator has a source file on each platform — `locator.sh` on Mac, `win\loc
 
 ### 12.5 Three problems you may hit on first install on a Mac
 
-<img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on first install on a Mac: the downloaded file is quarantined, the script is not executable, and macOS asks to access your Documents folderhe background item">
+<img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on a first Mac install">
 
-| Symptom | Cause | What to do |
-|---|---|---|
-| Double-clicking does nothing, or "cannot be opened" | The downloaded file is quarantined by the system | Right-click, then Open; or run `xattr -d com.apple.quarantine 打开菜单.command` in a terminal |
-| "Permission denied" | The script is not executable | Run `chmod +x 打开菜单.command` in a terminal |
-| Installed, but the status says it is not running | macOS blocked the background item, or the "access your Documents folder" prompt was denied | Background item: System Settings, General, Login Items & Extensions, allow it to run. Folder access: System Settings, Privacy & Security, Files and Folders. Then run Install / Repair once more from the menu |
+The three are unrelated; read only the one you hit.
+
+**1. Double-clicking does nothing, or you see "cannot be opened"**
+
+macOS tagged the download as coming from the internet.
+
+- Right-click it, then choose **Open** (do not double-click)
+- Or run this in a terminal: `xattr -d com.apple.quarantine 打开菜单.command`
+
+**2. You see "Permission denied"**
+
+The script is not executable.
+
+Run this in a terminal: `chmod +x 打开菜单.command`
+
+**3. It installed, but the status says it is not running**
+
+Two possible causes. After fixing either one, open the menu and pick **1 安装 / 修复** (Install / Repair) again.
+
+- **The background item was blocked**: System Settings, General, Login Items & Extensions, allow it to run
+- **The "access your Documents folder" prompt was denied**: System Settings, Privacy & Security, Files and Folders
 
 ### 12.6 What the installer adds
 
@@ -562,7 +605,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `prompt-sync.sh` | the terminal sync script, referenced by one line in the rc files |
 | | `path.conf` | records where the project folder currently is |
 | | `proxy.env` | the environment variables for the terminal path and the current state |
-| | `owned.env` | the values we wrote, so clearing removes only those (absent if the proxy has never been on) |
+| | `owned.env` | the values we wrote, so clearing removes only those |
 | | `prev.env` | the original values saved at install time, restored on uninstall |
 | | `monitor.stdout.log` | what the background program prints (look here when login start-up misbehaves) |
 | | `monitor.stderr.log` | errors the background program reports |
