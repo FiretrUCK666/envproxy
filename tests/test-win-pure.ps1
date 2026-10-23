@@ -304,6 +304,22 @@ try {
     if ($mirrorBak) { [System.IO.File]::WriteAllText($mirrorPath, $mirrorBak, (New-Object System.Text.UTF8Encoding($false))) }
 }
 
+Write-Host '[2f] every terminal-sync state has something to say'
+# 契约：问题清单里说"终端同步没生效"时，往下一定找得到"终端同步"那一行。
+# 曾经 State 叫 nohost、switch 处理的是 unknown，两者恰好错位，
+# 于是那一项永远不打印——用户被指向一个不存在的提示。
+# 这条枚举 Get-TerminalSyncState 可能返回的**全部**状态，逐个喂给渲染器。
+foreach ($ss in @('ok', 'blocked', 'unpaired', 'missing', 'stale', 'nohost')) {
+    $probeSt = Get-StatusSnapshot
+    $probeSt.TermSync = @{ State = $ss; Detail = 'x'; Path = ''; Line = 0 }
+    # 必须用 6>&1 重定向：状态页走 Write-Host（information stream），
+    # 2>&1 只接错误流，捕获到的是 0 行——那样这条断言会永远红或永远绿，
+    # 取决于怎么读结果，而两种都不说明任何事。
+    $probeOut = @(Show-StatusSnapshot $probeSt 6>&1)
+    $hasLine = @($probeOut | Where-Object { $_ -match '终端同步' }).Count -gt 0
+    Assert-Eq ("终端同步状态必须有对应那一行：" + $ss) $true $hasLine
+}
+
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
 

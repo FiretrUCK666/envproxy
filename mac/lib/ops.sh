@@ -477,7 +477,13 @@ show_status() {
         missing)
             style_out warn "终端同步 : 配置文件里没有同步块"
             style_out dim "  打开菜单选 1 可以写入。" ;;
-        *) ;;
+        *)
+            # 走到这里说明判定端又加了新状态而这里没跟上。静默跳过不行：
+            # 上面的问题清单会说"终端同步没生效"，而往下整屏找不到"终端同步"
+            # 四个字——用户被指向一个不存在的提示。Windows 侧真发生过一次
+            # （State 叫 nohost、switch 处理的是 unknown，恰好错位）。
+            style_out warn "终端同步 : 状态未知（$_ts_state）"
+            style_out dim "  打开菜单选 1（安装 / 修复）重写一次。" ;;
     esac
     if [ "$_upd_prog" = "1" ]; then
         style_out warn "上次更新 : 没有完成（覆盖过程中断）"

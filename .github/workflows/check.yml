@@ -1330,22 +1330,47 @@ jobs:
           # 现在版本号来自监控写下的缓存（status 只读、永不写文件这条契约不变）。
           # 守的是"状态页里出现了联网函数的调用"这一件事：一旦有人图省事又把它加回去，
           # 症状只会是"变慢"，没有任何断言会红，所以必须在这里挡住。
-          $statusWin = [regex]::Match($ps, '(?s)function Show-Status(.*?)(?=\nfunction )')
-          if (-not $statusWin.Success) { Write-Host '找不到 Show-Status，无法核对状态页是否联网'; $fail = 1 }
-          else {
-            $body = $statusWin.Groups[1].Value
-            foreach ($netFn in @('Get-RemoteVersion', 'Get-UpdateInfo', 'Get-ReleaseAssets', 'Invoke-WebRequest', 'Invoke-RestMethod')) {
-              if ($body -match [regex]::Escape($netFn)) { Write-Host ("Win 状态页在联网：调用了 {0}（状态页必须只读，版本号取自监控写的缓存）" -f $netFn); $fail = 1 }
+          # 状态页的**每一层**都要查，不能只查渲染那一层。
+          #
+          # 状态页现在是两段：采集（Get-StatusSnapshot / get_status_snapshot）+ 渲染
+          # （Show-StatusSnapshot / show_status）。原来只截渲染函数，采集段整个在视野外——
+          # 往采集里插一行联网调用，门禁全绿放行，而它恰恰是最容易被插进去的地方
+          # （「顺手在这里查一下版本号」）。判据要跟着结构走，否则拆分层本身就成了漏洞。
+          $statusLayersWin = @(
+            @('Get-StatusSnapshot',  '(?s)function Get-StatusSnapshot(.*?)(?=\nfunction )'),
+            @('Show-StatusSnapshot', '(?s)function Show-StatusSnapshot(.*?)(?=\nfunction )'),
+            @('Show-Status',         '(?s)function Show-Status(.*?)(?=\nfunction )')
+          )
+          $statusLayersMac = @(
+            @('get_status_snapshot', '(?s)get_status_snapshot\(\) \{(.*?)\n\}'),
+            @('show_status',         '(?s)show_status\(\) \{(.*?)\n\}')
+          )
+          $winNet = @('Get-RemoteVersion', 'Get-UpdateInfo', 'Get-ReleaseAssets', 'Invoke-WebRequest', 'Invoke-RestMethod')
+          $macNet = @('get_remote_version', 'get_update_info', 'fetch_update_file')
+          $foundAny = $false
+          foreach ($layer in $statusLayersWin) {
+            $m = [regex]::Match($ps, $layer[1])
+            if (-not $m.Success) { continue }
+            $foundAny = $true
+            foreach ($netFn in $winNet) {
+              if ($m.Groups[1].Value -match [regex]::Escape($netFn)) {
+                Write-Host ("Win 状态页在联网：{0} 里调用了 {1}（状态页必须只读，版本号取自监控写的缓存）" -f $layer[0], $netFn); $fail = 1
+              }
             }
           }
-          $statusMac = [regex]::Match($sh, '(?s)show_status\(\) \{(.*?)\n\}')
-          if (-not $statusMac.Success) { Write-Host '找不到 show_status，无法核对状态页是否联网'; $fail = 1 }
-          else {
-            $body2 = $statusMac.Groups[1].Value
-            foreach ($netFn2 in @('get_remote_version', 'get_update_info', 'fetch_update_file')) {
-              if ($body2 -match $netFn2) { Write-Host ("Mac 状态页在联网：调用了 {0}（状态页必须只读，版本号取自监控写的缓存）" -f $netFn2); $fail = 1 }
+          if (-not $foundAny) { Write-Host '找不到 Windows 状态页的任何一层，无法核对是否联网'; $fail = 1 }
+          $foundAnyMac = $false
+          foreach ($layer in $statusLayersMac) {
+            $m2 = [regex]::Match($sh, $layer[1])
+            if (-not $m2.Success) { continue }
+            $foundAnyMac = $true
+            foreach ($netFn2 in $macNet) {
+              if ($m2.Groups[1].Value -match [regex]::Escape($netFn2)) {
+                Write-Host ("Mac 状态页在联网：{0} 里调用了 {1}" -f $layer[0], $netFn2); $fail = 1
+              }
             }
           }
+          if (-not $foundAnyMac) { Write-Host '找不到 Mac 状态页的任何一层，无法核对是否联网'; $fail = 1 }
           # 版本缓存的写入方必须是监控，不能顺手塞回状态页（那就等于把联网搬了个地方）。
           if ($ps -notmatch 'function Write-VersionCache') { Write-Host 'Win 侧缺少 Write-VersionCache'; $fail = 1 }
           if ($sh -notmatch 'write_version_cache\(\)') { Write-Host 'Mac 侧缺少 write_version_cache'; $fail = 1 }

@@ -512,9 +512,17 @@ function Show-StatusSnapshot($st) {
                          Write-Styled 'dim' "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" }
             'missing'  { Write-Styled 'warn' "终端同步 : 配置文件里没有同步块"
                          Write-Styled 'dim' "  打开菜单选 1 可以写入。" }
-            'unknown'  { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断"
+            'nohost'   { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断"
                          Write-Styled 'dim' "  过几秒再看一次；一直在就选 1。" }
-            default { }
+            default    {
+                # 走到这里说明 Get-TerminalSyncState 又加了新状态而这里没跟上。
+                # 静默跳过不行：上面的问题清单会说"终端同步没生效"，而往下整屏
+                # 找不到"终端同步"四个字——用户被指向一个不存在的提示。
+                # 这是真发生过的一次（State 叫 nohost，switch 处理的是 unknown，
+                # 两者恰好错位，于是这一项永远不打印）。
+                Write-Styled 'warn' ("终端同步 : 状态未知（" + $st.TermSync.State + "）")
+                Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重写一次。"
+            }
         }
     }
     if ($st.UpdateInProgress) {
