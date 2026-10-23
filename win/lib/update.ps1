@@ -21,7 +21,7 @@ $UpdateRepoDefault = "FiretrUCK666/envproxy"
 
 # 更新源表：有序，逐个尝试，第一个能给出"可用的新版本安装包"的胜出。
 # 每项声明五件事：
-#   Id        这一源的仓库标识从哪里取（见 Get-UpdateRepoId）
+#   Id        这一源的仓库标识从哪里取（见 Get-UpdateRepo）
 #   Api/Web   两条"怎么问最新版"的路径，Preferred 决定先试哪条，另一条是兜底
 #   Base      安装包直连下载的地址前缀（最后一道兜底）
 #   ApiRepo   API 端点前缀，用来查资产 id 并从 API 取包（首选下载路径）
@@ -242,16 +242,13 @@ function Get-UpdateRepo {
 
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
-# 参数保留是为了源表的 Id 字段：将来加源时按 Id 分派，不必改调用方。
-function Get-UpdateRepoId([string]$Key) {
-    return (Get-UpdateRepo)
-}
+
 
 # 本机这次实际可用的源（有序）：没有仓库标识的源直接跳过（目前只有官方源一条）。
 function Get-UpdateSources {
     $out = @()
     foreach ($s in $UpdateSourceTable) {
-        $id = Get-UpdateRepoId $s.Id
+        $id = Get-UpdateRepo
         if (-not $id) { continue }
         $out += @{ Name = $s.Name; Repo = $id; Preferred = $s.Preferred; Api = $s.Api; Web = $s.Web; Base = $s.Base; ApiRepo = $s.ApiRepo }
     }

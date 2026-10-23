@@ -122,10 +122,7 @@ get_update_repo() {
 
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
-# 参数保留是为了源表的标识字段：将来加源时按它分派，不必改调用方。
-update_source_id() {
-    printf '%s' "$(get_update_repo)"
-}
+
 
 # 响应头落盘的位置：取版本时要靠它分"配额用尽"和"真的被拒"（403 有两种含义）。
 # 名字用 mktemp 造（不可预测），用完由调用方删掉：
@@ -673,7 +670,7 @@ REMOTE_SOURCE_NAME=""
 get_update_sources() {
     while read -r _sid _sname _spref _sapi _sweb _sbase _sapirepo; do
         [ -n "$_sid" ] || continue
-        _gid=$(update_source_id "$_sid")
+        _gid=$(get_update_repo)
         [ -n "$_gid" ] || continue
         printf '%s|%s|%s|%s|%s|%s\n' "$_sname" "$_spref" "${_sapi//@@/$_gid}" "${_sweb//@@/$_gid}" "${_sbase//@@/$_gid}" "${_sapirepo//@@/$_gid}"
     done <<_ENVPROXY_SOURCES_

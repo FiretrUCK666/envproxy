@@ -1374,7 +1374,7 @@ EOF
     _st_want=$(printf '%s\n' "$UPDATE_SOURCE_TABLE" | grep -c . || true)
     _st_one=$(printf '%s\n' "$(get_update_sources)" | grep -c . || true)
     _selftest_assert_eq "源表展开后的条数与表里一致" "$_st_want" "$_st_one"
-    if [ -n "$(update_source_id official)" ]; then _st2=1; else _st2=0; fi
+    if [ -n "$(get_update_repo)" ]; then _st2=1; else _st2=0; fi
     _selftest_assert_eq "official 给出非空仓库标识" "1" "$_st2"
     # 仓库标识取自 git remote，每种写法都必须给出同一个答案：路径的最后两段。
     # 用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则看着没问题，直到 remote 带端口——

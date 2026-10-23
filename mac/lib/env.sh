@@ -75,15 +75,16 @@ set_user_env_vars() {
             esac
         done
     } > "$_otmp" 2>/dev/null && mv "$_otmp" "$OWNED_ENV" 2>/dev/null || rm -f "$_otmp" 2>/dev/null || true
-    launchctl setenv HTTP_PROXY "$_http" 2>/dev/null || true
-    launchctl setenv http_proxy "$_http" 2>/dev/null || true
-    launchctl setenv HTTPS_PROXY "$_http" 2>/dev/null || true
-    launchctl setenv https_proxy "$_http" 2>/dev/null || true
-    launchctl setenv ALL_PROXY "$_http" 2>/dev/null || true
-    launchctl setenv all_proxy "$_http" 2>/dev/null || true
-    launchctl setenv NO_PROXY "$_np" 2>/dev/null || true
-    launchctl setenv no_proxy "$_np" 2>/dev/null || true
-    launchctl setenv NODE_USE_ENV_PROXY "1" 2>/dev/null || true
+    # 与上面写 owned.env 用**同一张表、同一套取值规则**：手抄一份的话，新增变量时
+    # 上面那个循环会自动跟上、下面这份不会，于是 owned.env 里有记录、launchctl 里没值，
+    # 而归属判定认为"这是我们的"、同步检查认为"不齐"，两个结论互相矛盾。
+    for _v in $PROXY_VAR_NAMES; do
+        case "$_v" in
+            NO_PROXY|no_proxy) launchctl setenv "$_v" "$_np" 2>/dev/null || true ;;
+            NODE_USE_ENV_PROXY) launchctl setenv "$_v" "1" 2>/dev/null || true ;;
+            *) launchctl setenv "$_v" "$_http" 2>/dev/null || true ;;
+        esac
+    done
     # 写没写成由**复读**决定，不由"我执行了 mv"决定。
     # 上面每一处 `|| true` 都是必要的容错（launchctl 在无 GUI 会话里必然失败，
     # 而终端路才是主路），但它们把"两个文件一个都没写出来"这种真故障也一起吞了。
@@ -177,35 +178,41 @@ env_vars_in_sync() {
     for _v in $PROXY_ADDR_VAR_NAMES; do
         grep -qxF "export $_v=\"$_http\"" "$PROXY_ENV" 2>/dev/null || return 1
     done
-    grep -qxF "export NO_PROXY=$_npq" "$PROXY_ENV" 2>/dev/null || return 1
-    grep -qxF "export no_proxy=$_npq" "$PROXY_ENV" 2>/dev/null || return 1
-    grep -qxF 'export NODE_USE_ENV_PROXY="1"' "$PROXY_ENV" 2>/dev/null || return 1
+    # 剩下的几个变量也逐项核，列表从同一张变量表来：
+    # 手抄的话，新增变量时前面那个循环会跟上、这里不会，于是"齐不齐"的判据永远漏一个。
+    for _v in $PROXY_VAR_NAMES; do
+        case "$_v" in
+            NO_PROXY|no_proxy) grep -qxF "export $_v=$_npq" "$PROXY_ENV" 2>/dev/null || return 1 ;;
+            NODE_USE_ENV_PROXY) grep -qxF "export $_v=\"1\"" "$PROXY_ENV" 2>/dev/null || return 1 ;;
+            HTTP_PROXY|http_proxy|HTTPS_PROXY|https_proxy|ALL_PROXY|all_proxy) continue ;;
+            *) return 1 ;;
+        esac
+    done
     # launchd 的会话环境是易失的（每次登录/重启清空），而 proxy.env 一直存在——只比对它就等于
     # 认为"第二路也齐了"，重启后那 9 个 setenv 一次都不会重放。两条腿都要核：任一条不符就判"不齐"，
     # 交给 sync_user_env_vars 整体重写（apply_state、安装、自愈因此共用同一个判据）。
     if command -v launchctl >/dev/null 2>&1; then
-        [ "$(launchctl getenv HTTP_PROXY 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv HTTPS_PROXY 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv ALL_PROXY 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv NO_PROXY 2>/dev/null)" = "$_np" ] || return 1
-        [ "$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null)" = "1" ] || return 1
-        # 小写拼写也是我们写下的那一份：只核 5 个大写变量，等于放任 4 个小写变量漂移，
-        # 而"齐了"的判定一旦撒谎，自愈就永远不修（macOS 大小写敏感，少一个就是真的少）。
-        [ "$(launchctl getenv http_proxy 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv https_proxy 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv all_proxy 2>/dev/null)" = "$_http" ] || return 1
-        [ "$(launchctl getenv no_proxy 2>/dev/null)" = "$_np" ] || return 1
+        # 逐个核，列表与取值规则同写入端（同一张 PROXY_VAR_NAMES、同一套 case 分派）：
+        # 小写拼写也是我们写下的那一份，少核一个就是真的漏（macOS 大小写敏感）。
+        for _v in $PROXY_VAR_NAMES; do
+            case "$_v" in
+                NO_PROXY|no_proxy) _want="$_np" ;;
+                NODE_USE_ENV_PROXY) _want="1" ;;
+                *) _want="$_http" ;;
+            esac
+            [ "$(launchctl getenv "$_v" 2>/dev/null)" = "$_want" ] || return 1
+        done
     fi
     # 第三条腿：owned.env 记着"我们写下的值"，终端同步与 off 哨兵全靠它判归属。
     # 它丢了就等于归属判据消失——ENVPROXY_TERM=off 会静默失效、off 哨兵写不出守卫。
     # 而它不在这个判据里的话，sync 会以为"齐了"直接返回，永远不重建（30 轮自愈也修不了，
     # 因为自愈走的正是这个函数）。所以必须把它当成"齐不齐"的一部分。
     if [ ! -f "$OWNED_ENV" ]; then return 1; fi
-    grep -q '^HTTP_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
-    grep -q '^HTTPS_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
-    grep -q '^ALL_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
-    grep -q '^NO_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
-    grep -q '^NODE_USE_ENV_PROXY	' "$OWNED_ENV" 2>/dev/null || return 1
+    # 整张表都要在：少记一个变量，它就在 off/固定直连时永远清不掉。
+    # 列表从同一张表来，不手抄——手抄的那份在加变量时会静默漏掉。
+    for _v in $PROXY_VAR_NAMES; do
+        grep -q "^$_v	" "$OWNED_ENV" 2>/dev/null || return 1
+    done
     return 0
 }
 
