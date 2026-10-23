@@ -604,7 +604,12 @@ function Show-RecentLog {
     # 但状态页会把它原样打到屏幕上。122 列的长行在 80/100 列的窗口里会硬折成两三行，
     # 屏幕上就是一团乱——"最近日志"于是从"看一眼有没有异常"变成"读一段糊住的字"。
     # 裁到窗口宽度 - 2（留两个缩进），并在末尾补一个省略号说明"这行还有后半段"。
-    $logW = 78
+    # 日志行宽：默认 80 列（大多数终端的标准宽度），能拿到真实窗口宽度时按窗口减 2（给缩进）。
+    # 80 这个默认值不是随手取的：本工具自己写下的日志行最长约 80 格
+    # （"检测到本地代理端口 7078 -> 已注入代理 http://127.0.0.1:7078" 正是 80）。
+    # 默认值比它小的话，最常见的那条日志每屏都被截成 "http://127.0.0.1:7…"，
+    # 而截掉的恰好是端口号——排查时最想看的那个数字。
+    $logW = 80
     try { if (-not [Console]::IsOutputRedirected) { $logW = [Console]::WindowWidth - 2 } } catch {}
     if ($logW -lt 40) { $logW = 40 }
     foreach ($logLine in ([System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3)) {
