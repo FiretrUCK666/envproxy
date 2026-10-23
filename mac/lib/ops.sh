@@ -94,17 +94,20 @@ install_envproxy() {
     # 分开调两次就成了两行（标签一行、说明一行），版面会散掉。
     # 这里手工拼转义序列，与 _seg 的判据同源（style_color 一个来源）。
     _tip_row() {
-        _tr_left=$(if [ -n "$1" ]; then _menu_cell_pad "$1" "$_tip_w"; else printf '%s' "$_tip_pad"; fi)
+        # 入口开着 set -u：$3 是可选的（多数行没有命令），必须带默认值，
+        # 否则任何一次两参调用都会 "unbound variable" 整屏崩掉。
+        _tr_label="${1:-}"; _tr_note="${2:-}"; _tr_cmdline="${3:-}"
+        _tr_left=$(if [ -n "$_tr_label" ]; then _menu_cell_pad "$_tr_label" "$_tip_w"; else printf '%s' "$_tip_pad"; fi)
         if [ ! -t 1 ]; then
             # 不是终端就纯文本，别往日志里塞控制字符（与 style_out 同一判据）
-            if [ -n "$3" ]; then printf '   %s   %s  %s\n' "$_tr_left" "$2" "$3"
-            else printf '   %s   %s\n' "$_tr_left" "$2"; fi
+            if [ -n "$_tr_cmdline" ]; then printf '   %s   %s  %s\n' "$_tr_left" "$_tr_note" "$_tr_cmdline"
+            else printf '   %s   %s\n' "$_tr_left" "$_tr_note"; fi
             return 0
         fi
         _tr_dim=$(style_color dim)
-        _tr_cmd=$(style_color cmd)
-        printf '\033[%sm   %s   \033[0m%s' "$_tr_dim" "$_tr_left" "$2"
-        if [ -n "$3" ]; then printf '  \033[%sm%s\033[0m\n' "$_tr_cmd" "$3"; else printf '\n'; fi
+        _tr_c = $(style_color cmd)
+        printf '\033[%sm   %s   \033[0m%s' "$_tr_dim" "$_tr_left" "$_tr_note"
+        if [ -n "$_tr_cmdline" ]; then printf '  \033[%sm%s\033[0m\n' "$_tr_c" "$_tr_cmdline"; else printf '\n'; fi
     }
     _tip_row "$_tip_a1" "自动就是对的，什么都不用做。" ""
     _tip_row "$_tip_a2" "敲一下回车就跟上。" ""
