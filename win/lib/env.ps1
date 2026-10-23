@@ -497,6 +497,57 @@ function Restore-PrevEnv {
 #   $false = 尝试写了但失败（调用方必须如实报告，不许说"已校正"）
 # 之前没有返回值，安装流程只能一律打"已按当前状态校正"——把写失败也说成成功，
 # 用户以为在走代理、实际是半套变量。
+# 拿 EnvProxyApplyState 这把跨进程锁，按状态把变量表写一次，然后广播。
+#
+# 为什么单独一个函数：Apply-State（状态翻转时）与监控的 30 轮自愈块做的是同一件事——
+# 拿同一把锁、判断 on/off、写 HKCU\Environment、广播。原来是两份代码，注释还互相指着
+# 对方说"与 Apply-State 同一件事"。两份的后果是：改广播时机、改判据、改锁的行为时
+# 要改两处，漏一处就变成"翻转时对、自愈时错"，而屏幕上完全看不出区别。
+#
+# 返回值区分三件事，因为调用方要据此说不同的话：
+#   0 = 写成了（或本来就齐）
+#   1 = 写失败了
+# 日志文案由调用方给：同样是"写好了"，状态翻转时说"检测到本地代理端口 7078"，
+# 自愈时说"变量被人改坏了，已重新写回"——同一件事在不同场合该说不同的话，
+# 但**做**的事必须一模一样。
+function Invoke-EnvStateWrite([string]$state, [string]$LogOff, [string]$LogOn) {
+    if (-not $state -or $state -eq "unknown") { return 0 }
+    $gate = $null
+    $held = $false
+    try {
+        $gate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
+        $held = $gate.WaitOne(5000)
+    } catch { $held = $false }
+    $ok = 0
+    try {
+        if ($state -eq "off") {
+            if (Test-ProxyVarsPresent) {
+                Remove-UserEnvVars
+                Broadcast-EnvironmentChange
+                if ($LogOff) { Write-MonitorLog $LogOff }
+            }
+        } else {
+            $port = $state.Substring(3)
+            if (-not (Sync-UserEnvVars $port)) {
+                # 返回 false 有两种情况：本来就齐（正常）、或者写失败。
+                # 靠"值到底齐了没有"再确认一次才能区分——判据是**整表**逐项相等。
+                if (-not (Test-ProxyVarsMatch ([int]$port))) { $ok = 1 }
+            } else {
+                Broadcast-EnvironmentChange
+                if ($LogOn) { Write-MonitorLog $LogOn }
+            }
+        }
+    } catch {
+        $ok = 1
+    } finally {
+        if ($gate) {
+            try { if ($held) { $gate.ReleaseMutex() } } catch {}
+            try { $gate.Dispose() } catch {}
+        }
+    }
+    return $ok
+}
+
 function Apply-State([string]$state) {
     # "unknown" = 这一轮不知道（端口枚举失败），不是"不在翻墙"。
     # 绝不能拿它去写变量：状态串的下标解析会把它当成 "on:<端口>"，
@@ -506,43 +557,10 @@ function Apply-State([string]$state) {
     # 没有这把锁就会出现"两边都判定要写 → 重复写 + 重复广播"。锁只覆盖"判断 + 写入"这段，
     # 拿到锁的一方写完，另一方进来时看到已就位，自然什么都不做。
     # 拿不到锁也照常往下走：锁只是省一次重复广播，跳过写入反而会让变量停在错的状态。
-    $gate = $null
-    $held = $false
-    try {
-        $gate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
-        $held = $gate.WaitOne(5000)
-    } catch { $held = $false }
-    $appliedOk = $true
-    try {
-        if ($state -eq "off") {
-            if (Test-ProxyVarsPresent) {
-                Remove-UserEnvVars
-                Broadcast-EnvironmentChange
-                Write-MonitorLog "代理已关闭 -> 已删除代理变量，恢复直连"
-            }
-        } else {
-            $port = $state.Substring(3)
-            # 期望值要与实际注入的地址同源，否则 IPv6-only 的代理会被判成"没写成"。
-            $want = Get-ProxyUrlForPort ([int]$port)
-            if (-not (Sync-UserEnvVars $port)) {
-                # Sync-UserEnvVars 返回 false 有两种情况：本来就齐（正常）、或者写失败。
-                # 靠"值到底齐了没有"再确认一次，才能区分这两者。
-                # 判据是**整表**逐项相等，不许只挑一个变量看——否则半套变量会被报成
-                # "已按当前状态校正"（详见 Test-ProxyVarsMatch 的注释）。
-                $appliedOk = Test-ProxyVarsMatch ([int]$port)
-            } else {
-                Broadcast-EnvironmentChange
-                Write-MonitorLog "检测到本地代理端口 $port -> 已注入代理 $want"
-            }
-        }
-    } catch {
-        $appliedOk = $false
-    } finally {
-        if ($gate) {
-            try { if ($held) { $gate.ReleaseMutex() } } catch {}
-            try { $gate.Dispose() } catch {}
-        }
-    }
+    # 写与广播都交给共用函数，这里只提供这个场合该说的话。
+    $port = if ($state -ne "off") { $state.Substring(3) } else { "" }
+    $logOn = if ($port) { "检测到本地代理端口 $port -> 已注入代理 " + (Get-ProxyUrlForPort ([int]$port)) } else { "" }
+    $appliedOk = ((Invoke-EnvStateWrite $state "代理已关闭 -> 已删除代理变量，恢复直连" $logOn) -eq 0)
     # 给 Git Bash 那份终端同步看的镜像文件。注册表它读不了（MSYS2 的 /proc/registry
     # 只能在最顶层 shell 进程里读，函数里读到的是空），所以这里额外落一份普通文件。
     # 写失败不影响任何判定：读不到文件时那份钩子什么都不做。
