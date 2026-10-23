@@ -266,7 +266,7 @@ function Remove-UserEnvVars {
             if (Test-IsOwnedProxyValue $n $cur) { $drop += $n }
             continue
         }
-        if ($n -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) {
+        if ($ProxyAddrVarNames -contains $n) {
             # 归属判定：形状上是本机地址、且安装快照里本来没有它，才是我们写下的。
             # 用户自己挂的 mitmproxy（http://127.0.0.1:8080）同样有快照，一律不动。
             if (Test-IsOwnedProxyValue $n $cur) { $drop += $n }
@@ -404,7 +404,7 @@ function Test-SnapshotSkip([string]$Name, [string]$Value, [bool]$FirstInstall) {
     if (Test-IsOurOwnedValue $Name $Value) { return $true }
     if ($FirstInstall) { return $false }
     if ($Name -eq "NODE_USE_ENV_PROXY") { return ($Value -eq "1") }
-    if ($Name -in @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")) { return (Test-LoopbackProxyUrl $Value) }
+    if ($ProxyAddrVarNames -contains $Name) { return (Test-LoopbackProxyUrl $Value) }
     return $false
 }
 

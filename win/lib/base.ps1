@@ -66,6 +66,11 @@ function Remove-ItemSafe([string]$Path) {
 # 一起中招。故 Windows 侧对一个逻辑变量只写一个规范拼写，共 5 个变量名。
 # DIVERGE(Mac): macOS 的 launchctl 与环境块真大小写敏感，大小写各一份确有意义，Mac 侧写 9 个。
 $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_USE_ENV_PROXY")
+# 其中"值是代理地址"的那几个。另两个角色不同：NO_PROXY 是例外清单，
+# NODE_USE_ENV_PROXY 是开关。归属判定要按角色分派——地址看形状、清单逐项减、
+# 开关只认 1——所以"哪些名字是地址类"必须只定义一处。
+# Mac 侧对应 $PROXY_ADDR_VAR_NAMES；两侧同形，门禁 6 核对。
+$ProxyAddrVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 
 # 本机地址直连的默认例外集，写法遵循 NO_PROXY 的通行规范：IPv6 地址**裸写**。
 # 裸写是各家的共同要求——httpx 的规范示例就是 `NO_PROXY=example.com,::1,localhost,...`，

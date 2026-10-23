@@ -1030,6 +1030,21 @@ jobs:
           # 而 mac 侧是 6，门禁报"两侧不一致"——其实是门禁自己的判据太松）。
           # 上面 d1a(3) 那一处比期望值用的是三项俱全的正则，两处必须同一判据。
           $epCount = @([regex]::Matches($ps, '@\{ Host = "[^"]+";\s*Path = "[^"]+";\s*Expect = "[^"]+"')).Count
+          # 「地址类变量」这张子表两端必须同形，且必须是变量表的子集。
+          # 它决定归属判定按哪个角色分派：地址看形状、NO_PROXY 逐项减、开关只认 1。
+          # 分派错了的后果是误删用户自己的值，而屏幕上看不出区别。
+          $winAddr = (([regex]::Match($ps, '\$ProxyAddrVarNames = @\(([^)]*)\)')).Groups[1].Value -split ',' | ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ }) -join ' '
+          $macAddr = (([regex]::Match($sh, 'PROXY_ADDR_VAR_NAMES="([^"]*)"')).Groups[1].Value -split '\s+' | Where-Object { $_ -match '^[A-Z_]+$' }) -join ' '
+          # 注意不能直接比字符串：macOS 的变量名真区分大小写，所以那边的表里
+          # 每个名字都有大小写两份；Windows 大小写不敏感，只写一套。
+          # 要问的是"两边说的是不是同一批变量"——把小写的一份折掉再比。
+          $macAddrNorm = (($macAddr -split ' ') | ForEach-Object { $_.ToUpperInvariant() } | Sort-Object -Unique) -join ' '
+          $winAddrNorm = (($winAddr -split ' ') | ForEach-Object { $_.ToUpperInvariant() } | Sort-Object -Unique) -join ' '
+          if ($winAddrNorm -ne $macAddrNorm) { Write-Host ("地址类变量两张表不是同一批：Win [{0}] / Mac [{1}]" -f $winAddrNorm, $macAddrNorm); $fail = 1 }
+          # 还必须是变量表的真子集：多出一个不存在的名字，那个分支永远走不到（静默失效）。
+          foreach ($a in ($winAddrNorm -split ' ')) {
+            if ($ps -notmatch ('"' + [regex]::Escape($a) + '"')) { Write-Host ("地址类变量表里的 {0} 不在变量表里" -f $a); $fail = 1 }
+          }
           if ($epCount -ne $hostCount) { Write-Host ("端点个数两侧不一致：Win {0} / Mac {1}" -f $epCount, $hostCount); $fail = 1 }
           if ($pathCount -ne $hostCount) { Write-Host ("macOS 端点表 host 与 path 条数不一致：{0} / {1}" -f $hostCount, $pathCount); $fail = 1 }
           # 逐主机核对 path 与期望值。只比条数是不够的：把某一条记录的 path 改错
