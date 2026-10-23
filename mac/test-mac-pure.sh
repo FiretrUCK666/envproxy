@@ -385,6 +385,20 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         _selftest_assert_eq "快照里有的 NO_PROXY 项判为使用者的" "1" "$_s1c"
         _selftest_assert_eq "快照里没有的默认项仍归我们回收" "0" "$_s1d"
         _selftest_assert_eq "快照里裸写的 NO_PROXY 条目也认得" "1" "$_s1e"
+
+        # classify_no_proxy_entry 是回收循环真正用的那个判据（返回 1=使用者自己的、0=我们加的、2=无关）。
+        # 上面几条测的是它内部的两个判据，这一段测它自己——回收循环里那一行
+        # `classify_no_proxy_entry "$_pt"; [ $? -eq 0 ] && continue` 就是靠这三个返回值分工的。
+        # 这三个分支一旦接错（比如 1 和 0 反了），用户的条目会被摘掉、我们的反而留着。
+        { printf 'NO_PROXY\t%s\n' "'localhost'"; } > "$PREV_ENV"
+        classify_no_proxy_entry "localhost"; _s1f=$?
+        classify_no_proxy_entry "127.0.0.1"; _s1g=$?
+        classify_no_proxy_entry "corp.example"; _s1h=$?
+        rm -f "$PREV_ENV" 2>/dev/null || true
+        PREV_ENV="$_s1_old_prev"
+        _selftest_assert_eq "分类：快照里的项判为使用者的（1）" "1" "$_s1f"
+        _selftest_assert_eq "分类：默认项但不在快照判为我们加的（0）" "0" "$_s1g"
+        _selftest_assert_eq "分类：无关条目原样留（2）" "2" "$_s1h"
     else
         echo "  SKIP 快照归属判定（建不出临时文件）"
     fi
