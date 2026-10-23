@@ -1038,7 +1038,10 @@ function Show-HelpIndexColored {
     Write-Styled 'dim' '  输编号查看    直接回车 = 回主菜单'
 }
 
-# 帮助目录的纯文本（非交互与自检用）：与彩屏同源，不各写一份。
+# 帮助目录的纯文本（非交互与自检用）。
+# 注意：目录页的彩屏版（Show-HelpIndexColored）与本函数**不是**同源——
+# 两者各自硬编码了抬头、导语、本机版本、底部提示四段文案，改一处必须同改另一处。
+# 真正做到同源的是主题页（Format-HelpTopic 与 Show-HelpTopicColored 都读 Get-HelpRenderedLines）。
 function Format-HelpIndex {
     $out = New-Object System.Collections.Generic.List[string]
     [void]$out.Add('================ EnvProxy 帮助 ================')
@@ -1206,7 +1209,13 @@ function Show-Menu {
     # 否则管道到 EOF 时 Read-Host 读空会被当成回车，一遍遍重复默认动作停不下来。
     try {
         if (-not (Test-CanPrompt)) {
-            Write-Styled 'warn' "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。"
+            # 非交互时先把菜单正文打出来，再提示怎么用开关。
+            # 与 Mac 侧对齐（那边 stdout 不是终端就退回纯文本菜单）：
+            # 同样的调用在两个平台上不该一个给菜单、一个只给一句警告。
+            # 这也让 Format-MenuText 不再是"只有测试在用"的死函数。
+            Write-Host (Format-MenuText)
+            Write-Host ''
+            Write-Styled 'warn' "以上是菜单。管道里没法交互，请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。"
             return
         }
     } catch {}

@@ -90,7 +90,7 @@ function Test-LauncherCurrent {
         # 静默失效，而「内容比对」却说一切正常。三字节单独断言一次。
         $bytes = [System.IO.File]::ReadAllBytes($LauncherPath)
         if (-not ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) { return $false }
-        # 行尾与首尾空白不比：落盘的行尾与源码里 here-string 的行尾
+        # 行尾与首尾空白不比：落盘的行尾与 win/locator.ps1 源码的行尾
         # 不必逐字节相同，比"生成出来的代码"是否一致就够了。
         $want = (Get-LauncherContent) -replace "`r`n", "`n"
         $have = (Read-Text $LauncherPath) -replace "`r`n", "`n"

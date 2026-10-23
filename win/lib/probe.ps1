@@ -483,8 +483,9 @@ function Confirm-CandidatePort([int[]]$Candidates, $Preferred) {
 # 只绑 IPv6 回环的代理（mihomo / sing-box 的 bind-address: "::1"）对 127.0.0.1 是
 # 主动拒绝的（实测 "actively refused"），只试 IPv4 会让这类用户永远检测不到代理、
 # 而且不报任何错。两个地址语义等价，都试一遍即可覆盖。
-# 注入的代理值仍统一写 http://127.0.0.1:<port>（端口在两个协议上都能连通）；
-# 只有"代理只监听 ::1"的极端情况才需要用 ::1 拼地址，见 Get-ProxyUrlFor。
+# 注入的地址**每次现场探测**：连得上的那个回环地址才写进去，可能是 127.0.0.1，
+# 也可能是 ::1（拼成 http://[::1]:port）。不能固定写 127.0.0.1——只绑 ::1 的代理
+# 在 IPv4 上主动拒绝，写死会让这类用户注入一个用不了的地址。见 Get-ProxyUrlForPort。
 $LoopbackProbes = @("127.0.0.1", "::1")
 
 # 探测某一端口时，按 $LoopbackProbes 顺序尝试连接，返回第一个连上的地址。

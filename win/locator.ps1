@@ -3,8 +3,9 @@
 $ErrorActionPreference = "SilentlyContinue"
 $reg = "HKCU:\Software\EnvProxy"
 $target = (Get-ItemProperty $reg -ErrorAction SilentlyContinue).ScriptPath
-# 广播用的 P/Invoke 不能写成 @'...'@ here-string：外层模板本身就是单引号 here-string，
-# 内层再出现行首 '@ 会提前终结外层。这里用反引号转义拼单行 C# 源码。
+# 广播用的 P/Invoke 拼成单行 C# 源码：这是个独立脚本，任何时刻都要能单独跑起来
+# （库不在身边、被复制到别处也要能跑），所以不依赖任何外部文件，也不写多行 here-string
+# 去和模板的引号规则纠缠。
 try {
     $csSrc = "using System;`nusing System.Runtime.InteropServices;`npublic static class EnvProxyNative {`n [DllImport(`"user32.dll`", CharSet = CharSet.Auto)]`n public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg, System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out System.UIntPtr lpdwResult);`n}"
     Add-Type -TypeDefinition $csSrc -ErrorAction SilentlyContinue

@@ -912,7 +912,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $remote = Get-RemoteVersion
     if (-not $remote) {
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
-        Write-Styled 'warn' ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源"))
+        Write-Styled 'warn' (Format-VersionCheckFailure $script:UpdateLastVersionFailure)
         $script:UpdateExitCode = 1
         return
     }
@@ -1041,9 +1041,16 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         $newScript = Join-Path $root "win\envproxy.ps1"
         # 先把操作锁交出去：收尾子进程跑的是同一个安装动作，它会自己去拿这把锁。
         if ($opMutex) { try { $opMutex.ReleaseMutex() } catch {}; $opMutex = $null }
-        $null = Invoke-InstallFinish $newScript
-        # 收尾成没成由**复读**决定：安装根里的监控在跑，就是成了。
+        # 收尾子进程有没有在限时内跑完（它自己的判据）……
+        $finishRan = Invoke-InstallFinish $newScript
+        # ……和"跑完之后监控到底起没起来"（复读判据）是两件事，都要看：
+        # 子进程跑完但什么都没做成，与子进程根本没跑完，事后长相一样，
+        # 但排查方向不同（前者看安装输出，后者看是不是被卡住/被杀）。
+        # 早先这里写 $null =，返回值算了没人看——下一个读代码的人会以为这条分支已被覆盖。
         $ok = $false
+        if (-not $finishRan) {
+            Write-Styled 'dim' "收尾子进程没有在限时内结束，正在复核安装根里的监控。"
+        }
         $deadline = (Get-Date).AddSeconds(15)
         while ((Get-Date) -lt $deadline) {
             if (Test-InstallRootMonitor $root) { $ok = $true; break }

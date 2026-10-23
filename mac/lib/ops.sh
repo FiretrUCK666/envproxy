@@ -74,11 +74,7 @@ install_envproxy() {
     _tip_a4="想让某个窗口固定直连"
     _tip_a5="改回跟着翻墙软件走"
     _tip_a6="忘了怎么用"
-    _tip_w=0
-    for _tip_t in "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6"; do
-        _tip_n=$(_display_width "$_tip_t")
-        [ "$_tip_n" -gt "$_tip_w" ] && _tip_w="$_tip_n"
-    done
+    _tip_w=$(printf '%s\n' "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6" | _max_width_of)
     # 前三条是"你会遇到的情况"，正常亮度；后三条是"想改的时候怎么做"，压暗一档。
     # 与 Windows 侧同一套分法：按"这一行右边有没有要照抄的命令"分，
     # 而不是逐条判名字——以后加一条也会自动归到对的一边。
@@ -507,7 +503,11 @@ show_status() {
 # 帮助的内容表：每个主题一屏放得下，进帮助先看目录，选一个只看那一段。
 # 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
-# 每一项用目录（dir）/ 正文（topic 函数）两处拼装，键与标题只写一次。
+# 每一项在**三处**拼装：短名（_help_topic_short）、标题（_help_topic_title）、
+# 正文（_help_topic_body），三处按同一批编号分派，再加 HELP_TOPIC_KEYS 这张编号表。
+# 也就是说加一条主题要改四处，漏改不报错——症状是"目录里出现空标题"或"选中后是一页空白"。
+# （Windows 侧是单表：Get-HelpTopics 一条记录同时含 Key/Title/Short/Lines。）
+# 自检里有一条"标题不为空"的断言专门兜这个漏，但那是事后兜底，不改变这里要改四处的事实。
 HELP_TOPIC_KEYS=(1 2 3 4 5 6 7 8)
 _help_topic_short() {
     case "$1" in
@@ -615,13 +615,10 @@ _help_topic_title() {
 # 编号去敲，敲到的是另一件事（想检查更新，结果卸载了）。生成之后这份内容与菜单
 # 读同一张表，改表即同步，不存在"两边都要记得改"。
 _help_menu_lines() {
-    _hml_w=0
-    for _hml_i in "${MENU_ITEMS[@]}"; do
+    _hml_w=$(for _hml_i in "${MENU_ITEMS[@]}"; do
         _hml_rest=${_hml_i#*|}
-        _hml_name=${_hml_rest%%|*}
-        _hml_nw=$(_display_width "$_hml_name")
-        [ "$_hml_nw" -gt "$_hml_w" ] && _hml_w="$_hml_nw"
-    done
+        printf '%s\n' "${_hml_rest%%|*}"
+    done | _max_width_of)
     echo "t 这些编号要在主菜单里敲，不是在帮助里敲。"
     for _hml_g in $(_menu_group_order); do
         echo "b "
@@ -728,34 +725,27 @@ _help_render_line() {
 # 一个主题里两列行的左列宽度（只按两列行算，别的行不参与——
 # 否则一段长正文会把列撑得很宽）。当前正在渲染的主题由 _HELP_BLOCK 指定。
 _help_block_key_width() {
-    _hbk_w=0
-    while IFS= read -r _hbk_l; do
+    # 取所有两列行（r / rc）的左列，求最宽。喂给 _max_width_of 而不是自己数——
+    # "宽度怎么算"只该有 _display_width 一个答案。
+    _hbk_w=$(printf '%s\n' "$_HELP_BLOCK" | while IFS= read -r _hbk_l; do
         _hbk_c=${_hbk_l%% *}
         case "$_hbk_c" in r|rc) ;; *) continue ;; esac
         _hbk_rest=${_hbk_l#* }
-        _hbk_k=${_hbk_rest%%|*}
-        _hbk_n=$(_display_width "$_hbk_k")
-        [ "$_hbk_n" -gt "$_hbk_w" ] && _hbk_w="$_hbk_n"
-    done <<EOF
-$_HELP_BLOCK
-EOF
+        printf '%s\n' "${_hbk_rest%%|*}"
+    done | _max_width_of)
     printf '%s' "$_hbk_w"
 }
 
 # 一个主题里 m 行的名字列宽度。
 _help_block_name_width() {
-    _hbn_w=0
-    while IFS= read -r _hbn_l; do
+    # 取所有 m 行（菜单屏）的名字列，求最宽。
+    _hbn_w=$(printf '%s\n' "$_HELP_BLOCK" | while IFS= read -r _hbn_l; do
         _hbn_c=${_hbn_l%% *}
         [ "$_hbn_c" = "m" ] || continue
         _hbn_rest=${_hbn_l#* }
         _hbn_rest2=${_hbn_rest#*|}
-        _hbn_name=${_hbn_rest2%%|*}
-        _hbn_n=$(_display_width "$_hbn_name")
-        [ "$_hbn_n" -gt "$_hbn_w" ] && _hbn_w="$_hbn_n"
-    done <<EOF
-$_HELP_BLOCK
-EOF
+        printf '%s\n' "${_hbn_rest2%%|*}"
+    done | _max_width_of)
     printf '%s' "$_hbn_w"
 }
 
@@ -931,7 +921,9 @@ show_help_index_colored() {
     _line_flush
 }
 
-# 帮助目录的纯文本（非交互与自检用）：与彩屏同源，不各写一份。
+# 帮助目录的纯文本（非交互与自检用）。
+# 注意：目录页的彩屏版（show_help_index_colored）与本函数**不是**同源——
+# 两者各自硬编码了抬头、导语、本机版本、底部提示四段文案，改一处必须同改另一处。
 format_help_index() {
     _hi_hv=$(get_local_version 2>/dev/null || true)
     [ -z "$_hi_hv" ] && _hi_hv="未知"
@@ -1166,13 +1158,11 @@ _line_blank() {
 # 渲染整张菜单。colored=1 上色，=0 纯文本；内容只有这一份。
 _render_menu() {
     _rm_colored="$1"
-    _rm_w=0
-    for _rm_i in "${MENU_ITEMS[@]}"; do
+    # 名字列宽度：从表里抽第二列，交给唯一的"求最宽"函数。
+    _rm_w=$(for _rm_i in "${MENU_ITEMS[@]}"; do
         _rm_rest=${_rm_i#*|}
-        _rm_name=${_rm_rest%%|*}
-        _rm_nw=$(_display_width "$_rm_name")
-        [ "$_rm_nw" -gt "$_rm_w" ] && _rm_w="$_rm_nw"
-    done
+        printf '%s\n' "${_rm_rest%%|*}"
+    done | _max_width_of)
     _rm_pid=$(get_monitor_pid || true)
     _rm_ver=$(get_local_version || true)
     [ -z "$_rm_ver" ] && _rm_ver="未知"

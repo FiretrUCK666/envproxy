@@ -115,6 +115,19 @@ _menu_cell_pad() {
 # 屏幕上就是乱码。逐字符累加显示宽度，超过就停。
 # 截断走的是与 _display_width 同一套字节判据（就地展开，不再逐字符调子 shell）：
 # 逐字符调子 shell 的代价是每个字符 forks 数次，一条超宽日志行要十几秒。
+# 从标准输入读若干行，输出其中最大的显示宽度。
+# 五处「求一列里最宽的名字」原来是同一形状各写一遍（安装提示列、菜单名字列、
+# 帮助两列、帮助名字列），只有变量前缀不同。收敛成一处之后，
+# 「宽度怎么算」只有 _display_width 一个答案，改它不会漏掉某一屏。
+_max_width_of() {
+    _mwo_w=0
+    while IFS= read -r _mwo_l; do
+        _mwo_n=$(_display_width "$_mwo_l")
+        [ "$_mwo_n" -gt "$_mwo_w" ] && _mwo_w="$_mwo_n"
+    done
+    printf '%s' "$_mwo_w"
+}
+
 _truncate_width() {
     LC_ALL=C
     _tw_s="$1"

@@ -263,6 +263,16 @@ update_failure_message() {
     esac
 }
 
+# 「最新版本 : 检查失败（…）」这一句的唯一出处。
+# 早先它在状态页与更新入口各硬编码一遍（两侧共四处），改一次措辞要改四处，
+# 漏一处就是「同一个故障，状态页和更新入口两种说法」。
+# 句子外壳（前缀、来源名、括号）收在这一处；具体原因仍由 update_failure_message 生成
+# ——它需要一个来源名才能把话说完整（「连不上 <来源>」），所以来源名必须传进去。
+UPD_FAIL_ALL_SOURCES="所有更新源"
+format_version_check_failure() {
+    printf '%s' "最新版本 : $(update_failure_message "$1" "$UPD_FAIL_ALL_SOURCES")"
+}
+
 # 从多条尝试的失败原因里挑一个报给用户（纯函数，可自检）。
 # 规则（与 Windows 侧同一套，两边必须一致）：
 #   1. 只有"全部都是 missing"才报 missing。404 必须是没有别的解释时才算数——
@@ -912,6 +922,59 @@ source_acceptable() {
 # 退出码（与 Windows 侧同一套，脚本与计划任务靠它判断成功没有）：
 #   0 = 达成目的（已更新 / 已是最新 / 用户选择不更新 / 开发副本不改）
 #   1 = 失败（检查失败、下载失败、校验失败、覆盖失败、没法提问）
+# 下载完成后的统一验收：是不是真包、内容有没有被改写。
+# 两条下载路（API 资产端点 / Release 直连）拿到的是**同一个 tag 下的同一个文件**，
+# 所以判据必然一样。早先这两段各写了 17 行完全相同的代码（逐行比对差异为 0），
+# 连注释都是同一件事的两种说法——将来"下载后再加一道校验"只会改到一份。
+#   $1 = 落盘路径（.headers 同前缀）
+#   $2 = 期望的 sha256（空 = 老版本没这字段，跳过校验）
+# 返回 0 = 采纳；非 0 = 丢弃（并已把原因记进 _pkg_kinds）。
+_accept_downloaded_package() {
+    _adp_path="$1"
+    _adp_digest="$2"
+    # 200 不等于拿到包：请求头被中间层丢掉时这里回的是 JSON。
+    # 不是 gzip 就丢弃，让另一条路接手——否则会把"网络问题"报成"发布缺包/校验失败"。
+    if ! _is_gzip "$_adp_path"; then
+        rm -f "$_adp_path" "$_adp_path.headers" 2>/dev/null || true
+        _pkg_kinds="$_pkg_kinds bad-content"
+        return 1
+    fi
+    # 校验值对不上：拿回来的不是发布方那份内容（下载被改写或截断）。
+    # 这跟"不是 gzip"是同一类问题：内容不可信，丢掉它换下一条路。
+    # 三态：0 = 对得上、2 = 老版本没这字段（跳过）、其他 = 对不上。
+    check_asset_digest "$_adp_digest" "$_adp_path"
+    _adp_rc=$?
+    if [ "$_adp_rc" -eq 0 ] || [ "$_adp_rc" -eq 2 ]; then
+        return 0
+    fi
+    rm -f "$_adp_path" "$_adp_path.headers" 2>/dev/null || true
+    _pkg_kinds="$_pkg_kinds bad-content"
+    return 1
+}
+
+# 当前环境能不能向使用者提问。判据是"能不能打开控制台"，不是"文件在不在"：
+# 只看 -r /dev/tty 不够——文件在却打不开时会漏过去，于是先下载再发现问不到人，
+# 白烧一次配额和一份安装包。
+_can_ask_human() {
+    if ( : < /dev/tty ) 2>/dev/null; then return 0; fi
+    return 1
+}
+
+# 在控制台上问一句，答案放 _ans。问不到人返回 1。
+#
+# 为什么探测放在子 shell 里：重定向在子 shell 启动时就位，所以"打不开"的报错
+# 不会漏到屏幕上。写成 `exec 3<>/dev/tty 2>/dev/null` 挡不住——重定向按从左到右
+# 生效，报错发生在 2>/dev/null 生效之前；`{ exec ...; } 2>/dev/null` 同样挡不住。
+# 这段坑很细，早先在两处各写了一遍（逐行相同），修它只会修到一份。
+_ask_human() {
+    _ans=""
+    _can_ask_human || return 1
+    exec 3<>/dev/tty
+    if ! read -r _ans <&3; then exec 3<&-; return 1; fi
+    exec 3<&-
+    return 0
+}
+
 update_envproxy() {
     _yes="$1"
     style_out title "======== EnvProxy 检查更新 ========"
@@ -920,7 +983,7 @@ update_envproxy() {
     style_out dim "正在检查最新版本（最多等十几秒）..."
     if ! get_remote_version; then
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
-        style_out warn "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
+        style_out warn "$(format_version_check_failure "${REMOTE_FAILURE_KIND:-network}")"
         return 1
     fi
     style_out ok "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
@@ -939,18 +1002,7 @@ update_envproxy() {
         # 两者必须分开走：合并成一条路会谎报成"已取消"，而且退出码是 0。
         # 报错信息也要吃掉：重定向失败发生在 2>/dev/null 生效之前，会原样漏到屏幕上。
         _ans_ok=1
-        # 先静默探测能不能开控制台，再真正打开：探测放在子 shell 里，
-        # 重定向在子 shell 启动时就位，所以"打不开"的报错不会漏到屏幕上
-        # （写成 `exec 3<>/dev/tty 2>/dev/null` 挡不住——重定向按从左到右生效，
-        #   报错发生在 2>/dev/null 生效之前；`{ exec ...; } 2>/dev/null` 同样挡不住）。
-        if ( : < /dev/tty ) 2>/dev/null; then
-            exec 3<>/dev/tty
-            read -r _ans <&3 || _ans_ok=0
-            exec 3<&-
-        else
-            _ans_ok=0
-        fi
-        if [ "$_ans_ok" != "1" ]; then
+        if ! _ask_human; then
             printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             return 1
         fi
@@ -1086,23 +1138,7 @@ update_envproxy() {
             fetch_update_file "$_sapirepo/releases/assets/$_asset_id" "$_try_tgz" "Accept: application/octet-stream"
             _rc=$?
             if [ "$_rc" -eq 0 ]; then
-                # 200 不等于拿到包：请求头被中间层丢掉时这里回的是 JSON。不是 gzip 就丢弃，
-                # 让下面的直连兜底接手——否则会把"网络问题"报成"发布缺包/校验失败"。
-                if _is_gzip "$_try_tgz"; then
-                    # 校验值对不上：拿回来的不是 GitHub 发布的那份内容（下载被改写或截断）。
-                    # 这跟"不是 gzip"是同一类问题：内容不可信，丢掉它换下一条路。
-                    check_asset_digest "$_asset_digest" "$_try_tgz"
-                    _cad_rc=$?
-                    if [ "$_cad_rc" -eq 0 ] || [ "$_cad_rc" -eq 2 ]; then
-                        _got=0
-                    else
-                        rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
-                        _pkg_kinds="$_pkg_kinds bad-content"
-                    fi
-                else
-                    rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
-                    _pkg_kinds="$_pkg_kinds bad-content"
-                fi
+                if _accept_downloaded_package "$_try_tgz" "$_asset_digest"; then _got=0; fi
             else
                 _pkg_kinds="$_pkg_kinds $FETCH_FAILURE"
             fi
@@ -1113,20 +1149,7 @@ update_envproxy() {
             fetch_update_file "$_sbase/releases/download/$(url_encode "$REMOTE_TAG")/EnvProxy-mac.tar.gz" "$_try_tgz" ""
             _rc=$?
             if [ "$_rc" -eq 0 ]; then
-                if _is_gzip "$_try_tgz"; then
-                    # 同样对一下校验值：直连拿到的也是同一份资产，一样要验。
-                    check_asset_digest "$_asset_digest" "$_try_tgz"
-                    _cad_rc=$?
-                    if [ "$_cad_rc" -eq 0 ] || [ "$_cad_rc" -eq 2 ]; then
-                        _got=0
-                    else
-                        rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
-                        _pkg_kinds="$_pkg_kinds bad-content"
-                    fi
-                else
-                    rm -f "$_try_tgz" "$_try_tgz.headers" 2>/dev/null || true
-                    _pkg_kinds="$_pkg_kinds bad-content"
-                fi
+                if _accept_downloaded_package "$_try_tgz" "$_asset_digest"; then _got=0; fi
             else
                 _pkg_kinds="$_pkg_kinds $FETCH_FAILURE"
             fi
@@ -1172,18 +1195,7 @@ _ENVPROXY_PKG_
         # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
         _ans_ok=1
-        # 先静默探测能不能开控制台，再真正打开：探测放在子 shell 里，
-        # 重定向在子 shell 启动时就位，所以"打不开"的报错不会漏到屏幕上
-        # （写成 `exec 3<>/dev/tty 2>/dev/null` 挡不住——重定向按从左到右生效，
-        #   报错发生在 2>/dev/null 生效之前；`{ exec ...; } 2>/dev/null` 同样挡不住）。
-        if ( : < /dev/tty ) 2>/dev/null; then
-            exec 3<>/dev/tty
-            read -r _ans <&3 || _ans_ok=0
-            exec 3<&-
-        else
-            _ans_ok=0
-        fi
-        if [ "$_ans_ok" != "1" ]; then
+        if ! _ask_human; then
             printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
             rm -rf "$_exdir" 2>/dev/null || true

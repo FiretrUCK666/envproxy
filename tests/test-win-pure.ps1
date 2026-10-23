@@ -1081,6 +1081,22 @@ Assert-Eq '监控判据认得带引号的命令行' $true ('powershell.exe -NoPr
 Assert-Eq '监控判据认得不带引号的命令行' $true ('powershell.exe -NoProfile -File D:\EnvProxy\win\envproxy.ps1' -match $MonitorCmdLinePattern)
 Assert-Eq '监控判据认不得带子命令的进程' $false ('powershell.exe -File "D:\EnvProxy\win\envproxy.ps1" -Status' -match $MonitorCmdLinePattern)
 Assert-Eq '监控判据认不得命令行中间提到脚本的进程' $false ('powershell.exe -Command "Get-Content D:\EnvProxy\win\envproxy.ps1"' -match $MonitorCmdLinePattern)
+# 定位器（win/locator.ps1）是独立的登录期脚本，不加载任何库，所以它只能自带一份
+# 同样的字面量。但「同一语义」这句话原来没有任何机制兜住：门禁 6 不比对这两个模式，
+# 测试也只钉了 runtime 那一份。改一侧的后果是「定位器认不出已在跑的监控 → 再起一份
+# 被单实例锁挡掉 → 监控起不来而状态页报未运行」。
+# 定位器就在仓库里，测试读得到，所以直接把它抓出来比对。
+$locSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/locator.ps1'))
+# 只抓"等号右边到行尾"，剥引号留给下一步：把两件事塞进一个正则时，
+# 引号很容易被当成通配符吃掉（实测过一次，取出来的是没有引号的内容，
+# 而断言看起来"通过了第一层"，第二层永远空）。
+$locRaw = [regex]::Match($locSrc, "MonitorCmdLinePattern\s*=\s*(.+)$", "Multiline")
+Assert-Eq '定位器里带了一份监控命令行判据' $true ($locRaw.Success)
+if ($locRaw.Success) {
+    $locVal = $locRaw.Groups[1].Value.Trim()
+    if ($locVal.Length -ge 2) { $locVal = $locVal.Substring(1, $locVal.Length - 2) }
+    Assert-Eq '定位器与核心脚本的监控命令行判据完全相同' $MonitorCmdLinePattern $locVal
+}
 
 # ------------------------------------------------------------------------------
 # [10] 快照归属判定：首次安装时，本机地址的代理变量是使用者自己的
