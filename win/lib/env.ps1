@@ -529,7 +529,17 @@ function Invoke-EnvStateWrite([string]$state, [string]$LogOff, [string]$LogOn) {
     try {
         $gate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
         $held = $gate.WaitOne(5000)
-    } catch { $held = $false }
+    } catch [System.Threading.AbandonedMutexException] {
+        # 这个异常的含义是"上一个持有者没释放就死了，而**锁已经交给本线程**"。
+        # 所以必须当成拿到了——当成没拿到的话，finally 里不会释放，
+        # 锁就被本进程永久占着，此后安装/停止/卸载全部 5 秒超时。
+        # 实测（强杀持有锁的进程，再 WaitOne(0) 与 WaitOne(5000)）：当前 .NET 实现
+        # 直接返回 True、不抛这个异常。所以这是防御而非已知故障——
+        # 但"抛了就泄漏"的代价太大，一行判断换掉一个不可恢复的状态值得。
+        $held = $true
+    } catch {
+        $held = $false
+    }
     $ok = 0
     try {
         if ($state -eq "off") {
@@ -557,6 +567,15 @@ function Invoke-EnvStateWrite([string]$state, [string]$LogOff, [string]$LogOn) {
             try { $gate.Dispose() } catch {}
         }
     }
+    # Git Bash 那份终端同步看的镜像文件，**在这里写**，不在 Apply-State 里写。
+    #
+    # 为什么必须放在共用函数里：它曾经留在 Apply-State 里，于是"状态翻转时写、
+    # 30 轮自愈时不写"——而自愈正是修"东西被删/被改坏"的那条路。实测：删掉
+    # terminal.env 之后跑一次自愈，文件仍然不存在，于是已开着的 Git Bash 窗口
+    # 再没有任何依据判断"这几个值是我们写的"，死代理永远清不掉，
+    # 用户看到的是 git/curl 全部 ECONNREFUSED 且错误里没有本工具的名字。
+    # 写失败不影响任何判定：读不到文件时那份钩子什么都不做。
+    try { Write-TerminalStateFile $state } catch {}
     return $ok
 }
 
@@ -572,12 +591,8 @@ function Apply-State([string]$state) {
     # 写与广播都交给共用函数，这里只提供这个场合该说的话。
     $port = if ($state -ne "off") { $state.Substring(3) } else { "" }
     $logOn = if ($port) { "检测到本地代理端口 $port -> 已注入代理 " + (Get-ProxyUrlForPort ([int]$port)) } else { "" }
-    $appliedOk = ((Invoke-EnvStateWrite $state "代理已关闭 -> 已删除代理变量，恢复直连" $logOn) -eq 0)
-    # 给 Git Bash 那份终端同步看的镜像文件。注册表它读不了（MSYS2 的 /proc/registry
-    # 只能在最顶层 shell 进程里读，函数里读到的是空），所以这里额外落一份普通文件。
-    # 写失败不影响任何判定：读不到文件时那份钩子什么都不做。
-    try { Write-TerminalStateFile $state } catch {}
-    return $appliedOk
+    # 镜像文件由 Invoke-EnvStateWrite 统一写（两个调用点必须做同一件事）。
+    return ((Invoke-EnvStateWrite $state "代理已关闭 -> 已删除代理变量，恢复直连" $logOn) -eq 0)
 }
 
 # 把当前状态落到 LOCALAPPDATA 下的 EnvProxy 目录，文件名 terminal.env，供 Git Bash 的提示符钩子读。

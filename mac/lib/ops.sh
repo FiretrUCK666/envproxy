@@ -306,7 +306,13 @@ get_status_snapshot() {
 
     # 代理变量：整条地址读回来（不只端口），再试连看它指向的端口还在不在。
     _cur=$(get_current_proxy_url 2>/dev/null || true)
-    _cur_alive=1
+    # 三态：1 = 活着、0 = 端口不在、"" = 说不清（值不是合法地址）。
+    #
+    # 初值必须是""，不能是 1。原来是 1，于是"取不出端口"时整个 if 被跳过、
+    # 1 留在原处变成了结论——屏幕上说"已注入"、结论行说"一切正常"。
+    # 这条路径真实可达：proxy.env 被别的工具改坏、或写进了半个地址就会命中。
+    # 拿不准时默认必须是"不知道"：说不知道最多让人多查一眼，说"正常"会让人不去查。
+    _cur_alive=""
     _cur_addr=""
     _cur_port=""
     if [ -n "$_cur" ]; then
@@ -315,6 +321,7 @@ get_status_snapshot() {
         _cur_port=$(printf '%s' "$_cur_hostport" | sed -nE 's/.*:([0-9]+)$/\1/p')
         _cur_addr=$(printf '%s' "$_cur_hostport" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
         if [ -n "$_cur_port" ]; then
+            _cur_alive=1
             _port_alive "$_cur_addr" "$_cur_port" || _cur_alive=0
         fi
     fi
@@ -363,7 +370,9 @@ show_status() {
 "
     [ "$_port_unknown" = "1" ] && _pb="$_pb这一轮没读到本机端口，无法判断代理
 "
-    if [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="$_pb代理变量指向的端口已经不在
+    if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then _pb="$_pb代理变量里不是合法地址
+"
+    elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="$_pb代理变量指向的端口已经不在
 "; fi
     case "$_ts_state" in ok) ;; *) _pb="$_pb终端同步没生效
 ";; esac
@@ -436,7 +445,10 @@ show_status() {
             style_out dim "  打开菜单选 1（安装 / 修复）可以启用。"
         fi
     fi
-    if [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
+    if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then
+        style_out warn "代理变量 : 值不是合法地址（$_cur）"
+        style_out dim "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
+    elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
         style_out warn "代理变量 : 指向的端口已不在（$_cur）"
         style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
         style_out dim "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"

@@ -276,6 +276,28 @@ foreach ($good in @('off', 'unknown', '')) {
     Assert-Eq ("合法状态串放行：" + $good) 0 $r
 }
 
+Write-Host '[2e] the mirror file has a self-heal path'
+# 契约：Git Bash 那份终端同步读 terminal.env 判断"这几个值是不是我们写的"。
+# 那个文件被删掉之后，必须有东西能重建它——否则已开着的窗口永远清不掉死代理，
+# 用户看到的是 git/curl 全部 ECONNREFUSED 而错误里没有本工具的名字。
+# 曾经它只在 Apply-State（状态翻转）里写，30 轮自愈那条路不写，
+# 于是"删掉就再也回不来"。这条钉住"自愈也能重建"。
+$mirrorPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "EnvProxy\terminal.env"
+$mirrorBak = $null
+if (Test-Path $mirrorPath) { $mirrorBak = Get-Content $mirrorPath -Raw -ErrorAction SilentlyContinue }
+try {
+    if (Test-Path $mirrorPath) { Remove-Item $mirrorPath -Force -ErrorAction SilentlyContinue }
+    # 走自愈那条路（Invoke-EnvStateWrite），不是走 Apply-State
+    $mirrorRc = Invoke-EnvStateWrite "on:7078" "" ""
+    Assert-Eq '自愈能把被删的镜像文件重建出来' $true (Test-Path $mirrorPath)
+    if (Test-Path $mirrorPath) {
+        $mirrorLines = @(Get-Content $mirrorPath)
+        Assert-Eq '重建出来的镜像含 we 写下的归属记录' $true (@($mirrorLines | Where-Object { $_ -like 'owned_*' }).Count -gt 0)
+    }
+} finally {
+    if ($mirrorBak) { [System.IO.File]::WriteAllText($mirrorPath, $mirrorBak, (New-Object System.Text.UTF8Encoding($false))) }
+}
+
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
 

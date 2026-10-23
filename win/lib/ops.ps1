@@ -354,7 +354,14 @@ function Get-StatusSnapshot {
     # 早先这里用正则只认 127.0.0.1，于是 IPv6-only 的代理整段检查被跳过、直接报"已注入"。
     $st.ProxyHost = $null
     $st.ProxyPort = 0
-    $st.ProxyAlive = $true
+    # 三态：$true 活着 / $false 端口不在 / $null 说不清（值不是合法地址）。
+    #
+    # 初值必须是 $null 而不是 $true。原来是 $true，于是"值解析不出来"时整个 if 被跳过、
+    # $true 留在原处，变成了结论——屏幕上绿字"已注入 (not-a-url)"、"一切正常"。
+    # 这条路径真实可达：注册表被别的工具写成 http://127.0.0.1:0 或半个地址就会命中。
+    # 一种"说不清"的默认值必须是"不知道"，不能是"好"：说不知道最多让人多查一眼，
+    # 说"一切正常"会让人压根不去查。
+    $st.ProxyAlive = $null
     if ($st.ProxyValue) {
         $pp = Split-ProxyUrl $st.ProxyValue
         if ($pp) {
@@ -362,6 +369,8 @@ function Get-StatusSnapshot {
             $st.ProxyPort = $pp.Port
             $st.ProxyAlive = Test-TcpAlive $pp.Host $pp.Port 800
         }
+        # 解析不出来就保持 $null：这不是"端口死"，是"这个值根本不是地址"，
+        # 处理方式不同——前者等监控自愈，后者要人看一眼变量被谁改坏了。
     }
     # 系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
@@ -406,7 +415,8 @@ function Show-StatusSnapshot($st) {
     }
     if (-not $st.AutoRunOk) { $problems += "开机自启没生效" }
     if ($st.PortUnknown) { $problems += "这一轮没读到本机端口，无法判断代理" }
-    if ($st.ProxyValue -and -not $st.ProxyAlive) { $problems += "代理变量指向的端口已经不在" }
+    if ($st.ProxyValue -and $st.ProxyAlive -eq $false) { $problems += "代理变量指向的端口已经不在" }
+    if ($st.ProxyValue -and $null -eq $st.ProxyAlive) { $problems += "代理变量里不是合法地址" }
     # 「没人维护」不是一个独立问题，它是「监控没在跑」的后果。
     # 两个都计进"有 N 项要注意"，用户会以为有两件事要修，而实际只有一件。
     # 所以它只在**监控还在跑、变量却指向死端口**时才需要单独说；
@@ -468,6 +478,12 @@ function Show-StatusSnapshot($st) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
         Write-Styled 'dim' "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
+    } elseif ($st.ProxyValue -and $null -eq $st.ProxyAlive) {
+        # 值在，但不是个能解析的地址。与"端口已不在"分开说：那个等监控自愈就行，
+        # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
+        # 不许落绿字"已注入"——那等于告诉用户一切正常。
+        Write-Styled 'warn' ("代理变量 : 值不是合法地址（{0}）" -f $st.ProxyValue)
+        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
         Write-Styled 'warn' ("代理变量 : 指向的端口已不在（{0}）" -f $st.ProxyValue)
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
