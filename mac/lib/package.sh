@@ -86,6 +86,25 @@ _VPKG_
     done < "$_vlist"
     rm -f "$_vlist" 2>/dev/null || true
     [ "$_vbad" = "0" ] || return 1
+
+    # 最后一道准入：**新代码能不能跑**。
+    #
+    # 前面查的全是"形状"——文件齐不齐、库清单对不对、VERSION 一致不一致、行尾对不对。
+    # 一个语法上跑不起来的包（少一个 fi、多一个引号）能完美通过全部形状校验，然后被装上去。
+    # 而装坏之后没有退路：覆盖成功 → 收尾用新入口跑 install → 新入口自己解析就失败 →
+    # 提示"请打开菜单选一次安装 / 修复"——那句话此时是死路，菜单也是同一个入口。
+    # 同时旧监控已被停掉、开机自启指向这个跑不起来的入口。
+    #
+    # 用 `bash -n`（与 CI 门禁 1 同一手段），放在**覆盖之前**。代价几十毫秒，收益是消除这条死路。
+    if [ "$_vplat" = "mac" ] && [ -f "$_vroot/mac/envproxy.sh" ]; then
+        for _vf_syn in "$_vroot/mac/envproxy.sh" "$_vroot"/mac/lib/*.sh "$_vroot"/mac/*.sh; do
+            [ -f "$_vf_syn" ] || continue
+            if ! /bin/bash -n "$_vf_syn" 2>/dev/null; then
+                echo "校验失败（$(basename "$_vf_syn") 有语法错误），未做任何改动。这一版装上去会跑不起来，所以拒收。" >&2
+                return 1
+            fi
+        done
+    fi
     return 0
 }
 
@@ -113,6 +132,20 @@ install_package() {
         echo "拒绝覆盖：目标不是 EnvProxy 安装目录，未做任何改动。"
         return 1
     fi
+    # C9: 覆盖进行中的落盘标记。
+    #
+    # 文件是逐个替换的，整个窗口有几秒。若这几秒里断电、蓝屏、被强制关机，
+    # 安装区就会新旧混在一起。因为 VERSION 最后写，`get_local_version` 仍报旧版本、
+    # 入口通常还起得来——于是启动自检全绿，运行时表现为某个函数"找不到"
+    # 或行为与常量不一致，而这类错误会被大量容错吞成"这一轮不知道"，
+    # 表现为功能部分可用、部分静默失效。没有任何自检会发现"这份安装是半新半旧的"。
+    #
+    # 所以覆盖前写标记、成功后删掉；状态页发现它就报出来。
+    # 与 stopped.intent 同一个手法：用落盘意图区分两类事后长相相同的情况。
+    _pmark="$_pdest/mac/monitor/update.inprogress"
+    mkdir -p "$(dirname "$_pmark")" 2>/dev/null || true
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_pmark" 2>/dev/null || true
+
     # 生效作用域 = 调用方声明 ∩ 包内实际有的目录（与 Win 侧 Install-Package 同语义）：
     # 分包本来就没有另一平台目录，即使有人传了全量作用域，也绝不碰包外的东西。
     _peff=""
@@ -259,5 +292,7 @@ install_package() {
         return 1
     fi
     rm -f "$_plist" 2>/dev/null || true
+    # 覆盖全部成功：撤掉"更新进行中"标记（留着会让状态页一直报假警报）。
+    rm -f "$_pmark" 2>/dev/null || true
     return 0
 }

@@ -66,7 +66,7 @@ Two need a restart: it was already open before you installed EnvProxy, or it run
 
 Installing does four things: it saves your current variable values (restored on uninstall), registers start at login, adds a small sync script to your terminal's startup configuration, and starts the monitor plus corrects the variables once.
 
-Progress is reported as steps 1–4. The order differs: Windows does (1) start at login, (2) monitor, (3) variables, (4) terminal sync; Mac does (1) start at login, (2) terminal sync, (3) monitor, (4) variables. Saving your original values happens before step 1, so it has no number of its own.
+Progress is reported as steps 1–4, and each number means the same thing on both platforms: (1) start at login, (2) monitor, (3) variables, (4) terminal sync. Saving your original values happens before step 1, so it has no number of its own.
 
 <img src="./assets/readme/first-run.en.svg" width="100%" alt="Install in three steps: download the package for your platform, double-click the menu and choose 1 Install / Repair, see the monitor started message; below, a side by side comparison: a window opened after the install takes effect right away, and a window that was open before also catches up once you reopen it or load the sync script by hand">
 
@@ -289,7 +289,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 |---|---|---|
 | Active | Normal | Nothing |
 | Installed but cannot run (reason given) | Windows execution policy stops PowerShell from running the profile. Windows only | Follow the hint on the second line (see section 4), then open a new window |
-| Markers in the profile are unpaired | Something else edited your profile | Run **1 Install / repair** once |
+| Markers in the profile are unpaired | Something else edited your profile and left half a marker | Delete that lone `# >>> EnvProxy >>>` (or `# <<< EnvProxy <<<`) line — the status page gives its line number — then pick 1 |
 | No sync block in the profile | Never installed, or it was cleaned away | Run **1 Install / repair** once |
 | Cannot read the profile path this time (Windows only) | Rare; this run cannot tell | Look again in a few seconds; if it stays, run **1 Install / repair** once |
 
@@ -355,7 +355,7 @@ It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does
 
 1. **A port is listening** — some program on this machine opened a proxy port
 2. **It really is a proxy** — a `CONNECT` handshake must answer `HTTP/1.x 200`. This rules out development servers and ordinary web servers
-3. **It really reaches the internet** — the port is used to reach **7 different endpoints**, and **any one** returning a real response is enough
+3. **It really reaches the internet** — the port is used to reach **6 different endpoints**, and **any one** returning a real response is enough
 
 All three must hold before any variable is written. A web server on your machine is never mistaken for a proxy.
 

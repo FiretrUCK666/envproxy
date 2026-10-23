@@ -44,7 +44,8 @@ param(
     [switch]$Menu,
     [switch]$Help,
     [switch]$Yes,
-    [switch]$Purge
+    [switch]$Purge,
+    [switch]$RepairProfile
 )
 # ------------------------------------------------------------------------------
 #  文件结构（入口只做四件事：解析参数、挂操作锁、加载自检、分派）
@@ -58,6 +59,17 @@ param(
 #     lib\ops.ps1      安装/停止/卸载/状态编排
 #   库清单的唯一权威处是下面的 $CoreLibs；门禁会核对它与 lib\ 实际内容一致。
 # ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
+# 启动期的输出通道（必须先于任何库定义）
+# ------------------------------------------------------------------------------
+# 下面两段自救提示（缺文件 / 解析不过）存在的唯一理由，就是"库有问题时给人一句人话"。
+# 而它们跑在库加载**之前**，此刻 Write-Styled 还定义在 base.ps1 里、根本没进来。
+# 用它打印的后果是：满屏 "术语 'Write-Styled' 不会被识别"，排查方向被引到"工具自己崩了"。
+# 所以这里自带一个不依赖任何库的最小输出器，只用 Write-Host。
+function Write-BootWarn([string]$Text) {
+    try { Write-Host $Text -ForegroundColor Yellow } catch { try { Write-Host $Text } catch {} }
+}
+
 # ------------------------------------------------------------------------------
 # 加载核心库（顺序固定：契约常量与纯函数必须先就位）
 # ------------------------------------------------------------------------------
@@ -79,10 +91,10 @@ foreach ($libName in $CoreLibs) {
     elseif ((Get-Item -LiteralPath $libPath).Length -eq 0) { $missingLib += ("lib\{0}.ps1（空文件）" -f $libName) }
 }
 if ($missingLib.Count) {
-    Write-Styled 'warn' "安装不完整，缺少程序文件："
-    foreach ($m in $missingLib) { Write-Styled 'warn' ("  " + $m) }
-    Write-Styled 'warn' "这个文件夹没有完整拷过来，或者文件被删掉了。"
-    Write-Styled 'warn' "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。"
+    Write-BootWarn "安装不完整，缺少程序文件："
+    foreach ($m in $missingLib) { Write-BootWarn ("  " + $m) }
+    Write-BootWarn "这个文件夹没有完整拷过来，或者文件被删掉了。"
+    Write-BootWarn "到 Releases 页面重新下载安装包，解压后覆盖这个文件夹即可（缺文件时打开菜单也修不了——它自己就要用到这些文件）。"
     exit 1
 }
 # 解析预检：文件在、不为空，但语法解析不了（典型是 .ps1 丢了 UTF-8 BOM，
@@ -102,10 +114,10 @@ foreach ($libName in $CoreLibs) {
     if ($err -and $err.Count) { $parseBad += ("lib\{0}.ps1（{1}）" -f $libName, $err[0].Message) }
 }
 if ($parseBad.Count) {
-    Write-Styled 'warn' "程序文件损坏，无法解析："
-    foreach ($m in $parseBad) { Write-Styled 'warn' ("  " + $m) }
-    Write-Styled 'warn' "最常见的原因是 .ps1 被存成了「UTF-8 无 BOM」：中文注释在 PowerShell 5.1 下"
-    Write-Styled 'warn' "会按系统代码页读成乱码、撑破语法。到 Releases 页面重新下载安装包覆盖即可。"
+    Write-BootWarn "程序文件损坏，无法解析："
+    foreach ($m in $parseBad) { Write-BootWarn ("  " + $m) }
+    Write-BootWarn "最常见的原因是 .ps1 被存成了「UTF-8 无 BOM」：中文注释在 PowerShell 5.1 下"
+    Write-BootWarn "会按系统代码页读成乱码、撑破语法。到 Releases 页面重新下载安装包覆盖即可。"
     exit 1
 }
 foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) }
@@ -148,6 +160,7 @@ if ($Status)    { $usageCommands += "status" }
 if ($Update)    { $usageCommands += "update" }
 if ($Menu)      { $usageCommands += "menu" }
 if ($Help)      { $usageCommands += "help" }
+if ($RepairProfile) { $usageCommands += "repair-profile" }
 $usageSwitches = @()
 if ($Purge) { $usageSwitches += "purge" }
 if ($Yes)   { $usageSwitches += "yes" }
@@ -155,30 +168,43 @@ if ($Yes)   { $usageSwitches += "yes" }
 #   -Un      -> -Uninstall   少打几个字母就真的卸载
 #   -Instal  -> -Install     少打一个字母就真的安装
 # 而 $args 是空的，Get-UsageError 完全看不见——它会静默执行破坏性动作。
-# 这里回读原始命令行，逐个确认每个 -开关 都**精确**等于已声明的名字。
-$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Yes','Purge')
+#
+# 判据的难点在于：$MyInvocation.Line 是**整行输入**，不是"脚本收到的参数"。
+# 拿整行去比对，下面这些完全正常的用法都会被判成"你把参数写错了"（退出码 2）：
+#     .\envproxy.ps1 -Status | Select-Object -First 3      → 报 -First 无法识别
+#     .\envproxy.ps1 -Status | Format-Table -AutoSize      → 报 -AutoSize 无法识别
+#     pwsh -NoProfile .\envproxy.ps1 -Status               → 报 -NoProfile 无法识别
+# 而"看状态并截几行"恰恰是脚本化使用最自然的一步。
+#
+# 所以判据不是"整行有没有别的命令"，而是取一个**精确窗口**：
+#   脚本路径之后，到第一个 shell 元字符之前——那一段才是本脚本收到的参数。
+#   `.\envproxy.ps1 -Status | Select-Object -First 3` 的窗口是 ` -Status `，
+#   `-First` 落在管道之后、不在窗口里，自然不会误报。
+# 这个窗口同时保住了护栏的本职：`-Instal` / `-Un` 就在窗口里，照样被拦下。
+# 宁可不拦缩写，也不能把对的用法拦下来——拦错了用户无法通过重试解决。
+$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Yes','Purge','RepairProfile')
 $rawLine = ""
 try { $rawLine = [string]$MyInvocation.Line } catch {}
 if ([string]::IsNullOrWhiteSpace($rawLine)) {
     try { $rawLine = [string](Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction SilentlyContinue).CommandLine } catch {}
 }
 if (-not [string]::IsNullOrWhiteSpace($rawLine)) {
-    # 只看 -File <脚本> 之后的那一段：前面是 powershell.exe 自己的参数
-    # （-NoProfile、-ExecutionPolicy 等），不该拿我们的开关表去校验它们。
-    $scriptArgs = $rawLine
-    if ($rawLine -match '(?i)-File\s+("[^"]+"|\S+)(.*)$') {
-        $scriptArgs = $Matches[2]
-    } elseif ($rawLine -match '(?i)-Command\b') {
-        # -Command 形态：参数已经是代码的一部分，不做原文校验（避免误判）。
-        $scriptArgs = ""
-    }
-    foreach ($m in [regex]::Matches($scriptArgs, '(?i)(?<=^|\s)--?([A-Za-z][A-Za-z0-9]*)')) {
-        $typed = $m.Groups[1].Value
-        if (-not ($knownSwitches | Where-Object { $_ -eq $typed })) {
-            Write-Styled 'warn' ("无法识别的开关：-" + $typed)
-            Write-Styled 'warn' ("可用开关：" + (($knownSwitches | ForEach-Object { "-" + $_ }) -join ' '))
-            Write-Styled 'warn' "参数必须写全，不支持缩写（少打几个字母会被当成另一个动作）。"
-            exit 2
+    # 先定位脚本路径本身：`-File "x.ps1"`、位置式 `x.ps1`、以及带引号/带 .\ 前缀都算。
+    $pathMatch = [regex]::Match($rawLine, '(?i)("[^"]*envproxy\.ps1"|[^\swith;|&]*(?:\\|/)?envproxy\.ps1)')
+    $tail = $null
+    if ($pathMatch.Success) { $tail = $rawLine.Substring($pathMatch.Index + $pathMatch.Length) }
+    if ($null -ne $tail) {
+        # 窗口截到第一个元字符为止：管道、语句分隔、重定向、括号、子表达式之后都不属于我们。
+        $stopAt = $tail.IndexOfAny([char[]]@('|',';','&','>','<','{','}','$','(',')','`'))
+        $window = if ($stopAt -ge 0) { $tail.Substring(0, $stopAt) } else { $tail }
+        foreach ($m in [regex]::Matches($window, '(?i)(?<=^|\s)--?([A-Za-z][A-Za-z0-9]*)')) {
+            $typed = $m.Groups[1].Value
+            if (-not ($knownSwitches | Where-Object { $_ -eq $typed })) {
+                Write-Styled 'warn' ("无法识别的开关：-" + $typed)
+                Write-Styled 'warn' ("可用开关：" + (($knownSwitches | ForEach-Object { "-" + $_ }) -join ' '))
+                Write-Styled 'warn' "参数必须写全，不支持缩写（少打几个字母会被当成另一个动作）。"
+                exit 2
+            }
         }
     }
 }
@@ -231,6 +257,27 @@ if ($Menu) {
 }
 if ($Help) {
     Show-Help
+    return
+}
+# 显式修复"配置文件里标记不成对"。这是一个**需要人明确同意**的修复动作：
+# 安装/卸载遇到不成对的标记一律"一个字节都不改"（猜必错），但那条护栏让一个
+# 可诊断、可修复的状态变成不可达——用户照文档重跑安装，每次都被拒绝。
+# 所以给一个显式入口，语义是"我确认这是半截标记，删掉它"，不是"你猜一个"。
+if ($RepairProfile) {
+    $r = Repair-ProfileMarkers
+    if ($r.Fixed.Count -gt 0) {
+        Write-Styled 'ok' "[完成] 已摘掉这些文件里的孤立标记（原文件已备份为 *.envproxy.bak）："
+        foreach ($p in $r.Fixed) { Write-Styled 'dim' ("        " + $p) }
+        Write-Styled 'dim' "        现在打开菜单选 1（安装 / 修复），把它重新写好。"
+    }
+    if ($r.Failed.Count -gt 0) {
+        Write-Styled 'warn' "[未完成] 这些文件没能修好（可能不可写）："
+        foreach ($p in $r.Failed) { Write-Styled 'warn' ("        " + $p) }
+        Write-Styled 'warn' "        可以手动删掉文件里孤立的 # >>> EnvProxy >>> 那一行。"
+    }
+    if ($r.Fixed.Count -eq 0 -and $r.Failed.Count -eq 0) {
+        Write-Styled 'dim' "没有需要修的：所有配置文件里的标记都是成对的。"
+    }
     return
 }
 # 无参数 = 监控模式（由开机自启调用）。

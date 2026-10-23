@@ -93,6 +93,35 @@ function Test-Package([string]$Root, [string]$WantVersion, [string]$Platform = "
             if ([System.Text.Encoding]::UTF8.GetString($b).Contains("`r`n")) { throw ("校验失败（{0} 含 CRLF），未做任何改动。" -f $f.Name) }
         }
     }
+
+    # 最后一道准入：**新代码能不能跑**。
+    #
+    # 前面查的全是"形状"——文件齐不齐、库清单对不对、VERSION 一致不一致、BOM 与行尾对不对。
+    # 一个语法上跑不起来的包（少一个右花括号、多一个引号、引用了不存在的函数）能完美通过
+    # 全部形状校验，然后被装上去。而装坏之后没有退路：
+    #   覆盖成功 → 收尾用新入口跑 -Install → 新入口自己在解析预检里退出 1 →
+    #   提示"请打开菜单选一次安装 / 修复"——那句话此时是死路，菜单也是同一个入口、同样解析不过。
+    #   同时旧监控已被停掉、开机自启指向这个跑不起来的入口。
+    #   机器进入"程序坏了、装不回、开机也不自启"的状态，唯一出路是手动去 Releases 重下。
+    #
+    # 所以把"能跑"纳入准入，且放在**覆盖之前**。成本是几十毫秒的解析，
+    # 收益是彻底消除上面那条死路。用与入口完全相同的 Parser::ParseFile——
+    # 判据只有一处，改一侧不会让准入与启动检查错位。
+    $scripts = @()
+    foreach ($l in $declared) { $scripts += (Join-Path $Root ("{0}/lib/{1}{2}" -f $platDir, $l, $libExt)) }
+    $scripts += (Join-Path $Root $wantEntry)
+    foreach ($sp in $scripts) {
+        $ptok = $null; $perr = $null
+        try {
+            [void][System.Management.Automation.Language.Parser]::ParseFile($sp, [ref]$ptok, [ref]$perr)
+        } catch {
+            throw ("校验失败（{0} 读不出来），未做任何改动。" -f (Split-Path -Leaf $sp))
+        }
+        if ($perr -and $perr.Count) {
+            throw ("校验失败（{0} 有语法错误：{1}），未做任何改动。这一版装上去会跑不起来，所以拒收。" -f (Split-Path -Leaf $sp), $perr[0].Message)
+        }
+    }
+
 }
 
 function Copy-FileAtomic([string]$Src, [string]$Dest) {
@@ -146,6 +175,25 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
     # 推导出的"安装根"就是错的，后面的删除循环会删掉用户自己的文件。这道闸让那种情况到此为止。
     if (-not (Test-Item (Join-Path $ProjectRoot "VERSION"))) { throw "这里不是 EnvProxy 安装目录（缺少 VERSION），未做任何改动。请从安装包的 win\ 目录里运行，或手动下载安装包覆盖。" }
     if (-not (Test-Item (Join-Path $ProjectRoot "win\envproxy.ps1"))) { throw "这里不是 EnvProxy 安装目录（缺少 win\envproxy.ps1），未做任何改动。请从安装包的 win\ 目录里运行，或手动下载安装包覆盖。" }
+
+    # C9: 覆盖进行中的落盘标记。
+    #
+    # 文件是逐个替换的，整个窗口有几秒。若这几秒里断电、蓝屏、被强制关机，
+    # 或用户在任务管理器里结束进程，安装区里就会新旧混在一起。
+    # 因为 VERSION 最后写，`Get-LocalVersion` 仍报旧版本，入口通常还能起来——
+    # 于是**启动自检全绿**，运行时表现为某个函数"找不到"或行为与常量不一致
+    # （新入口配旧 probe，端口表或阈值就对不上），而这类错误会被大量 try/catch
+    # 吞成"这一轮不知道"，表现为功能部分可用、部分静默失效。
+    # 没有任何自检会发现"这份安装是半新半旧的"。
+    #
+    # 所以覆盖前写一个标记、成功后删掉。入口发现它就在状态页报出来。
+    # 与 stopped.intent 是同一个手法：用落盘意图区分两类事后长相相同的情况。
+    $marker = Join-Path $ProjectRoot ("{0}\monitor\update.inprogress" -f $(if ($ShipDirs -contains "win") { "win" } else { "mac" }))
+    try {
+        $mdir = Split-Path -Parent $marker
+        if (-not (Test-Item $mdir)) { New-Item -Path $mdir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+        Write-Text -Path $marker -Text ((Get-Date).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture))
+    } catch {}
     # 覆盖前后各做一件事，都是为了让"更新到一半失败"不留残局：
     #   覆盖前——把四个程序目录 + 根目录那几个随包文件备份到本次更新的临时目录；
     #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方。
@@ -231,6 +279,9 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -like '*.tmp[0-9]*' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }
         if ($removed -gt 0) { Write-Styled 'dim' ("  共移除 {0} 个旧版本残留文件。" -f $removed) }
+        # 覆盖全部成功：撤掉"更新进行中"标记。
+        # 留着它会让状态页一直报"上次更新没完成，程序文件可能新旧混合"——那是假警报。
+        try { if (Test-Item $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue } } catch {}
     } catch {
         if ($backup -and (Test-Item $backup)) {
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
@@ -291,6 +342,9 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             if ($notBack.Count) {
                 throw ("安装区写入失败，且回滚未完成——以下文件没能还原：{0}。请到 Releases 页面手动下载安装包覆盖一次。" -f (($notBack | Select-Object -First 6) -join '；'))
             }
+            # 回滚成功 = 安装区已经回到更新前，不再处于"半新半旧"，标记要撤掉，
+            # 否则下一次启动会白报一次"上次更新没完成"。
+            try { if (Test-Item $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue } } catch {}
             throw ("安装区写入失败，已回滚到更新前的状态：{0}" -f $_.Exception.Message)
         }
         throw

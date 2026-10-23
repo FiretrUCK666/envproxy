@@ -240,13 +240,26 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
     }
     if (-not $varsClean) { $dirty += "代理变量仍在" }
     if (Get-MonitorProcess) { $dirty += "监控进程仍在" }
+    # 复检不能只靠一条通道：进程身份原来全走 WMI，而 WMI 被精简工具关掉时它返回空，
+    # 于是"监控仍在"这一项永远进不了 $dirty，屏幕上打印"[完成] 已恢复到安装前的状态"，
+    # 而实际上监控还活着、还会把自启动项重建回来。
+    # 所以补一条**不依赖任何进程查询**的事后判据：卸载已经把 Run 键删掉了，
+    # 如果几秒之内它又出现了，那只能是活着的监控自愈写回来的。
+    if (-not $dirty.Contains("监控进程仍在")) {
+        Start-Sleep -Seconds 3
+        $runAfter = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
+        if ($runAfter) { $dirty += "监控进程仍在（开机自启被它重建了）" }
+    }
     if ($removeLog -and (Test-Item (Join-Path $MonitorDir "monitor.log"))) { $dirty += "历史日志未能删除" }
     if ($dirty.Count -eq 0) {
         Write-Styled 'ok' "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。"
         if ($removeLog) {
             Write-Styled 'ok' "        历史日志已一并彻底删除。"
         } else {
-            Write-Styled 'warn' "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。"
+            # 这一行说的是"你选择留下的东西在哪"，不是警告。
+            # 用 warn（黄）会给一整屏绿色的成功页加一条假警报——同一函数里真正的
+            # "没干净"是用 [未完成] 开头那一支。mac 侧本来就是 dim，以它为准。
+            Write-Styled 'dim' "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。"
         }
         Write-Styled 'ok' "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。"
     } else {
@@ -260,198 +273,288 @@ function Uninstall-EnvProxy([bool]$Purge = $false) {
 # 会联网查一次最新版本（约 1-2 秒）：看状态时最想知道的就是"我是不是最新版"，
 # 这个检查不能省。慢的那一下由调用方先说一声，不静默等待。
 function Show-Status {
-    Write-Styled 'title' "======== EnvProxy 状态 ========"
+    # 状态对象先在内存里算完，再统一渲染。
+    # 为什么不能边算边打印：结论行("一切正常" / "有 N 项要注意")必须出现在最上面，
+    # 而它是全部检查跑完之后才知道的。先打印再补结论 = 用户读完 8 行还要自己合成判断。
+    # 这一层也是 --json 之类机器可读输出的前提（先有对象，才有第二种渲染方式）。
+    $st = Get-StatusSnapshot
+    Show-StatusSnapshot $st
+}
 
-    $m = Get-MonitorProcess
+# 采集状态：只读、不写文件、不提问、不猜。所有值都来自现成函数。
+function Get-StatusSnapshot {
+    $st = [ordered]@{}
+    $st.Monitor = Get-MonitorProcess
     $run = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
-    # 自启是否真的会生效：值在，且它指向的脚本真的存在。
-    # 只看"值非空"会说谎——卸载不彻底或手工删过文件夹时，登录时什么都不会起来。
-    $autoRunOk = $false
     $launcher = ""
     if ($run -match '-File\s+"?([^"]+\.ps1)"?') { $launcher = $Matches[1] }
-    if ($launcher -and (Test-Path -LiteralPath $launcher)) { $autoRunOk = $true }
+    # 自启是否真的会生效：值在，且它指向的脚本真的存在。
+    # 只看"值非空"会说谎——卸载不彻底或手工删过文件夹时，登录时什么都不会起来。
+    $st.AutoRunRaw = $run
+    $st.AutoRunLauncher = $launcher
+    $st.AutoRunOk = [bool]($launcher -and (Test-Path -LiteralPath $launcher))
+    $st.StopIntent = Test-Item $StopIntentFile
+    # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
+    # DIVERGE(Win): 这里用 Get-ActiveProxyPort 并把日志关掉（-NoLog），Mac 侧状态页
+    #   直接调 find_candidate_ports ——那个函数本身就不写日志。两端都是只读，
+    #   只是 Mac 的日志写在 get_current_state 里、Windows 的写在 Find-CandidatePorts 里，
+    #   所以 Windows 需要显式传 -NoLog 才能守住"状态显示永不写文件"这条契约。
+    $st.Port = Get-ActiveProxyPort -FullScan:$false -NoLog:$true
+    $st.PortUnknown = [bool]$script:PortEnumerationFailed
+    try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
+    $st.ProxyValue = Get-EnvProxyValue
+    # 注入值指向的端口还在不在：解析真实值（可能是 IPv4 也可能是 [::1]），按地址族试连。
+    # 早先这里用正则只认 127.0.0.1，于是 IPv6-only 的代理整段检查被跳过、直接报"已注入"。
+    $st.ProxyHost = $null
+    $st.ProxyPort = 0
+    $st.ProxyAlive = $true
+    if ($st.ProxyValue) {
+        $pp = Split-ProxyUrl $st.ProxyValue
+        if ($pp) {
+            $st.ProxyHost = $pp.Host
+            $st.ProxyPort = $pp.Port
+            $st.ProxyAlive = Test-TcpAlive $pp.Host $pp.Port 800
+        }
+    }
+    # 系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
+    $st.SysProxy = $null
+    try {
+        $sp = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
+        if (($sp.ProxyEnable -eq 1) -and ($sp.ProxyServer -match "127\.0\.0\.1:(\d+)")) {
+            $spPort = [int]$Matches[1]
+            if (-not (Test-TcpAlive "127.0.0.1" $spPort 800)) {
+                $st.SysProxy = @{ Server = $sp.ProxyServer; Port = $spPort }
+            }
+        }
+    } catch {}
+    # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
+    # 那种情况下入口通常还能起来、启动自检全绿，但安装区可能新旧混合，
+    # 表现为某些功能静默失效——所以必须主动说出来。
+    $st.UpdateInProgress = Test-Item $UpdateInProgressFile
+    $st.LocalVersion = Get-LocalVersion
+    # 最新版本号来自**监控写下的缓存**，状态页自己绝不联网：
+    # 否则每次"查看状态"都要等一次外网往返（离线/限流时是注定失败的等待）。
+    # 写缓存的是监控，状态显示"永不写文件"这条契约不动——写的人换了，不是多了一个。
+    $st.RemoteCache = $null
+    try { $st.RemoteCache = Read-VersionCache } catch {}
+    return $st
+}
 
-    if ($m) {
-        Write-Styled 'ok' ("监控进程 : 运行中 (PID {0})" -f $m.ProcessId)
+# 把状态对象渲染成屏幕。纯渲染：不再做任何探测，也不再写任何东西。
+
+function Show-StatusSnapshot($st) {
+    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
+    # 读者（尤其是注意力容易被打断的那种）读完 8 行再自己合成判断，是这屏最大的问题。
+    # 所以结论放最上面一行，细节在下面；正常项与异常项不再同构平铺。
+    $problems = @()
+    if (-not $st.Monitor) {
+        if ($st.StopIntent) { $problems += "监控按你的选择停着" }
+        else { $problems += "监控进程不在了（可能被结束任务关掉或崩溃）" }
+    }
+    if (-not $st.AutoRunOk) { $problems += "开机自启没生效" }
+    if ($st.PortUnknown) { $problems += "这一轮没读到本机端口，无法判断代理" }
+    if ($st.ProxyValue -and -not $st.ProxyAlive) { $problems += "代理变量指向的端口已经不在" }
+    # 「没人维护」不是一个独立问题，它是「监控没在跑」的后果。
+    # 两个都计进"有 N 项要注意"，用户会以为有两件事要修，而实际只有一件。
+    # 所以它只在**监控还在跑、变量却指向死端口**时才需要单独说；
+    # 监控没在跑那一支里已经用补充说明讲过了。
+    if ($st.TermSync -and $st.TermSync.State -ne 'ok') { $problems += "终端同步没生效" }
+    if ($st.SysProxy) { $problems += "系统代理可能残留（不是本工具写的）" }
+    if ($st.UpdateInProgress) { $problems += "上次更新没有完成，程序文件可能新旧混合" }
+
+    Write-Styled 'title' "======== EnvProxy 状态 ========"
+    if ($problems.Count -eq 0) {
+        Write-Styled 'ok' "一切正常，不用做任何事。"
     } else {
+        Write-Styled 'warn' ("有 {0} 项要注意：" -f $problems.Count)
+        foreach ($p in $problems) { Write-Styled 'warn' ("  - " + $p) }
+    }
+    Write-Host ''
+
+    # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
+    $m = $st.Monitor
+    if (-not $m) {
         Write-Styled 'warn' "监控进程 : 未运行"
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
         # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
         # 不分辨就只能猜：说成"你停的"，被强杀的人会以为自己点错了；什么都不说，
         # 真停过的人会以为坏了。
-        if (Test-Item $StopIntentFile) {
-            if ($autoRunOk) { Write-Styled 'dim' "           （已按你的选择停止，下次登录会自动恢复）" }
+        if ($st.StopIntent) {
+            if ($st.AutoRunOk) {
+                Write-Styled 'dim' "  （你点过停止。下次登录会自动恢复，或现在选 1）"
+            } else {
+                # 两个问题叠在一起时必须说清是两个：点过停止 + 自启记录也坏了。
+                Write-Styled 'warn' "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
+                Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以一起修好。"
+            }
         } else {
-            Write-Styled 'warn' "           （不是点了停止，是进程不在了：可能被「结束任务」关掉，或崩溃）"
-            Write-Styled 'dim' "           打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
+            Write-Styled 'warn' "  （不是点了停止，是进程不在了：可能被结束任务关掉，或崩溃）"
+            Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
         }
     }
-
-    if ($run) {
-        if ($autoRunOk) {
-            Write-Styled 'ok' "开机自启 : 已启用"
-        } else {
+    if (-not $st.AutoRunOk) {
+        if ($st.AutoRunRaw) {
             Write-Styled 'warn' "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
-            Write-Styled 'dim' ("           记录指向：{0}" -f $(if ($launcher) { $launcher } else { $run }))
-            Write-Styled 'dim' "           打开菜单选 1（安装 / 修复）可以重建。"
+            Write-Styled 'dim' ("  记录指向：{0}" -f $(if ($st.AutoRunLauncher) { $st.AutoRunLauncher } else { $st.AutoRunRaw }))
+        } else {
+            Write-Styled 'warn' "开机自启 : 未启用"
         }
-    } else {
-        Write-Styled 'warn' "开机自启 : 未启用"
+        Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以重建。"
     }
+    if (-not $st.ProxyValue -and $st.Port -and -not $m) {
+        # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
+        # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
+        Write-Styled 'dim' "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
+    } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
+        Write-Styled 'warn' ("代理变量 : 指向的端口已不在（{0}）" -f $st.ProxyValue)
+        Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
+        Write-Styled 'dim' "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"
+    } elseif ($st.ProxyValue -and -not $m) {
+        Write-Styled 'warn' ("代理变量 : 已注入（{0}），但没人维护" -f $st.ProxyValue)
+        Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
+        Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
+    }
+    if ($st.TermSync) {
+        switch ($st.TermSync.State) {
+            'blocked'  { Write-Styled 'warn' "终端同步 : 装了但跑不起来"
+                         Write-Styled 'dim' ("  " + $st.TermSync.Detail)
+                         Write-Styled 'dim' "  按提示改一次，改完重开一个窗口。" }
+            'unpaired' { Write-Styled 'warn' "终端同步 : 配置文件里的标记不成对，未改动它"
+                         # 这里不能说"重跑一次安装可修复"——重跑同样会被这条护栏拒绝，
+                         # 用户会反复重跑、每次都被"安全起见一个字节都没动"回绝。
+                         # 必须给一条真的能做成的动作。
+                         if ($st.TermSync.Line) {
+                             Write-Styled 'dim' ("  删掉配置文件里孤立的那行标记（第 " + $st.TermSync.Line + " 行）再选 1。")
+                         } else {
+                             Write-Styled 'dim' "  在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。"
+                         } }
+            'missing'  { Write-Styled 'warn' "终端同步 : 配置文件里没有同步块"
+                         Write-Styled 'dim' "  打开菜单选 1 可以写入。" }
+            'unknown'  { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断"
+                         Write-Styled 'dim' "  过几秒再看一次；一直在就选 1。" }
+            default { }
+        }
+    }
+    if ($st.UpdateInProgress) {
+        Write-Styled 'warn' "上次更新 : 没有完成（覆盖过程中断）"
+        Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
+        Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重做一次即可。"
+    }
+    if ($st.SysProxy) {
+        Write-Styled 'warn' ("系统代理 : 疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server)
+        # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
+        # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
+        Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+    }
+    if ($problems.Count -gt 0) { Write-Host '' }
 
-    # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
-    # DIVERGE(Win): 这里用 Get-ActiveProxyPort 并把日志关掉（-NoLog），Mac 侧状态页
-    #   直接调 find_candidate_ports ——那个函数本身就不写日志。两端都是只读，
-    #   只是 Mac 的日志写在 get_current_state 里、Windows 的写在 Find-CandidatePorts 里，
-    #   所以 Windows 需要显式传 -NoLog 才能守住"状态显示永不写文件"这条契约。
-    $port = Get-ActiveProxyPort -FullScan:$false -NoLog:$true
-    if ($port) {
-        Write-Styled 'ok' ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $port)
-    } elseif ($script:PortEnumerationFailed) {
-        # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
+    # ---- 参考信息：正常项压成最少的行，且统一用灰，不跟"要注意"抢注意力 ----
+    # 全绿时也要能一眼确认"核心链路是通的"，所以正常的那几项各占一行但用 ok 色；
+    # 版本号那三行对普通用户没有行动价值，压成一行。
+    if ($m) { Write-Styled 'ok' ("监控进程 : 运行中 (PID {0})" -f $m.ProcessId) }
+    if ($st.AutoRunOk) { Write-Styled 'ok' "开机自启 : 已启用" }
+    if ($st.Port) {
+        Write-Styled 'ok' ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $st.Port)
+    } elseif ($st.PortUnknown) {
         Write-Styled 'warn' "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
     } else {
-        Write-Styled 'warn' "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+        Write-Styled 'dim' "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
     }
-
-    # 终端同步：已开着的窗口靠它跟上变化。这一项缺了，用户会在「监控运行中」的
-    # 假象里以为一切正常，其实每次开窗口都不同步（执行策略、块不成对、宿主不支持）。
-    $ts = $null
-    try { $ts = Get-TerminalSyncState } catch {}
-    if ($ts) {
-        switch ($ts.State) {
-            'ok'       { Write-Styled 'ok' "终端同步 : 已生效（已开着的窗口敲回车即跟上）" }
-            'blocked'  { Write-Styled 'warn' "终端同步 : 装了但跑不起来"
-                         Write-Styled 'warn' ("            " + $ts.Detail) }
-            'unpaired' { Write-Styled 'warn' "终端同步 : 配置文件里的标记不成对，未改动它"
-                         Write-Styled 'warn' "            打开菜单选 1 可以修复" }
-            'missing'  { Write-Styled 'warn' "终端同步 : 配置文件里没有同步块"
-                         Write-Styled 'warn' "            打开菜单选 1 可以写入" }
-            default    { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断" }
-        }
+    if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
+        Write-Styled 'ok' "终端同步 : 已生效（已开着的窗口敲回车即跟上）"
     }
-
-    $cur = Get-EnvProxyValue
-    if ($cur) {
-        # 光看"变量有值"不够：变量可能指向一个已经不存在的端口。
-        # 那种情况下终端里每条联网命令都会报 ECONNREFUSED 127.0.0.1:xxxx，
-        # 而错误信息里没有本工具的名字——用户（和帮他排查的 AI）会去查网络、查防火墙、
-        # 查 DNS，唯独查不到这里。所以状态页要主动把这件事认下来。
-        $varPort = 0
-        if ($cur -match "127\.0\.0\.1:(\d+)") { $varPort = [int]$Matches[1] }
-        $varAlive = $true
-        if ($varPort -gt 0) {
-            $varAlive = $false
-            $tc2 = $null
-            try {
-                $tc2 = New-Object Net.Sockets.TcpClient
-                $iar2 = $tc2.BeginConnect("127.0.0.1", $varPort, $null, $null)
-                if ($iar2.AsyncWaitHandle.WaitOne(800)) { $tc2.EndConnect($iar2); $varAlive = $true }
-            } catch {} finally {
-                try { if ($tc2) { $tc2.Close() } } catch {}
-            }
-        }
-        if ($varAlive) {
-            Write-Styled 'ok' ("代理变量 : 已注入 ({0})" -f $cur)
-            # 变量已经写进系统，但没有任何进程在维护它们。翻墙软件一关，这些变量就指向
-            # 一个死端口，curl/git 会一直失败到手工处理或下次登录——用户不知道要找这里。
-            if (-not $m) {
-                Write-Styled 'warn' "           但这些变量现在没人维护：翻墙软件断开后不会自动清掉，终端会连不上。"
-                Write-Styled 'dim' "           打开菜单选 1（安装 / 修复）恢复监控；或选 5（停止监控）把这批变量一并清掉。"
-            }
-        } else {
-            Write-Styled 'warn' ("代理变量 : 指向的端口已不在（{0}）" -f $cur)
-            Write-Styled 'warn' ("           终端里联网会报 ECONNREFUSED 127.0.0.1:{0}，那是这里造成的。" -f $varPort)
-            Write-Styled 'dim' "           监控在跑的话，几秒内会自动清掉；想立刻清掉、或者监控本来就没在跑，就打开菜单选 1（安装 / 修复）。"
-        }
-    } else {
+    # 代理变量只有"已注入且活着"这一种情况才进参考区；
+    # 指向死端口、没人维护、翻墙在跑但工具停用这三种都已在上面说过，
+    # 这里再打一遍就是同一件事说两次，读者会以为有两处不同的问题。
+    if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
+        Write-Styled 'ok' ("代理变量 : 已注入 ({0})" -f $st.ProxyValue)
+    } elseif (-not $st.ProxyValue) {
         Write-Styled 'dim' "代理变量 : 无（直连状态）"
-        # 上一行说"有代理在监听"、这一行说"没注入变量"，单独看会以为自相矛盾。
-        # 实话是：翻墙软件在跑，但本工具没在它上面工作（多半是用户自己停的）。
-        # 补一句桥接，否则用户会判定"坏了"然后去卸载。
-        if ($port -and -not $m) { Write-Styled 'dim' "           （翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" }
     }
+    Show-VersionLines $st
+    Show-RecentLog
+}
 
-    # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
-    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
-    # Mac 侧同语义实现在 show_status（读 scutil --proxy + nc 试连），两侧判据一致。
-    try {
-        $sp = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
-        if (($sp.ProxyEnable -eq 1) -and ($sp.ProxyServer -match "127\.0\.0\.1:(\d+)")) {
-            $spPort = [int]$Matches[1]
-            $spAlive = $false
-            $tc = $null
-            try {
-                $tc = New-Object Net.Sockets.TcpClient
-                $iar = $tc.BeginConnect("127.0.0.1", $spPort, $null, $null)
-                if ($iar.AsyncWaitHandle.WaitOne(800)) { $tc.EndConnect($iar); $spAlive = $true }
-            } catch {} finally {
-                try { if ($tc) { $tc.Close() } } catch {}
-            }
-            if (-not $spAlive) {
-                Write-Styled 'warn' ("系统代理 : 疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $sp.ProxyServer)
-                Write-Styled 'warn' "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
-            }
-        }
-    } catch {}
-
-    # 版本信息（只读：查不到只提示，不断言、不写文件、不提问）
-    $localVer = Get-LocalVersion
-    if ($localVer) { Write-Styled 'ok' ("本地版本 : v{0}" -f $localVer) }
-    else           { Write-Styled 'warn' "本地版本 : 未知" }
-    $remoteVer = Get-RemoteVersion
-    if ($remoteVer) {
-        Write-Styled 'ok' ("最新版本 : {0}" -f $remoteVer.Tag)
+# 版本那三行：正常时压成一行。原来"本地版本/最新版本/更新状态"各占一行、
+# 与"监控未运行"平级，等于把对普通用户没有行动价值的信息和要靠它行动的信息摆成一样重。
+#
+# 数据来自监控写的缓存，所以有三种情况，必须分开说：
+#   有且新鲜  → 正常比较版本
+#   有但很旧  → 仍然比较，但把"这是多久以前查的"一起说出来（陈旧数据不许假装是当前数据）
+#   还没有    → 说明为什么还没有（监控没在跑 / 刚装上），并给出主动查的办法
+function Show-VersionLines($st) {
+    $localVer = $st.LocalVersion
+    $cache = $st.RemoteCache
+    $remote = $null
+    if ($cache) { $remote = @{ Version = $cache.Version; Tag = ("v" + $cache.Version) } }
+    $localText = if ($localVer) { "v$localVer" } else { "未知" }
+    if (-not $cache) {
+        # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
+        Write-Styled 'dim' ("版本 : {0}（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" -f $localText)
+        return
+    }
+    $ageText = ""
+    if ($cache.AgeMinutes -ge 1440) { $ageText = ("（{0} 天前的记录）" -f [int]($cache.AgeMinutes / 1440)) }
+    elseif ($cache.AgeMinutes -ge 60) { $ageText = ("（{0} 小时前的记录）" -f [int]($cache.AgeMinutes / 60)) }
+    if ($remote) {
+        $state = $null
+        $role = 'ok'
         if (Test-DevCopy) {
-            Write-Styled 'dim' "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）"
+            $state = "开发副本（更新走 git pull，本入口不改动文件）"; $role = 'dim'
         } elseif (Test-SourceCopy) {
-            Write-Styled 'warn' "更新状态 : 源码包（更新入口会先确认用途再动手）"
+            $state = "源码包（更新入口会先确认用途再动手）"; $role = 'warn'
         } elseif (-not $localVer) {
-            Write-Styled 'warn' "更新状态 : 可打开菜单选 3（检查更新）升级"
-        } elseif ((Compare-Versions $localVer $remoteVer.Version) -gt 0) {
-            Write-Styled 'ok' "更新状态 : 本地版本比最新发布版新"
-        } elseif ((Compare-Versions $remoteVer.Version $localVer) -gt 0) {
-            Write-Styled 'warn' "更新状态 : 发现新版，打开菜单选 3（检查更新）即可升级"
+            $state = "可打开菜单选 3（检查更新）升级"; $role = 'warn'
+        } elseif ((Compare-Versions $localVer $remote.Version) -gt 0) {
+            $state = "本地版本比最新发布版新"; $role = 'dim'
+        } elseif ((Compare-Versions $remote.Version $localVer) -gt 0) {
+            $state = ("发现新版 {0}，选 3（检查更新）即可升级" -f $remote.Tag); $role = 'warn'
         } else {
-            Write-Styled 'ok' "更新状态 : 已是最新"
+            $state = "已是最新"; $role = 'dim'
         }
-    } else {
-        # 状态显示也要说清是哪一类失败：笼统说"都不可达"会让用户以为是网络问题，
-        # 而限流（等一小时）、缺包（手动下载）要做的动作完全不同。
-        Write-Styled 'warn' ("最新版本 : 检查失败（{0}）" -f (Get-UpdateFailureMessage $script:UpdateLastVersionFailure "所有更新源"))
-        Write-Styled 'dim' "更新状态 : 未知"
+        if ($role -eq 'dim') {
+            Write-Styled 'dim' ("版本 : {0}（{1}）{2}" -f $localText, $state, $ageText)
+        } else {
+            Write-Styled $role ("版本 : {0}（{1}）{2}" -f $localText, $state, $ageText)
+        }
     }
+}
 
+# 最近日志：读最后 3 行，按窗口宽度裁。纯读+打印，不探测、不写文件。
+function Show-RecentLog {
     Write-Styled 'title' "---------------- 最近日志 ----------------"
-    if (Test-Item $LogFile) {
-        # 日志行按控制台宽度裁：一行日志本来就是给文件看的（不折行、好搜），
-        # 但状态页会把它原样打到屏幕上。122 列的长行在 80/100 列的窗口里会硬折成两三行，
-        # 屏幕上就是一团乱——"最近日志"于是从"看一眼有没有异常"变成"读一段糊住的字"。
-        # 裁到窗口宽度 - 2（留两个缩进），并在末尾补一个省略号说明"这行还有后半段"。
-        $logW = 78
-        try { if (-not [Console]::IsOutputRedirected) { $logW = [Console]::WindowWidth - 2 } } catch {}
-        if ($logW -lt 40) { $logW = 40 }
-        foreach ($logLine in ([System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3)) {
-            $shown = $logLine
-            if ((Get-DisplayWidth $shown) -gt $logW) {
-                $acc = ''
-                $accW = 0
-                foreach ($ch in $shown.ToCharArray()) {
-                    $cw = if ([int]$ch -gt 0x2E80) { 2 } else { 1 }
-                    if ($accW + $cw -gt ($logW - 1)) { break }
-                    $acc += $ch
-                    $accW += $cw
-                }
-                $shown = $acc + '…'
-            }
-            Write-Styled 'dim' "  $shown"
-        }
-    } else {
+    if (-not (Test-Item $LogFile)) {
         Write-Styled 'dim' "  （暂无日志）"
+        Write-Styled 'title' "=================================="
+        return
+    }
+    # 日志行按控制台宽度裁：一行日志本来就是给文件看的（不折行、好搜），
+    # 但状态页会把它原样打到屏幕上。122 列的长行在 80/100 列的窗口里会硬折成两三行，
+    # 屏幕上就是一团乱——"最近日志"于是从"看一眼有没有异常"变成"读一段糊住的字"。
+    # 裁到窗口宽度 - 2（留两个缩进），并在末尾补一个省略号说明"这行还有后半段"。
+    $logW = 78
+    try { if (-not [Console]::IsOutputRedirected) { $logW = [Console]::WindowWidth - 2 } } catch {}
+    if ($logW -lt 40) { $logW = 40 }
+    foreach ($logLine in ([System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3)) {
+        $shown = $logLine
+        if ((Get-DisplayWidth $shown) -gt $logW) {
+            $acc = ''
+            $accW = 0
+            foreach ($ch in $shown.ToCharArray()) {
+                $cw = Get-CharWidth $ch
+                if ($accW + $cw -gt ($logW - 1)) { break }
+                $acc += $ch
+                $accW += $cw
+            }
+            $shown = $acc + '…'
+        }
+        Write-Styled 'dim' "  $shown"
     }
     Write-Styled 'title' "=================================="
 }
+
 
 # ------------------------------------------------------------------------------
 # 8. 菜单（唯一双击入口"打开菜单"背后：编号→现有开关，不新增行为）
@@ -468,11 +571,20 @@ function Clear-Screen {
     } catch {}
 }
 
-# 计算一段文字在终端里占几格：中日韩字符占两格，ASCII 占一格。
-# 所有需要对齐的地方都走这一处——写第三份就会有一天三份算出三个宽度。
+# 单个字符占几格：码位 > U+2E80 记两格，其余一格。
+# 这是**唯一**的判据处：Get-DisplayWidth 与日志裁剪都调它。写成两份就会有一天
+# 两份算出两个宽度，症状是同一屏里两列对不齐、日志截得长短不一。
+# 与 Mac 侧 _display_width 同一条判据（门禁核对两端对同一批字符的结论相同）。
+function Get-CharWidth([char]$Ch) {
+    if ([int]$Ch -gt 0x2E80) { return 2 }
+    return 1
+}
+
+# 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
+# 所有需要对齐的地方都走这一处。
 function Get-DisplayWidth([string]$Text) {
     $w = 0
-    foreach ($ch in $Text.ToCharArray()) { $w += if ([int]$ch -gt 0x2E80) { 2 } else { 1 } }
+    foreach ($ch in $Text.ToCharArray()) { $w += (Get-CharWidth $ch) }
     return $w
 }
 
@@ -533,11 +645,27 @@ function Get-MenuRenderedLines {
     if (-not $verText) { $verText = "未知" }
     $out += [pscustomobject]@{ Role = 'title'; Text = '======== EnvProxy 菜单 ========'
                                Segments = @(@{ Role = 'title'; Text = '======== EnvProxy 菜单 ========' }) }
-    # 抬头是状态提要，用灰：它是背景信息，不该和可点的编号抢注意力。
+    # 抬头是这一屏最该被看到的一行：用户打开菜单九成的目的是"我现在正常吗"，
+    # 答案就在这里（监控在跑 = 正常，未运行 = 有问题）。
+    # 早先整行用 dim（暗灰），等于把答案压到最暗、还给它贴了"背景信息"的标签；
+    # 而"怎么修"的编号反而是亮绿——优先级是反的。
+    # 现在拆两段：标签用灰（它确实是背景），**状态值用 ok/warn**（与状态页同一套语义）。
+    $monRole = if ($hl) { 'ok' } else { 'warn' }
     $monText = if ($hl) { ("运行中 (PID {0})" -f $hl.ProcessId) } else { '未运行' }
-    $headText = ("  监控 {0}    版本 v{1}" -f $monText, $verText)
-    $out += [pscustomobject]@{ Role = 'dim'; Text = $headText
-                               Segments = @(@{ Role = 'dim'; Text = $headText }) }
+    $segs = @(
+        @{ Role = 'dim'; Text = '  监控 ' },
+        @{ Role = $monRole; Text = $monText },
+        @{ Role = 'dim'; Text = ("    版本 v{0}" -f $verText) }
+    )
+    $joined = ''
+    foreach ($sg in $segs) { $joined += $sg.Text }
+    $out += [pscustomobject]@{ Role = 'dim'; Text = $joined; Segments = $segs }
+    # 未运行时补一句可执行的话：打开菜单 → 第一行就知道好不好 → 坏了直接告诉按哪个键。
+    if (-not $hl) {
+        $hint = '        按 1 可以让它重新跑起来'
+        $out += [pscustomobject]@{ Role = 'dim'; Text = $hint
+                                   Segments = @(@{ Role = 'dim'; Text = $hint }) }
+    }
     foreach ($g in (Get-MenuGroups)) {
         $items = @($MenuItems | Where-Object { $_.Group -eq $g })
         if ($items.Count -eq 0) { continue }

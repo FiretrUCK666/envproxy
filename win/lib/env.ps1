@@ -141,8 +141,12 @@ function Remove-UserEnvNames([string[]]$Names) {
     Set-UserEnvRaw -Values $t
 }
 
+# "我们现在注入的代理地址是什么"。状态页与终端同步都用它。
+# 必须用不展开的读法：这是**用户可见的真实写入值**，状态页会原样打印它。
+# 用 GetEnvironmentVariable 会被展开（HTTP_PROXY 里一般没有 %…%，但口径要一致：
+# 全文件只留 Get-UserEnvRaw 一个读法，将来任何人加一处读取都不会引入第二种语义）。
 function Get-EnvProxyValue {
-    return [Environment]::GetEnvironmentVariable($ProxyVarNames[0], "User")
+    return (Get-UserEnvRaw $ProxyVarNames[0])
 }
 
 function Sync-UserEnvVars([string]$Port) {
@@ -323,9 +327,35 @@ function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
 # "删得掉但门槛没让它删"的残留（半代理）。
 function Test-ProxyVarsPresent {
     foreach ($n in $ProxyVarNames) {
-        if (Test-IsOwnedProxyValue $n ([Environment]::GetEnvironmentVariable($n, "User"))) { return $true }
+        # 必须用**不展开**的读法，与写入端（Write-EnvProxyValues）和删除端
+        # （Remove-UserEnvVars）同一套。用 GetEnvironmentVariable 读出来是展开后的字面
+        # 路径（例如 NO_PROXY=%USERPROFILE%,… 会变成 C:\Users\…），形状判据对不上 →
+        # 这个变量被判成"没痕迹" → 这里返回假 → 30 轮自愈不会清理它，off 态残留永久留着。
+        # 而真去清的时候走的又是不展开读法（判据与门槛不一致）——正是
+        # "两个判据各说各话"那一类。收敛成一个入口之后，这类漂移没有发生的余地。
+        if (Test-IsOwnedProxyValue $n (Get-UserEnvRaw $n)) { return $true }
     }
     return $false
+}
+
+# 我们该持有的那套变量现在**是否与它应该的样子逐项相等**。
+# 与 Test-ProxyVarsPresent 的分工：那个回答"有没有痕迹"（用于 off 态清理门槛），
+# 这个回答"写全了没有"（用于 on 态确认）。
+#
+# 为什么需要它：Apply-State 的 on 态原来只拿 HTTPS_PROXY 一个变量当判据
+# （`$appliedOk = ((Get-UserEnvRaw "HTTPS_PROXY") -eq $want)`）。于是 5 个变量里
+# 只要有任意一个没写进去、而 HTTPS_PROXY 恰好排在前面写完了，屏幕就打印
+# "环境变量：已按当前状态校正"，机器上却是**半套变量**——git 走代理、npm 不走，
+# 或者本地地址被代理掉，错得毫无规律。那正是本项目最想消灭的症状。
+# 而且哪几个先写进去取决于哈希桶顺序，所以同一台机器上总是缺同一个变量，
+# 很难联想到"写了一半"。
+function Test-ProxyVarsMatch([int]$Port) {
+    $want = Get-ProxyVarTable $Port (Get-ProxyUrlForPort $Port)
+    $want["NO_PROXY"] = Merge-NoProxy (Get-UserEnvRaw "NO_PROXY") $DefaultNoProxy
+    foreach ($n in $ProxyVarNames) {
+        if ((Get-UserEnvRaw $n) -ne $want[$n]) { return $false }
+    }
+    return $true
 }
 
 # 快照时这个值要不要当成"我们写的"跳过（纯函数，不碰注册表，可单测）。
@@ -472,7 +502,9 @@ function Apply-State([string]$state) {
             if (-not (Sync-UserEnvVars $port)) {
                 # Sync-UserEnvVars 返回 false 有两种情况：本来就齐（正常）、或者写失败。
                 # 靠"值到底齐了没有"再确认一次，才能区分这两者。
-                $appliedOk = ((Get-UserEnvRaw "HTTPS_PROXY") -eq $want)
+                # 判据是**整表**逐项相等，不许只挑一个变量看——否则半套变量会被报成
+                # "已按当前状态校正"（详见 Test-ProxyVarsMatch 的注释）。
+                $appliedOk = Test-ProxyVarsMatch ([int]$port)
             } else {
                 Broadcast-EnvironmentChange
                 Write-MonitorLog "检测到本地代理端口 $port -> 已注入代理 $want"

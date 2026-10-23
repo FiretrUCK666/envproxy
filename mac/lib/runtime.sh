@@ -5,6 +5,14 @@
 MONITOR_DIR="$SCRIPT_DIR/monitor"
 PID_FILE="$MONITOR_DIR/monitor.pid"
 STOP_FLAG="$MONITOR_DIR/stop.flag"
+# 停止意图标记：与 Windows 侧 stopped.intent 同一手法、同一条理由。
+# "监控没在跑"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
+# 强制退出/崩溃了。只有执行停止的那一方能留下证据。
+# 之前 mac 侧靠"自启动注册在不在"去猜，而"注册在、监控没跑"恰恰是被强杀的典型现场——
+# 于是把崩溃说成"已按你的选择停止"，用户会以为自己点错了。
+STOP_INTENT="$MONITOR_DIR/stopped.intent"
+# 版本号缓存：由监控刷新、状态页只读。状态页不许联网（理由见 write_version_cache）。
+VERSION_CACHE="$MONITOR_DIR/version.cache"
 LOG_FILE="$MONITOR_DIR/monitor.log"
 PATH_CONF="$ENVPROXY_HOME/path.conf"
 LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
@@ -152,6 +160,47 @@ remove_autorun() {
 # 判据取内容而非存在，理由是升级路径：改完脚本若没走"安装"，固定位置里留着的仍是
 # 旧 plist / 旧定位器（搜索算法、参数、乃至 KeepAlive 这类语义都会停在旧值上）。
 # 每次自查 = 让系统状态收敛到当前代码，不依赖用户记得重装。
+# 版本号缓存：监控每 30 轮（约 60–90 秒）刷新一次，状态页只读。
+#
+# 为什么要缓存：状态页原来自己调 get_remote_version，那是真实网络请求（先 API 后 Web，
+# 各 8 秒超时，限流时还会换出口重试）。离线、限流、走白名单网络的人，每次点"查看状态"
+# 都在等一个注定失败的请求——而用户对"点一下要等几秒"的归因通常是"这工具很慢"。
+# 写缓存的是监控（它本来就写文件），状态显示"永不写文件、永不提问"这条契约一个字不动：
+# **写的人换了，不是多了一个**。
+#
+# 格式两行：版本号、写入时刻（ISO 8601）。带时间戳是因为陈旧数据必须能被认出——
+# 只报"已是最新"而不知道这个结论有多旧，比不报更糟。
+write_version_cache() {
+    get_remote_version || return 0   # 查不到就保持上次的值，不写「未知」把好数据冲掉
+    [ -n "$REMOTE_VERSION" ] || return 0
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    _wvc_now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    printf '%s\n%s\n' "$REMOTE_VERSION" "$_wvc_now" > "$VERSION_CACHE" 2>/dev/null || true
+}
+
+# 读版本缓存，输出两个空格分隔的字段：版本号 与"距今多少分钟"。
+# 没有缓存返回非零（调用方据此说"还没查过"）。
+read_version_cache() {
+    [ -f "$VERSION_CACHE" ] || return 1
+    _rvc_ver=$(sed -n '1p' "$VERSION_CACHE" 2>/dev/null)
+    _rvc_at=$(sed -n '2p' "$VERSION_CACHE" 2>/dev/null)
+    [ -n "$_rvc_ver" ] || return 1
+    # 算年龄：把 ISO 时刻转成 epoch。BSD date 不认 -d，GNU date 不认 -j，
+    # 所以两条都试；都失败就报 0（当作"刚查过"），宁可少说一句也不误报"很久没查"。
+    _rvc_age=0
+    if [ -n "$_rvc_at" ]; then
+        _rvc_epoch=$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$_rvc_at" +%s 2>/dev/null \
+                     || date -u -d "$_rvc_at" +%s 2>/dev/null || echo "")
+        case "$_rvc_epoch" in
+            ''|*[!0-9]*) _rvc_age=0 ;;
+            *) _rvc_age=$(( ( $(date -u +%s) - _rvc_epoch ) / 60 )) ;;
+        esac
+        [ "$_rvc_age" -lt 0 ] && _rvc_age=0
+    fi
+    printf '%s %s' "$_rvc_ver" "$_rvc_age"
+    return 0
+}
+
 repair_autorun() {
     _need=0
     [ -f "$PLIST_PATH" ] || _need=1
@@ -167,8 +216,21 @@ repair_autorun() {
         launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" || _need=1
     fi
     if [ $_need -eq 1 ]; then
-        set_autorun || true
-        log_msg "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
+        # 修没修成由**复读**决定，不由"我调用了写入"决定。
+        # 原来这里无条件记"已自动修复"，于是任何让自愈失败的条件（LaunchAgents 不可写、
+        # plist 被 EDR 锁住、磁盘满）都会每 60–90 秒往 200 行的黑盒日志里刷一条假消息，
+        # 五六个小时就把之前所有记录冲干净——正好在最需要黑匣子的时候把它清空。
+        # 而与 Windows 侧 Repair-AutoRun 的写法（写完读回、按复读结果决定报哪句）也不一致。
+        if set_autorun; then
+            log_msg "已自动修复开机自启动（定位器/自启动项缺失、损坏或与当前版本不一致）"
+        else
+            # 失败只在状态变化时记一次：同样的失败重复记 = 把黑盒刷掉，
+            # 而"坏着"这件事状态页已经会说，日志里留一条够了。
+            if [ "${_autorun_fail_logged:-0}" != "1" ]; then
+                log_msg "开机自启动修复失败（原因见上一步输出；之后相同的失败不再重复记）"
+                _autorun_fail_logged=1
+            fi
+        fi
     fi
     _repair_hooks || true
 }
@@ -195,8 +257,14 @@ _repair_hooks() {
     done
     [ "$_any" = "0" ] && _need=1
     if [ "$_need" = "1" ]; then
-        insert_shell_hooks || true
-        log_msg "已自动修复终端 shell hook（缺失或内容与当前版本不一致）"
+        if insert_shell_hooks; then
+            log_msg "已自动修复终端 shell hook（缺失或内容与当前版本不一致）"
+        else
+            if [ "${_hooks_fail_logged:-0}" != "1" ]; then
+                log_msg "终端 shell hook 修复失败（原因见上一步输出；之后相同的失败不再重复记）"
+                _hooks_fail_logged=1
+            fi
+        fi
     fi
 }
 
@@ -447,7 +515,15 @@ get_monitor_pid() {
         return 0
     fi
     # pgrep 是 macOS 自带（10.6 起），直调即可，不留走不到的兜底分支。
-    for _pid in $(pgrep -f "envproxy\.sh$" 2>/dev/null); do
+    # **必须按 UID 过滤**：pgrep 返回全机器所有用户的进程，不过滤会认领别人的。
+    # 同一台 Mac 上多个账户（家庭共用、公司共用、CI/测试机）各装一份时，后果是三连击：
+    #   1. status 在 B 用户那里报"A 的监控 PID 正在运行"，而 B 自己的没起来；
+    #   2. install 判定"有旧位置的监控 → 迁移"，于是向 A 的目录写 stop.flag（通常不可写、
+    #      静默失败），再去 kill A 的 PID（非 root 会 EPERM、静默）——B 自己的监控反而起不来；
+    #   3. 登录定位器看到 A 的监控在跑就静默退出，**B 的监控永远不启动**，
+    #      而 B 的状态页读自己的 pid 文件报"未运行"，两条信息互相矛盾、无从排查。
+    # Windows 侧早就按 SID 过滤了（并注明这是踩过的坑），这边是同一条理由。
+    for _pid in $(pgrep -u "$(id -u)" -f "envproxy\.sh$" 2>/dev/null); do
         [ "$_pid" != "$$" ] || continue
         printf '%s' "$_pid"
         return 0
@@ -482,6 +558,9 @@ start_monitor() {
         sleep 0.4
     done
     if get_monitor_pid_from_file >/dev/null 2>&1; then
+        # 它起来了 = 停止意图作废。不删的话，状态页会一直把"在跑"的解释留在
+        # "你点过停止"那一支上，下一次崩溃又会被说成用户选择。
+        rm -f "$STOP_INTENT" 2>/dev/null || true
         echo "监控进程已启动。"
         return 0
     fi
@@ -502,7 +581,15 @@ start_monitor() {
 
 stop_monitor() {
     _existing=$(get_monitor_pid || true)
-    if [ -z "$_existing" ]; then echo "监控进程未在运行。"; return 0; fi
+    if [ -z "$_existing" ]; then
+        # 监控本来就没在跑，但使用者确实表达了"停"的意图——照样记下来。
+        # 不记的话，状态页会把这台机器报成"进程不在了（可能被强制退出或崩溃）"，
+        # 而真相是使用者刚刚点过停止。意图比进程状态更权威。
+        mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+        printf 'user\n' > "$STOP_INTENT" 2>/dev/null || true
+        echo "监控进程未在运行。"
+        return 0
+    fi
     _args=$(ps -p "$_existing" -o args= 2>/dev/null || echo "")
     _target_dir="$MONITOR_DIR"
     # ps 的 args 是"解释器 + 脚本路径"两个词，路径里可能有空格，所以按"去掉第一个词"取整串，
@@ -532,6 +619,9 @@ stop_monitor() {
     if [ "$_target_dir" != "$MONITOR_DIR" ] && [ -d "$_target_dir" ]; then
         if [ -z "$(ls -A "$_target_dir" 2>/dev/null)" ]; then rmdir "$_target_dir" 2>/dev/null || true; fi
     fi
+    # 记下"这是使用者主动停的"，状态页据此区分它与"进程被外部结束"。
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    printf 'user\n' > "$STOP_INTENT" 2>/dev/null || true
     # 定论由复读决定，不由"我发了停止信号"决定：进程还在就不能报"已停止"。
     if [ -n "$(get_monitor_pid || true)" ]; then
         echo "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
@@ -640,6 +730,10 @@ run_monitor_loop() {
         if [ $_repair -ge 30 ]; then
             _repair=0
             repair_autorun || true
+            # 版本号缓存：状态页要显示"是不是最新版"，而它自己不许联网——
+            # 否则每次"查看状态"都要等一次外网往返（离线/限流时白等）。
+            # 写缓存的是监控（它本来就写文件），状态页只读。
+            write_version_cache || true
             # 变量自检：apply_state 只在状态翻转时动手，稳态下它永远不会被调用，
             # 于是"别的东西改坏了变量"没人纠正。这里按同一周期整表核对，不齐就补回来
             # （幂等，齐了则零写入）。只核对我们本该持有的那几个，与用户自己的变量无关。

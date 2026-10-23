@@ -98,6 +98,39 @@ function Test-LauncherCurrent {
     } catch { return $false }
 }
 
+# 版本号缓存：监控每 30 轮（约 60–90 秒）刷新一次，状态页只读。
+#
+# 为什么要缓存：状态页原来自己调 Get-RemoteVersion，那是真实网络请求（先 API 后 Web，
+# 各 8 秒超时，限流时还会换出口重试）。离线、限流、走白名单网络的人，每次点"查看状态"
+# 都在等一个注定失败的请求——而用户对"点一下要等 10 秒"的归因通常是"这工具很慢"。
+# 写缓存的是监控（它本来就写文件），状态显示"永不写文件、永不提问"这条契约一个字不动：
+# **写的人换了，不是多了一个**。
+#
+# 格式两行：版本号、写入时刻（ISO 8601）。带时间戳是因为陈旧数据必须能被认出——
+# 只报"已是最新"而不知道这个结论有多旧，比不报更糟。
+function Write-VersionCache {
+    $r = Get-RemoteVersion
+    if (-not $r) { return }   # 查不到就保持上次的值，不写「未知」把好数据冲掉
+    $dir = Split-Path -Parent $VersionCacheFile
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -Path $dir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+    $stamp = (Get-Date).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture)
+    try { Write-Text -Path $VersionCacheFile -Text ($r.Version + "`n" + $stamp + "`n") } catch {}
+}
+
+# 读版本缓存。没有或读不出来返回 $null（调用方据此说"还没查过"）。
+function Read-VersionCache {
+    if (-not (Test-Item $VersionCacheFile)) { return $null }
+    try {
+        $lines = [System.IO.File]::ReadAllLines($VersionCacheFile, [System.Text.Encoding]::UTF8)
+        if ($lines.Count -lt 2) { return $null }
+        $ver = $lines[0].Trim()
+        if (-not $ver) { return $null }
+        $at = [datetime]::MinValue
+        try { $at = [datetime]::Parse($lines[1].Trim(), [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } catch {}
+        return @{ Version = $ver; At = $at; AgeMinutes = [int]((Get-Date) - $at).TotalMinutes }
+    } catch { return $null }
+}
+
 function Repair-AutoRun {
     try {
         $expected = Get-LauncherCommand
@@ -427,6 +460,11 @@ function Get-TerminalSyncState {
     if ($paths.Count -eq 0) { return @{ State = 'nohost'; Detail = '取不到配置文件路径' } }
     $unpaired = 0
     $current = 0
+    # 记下第一处"孤立标记"的位置（文件:行），状态页据此告诉用户"删哪一行"。
+    # 只说"标记不成对"等于让用户自己去几千行的 profile 里找；而重跑安装同样会被
+    # 这条护栏拒绝（"安全起见一个字节都没动"），所以只报现象等于给了个死路。
+    $badPath = ''
+    $badLine = 0
     foreach ($p in $paths) {
         if (-not (Test-Item $p)) { continue }
         # Git Bash 的块用 bash 语法，判据也必须是它自己那套：
@@ -438,7 +476,14 @@ function Get-TerminalSyncState {
                 if ($lines[$i].Trim() -ceq $BashBlockStart -and $hs -lt 0) { $hs = $i }
                 if ($lines[$i].Trim() -ceq $BashBlockEnd -and $he -lt 0) { $he = $i }
             }
-            if (($hs -ge 0) -ne ($he -ge 0)) { $unpaired++; continue }
+            if (($hs -ge 0) -ne ($he -ge 0)) {
+                $unpaired++
+                if (-not $badPath) {
+                    $badPath = $p
+                    $badLine = $(if ($hs -ge 0) { $hs + 1 } else { $he + 1 })
+                }
+                continue
+            }
             if ($hs -ge 0 -and $he -gt $hs) {
                 $have = @($lines[$hs..$he] | ForEach-Object { $_.Trim() })
                 $want = @(Get-BashBlockLines | ForEach-Object { $_.Trim() })
@@ -452,7 +497,18 @@ function Get-TerminalSyncState {
         # 他又不知道该删哪行。同一文件里的 Remove-OneShellProfile 就是先 Test-MarkerPresent
         # 再判成对，这里与它对齐（同一件事只准有一处判据）。
         if (-not (Test-MarkerPresent @(Read-ProfileLines $p) $ProfileBlockStart)) { continue }
-        if (-not (Test-ProfileBlockPaired $p)) { $unpaired++; continue }
+        if (-not (Test-ProfileBlockPaired $p)) {
+            $unpaired++
+            if (-not $badPath) {
+                # 找第一个出现的孤立标记行号（开始行或结束行，谁孤就是谁）。
+                $pl = @(Read-ProfileLines $p)
+                for ($k = 0; $k -lt $pl.Count; $k++) {
+                    $t = $pl[$k].Trim()
+                    if ($t -ceq $ProfileBlockStart -or $t -ceq $ProfileBlockEnd) { $badPath = $p; $badLine = $k + 1; break }
+                }
+            }
+            continue
+        }
         if (Test-ProfileBlockCurrent $p) { $current++ }
     }
     # 执行策略会拦掉整个 profile 文件，块再对也跑不起来。判定优先于块本身。
@@ -460,8 +516,60 @@ function Get-TerminalSyncState {
     try { $pol = Get-ProfileExecutionPolicyWarning } catch {}
     if ($pol) { return @{ State = 'blocked'; Detail = $pol } }
     if ($current -gt 0) { return @{ State = 'ok'; Detail = '' } }
-    if ($unpaired -gt 0) { return @{ State = 'unpaired'; Detail = '配置文件里的标记不成对，未改动它' } }
+    if ($unpaired -gt 0) { return @{ State = 'unpaired'; Detail = '配置文件里的标记不成对，未改动它'; Path = $badPath; Line = $badLine } }
     return @{ State = 'missing'; Detail = '配置文件里没有同步块' }
+}
+
+# 显式修复"标记不成对"的 profile：先备份整份，再摘掉**孤立**的标记行，最后读回复检。
+#
+# 为什么需要它：安装/卸载遇到不成对的标记一律"一个字节都不改"（这是对的——猜必错），
+# 但这让一个可诊断、可修复的状态变成不可达：用户照文档重跑安装，每次都被拒绝。
+# 人一旦明确说出"我同意修"，就不该再被拒。所以给一个显式入口，
+# 语义是"我确认这是半截标记，删掉它"，而不是"你猜一个"。
+function Repair-ProfileMarkers {
+    $paths = @()
+    try { $paths = @(Get-ProfilePaths) } catch {}
+    $fixed = @()
+    $failed = @()
+    foreach ($p in $paths) {
+        if (-not (Test-Item $p)) { continue }
+        if ($p -like "*.bashrc") {
+            $bs = $BashBlockStart; $be = $BashBlockEnd
+        } else {
+            $bs = $ProfileBlockStart; $be = $ProfileBlockEnd
+        }
+        $lines = @(Read-ProfileLines $p)
+        $hasS = $false; $hasE = $false
+        foreach ($l in $lines) {
+            if ($l.Trim() -ceq $bs) { $hasS = $true }
+            if ($l.Trim() -ceq $be) { $hasE = $true }
+        }
+        # 只处理"确有标记但不成对"的文件；成对的与完全没装的都不碰。
+        if ($hasS -eq $hasE) { continue }
+        $keep = New-Object System.Collections.ArrayList
+        foreach ($l in $lines) {
+            $t = $l.Trim()
+            # 只删孤立的标记行；块内其余内容（钩子行）一并留给下一次安装重写。
+            if ($t -ceq $bs -and -not $hasE) { continue }
+            if ($t -ceq $be -and -not $hasS) { continue }
+            [void]$keep.Add($l)
+        }
+        # 先备份整份（与正常写入同一套 .envproxy.bak 命名，不另造一套）。
+        try {
+            $bak = $p + ".envproxy.bak"
+            if (-not (Test-Path -LiteralPath $bak)) { Copy-Item -LiteralPath $p -Destination $bak -Force -ErrorAction SilentlyContinue }
+        } catch {}
+        if (-not (Write-TextAtomic -Path $p -Lines @($keep))) { $failed += $p; continue }
+        # 读回复检：修没修成由复读决定，不由"我调用了写入"决定。
+        $still = @(Read-ProfileLines $p)
+        $stillS = $false; $stillE = $false
+        foreach ($l in $still) {
+            if ($l.Trim() -ceq $bs) { $stillS = $true }
+            if ($l.Trim() -ceq $be) { $stillE = $true }
+        }
+        if ($stillS -or $stillE) { $failed += $p } else { $fixed += $p }
+    }
+    return @{ Fixed = $fixed; Failed = $failed }
 }
 
 function Get-ProfilePaths {
@@ -977,6 +1085,15 @@ $PidFile    = Join-Path $MonitorDir "monitor.pid"
 # 不区分就只能二选一：都说"你停的"（用户没停，会以为点错了），或都不说（真停过的人会以为坏了）。
 # 所以由执行停止的那一方写下这个标记，监控自己启动时删掉它。
 $StopIntentFile = Join-Path $MonitorDir "stopped.intent"
+# 版本号缓存：由监控刷新、状态页只读。状态页不许联网（见 Write-VersionCache 的注释）。
+$VersionCacheFile = Join-Path $MonitorDir "version.cache"
+# 覆盖安装区时的"进行中"标记。正常结束（成功或回滚）都会删掉它；
+# 断电/被杀才会留下——那种情况下安装区可能是新旧混合的，而没有任何自检看得出来。
+$UpdateInProgressFile = Join-Path $MonitorDir "update.inprogress"
+# pid 文件多久没更新就认为"心跳断了"。120 秒 = 稳定态两轮自愈周期（60–90 秒），
+# 容得下一次系统卡顿或休眠唤醒。它不是"监控死了"的判据（进程可能是活的），
+# 只用来在 WMI 不可用时兜底判断"是不是还活着"。
+$script:MonitorHeartbeatMaxSec = 120
 $StopFlag   = Join-Path $MonitorDir "stop.flag"
 
 function Ensure-MonitorDir {
@@ -1011,9 +1128,46 @@ function Get-MonitorProcessFromPidFile {
 
 # 判据二（兜底）：命令行特征。判"有没有监控在跑"用它——pid 文件缺失或陈旧但确实有监控时
 # 靠它（手工启动、pid 文件被删、跨位置停止）；判"我刚启动的监控起来了吗"不能用它。
+# 监控进程是否活着：三条路任一为真即视为活着。
+#
+# 为什么要三条：身份判定原来只走 WMI（Get-CimInstance / Invoke-CimMethod）一条通道，
+# 而"停止"和"卸载"完全依赖它。各类"系统优化/精简"工具会关掉 Windows Management
+# Instrumentation，企业镜像、Ghost 装机盘也会，WMI 仓损坏同样会让它抛异常
+# （下面两处都 `catch { return @() }`）。通道一断，后果是三连击且全部静默：
+#   1. -Stop 静默变成空操作 → 监控 2–3 秒后把变量重新注入，用户看到"停了又自己回来"；
+#   2. -Uninstall 停不掉 → 后续照做删掉 Run 键，而活着的监控每 30 轮自愈把 Run 键和
+#      launcher 重建回来（周期只有 60–90 秒，比人操作快）；
+#   3. 卸载复检用的是同一个通道 → 屏幕上打印"[完成] 电脑已恢复到安装前的状态"。
+# 也就是"卸载"这个最后的兜底手段会失效——比直接报错糟得多。
+#
+# 所以判据不吊在一根绳上。三条的来源各不相同：
+#   a) pid 文件 + mtime 心跳：监控每轮都在写日志/刷新，不依赖任何系统服务；
+#   b) Get-Process -Id：走进程快照 API，不是 WMI；
+#   c) WMI 命令行特征：能拿到就更好（它还能回答"是哪个脚本"），拿不到不影响结论。
+function Test-MonitorAlive {
+    # a) pid 文件新鲜度。120 秒 = 稳定态两轮自愈周期，容得下一次系统卡顿。
+    if (Test-Item $PidFile) {
+        try {
+            $ageSec = ((Get-Date) - (Get-Item -LiteralPath $PidFile).LastWriteTime).TotalSeconds
+            if ($ageSec -ge 0 -and $ageSec -le $script:MonitorHeartbeatMaxSec) {
+                $p = [int]((Read-Text $PidFile).Trim())
+                if ($p -gt 0 -and $p -ne $PID) {
+                    # 心跳新鲜 + 进程真在（Get-Process 不是 WMI）→ 认定为活着。
+                    $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
+                    if ($proc) { return $true }
+                }
+            }
+        } catch {}
+    }
+    return $false
+}
+
 function Get-MonitorProcess {
     $fromFile = Get-MonitorProcessFromPidFile
     if ($fromFile) { return $fromFile }
+    # 不依赖 WMI 的快速判据：心跳新鲜就当作活着。
+    # 它拿不到 PID（拿得到也在 $fromFile 那一支返回了），所以只在"是不是活着"这个问题上生效。
+    if (Test-MonitorAlive) { return [pscustomobject]@{ ProcessId = 0; CommandLine = "" } }
     # Get-CimInstance 是 Windows 专有的命令：Linux/macOS 上的 pwsh 没有它。
     # 本项目的测试会在 ubuntu 上跑这份代码（门禁 10），退不回来就会抛异常、
     # 整份自检中断在这里。非 Windows 上直接当作"没有命令行线索"。
@@ -1279,6 +1433,10 @@ function Run-MonitorLoop {
                         Write-MonitorLog ("终端同步没有更新：配置文件里的标记不成对，没动它：" + $pr.Path)
                     }
                 } catch {}
+                # 版本号缓存：状态页要显示"是不是最新版"，而它自己不许联网——
+                # 否则每次"查看状态"都要等一次外网往返（离线/限流时白等）。
+                # 写缓存的是监控（它本来就写文件），状态页只读。
+                try { Write-VersionCache } catch {}
                 # 变量自检：Apply-State 只在状态翻转时动手，稳态下它永远不会被调用，
                 # 于是"别的东西改坏了变量"没人纠正。这里按同一周期做一次整表核对：
                 # on 态补齐缺失项，off 态把残留收干净——判据与删除侧同一套，

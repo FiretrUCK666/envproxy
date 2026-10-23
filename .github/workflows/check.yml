@@ -976,7 +976,12 @@ jobs:
           $paths = Grab $sh 'CHECK_PATHS="([^"]*)"' 'macOS 端点路径表'
           $hostCount = @($hosts -split '\s+' | Where-Object { $_ }).Count
           $pathCount = @($paths -split '\s+' | Where-Object { $_ }).Count
-          $epCount = @([regex]::Matches($ps, '@\{ Host =')).Count
+          # 端点行必须**三项俱全**（Host / Path / Expect）才计数。
+          # 只数 `@{ Host =` 会把任何含这两个词的普通对象算进来（实测：状态页的
+          # Split-ProxyUrl 返回 `@{ Host = ...; Port = ... }`，于是 win 侧端点数被数成 7
+          # 而 mac 侧是 6，门禁报"两侧不一致"——其实是门禁自己的判据太松）。
+          # 上面 d1a(3) 那一处比期望值用的是三项俱全的正则，两处必须同一判据。
+          $epCount = @([regex]::Matches($ps, '@\{ Host = "[^"]+";\s*Path = "[^"]+";\s*Expect = "[^"]+"')).Count
           if ($epCount -ne $hostCount) { Write-Host ("端点个数两侧不一致：Win {0} / Mac {1}" -f $epCount, $hostCount); $fail = 1 }
           if ($pathCount -ne $hostCount) { Write-Host ("macOS 端点表 host 与 path 条数不一致：{0} / {1}" -f $hostCount, $pathCount); $fail = 1 }
           # g) 事实清单：数字从代码取值，再查双语 README——代码改了、文档没跟上就当场失败

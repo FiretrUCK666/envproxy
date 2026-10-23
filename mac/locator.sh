@@ -55,14 +55,29 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
         done
     }
     _all=""
+    # 总时限：一个根慢和十个根加起来慢，后果一样，所以限的是**整段搜索**而不是单个根。
+    # 超时就放弃搜索、走既有的"找不到就清变量退出"分支——宁可不接管，
+    # 也不能让登录卡住、更不能让监控因为搜索出错而不启动。
+    # 用 bash 自带的 SECONDS，零 fork（这个脚本本身就在登录路径上，每多一个进程都要付钱）。
+    _budget_start=$SECONDS
+    _over_budget() { [ $(( SECONDS - _budget_start )) -ge 8 ]; }
     for _r in "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads" "$HOME/OneDrive" "$HOME/.config"; do
+        _over_budget && break
         _out=$(_search_one "$_r" 6)
         [ -n "$_out" ] && _all="$_all
 $_out"
     done
     for _vol in /Volumes/*; do
+        _over_budget && break
         [ -d "$_vol" ] || continue
         case "$_vol" in *Time*Machine*|*Backups.backupdb*) continue;; esac
+        # 跳过网络挂载点：断线的 SMB/NFS 卷上一次递归遍历会各等一次传输超时
+        # （数秒到数十秒），而这段搜索排在"启动监控"之前——后果是监控晚启动，
+        # 这期间没有人纠正环境变量；严重时搜索中途出错，监控压根不启动。
+        # mount 的输出里网络卷形如 "//user@host/share on /Volumes/x (smbfs, ...)"。
+        case "$(mount 2>/dev/null | grep -F " on $_vol " || true)" in
+            *smbfs*|*nfs*|*afpfs*|*webdav*) continue ;;
+        esac
         _out=$(_search_one "$_vol" 4)
         [ -n "$_out" ] && _all="$_all
 $_out"
@@ -91,7 +106,11 @@ fi
 mkdir -p "$(dirname "$REG")" 2>/dev/null
 printf '%s\n' "$_target" > "$REG" 2>/dev/null
 
-# 单实例：已在跑就静默退出（监控自身还有互斥锁，这里只是少 fork 一次）
-pgrep -f "envproxy\.sh$" >/dev/null 2>&1 && exit 0
+# 单实例：已在跑就静默退出（监控自身还有互斥锁，这里只是少 fork 一次）。
+# 判据必须按 UID 过滤：别的账户的监控不算"已经有人在跑"。
+# 不过滤的后果是——同一台 Mac 上另一个账户装过本工具时，这个定位器每次登录
+# 都以为"监控已经在跑"而静默退出，于是**本账户的监控永远不启动**，
+# 而状态页读自己的 pid 文件报"未运行"，两条信息互相矛盾。与 core 侧同一判据。
+pgrep -u "$(id -u)" -f "envproxy\.sh$" >/dev/null 2>&1 && exit 0
 
 exec /bin/bash "$_target"

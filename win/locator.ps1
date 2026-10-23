@@ -40,8 +40,17 @@ if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Lea
         @{ Path = "$env:USERPROFILE\.config";   Depth = 6 }
     )
     $sysRoot = "$($env:SystemDrive)\"
+    # 只搜**本地**磁盘：网络盘（映射的 Z: 之类）与已断开的可移动卷会让
+    # Get-ChildItem -Recurse 在登录路径上各自等一次传输超时（数秒到数十秒，
+    # 视协议与服务器是否回 RST 而定，机器之间差异极大）。
+    # 这段搜索排在"启动监控"之前，于是后果是：监控晚启动几十秒到几分钟，
+    # 这期间没有人纠正环境变量（上次关机时代理还开着的话，一开机终端就带着死端口全连不上）；
+    # 更糟的是搜索中途抛异常（某些失败是终止性的），于是**监控压根不启动**，
+    # 而 Run 键、launcher.ps1 全都还在、状态页报"开机自启：已启用"。
+    # DisplayRoot 对网络盘是 UNC 路径（\\server\share），据此排除。
     Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
         Where-Object { $_.Root -ne $sysRoot } |
+        Where-Object { -not $_.DisplayRoot -or ($_.DisplayRoot -notmatch '^\\\\') } |
         ForEach-Object { $roots += @{ Path = $_.Root; Depth = 4 } }
 
     # 先把所有搜索根的结果汇总，再统一按活跃度排序（与 Mac 侧 locator.sh 同一算法）。
@@ -49,7 +58,12 @@ if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Lea
     # 里放着的陈旧备份会压过其他盘里真正在用的正本——而"活跃度优先"正是
     # "备份目录不会被误选"的唯一依据。
     $candidates = @()
+    # 总时限：一个根慢和十个根加起来慢，后果一样，所以限的是**整段搜索**而不是单个根。
+    # 超时就放弃搜索、走下面那条"清变量后退出"的既有分支——宁可不接管，
+    # 也不能让登录卡住、更不能让监控因为搜索抛异常而不启动。
+    $budget = [Diagnostics.Stopwatch]::StartNew()
     foreach ($r in $roots) {
+        if ($budget.Elapsed.TotalSeconds -ge 8) { break }
         $candidates += @(Get-ChildItem -LiteralPath $r.Path -Recurse -Depth $r.Depth -Filter "envproxy.ps1" -ErrorAction SilentlyContinue)
     }
     if ($candidates.Count -gt 0) {

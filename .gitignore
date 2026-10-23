@@ -9,21 +9,11 @@ Thumbs.db
 *~
 
 # EnvProxy runtime state (auto-created next to each platform core, machine-local).
-# Never commit: a clone recreates them on first run (mkdir -p).
-win/monitor/monitor.log
-win/monitor/monitor.pid
-win/monitor/stop.flag
-# "停止"是一次跨重启仍然有效的意图，所以它落在磁盘上而不是内存里。
-win/monitor/stopped.intent
-mac/monitor/monitor.log
-mac/monitor/monitor.pid
-mac/monitor/stop.flag
-# 操作锁（mac 侧用文件锁；正常退出会自己删，被 kill -9 或断电时会留下）
-mac/monitor/.op.lock
-mac/monitor/.op.lock.tmp.*
-# 监控单实例锁（目录形式）：被强杀时同样会留下空目录
-mac/monitor/.lock/
-mac/monitor/.lock
+# 整个运行时目录一律不入库。逐个列文件名的话，每加一个运行时文件就要记得补一行，
+# 漏一次它就会随 git add -A 入库、跟着进安装包——而 monitor/ 是「每台机器自己生成」的东西
+# （日志、pid、各类临时标记与缓存）。目录本身由脚本 mkdir -p 自建，不需要 git 记住它。
+win/monitor/
+mac/monitor/
 
 # temp / local bundles (README ships the folder via USB/drive/zip)
 *.tmp

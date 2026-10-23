@@ -60,19 +60,41 @@ HELP_MAX_LINES=30
 LOG_MAX_BYTES=204800
 LOG_TAIL_LINES=200
 
-# 计算一段文字在终端里占几格：中日韩字符占两格，ASCII 占一格。
-# 所有需要对齐的地方（菜单、帮助的两列、安装提示）都走这一处：
+# 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
+# 所有需要对齐的地方（菜单、帮助的两列、安装提示、日志裁剪）都走这一处：
 # 写第二份就会有一天两份算出两个宽度，屏幕上看就是"某一屏的表格歪了"。
 # 放在 base 层而不是 ops：帮助与菜单都要用它，而 ops 里的定义顺序会随编辑变化。
+#
+# 判据与 Windows 侧 Get-DisplayWidth 逐字节同一条：码位 > U+2E80 记两格。
+# UTF-8 下等价于"3 字节序列的首字节 >= 0xE3"——2 字节序列（é · °）与
+# U+2000..U+2E7F 的三字节序列（… → ）都只有一格，与 Windows 的结论一致。
+#
+# 为什么按字节走而不是按字符走：旧版用 `wc -c` + `tr` 数多字节字节数再除以 3，
+# 于是每个 2 字节字符（… → · ° é）被算成 2 格，比 Windows 宽一格，表格歪掉；
+# 而 `_truncate_width` 逐字符调本函数，一个字符 forks 3 次——实测一条超宽日志行
+# （98 列、137 字符）要 11 秒，状态页每多打印一行日志就多等这么久。
+# 现在整个函数零 fork：`printf -v` 取字节值，纯算术累加。
 _display_width() {
+    LC_ALL=C
     _dw_s="$1"
-    _dw_all=$(printf '%s' "$_dw_s" | wc -c)
-    _dw_ascii=$(printf '%s' "$_dw_s" | LC_ALL=C tr -dc '\000-\177' | wc -c)
-    _dw_multi=$((_dw_all - _dw_ascii))
-    # 多字节字节数 / 3 得到汉字个数（本项目文案里没有 2 字节或 4 字节字符）
-    _dw_han=$((_dw_multi / 3))
-    _dw_rest=$((_dw_multi - _dw_han * 3))
-    printf '%s' $((_dw_ascii + _dw_han * 2 + _dw_rest))
+    _dw_n=${#_dw_s}
+    _dw_i=0
+    _dw_w=0
+    while [ "$_dw_i" -lt "$_dw_n" ]; do
+        _dw_ch=${_dw_s:_dw_i:1}
+        printf -v _dw_b '%d' "'$_dw_ch"
+        if [ "$_dw_b" -lt 128 ]; then
+            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 1))
+        elif [ "$_dw_b" -ge 227 ]; then
+            # 3 字节序列且首字节 >= 0xE3（码位 > U+2E80）：两格
+            _dw_w=$((_dw_w + 2)); _dw_i=$((_dw_i + 3))
+        else
+            # 2 字节序列，或首字节 < 0xE3 的 3 字节序列：一格
+            if [ "$_dw_b" -ge 224 ]; then _dw_i=$((_dw_i + 3)); else _dw_i=$((_dw_i + 2)); fi
+            _dw_w=$((_dw_w + 1))
+        fi
+    done
+    printf '%s' "$_dw_w"
 }
 
 # 把文字补齐到指定宽度（按上面的显示宽度算）。
@@ -91,26 +113,35 @@ _menu_cell_pad() {
 # 把一段文字按终端显示宽度截断，超出时补省略号。
 # 必须按"字符"走而不是按字节切：中文占两格，按字节切会把一个汉字切成半个，
 # 屏幕上就是乱码。逐字符累加显示宽度，超过就停。
+# 截断走的是与 _display_width 同一套字节判据（就地展开，不再逐字符调子 shell）：
+# 逐字符调子 shell 的代价是每个字符 forks 数次，一条超宽日志行要十几秒。
 _truncate_width() {
+    LC_ALL=C
     _tw_s="$1"
     _tw_max="$2"
     if [ "$(_display_width "$_tw_s")" -le "$_tw_max" ]; then
         printf '%s' "$_tw_s"
         return 0
     fi
-    _tw_acc=""
+    _tw_n=${#_tw_s}
+    _tw_i=0
     _tw_aw=0
-    _tw_i=1
-    _tw_len=${#_tw_s}
-    while [ "$_tw_i" -le "$_tw_len" ]; do
-        _tw_ch=${_tw_s:$((_tw_i - 1)):1}
-        _tw_cw=$(_display_width "$_tw_ch")
+    _tw_acc=0   # 已接受部分的字节数
+    while [ "$_tw_i" -lt "$_tw_n" ]; do
+        _tw_ch=${_tw_s:_tw_i:1}
+        printf -v _tw_b '%d' "'$_tw_ch"
+        if [ "$_tw_b" -lt 128 ]; then _tw_cw=1; _tw_cl=1
+        elif [ "$_tw_b" -ge 227 ]; then _tw_cw=2; _tw_cl=3
+        else
+            _tw_cw=1
+            if [ "$_tw_b" -ge 224 ]; then _tw_cl=3; else _tw_cl=2; fi
+        fi
         [ $((_tw_aw + _tw_cw)) -gt "$_tw_max" ] && break
-        _tw_acc="$_tw_acc$_tw_ch"
         _tw_aw=$((_tw_aw + _tw_cw))
-        _tw_i=$((_tw_i + 1))
+        _tw_i=$((_tw_i + _tw_cl))
+        _tw_acc=$_tw_i
     done
-    printf '%s…' "$_tw_acc"
+    printf '%s…' "${_tw_s:0:_tw_acc}"
 }
 
 STYLE_ROLES="title heading item key value cmd ok warn bad dim text"
@@ -270,7 +301,7 @@ usage_error() {
         return 1
     fi
     if [ -n "${USAGE_EXTRA:-}" ]; then
-        printf '无法识别的参数: %s' "$USAGE_EXTRA"
+        printf '无法识别的参数：%s' "$USAGE_EXTRA"
         return 1
     fi
     # 开关必须跟着它的命令：--purge 只配 uninstall，--yes 只配 update。

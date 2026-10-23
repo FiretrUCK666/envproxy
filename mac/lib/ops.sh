@@ -12,7 +12,7 @@
 # 10. 子命令
 # ------------------------------------------------------------------------------
 install_envproxy() {
-    style_out title "======== EnvProxy 安装 (macOS) ========"
+    style_out title "======== EnvProxy 安装 ========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     # 先说清楚要动什么、不动什么，再说"正在做"——用户在按完编号之后得先知道会发生什么，
     # 而不是盯着静止的屏幕猜。
@@ -30,29 +30,35 @@ install_envproxy() {
     else
         style_out warn "[1/4] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
     fi
-    style_out text "[2/4] 正在写终端配置……"
-    if insert_shell_hooks; then
-        style_out ok "[2/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
+    # 编号必须与 Windows 侧同一含义（自启 → 监控 → 变量 → 终端同步）。
+    # 早先两端 [2/4] 和 [3/4] 各指另一件事，用户按编号念给客服或照 README 对照排查时，
+    # 「[3/4] 环境变量」在 mac 上其实还没开始。四步之间没有功能上的先后约束
+    # （终端同步只写配置文件、与代理状态无关；变量对齐只要在监控启动之后即可），
+    # 所以两种顺序都成立——既然都成立，就不该保留差异：`[n/4]` 是给用户数进度的，
+    # 含义不固定的编号等于没有编号。
+    style_out text "[2/4] 正在启动后台监控……"
+    if start_monitor 1; then
+        style_out ok "[2/4] 监控进程：已启动"
     else
-        style_out warn "[2/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
+        style_out warn "[2/4] 监控进程：未能确认运行，原因见上面那两行"
     fi
     update_path_record
-    style_out text "[3/4] 正在启动后台监控……"
-    if start_monitor 1; then
-        style_out ok "[3/4] 监控进程：已启动"
-    else
-        style_out warn "[3/4] 监控进程：未能确认运行，原因见上面那两行"
-    fi
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
     # 不管成没成就按预设的 off 去应用，等于把"读不出来"当成"代理没了"。
     # 这一步也要报进度：它是"会改这 4 处"里的第 4 处（环境变量），
     # 不报的话用户只数到 3 步，会以为环境变量那步被跳过了。
-    style_out text "[4/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……"
+    style_out text "[3/4] 正在确认翻墙软件在不在（有端口、是代理、真能连出去）……"
     if align_state_once >/dev/null 2>&1; then
-        style_out ok "[4/4] 环境变量：已按当前状态校正"
+        style_out ok "[3/4] 环境变量：已按当前状态校正"
     else
         # 读不出来 ≠ 没有代理：这一轮什么都没改，如实说明（与 Windows 侧同口径）。
-        style_out warn "[4/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
+        style_out warn "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
+    fi
+    style_out text "[4/4] 正在写终端配置……"
+    if insert_shell_hooks; then
+        style_out ok "[4/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
+    else
+        style_out warn "[4/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
     fi
     echo ""
     # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
@@ -108,9 +114,9 @@ uninstall_envproxy() {
     if [ $_remove_log -eq 1 ]; then
         rm -rf "$MONITOR_DIR" 2>/dev/null || true
     else
-        rm -f "$PID_FILE" "$STOP_FLAG" 2>/dev/null || true
+        rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
-            rm -f "$PID_FILE" "$STOP_FLAG" 2>/dev/null || true
+            rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" 2>/dev/null || true
         fi
     fi
     _ghost=$(get_monitor_pid || true)
@@ -165,57 +171,73 @@ uninstall_envproxy() {
     fi
 }
 
-show_status() {
-    style_out title "======== EnvProxy 状态 (macOS) ========"
-    _m=$(get_monitor_pid || true)
-      # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
-      # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
-      # 状态页却仍报"已启用"。判据要和"能不能真的启动"一致：注册在，且那个文件真的存在。
-      # 与 Windows 侧同口径（那边查的是 Run 键指向的脚本是否存在）。
-      _autorun_ok=0
-      if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" && [ -f "$LOCATOR_PATH" ]; then
-          _autorun_ok=1
-      fi
-    if [ -n "$_m" ]; then
-        style_out ok "监控进程 : 运行中 (PID $_m)"
-    else
-        style_out warn "监控进程 : 未运行"
-        # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
-        # 不说清这一点，用户会看到"自启已启用"和"监控未运行"并列，以为装坏了。
-        [ "$_autorun_ok" = "1" ] && style_out dim "           （已按你的选择停止，下次登录会自动恢复）"
+# 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
+# 状态页用它判三件事：注入的代理变量指向的端口、系统代理指向的端口。
+# 与 Windows 侧 Test-TcpAlive 同一判据（那边按地址族建套接字，这边同样只连一次）。
+_port_alive() {
+    _pa_addr="$1"; _pa_port="$2"
+    [ -n "$_pa_addr" ] && [ -n "$_pa_port" ] || return 1
+    # 大括号加 2>/dev/null 包住：nc/curl 在端口没人听时会往 stderr 写一行，
+    # 那行不是错误、只是噪声，不该出现在状态页上。
+    if nc_supports_G; then
+        if printf '' | nc -z -G 1 -w 1 "$_pa_addr" "$_pa_port" 2>/dev/null; then return 0; fi
+        return 1
     fi
-      if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then
-          if [ "$_autorun_ok" = "1" ]; then
-              style_out ok "开机自启 : 已启用"
-          else
-              style_out warn "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
-              style_out dim "           记录指向：$LOCATOR_PATH"
-              style_out dim "           打开菜单选 1（安装 / 修复）可以重建。"
-          fi
-      else
-          if [ -f "$PLIST_PATH" ]; then echo "开机自启 : 已写入但未加载"; else echo "开机自启 : 未启用"; fi
-      fi
+    # 降级：用 curl 探连通。
+    # 与 probe 层同一个坑：--noproxy '' 是绕过代理直连目标，'*' 语义正好相反；
+    # 不加 -p 时 curl 发的是普通 GET，任何回 200 的服务都会被当成代理。
+    #
+    # 注释必须写在命令**上方**：续行（行尾反斜杠）中间夹一行注释，bash 会把
+    # 整行注释丢弃、续行到此结束，后面的参数变成一条独立命令去执行——
+    # 实测 curl 只收到前四个参数、URL 全丢，报 "no URL specified"，
+    # 于是判断永远是"死了"，状态页每次都打印假警告。
+    if env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+        curl --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
+        --noproxy '' -p -x "http://$_pa_addr:$_pa_port" "http://127.0.0.1:9/" 2>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+# 当前注入的代理地址：**整条**读回来，不只取端口。
+# 只取端口再拼 127.0.0.1 是错的：注入值可能是 http://[::1]:7078，
+# 那样屏幕上会显示一个本机根本不成立的地址，而用户完全可能照抄去填别的工具。
+# 与 write_off_sentinel 里同一套"整条 URL"取法。
+get_current_proxy_url() {
+    [ -f "$PROXY_ENV" ] || return 1
+    _gpu_line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    [ -n "$_gpu_line" ] || return 1
+    printf '%s' "$_gpu_line" | sed -E 's/^export HTTP_PROXY="?([^"]*)"?$/\1/'
+}
+
+show_status() {
+    style_out title "======== EnvProxy 状态 ========"
+    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
+    # 读完 8 行再自己合成判断，是这屏原来最大的问题；正常项与异常项也不再同构平铺。
+    _m=$(get_monitor_pid || true)
+    # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
+    # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
+    # 状态页却仍报"已启用"。判据要和"能不能真的启动"一致：注册在，且那个文件真的存在。
+    # 与 Windows 侧同口径（那边查的是 Run 键指向的脚本是否存在）。
+    _autorun_reg=0
+    launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" && _autorun_reg=1
+    _autorun_ok=0
+    if [ "$_autorun_reg" = "1" ] && [ -f "$LOCATOR_PATH" ]; then _autorun_ok=1; fi
+
     # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
     # 只枚举一次（枚举两次之间状态可能变，两次结论可能自相矛盾）；
     # 深度与 Windows 侧一致：都只做快扫（全端口扫留给监控与诊断入口）。
-    _cands=""
-    _crc=0
-    _cands=$(find_candidate_ports 0) || _crc=$?
-    if [ "$_crc" -ne 0 ]; then
-        style_out warn "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
-    else
-        _port=$(printf '%s' "$_cands" | awk '{print $1}')
-        if [ -n "$_port" ]; then
-            style_out ok "翻墙代理 : 已开启（本地端口 $_port 监听中）"
-        else
-            style_out warn "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
-        fi
-    fi
+    _port=""
+    _port_unknown=0
+    _cands=$(find_candidate_ports 0) || _port_unknown=1
+    [ "$_port_unknown" = "0" ] && _port=$(printf '%s' "$_cands" | awk '{print $1}')
+
     # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
     # 「看起来装好了，实则每次开窗口都不同步」。与 Win 侧 Get-TerminalSyncState 同语义。
     _ts_state="missing"
     _ts_hits=0
     _ts_unpaired=0
+    _ts_badline=""
     for _ts_p in $(rc_check_files); do
         [ -f "$_ts_p" ] || continue
         # 先看有没有我们的标记：连标记都没有的文件不是「不成对」，是「没装过」，不计数。
@@ -224,7 +246,13 @@ show_status() {
         _ts_has_e=0
         grep -qxF "$HOOK_END" "$_ts_p" 2>/dev/null && _ts_has_e=1
         [ "$_ts_has_s" = "0" ] && [ "$_ts_has_e" = "0" ] && continue
-        if ! _hook_block_paired "$_ts_p"; then _ts_unpaired=$((_ts_unpaired + 1)); continue; fi
+        if ! _hook_block_paired "$_ts_p"; then
+            _ts_unpaired=$((_ts_unpaired + 1))
+            # 顺带记下孤立标记的行号：状态页要能告诉用户"删哪一行"。
+            # 只说"标记不成对"等于让用户自己去几千行里找。
+            [ -z "$_ts_badline" ] && _ts_badline=$(grep -nxF -e "$HOOK_START" -e "$HOOK_END" "$_ts_p" 2>/dev/null | head -n 1 | cut -d: -f1)
+            continue
+        fi
         # 成对了还要看钩子行是不是当前版本：标记在、钩子行被改过就不算生效。
         grep -qxF "$HOOK_LINE" "$_ts_p" 2>/dev/null && _ts_hits=$((_ts_hits + 1))
     done
@@ -233,16 +261,26 @@ show_status() {
     elif [ "$_ts_unpaired" -gt 0 ]; then
         _ts_state="unpaired"
     fi
-    case "$_ts_state" in
-        ok)       style_out ok "终端同步 : 已生效（已开着的窗口敲回车即跟上）" ;;
-        unpaired) style_out warn "终端同步 : 配置文件里的标记不成对，未改动它（重跑一次安装可修复）" ;;
-        *)        style_out warn "终端同步 : 配置文件里没有同步块（重跑一次安装可修复）" ;;
-    esac
-    _cur=$(get_current_proxy_port 2>/dev/null || true)
-    if [ -n "$_cur" ]; then style_out ok "代理变量 : 已注入 (http://127.0.0.1:$_cur)"; else style_out dim "代理变量 : 无（直连状态）"; fi
-    # 只读提示：系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
+
+    # 代理变量：整条地址读回来（不只端口），再试连看它指向的端口还在不在。
+    _cur=$(get_current_proxy_url 2>/dev/null || true)
+    _cur_alive=1
+    _cur_addr=""
+    _cur_port=""
+    if [ -n "$_cur" ]; then
+        # 从 URL 里取主机与端口：IPv6 形态是 http://[::1]:7078，直接按最后一个冒号切。
+        _cur_hostport=$(printf '%s' "$_cur" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')
+        _cur_port=$(printf '%s' "$_cur_hostport" | sed -nE 's/.*:([0-9]+)$/\1/p')
+        _cur_addr=$(printf '%s' "$_cur_hostport" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
+        if [ -n "$_cur_port" ]; then
+            _port_alive "$_cur_addr" "$_cur_port" || _cur_alive=0
+        fi
+    fi
+
+    # 系统代理：浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
     # 与 Win 侧 HKCU Internet Settings 那段同语义（读系统设置 → 试连 → 只在连不上时提醒）。
+    _sp_bad=0
     _sp_info=$(scutil --proxy 2>/dev/null || true)
     if [ -n "$_sp_info" ]; then
         _sp_enable=$(printf '%s' "$_sp_info" | awk '/HTTPEnable *: *1/ {print 1; exit}')
@@ -250,60 +288,194 @@ show_status() {
         _sp_port=$(printf '%s' "$_sp_info" | awk '/HTTPPort *: */ {sub(/.*: */, ""); print; exit}')
         if [ "$_sp_enable" = "1" ] && [ "$_sp_host" = "127.0.0.1" ] && [ -n "$_sp_port" ]; then
             # "在听"还不够：多数翻墙软件的断开按钮不停内核，端口仍会应答。
-            # 真连一次才分得清"活着"与"占着不放"（与 Win 侧 TcpClient 试连同口径）。
-            _sp_alive=0
-            # 这里只管"能不能连上"，所以两种写法都做同一件事：连一次看成功与否。
-            # nc 不认 -G 时（Homebrew 的 GNU netcat 抢占 PATH）改用 curl 探连通。
-            if nc_supports_G; then
-                if printf '' | nc -z -G 1 -w 1 127.0.0.1 "$_sp_port" 2>/dev/null; then _sp_alive=1; fi
-            else
-                # 与 probe 层同一个坑：--noproxy '' 是绕过代理直连目标，'*' 语义正好相反；
-                # 而且不加 -p 时 curl 发的是普通 GET，任何回 200 的服务都会被当成代理。
-                #
-                # 注释必须写在命令**上方**：续行（行尾反斜杠）中间夹一行注释，bash 会把
-                # 整行注释丢弃、续行到此结束，后面的参数变成一条独立命令去执行——
-                # 实测 curl 只收到前四个参数、URL 全丢，报 "no URL specified"，
-                # 于是 _sp_alive 永远是 0，状态页每次都打印"系统代理疑似残留"的假警告。
-                if env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-                    curl --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
-                    --noproxy '' -p -x "http://127.0.0.1:$_sp_port" "http://127.0.0.1:9/" 2>/dev/null; then _sp_alive=1; fi
-            fi
-            if [ "$_sp_alive" = "0" ]; then
-                style_out warn "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）"
-                style_out dim "      浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
-            fi
+            # 真连一次才分得清"活着"与"占着不放"（与 Win 侧 Test-TcpAlive 同口径）。
+            _port_alive "127.0.0.1" "$_sp_port" || _sp_bad=1
         fi
     fi
+
     # 版本信息（只读：查不到只提示，不写文件、不提问）
     _local_ver=$(get_local_version || true)
-    if [ -n "$_local_ver" ]; then style_out ok "本地版本 : v$_local_ver"; else style_out warn "本地版本 : 未知"; fi
-    if get_remote_version; then
-        style_out ok "最新版本 : $REMOTE_TAG"
+
+    # ---- 结论行 ----
+    _pb=""
+    if [ -z "$_m" ]; then
+        if [ -f "$STOP_INTENT" ]; then _pb="$_pb监控按你的选择停着
+"; else _pb="$_pb监控进程不在了（可能被强制退出或崩溃）
+"; fi
+    fi
+    [ "$_autorun_ok" = "0" ] && _pb="$_pb开机自启没生效
+"
+    [ "$_port_unknown" = "1" ] && _pb="$_pb这一轮没读到本机端口，无法判断代理
+"
+    if [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="$_pb代理变量指向的端口已经不在
+"; fi
+    case "$_ts_state" in ok) ;; *) _pb="$_pb终端同步没生效
+";; esac
+    [ "$_sp_bad" = "1" ] && _pb="$_pb系统代理可能残留（不是本工具写的）
+"
+    # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
+    # 那种情况下入口通常还能起来、启动自检全绿，但安装区可能新旧混合，
+    # 表现为某些功能静默失效——所以必须主动说出来。
+    _upd_prog=0
+    [ -f "$MONITOR_DIR/update.inprogress" ] && _upd_prog=1
+    [ "$_upd_prog" = "1" ] && _pb="$_pb上次更新没有完成，程序文件可能新旧混合
+"
+    # 计数与列表必须来自同一批条目：先切成数组，再数个数、再逐条打印。
+    # 早先两边各算一遍，于是出现了"有 1 项要注意"下面一条都不显示的分叉。
+    # 计数与列表同源：_pb 从一开始就是**换行分隔**，数个数与逐条打印读同一份。
+    # 早先两边各算一遍（而且分隔符用的是全角分号、切分器认的是半角），
+    # 于是出现过"有 1 项要注意"下面把三件事挤成一行的情况。
+    _pn=0
+    if [ -n "$_pb" ]; then
+        _pn=$(printf '%s' "$_pb" | grep -c . || true)
+    fi
+    if [ "$_pn" = "0" ]; then
+        style_out ok "一切正常，不用做任何事。"
+    else
+        style_out warn "有 $_pn 项要注意："
+        printf '%s' "$_pb" | while IFS= read -r _pb1; do
+            [ -n "$_pb1" ] && style_out warn "  - $_pb1"
+        done
+    fi
+    echo ""
+
+    # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
+    if [ -z "$_m" ]; then
+        style_out warn "监控进程 : 未运行"
+        # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
+        # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
+        # 强制退出/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
+        # 与 Windows 侧 stopped.intent 同一手法：猜错的代价是把崩溃说成用户选择。
+        if [ -f "$STOP_INTENT" ]; then
+            if [ "$_autorun_ok" = "1" ]; then
+                style_out dim "  （你点过停止。下次登录会自动恢复，或现在选 1）"
+            else
+                style_out warn "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
+                style_out dim "  打开菜单选 1（安装 / 修复）可以一起修好。"
+            fi
+        else
+            style_out warn "  （不是点了停止，是进程不在了：可能被强制退出，或崩溃）"
+            style_out dim "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
+        fi
+    fi
+    if [ "$_autorun_ok" = "0" ]; then
+        if [ "$_autorun_reg" = "1" ]; then
+            style_out warn "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
+            style_out dim "  记录指向：$LOCATOR_PATH"
+            style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
+        elif [ -f "$PLIST_PATH" ]; then
+            style_out warn "开机自启 : 已写入但未加载"
+            style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
+        else
+            style_out warn "开机自启 : 未启用"
+            style_out dim "  打开菜单选 1（安装 / 修复）可以启用。"
+        fi
+    fi
+    if [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
+        style_out warn "代理变量 : 指向的端口已不在（$_cur）"
+        style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
+        style_out dim "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"
+    elif [ -n "$_cur" ] && [ -z "$_m" ]; then
+        style_out warn "代理变量 : 已注入（$_cur），但没人维护"
+        style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
+        style_out dim "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
+    fi
+    case "$_ts_state" in
+        unpaired)
+            style_out warn "终端同步 : 配置文件里的标记不成对，未改动它"
+            if [ -n "$_ts_badline" ]; then
+                style_out dim "  删掉配置文件里孤立的那行标记（第 $_ts_badline 行）再选 1。"
+            else
+                style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再选 1。"
+            fi ;;
+        missing)
+            style_out warn "终端同步 : 配置文件里没有同步块"
+            style_out dim "  打开菜单选 1 可以写入。" ;;
+        *) ;;
+    esac
+    if [ "$_upd_prog" = "1" ]; then
+        style_out warn "上次更新 : 没有完成（覆盖过程中断）"
+        style_out dim "  程序文件可能新旧混合，某些功能会静默失效。"
+        style_out dim "  打开菜单选 1（安装 / 修复）重做一次即可。"
+    fi
+    if [ "$_sp_bad" = "1" ]; then
+        style_out warn "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）。"
+        style_out dim "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+    fi
+    [ "$_pn" != "0" ] && echo ""
+
+    # ---- 参考信息：正常项 ----
+    [ -n "$_m" ] && style_out ok "监控进程 : 运行中 (PID $_m)"
+    [ "$_autorun_ok" = "1" ] && style_out ok "开机自启 : 已启用"
+    if [ -n "$_port" ]; then
+        style_out ok "翻墙代理 : 已开启（本地端口 $_port 监听中）"
+    elif [ "$_port_unknown" = "1" ]; then
+        style_out warn "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
+    else
+        style_out dim "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+    fi
+    [ "$_ts_state" = "ok" ] && style_out ok "终端同步 : 已生效（已开着的窗口敲回车即跟上）"
+    # 代理变量只有"已注入且活着且监控在跑"才进参考区；其余分支上半段已经说过，
+    # 这里再打一遍就是同一件事说两次。
+    if [ -n "$_cur" ] && [ "$_cur_alive" = "1" ] && [ -n "$_m" ]; then
+        style_out ok "代理变量 : 已注入 ($_cur)"
+    elif [ -z "$_cur" ]; then
+        style_out dim "代理变量 : 无（直连状态）"
+    fi
+
+    # 版本那三行：正常时压成一行。原来"本地版本/最新版本/更新状态"各占一行、
+    # 与"监控未运行"平级，等于把对普通用户没有行动价值的信息和要靠它行动的信息摆成一样重。
+    #
+    # 数据来自监控写的缓存，所以有三种情况，必须分开说：
+    #   有且新鲜  → 正常比较版本
+    #   有但很旧  → 仍然比较，但把"这是多久以前查的"一起说出来（陈旧数据不许假装是当前数据）
+    #   还没有    → 说明为什么还没有（监控没在跑 / 刚装上），并给出主动查的办法
+    _local_text="未知"
+    [ -n "$_local_ver" ] && _local_text="v$_local_ver"
+    _vc=""; _vc_age=""
+    _vc_line=$(read_version_cache 2>/dev/null || true)
+    if [ -n "$_vc_line" ]; then
+        _vc=$(printf '%s' "$_vc_line" | cut -d' ' -f1)
+        _vc_age=$(printf '%s' "$_vc_line" | cut -d' ' -f2)
+    fi
+    if [ -z "$_vc" ]; then
+        # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
+        style_out dim "版本 : $_local_text（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）"
+    else
+        REMOTE_VERSION="$_vc"
+        REMOTE_TAG="v$_vc"
+        _age_text=""
+        case "$_vc_age" in
+            ''|*[!0-9]*) ;;
+            *)
+                if [ "$_vc_age" -ge 1440 ]; then _age_text="（$((_vc_age / 1440)) 天前的记录）"
+                elif [ "$_vc_age" -ge 60 ]; then _age_text="（$((_vc_age / 60)) 小时前的记录）"
+                fi ;;
+        esac
+        _state=""
+        _role="ok"
         if is_dev_copy; then
-            style_out dim "更新状态 : 开发副本（更新走 git pull，本入口不改动文件）"
+            _state="开发副本（更新走 git pull，本入口不改动文件）"; _role="dim"
         elif is_source_copy; then
-            style_out warn "更新状态 : 源码包（更新入口会先确认用途再动手）"
+            _state="源码包（更新入口会先确认用途再动手）"; _role="warn"
         elif [ -z "$_local_ver" ]; then
-            style_out warn "更新状态 : 可打开菜单选 3（检查更新）升级"
+            _state="可打开菜单选 3（检查更新）升级"; _role="warn"
         else
             _newer=$(compare_versions "$_local_ver" "$REMOTE_VERSION" || true)
             if [ "$_newer" -gt 0 ] 2>/dev/null; then
-                style_out ok "更新状态 : 本地版本比最新发布版新"
+                _state="本地版本比最新发布版新"; _role="dim"
             else
                 _older=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
                 if [ "$_older" -gt 0 ] 2>/dev/null; then
-                    style_out warn "更新状态 : 发现新版，打开菜单选 3（检查更新）即可升级"
+                    _state="发现新版 $REMOTE_TAG，选 3（检查更新）即可升级"; _role="warn"
                 else
-                    style_out ok "更新状态 : 已是最新"
+                    _state="已是最新"; _role="dim"
                 fi
             fi
         fi
-    else
-        # 状态显示也要说清是哪一类失败：笼统说"都不可达"会让用户以为是网络问题，
-        # 而限流（等一小时）、缺包（手动下载）要做的动作完全不同。
-        style_out warn "最新版本 : 检查失败（$(update_failure_message "${REMOTE_FAILURE_KIND:-network}" "所有更新源")）"
-        style_out dim "更新状态 : 未知"
+        style_out "$_role" "版本 : $_local_text（$_state）$_age_text"
     fi
+
     style_out title "---------------- 最近日志 ----------------"
     if [ -f "$LOG_FILE" ]; then
         # 日志行按终端宽度裁：日志文件里的长行是给"搜"用的（不折行才好 grep），
@@ -1007,11 +1179,23 @@ _render_menu() {
     if [ -n "$_rm_pid" ]; then _rm_mon="运行中 (PID $_rm_pid)"; else _rm_mon="未运行"; fi
     _SEG_COLORED="$_rm_colored"
     _SEG_LINE=""
-    _seg title "======== EnvProxy 菜单 (macOS) ========"
+    _seg title "======== EnvProxy 菜单 ========"
     _line_flush
-    # 抬头是状态提要，用灰：它是背景信息，不该和可点的编号抢注意力。
-    _seg dim "  监控 $_rm_mon    版本 v$_rm_ver"
+    # 抬头是这一屏最该被看到的一行：用户打开菜单九成的目的是"我现在正常吗"，
+    # 答案就在这里（监控在跑 = 正常，未运行 = 有问题）。
+    # 早先整行用 dim（暗灰），等于把答案压到最暗、还给它贴了"背景信息"的标签；
+    # 而"怎么修"的编号反而是亮绿——优先级是反的。
+    # 现在拆两段：标签用灰（它确实是背景），**状态值用 ok/warn**（与状态页同一套语义）。
+    if [ -n "$_rm_pid" ]; then _rm_mr="ok"; else _rm_mr="warn"; fi
+    _seg dim "  监控 "
+    _seg "$_rm_mr" "$_rm_mon"
+    _seg dim "    版本 v$_rm_ver"
     _line_flush
+    # 未运行时补一句可执行的话：打开菜单 → 第一行就知道好不好 → 坏了直接告诉按哪个键。
+    if [ -z "$_rm_pid" ]; then
+        _seg dim "        按 1 可以让它重新跑起来"
+        _line_flush
+    fi
     for _rm_g in $(_menu_group_order); do
         _rm_first=1
         for _rm_i in "${MENU_ITEMS[@]}"; do

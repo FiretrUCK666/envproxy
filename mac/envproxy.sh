@@ -157,7 +157,15 @@ case "$_CMD_NORM" in
     install) install_envproxy;;
     # stop 也要走哨兵模式：purge 会把 proxy.env 整个删掉，已开着的窗口下次回到提示符时
     # 读不到文件，就永远停在上一次的代理值上（契约：off 态写守卫式 unset，不删文件）。
-    stop) stop_monitor; remove_user_env_vars sentinel; echo "代理变量已清除，当前恢复直连。"
+    stop)
+          # 提权提醒：install / uninstall 都有这一句，唯独 stop 没有。
+          # 判据（是不是 root）与动作（改的是谁的配置）两端完全同构——
+          # 以 root 跑时动的是 root 账号的变量、停的是可能属于别人的监控，
+          # 而屏幕上一句提醒都没有。与 Windows 侧 -Stop 的 Test-IsElevated 同一口径。
+          if [ "$(id -u)" = "0" ]; then
+              echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。" >&2
+          fi
+          stop_monitor; remove_user_env_vars sentinel; echo "代理变量已清除，当前恢复直连。"
           # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
           # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
           # 与其让人以为"工具坏了"，不如说清楚。

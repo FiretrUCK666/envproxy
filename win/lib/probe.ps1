@@ -202,6 +202,24 @@ function Test-PortListening([int]$Port) {
 }
 
 # CONNECT 探测：向端口发一个 HTTP CONNECT 请求，只有真正的 HTTP 代理才回 "200"。
+# CONNECT 握手的报文与"什么算应答"的唯一出处。
+# 串行探测（Test-HttpProxy）与并行探测（Test-HttpProxyBatch）都要用：
+# 各写一份必然分叉，而分叉的后果是"同一个端口串行判通、并行判死"——
+# 批量那一层会把候选集悄悄缩小，用户看到的就是"有时候能检测到有时候不能"。
+# 判据抽成纯函数 Test-ConnectResponse，喂字符串就能测，不必真连网络。
+$ConnectProbeRequest = [System.Text.Encoding]::ASCII.GetBytes("CONNECT 127.0.0.1:9 HTTP/1.1`r`nHost: 127.0.0.1:9`r`n`r`n")
+
+function Get-ConnectProbeRequest {
+    return $ConnectProbeRequest
+}
+
+# 应答算不算"这是个真代理"：必须是 HTTP/1.x 且状态码 200。
+# 504/502/超时/拒绝都不算（内核还活着但出口断了，那属于节点不通，不是"这不是代理"）。
+function Test-ConnectResponse([string]$Response) {
+    if (-not $Response) { return $false }
+    return [bool]($Response -match "^\s*HTTP/1\.[01]\s+200")
+}
+
 # 这是区分"代理端口"与"其他服务端口"的终极判定，不依赖进程名/端口号猜测。
 function Test-HttpProxy([int]$Port) {
     $client = $null
@@ -212,14 +230,14 @@ function Test-HttpProxy([int]$Port) {
         $client = $conn.Client
         $stream = $client.GetStream()
         $stream.ReadTimeout = 500
-        $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT 127.0.0.1:9 HTTP/1.1`r`nHost: 127.0.0.1:9`r`n`r`n")
+        $req = Get-ConnectProbeRequest
         $stream.Write($req, 0, $req.Length)
         $stream.Flush()
         $buf = New-Object byte[] 512
         $n = $stream.Read($buf, 0, 512)
         if ($n -gt 0) {
             $resp = [System.Text.Encoding]::ASCII.GetString($buf, 0, $n)
-            return ($resp -match "^\s*HTTP/1\.[01]\s+200")
+            return (Test-ConnectResponse $resp)
         }
         return $false
     } catch {
@@ -279,7 +297,7 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
         try {
             $c = $item.Client
             $s = $c.GetStream()
-            $req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT 127.0.0.1:9 HTTP/1.1`r`nHost: 127.0.0.1:9`r`n`r`n")
+            $req = Get-ConnectProbeRequest
             $s.Write($req, 0, $req.Length)
             $s.Flush()
             $buf = New-Object byte[] 512
@@ -298,7 +316,7 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
                     $n = $r.Stream.EndRead($r.Async)
                     if ($n -gt 0) {
                         $resp = [System.Text.Encoding]::ASCII.GetString($r.Buffer, 0, $n)
-                        if ($resp -match "^\s*HTTP/1\.[01]\s+200") { $winner = $r.Item.Port; break }
+                        if (Test-ConnectResponse $resp) { $winner = $r.Item.Port; break }
                     }
                 } catch {}
             } else {
@@ -495,6 +513,50 @@ function Connect-Loopback([int]$Port, [int]$TimeoutMs = 500) {
     return $null
 }
 
+# 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
+# 状态页用它判两件事：注入的代理变量指向的端口、系统代理指向的端口。
+# 必须按地址族显式建套接字：注入值可能是 http://[::1]:7078，
+# 用 IPv4 套接字连 ::1 不报"地址不可达"而是抛 "socket is not connected"，
+# 于是判成"死了"——那正是本项目最怕的"看起来正常、实则错的结论"的反面。
+function Test-TcpAlive([string]$Address, [int]$Port, [int]$TimeoutMs = 800) {
+    if (-not $Address -or $Port -le 0) { return $false }
+    $c = $null
+    try {
+        $family = if ($Address -like "*:*") {
+            [System.Net.Sockets.AddressFamily]::InterNetworkV6
+        } else {
+            [System.Net.Sockets.AddressFamily]::InterNetwork
+        }
+        $c = New-Object System.Net.Sockets.TcpClient($family)
+        $iar = $c.BeginConnect([System.Net.IPAddress]::Parse($Address), $Port, $null, $null)
+        if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $c.EndConnect($iar); return $true }
+        return $false
+    } catch {
+        return $false
+    } finally {
+        if ($c) { try { $c.Close() } catch {} }
+    }
+}
+
+# 从注入值里取出主机与端口。返回一个含 Host / Port 两个字段的对象；解析不了返回 $null。
+# 不写正则：注入值有两种合法形态（http://127.0.0.1:p 与 http://[::1]:p），
+# 手写正则会漏掉 IPv6 那一种——实测状态页就是这样把整段活性检查跳过去的。
+function Split-ProxyUrl([string]$Url) {
+    if (-not $Url) { return $null }
+    try {
+        $u = [System.Uri]$Url
+        if ($u.Port -le 0) { return $null }
+        # Uri::Host 对 IPv6 返回带方括号的 "[::1]"（这是 URL 的写法），
+        # 而 IPAddress::Parse 要的是裸 "::1"。不剥掉方括号的话，IPv6 注入值
+        # 会在试连时解析失败、被静默判成"端口已死"——正是这条检查要防的那种错误结论。
+        $h = $u.Host
+        if ($h.StartsWith('[') -and $h.EndsWith(']')) { $h = $h.Substring(1, $h.Length - 2) }
+        return [pscustomobject]@{ Host = $h; Port = $u.Port }
+    } catch {
+        return $null
+    }
+}
+
 # 给已选定的回环地址拼代理 URL：IPv6 字面量要加方括号。
 function Get-ProxyUrlFor([string]$Address, [int]$Port) {
     if ($Address -like "*:*") { return ("http://[{0}]:{1}" -f $Address, $Port) }
@@ -533,8 +595,7 @@ $CheckEndpoints = @(
     @{ Host = "www.gstatic.com";                Path = "/generate_204"; Expect = "204" },
     @{ Host = "youtubei.googleapis.com";        Path = "/generate_204"; Expect = "204" },
     @{ Host = "www.google.com";                 Path = "/generate_204"; Expect = "204" },
-    @{ Host = "www.wikipedia.org";              Path = "/";           Expect = "3xx" },
-    @{ Host = "twitter.com";                    Path = "/";           Expect = "3xx" }
+    @{ Host = "www.wikipedia.org";              Path = "/";           Expect = "3xx" }
 )
 
 # 单个端点应答的状态码判定（唯一的判据实现）。$Expect 取自端点表。
@@ -547,12 +608,13 @@ $script:LastGoodEndpoint = 0
 
 # 单端点探测：通过代理发真实 HTTP 请求，成功返回 $true
 function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path, [string]$Expect = "204") {
+    # 只在**一个**字段里持有连接：先拿到 Connect-Loopback 的结果再取 client。
+    # 早先这里先 New 一个 TcpClient、随后又被覆盖成 Connect-Loopback 的那个，
+    # finally 只关得到后者——每调用一次泄漏一个套接字句柄（实测 200 次 +202 句柄），
+    # 而这正是唯一真实节点探测路径，失败期每 5 秒一次。
     $client = $null
     $stream = $null
     try {
-        $client = New-Object System.Net.Sockets.TcpClient
-        $client.ReceiveTimeout = 6000
-        $client.SendTimeout = 6000
         $conn = Connect-Loopback $Port 500
         if (-not $conn) { return $false }
         $client = $conn.Client

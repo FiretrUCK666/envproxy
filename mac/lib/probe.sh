@@ -19,13 +19,24 @@ PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shado
 #   2) 响应体"零字节或极小"——探针发 HEAD 请求（--head），只收响应头、不收正文。
 #      现有 7 个端点：5 个 /generate_204（0 字节 204）+ 2 个被墙站点（重定向或 KB 级响应）。
 # 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
-CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org twitter.com"
-CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 / /"
+# 端点表：三张平行字符串（host / path / expect）必须逐项对齐，条数由门禁 6 核对。
+#
+# 收录标准有两条，缺一不可（缺了第一条这个端点就废了）：
+#   1. **必须翻墙才到得了**。直连也能回的端点证明不了"经代理能出去"，
+#      它会让判决在直连状态下也报"通"。实测反例：
+#      cp.cloudflare.com/generate_204 与 connectivitycheck.platform.hicloud.com/generate_204
+#      直连都回 204（后者是给国内手机判断 Wi-Fi 用的，设计上就必须国内可达），都不能收。
+#   2. 响应体零字节或极小（探针只读响应头、不读正文）。
+#
+# 已经删掉的：twitter.com —— 实测一律回 520，既非 204 也非 3xx，
+# 占着"跨域段兜底"的名额却永远判死，还每轮白等一次 6 秒超时。
+CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org"
+CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 /"
 # 每个端点自己声明期望应答，与 Windows 侧端点表逐项一致（门禁 6 核查）。
 # /generate_204 类只认 204：被强制门户劫持时会回 200 或 302，那都不是「通」。
 # wikipedia/twitter 只认 3xx：它们正常就回重定向，按 204 判会让这两个跨域段兜底端点
 # 永远判死、端点池退化成纯 Google 段——那正是它们存在的意义所在。
-CHECK_EXPECTS="204 204 204 204 204 3xx 3xx"
+CHECK_EXPECTS="204 204 204 204 204 3xx"
 
 # 监控状态（进程内变量，不落地）
 LAST_GOOD_ENDPOINT=0

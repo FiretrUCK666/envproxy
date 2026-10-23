@@ -1647,10 +1647,16 @@ Assert-Eq 'help warns about the ampersand space trap' $true ($docText -match '�
 # 不认的话，终端里每条联网命令都会报 ECONNREFUSED 127.0.0.1:xxxx，
 # 而错误信息里没有本工具的名字——用户（和帮他排查的 AI）会去查网络、防火墙、DNS，
 # 唯独查不到这里。这条断言钉住那份"主动认错"的文案还在。
-$statusSrc = (Get-Command Show-Status).Definition
-Assert-Eq 'status page checks whether the injected port is still alive' $true ($statusSrc -match 'BeginConnect')
-Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($statusSrc -match 'ECONNREFUSED')
-Assert-Eq 'status page tells the reader what to do next' $true ($statusSrc -match '安装 / 修复')
+# 状态页拆成了两层：采集（Get-StatusSnapshot）与渲染（Show-StatusSnapshot）。
+# 断言要跟着拆，否则会变成"查了一个不含这段代码的函数"——那是假红，也是假绿。
+# 原则不变：判据（试连）与文案（主动认 ECONNREFUSED）都必须还在，只是各在自己的层里。
+$snapSrc = (Get-Command Get-StatusSnapshot).Definition
+$renderSrc = (Get-Command Show-StatusSnapshot).Definition
+Assert-Eq 'status page checks whether the injected port is still alive' $true ($snapSrc -match 'Test-TcpAlive')
+Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($renderSrc -match 'ECONNREFUSED')
+Assert-Eq 'status page tells the reader what to do next' $true ($renderSrc -match '安装 / 修复')
+# 结论行必须在最上面：读者读完 8 行再自己合成判断，是这屏原来的最大问题。
+Assert-Eq 'status page leads with a one-line verdict' $true ($renderSrc -match '一切正常')
 
 # 绿色的一行 = "这一整行可以复制去跑"。颜色是唯一告诉读者"哪些行是命令"的东西，
 # 所以这个承诺必须是真的。历史上假过两次：

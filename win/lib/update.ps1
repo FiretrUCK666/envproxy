@@ -1061,6 +1061,25 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
             Write-Styled 'warn' "监控未能确认运行，请打开菜单选一次「安装 / 修复」。"
             $script:UpdateExitCode = 1
         }
+        if ($script:UpdateExitCode -ne 0) {
+            # C8：把覆盖时的备份目录**留下来**，而不是随临时目录一起删掉。
+            # 覆盖成功之后才发现"跑不起来"的那个窗口，原来完全没有回退抓手：
+            # 备份在 $Stage/backup，而 finally 会把整个解压目录删掉（回滚只在
+            # 覆盖过程中抛异常时才发生）。于是提示里那句"选一次安装/修复"可能是死路
+            # （菜单也是同一个入口），人只能去 Releases 重下。
+            # 留一份具名的备份，至少有一条"把目录拷回去"的路。
+            $keepBak = Join-Path (Split-Path -Parent $root) ("envproxy-backup-" + ($Remote.Version -replace '[^0-9A-Za-z._-]','_'))
+            $srcBak = Join-Path $extractDir "backup"
+            if (Test-Item $srcBak) {
+                try {
+                    if (Test-Item $keepBak) { Remove-ItemSafe $keepBak }
+                    Copy-Item -LiteralPath $srcBak -Destination $keepBak -Recurse -Force -ErrorAction Stop
+                    Write-Styled 'dim' ("已把覆盖前的文件备份到：" + $keepBak)
+                    Write-Styled 'dim' "  实在修不好时，把里面的文件拷回安装目录即可回到更新前的状态。"
+                } catch {}
+            }
+            $script:KeptBackupPath = $keepBak
+        }
     } catch {
         Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
         Write-Styled 'warn' "可稍后重试；也可以手动下载安装包覆盖后，再打开菜单选一次「安装 / 修复」。"
