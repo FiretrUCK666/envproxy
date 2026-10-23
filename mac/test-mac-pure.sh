@@ -193,6 +193,35 @@ self_test() {
     done
     _selftest_assert_eq "合法状态串一律放行" "1" "$_good_states_ok"
 
+    # 帮助主题表的形状：编号必须连续、不重复，每条的三个字段都不能空。
+    # 代码注释里一直写着"自检里有一条断言直接检查这张表的形状"，而这条断言
+    # 之前并不存在——把表改成 1,3,3 也全绿。假承诺比没有承诺更糟：
+    # 下一个人会相信已经有人看着了。
+    _ht_recs=${#HELP_TOPICS[@]}
+    _selftest_assert_eq "帮助主题表非空" "1" "$([ "$_ht_recs" -gt 0 ] && echo 1 || echo 0)"
+    _ht_expect=1
+    _ht_bad=0
+    for _ht_rec in "${HELP_TOPICS[@]}"; do
+        _ht_key=${_ht_rec%%|*}
+        _ht_rest=${_ht_rec#*|}
+        _ht_short=${_ht_rest%%|*}
+        _ht_title=${_ht_rest#*|}
+        if [ "$_ht_key" != "$_ht_expect" ]; then _ht_bad=1; fi
+        if [ -z "$_ht_short" ] || [ -z "$_ht_title" ]; then _ht_bad=1; fi
+        case "$_ht_title" in *"|"*) _ht_bad=1 ;; esac
+        _ht_expect=$((_ht_expect + 1))
+    done
+    _selftest_assert_eq "帮助主题表编号连续且三个字段都非空" "0" "$_ht_bad"
+    # 编号表必须与主表同长同序（它是派生出来的，但不能保证永远派生得对）
+    _ht_keys=${#HELP_TOPIC_KEYS[@]}
+    _selftest_assert_eq "帮助编号表与主表条数一致" "$_ht_recs" "$_ht_keys"
+    # 每条主题都必须有正文页（body 仍单独分派，漏一条就是"选中后是一页空白"）
+    _ht_nobody=0
+    for _ht_k in "${HELP_TOPIC_KEYS[@]}"; do
+        if [ -z "$(format_help_topic "$_ht_k" 2>/dev/null | tr -d '[:space:]')" ]; then _ht_nobody=1; fi
+    done
+    _selftest_assert_eq "每条帮助主题都有正文页" "0" "$_ht_nobody"
+
 echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # prompt-sync.sh 是使用者 shell 去 source 的独立脚本（不进 CORE_LIBS、不被入口加载）。
     # 路径当场算出来：子 shell 里不会因为变量没导出而丢掉。
