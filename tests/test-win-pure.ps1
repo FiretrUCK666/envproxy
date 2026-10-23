@@ -268,6 +268,12 @@ foreach ($bad in @('on:', 'garbage', 'on:abc', 'on:0', 'on:70000', 'on:-1')) {
     $r = $null
     try { $r = Invoke-EnvStateWrite $bad '' '' } catch { $r = 'threw' }
     Assert-Eq ("畸形状态串被拒：" + $bad) 1 $r
+    # Apply-State 是它的调用方，也必须挡住而不是抛异常。
+    # 它在监控主循环里跑：抛出去会被 catch 吞掉，$lastState 不更新，
+    # 而变量可能已经被改过——状态与实际就此分叉，屏幕上完全看不出来。
+    $ar = $null
+    try { $ar = Apply-State $bad } catch { $ar = 'threw' }
+    Assert-Eq ("Apply-State 对畸形串不抛异常：" + $bad) $false $ar
 }
 # 合法输入必须放行（off 与 unknown 不动变量，返回 0 = 没有失败）
 foreach ($good in @('off', 'unknown', '')) {

@@ -589,8 +589,19 @@ function Apply-State([string]$state) {
     # 拿到锁的一方写完，另一方进来时看到已就位，自然什么都不做。
     # 拿不到锁也照常往下走：锁只是省一次重复广播，跳过写入反而会让变量停在错的状态。
     # 写与广播都交给共用函数，这里只提供这个场合该说的话。
-    $port = if ($state -ne "off") { $state.Substring(3) } else { "" }
-    $logOn = if ($port) { "检测到本地代理端口 $port -> 已注入代理 " + (Get-ProxyUrlForPort ([int]$port)) } else { "" }
+    #
+    # 文案要在**调用之前**算好（共用函数拿到它才能记日志），但算式本身会抛：
+    # `[int]` 转换遇到 "on:abc" 这类值直接抛，而它原来在 try 之外——
+    # 于是监控主循环里这一抛会走 catch、$lastState 不更新、变量却可能已经被改过，
+    # 状态与实际分叉。先把端口解析成数字并在失败时提前返回，
+    # 与 Invoke-EnvStateWrite 里的守卫同一判据（那边是最后一道，这里是它的文案来源）。
+    $logOn = ""
+    if ($state -ne "off") {
+        $portNum = 0
+        if (-not [int]::TryParse($state.Substring(3), [ref]$portNum)) { return $false }
+        if ($portNum -lt 1 -or $portNum -gt 65535) { return $false }
+        $logOn = "检测到本地代理端口 $portNum -> 已注入代理 " + (Get-ProxyUrlForPort $portNum)
+    }
     # 镜像文件由 Invoke-EnvStateWrite 统一写（两个调用点必须做同一件事）。
     return ((Invoke-EnvStateWrite $state "代理已关闭 -> 已删除代理变量，恢复直连" $logOn) -eq 0)
 }
