@@ -249,9 +249,18 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
             if (Test-Item $MonitorDir) { Start-Sleep -Milliseconds 500 }
         }
     } else {
-        # 保留历史日志（黑匣子，便于日后排查），只删运行时临时文件
+        # 保留历史日志（黑匣子，便于日后排查），只删运行时临时文件。
+        # 卸载 = 恢复成没装过：所有运行时状态都不该活过它，唯一保留的是黑匣子日志。
+        # 漏掉任何一个的后果都很具体：version.cache 会让重装后的状态页显示上一次的版本号；
+        # update.inprogress 会被读成"上次更新没完成"（那是上一次安装的经历）；
+        # stopped.intent 一删就够，留着会让重装后的状态页说"你点过停止"而监控正在跑；
+        # monitor.beat 是上一个进程的心跳，留着会让"监控还活着吗"读到过期的答案。
         Remove-ItemSafe $PidFile
         Remove-ItemSafe $StopFlag
+        Remove-ItemSafe $StopIntentFile
+        Remove-ItemSafe $VersionCacheFile
+        Remove-ItemSafe $UpdateInProgressFile
+        Remove-ItemSafe $HeartbeatFile
         # 若无日志可留（从未运行过），空目录一并移除，不留任何痕迹
         $hasContent = Get-ChildItem -LiteralPath $MonitorDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $hasContent) {

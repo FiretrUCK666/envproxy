@@ -1092,6 +1092,28 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         fi
     done
     _selftest_assert_eq "状态页: 每行都走分段渲染" "" "$_sr_bad"
+    # 卸载必须把运行时状态清干净：漏一个就"没恢复到装之前"，而屏幕照样报"已完成"。
+    # 具体后果（都实际发生过或差点发生）：
+    #   version.cache  -> 重装后状态页显示上一次安装留下的版本号；
+    #   update.inprogress -> 被读成"上次更新没完成"，其实是上一次安装的经历；
+    #   stopped.intent -> 重装后状态页说"你点过停止"而监控正在跑；
+    #   .lock 空目录   -> 新监控 mkdir 失败，多绕一圈接管分支。
+    # 这里抽源码核对：卸载函数体里必须点到这几个名字。
+    _un_body=$(sed -n "/^uninstall_envproxy()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
+    _un_bad=""
+    for _un_f in 'VERSION_CACHE' 'update.inprogress' 'STOP_INTENT' 'PID_FILE' 'STOP_FLAG'; do
+        case "$_un_body" in
+            *"$_un_f"*) ;;
+            *) _un_bad="$_un_bad $_un_f(缺)" ;;
+        esac
+    done
+    _selftest_assert_eq "卸载: 运行时状态逐项点到（不留过期答案）" "" "$_un_bad"
+    # 目录只删空的：使用者在 ~/.envproxy 里自己放的东西一个字节都不许动。
+    case "$_un_body" in
+        *'rmdir "$ENVPROXY_HOME"'*) _un_rmdir=1 ;;
+        *) _un_rmdir=0 ;;
+    esac
+    _selftest_assert_eq "卸载: 工具目录只在空时才删（不碰使用者的东西）" "1" "$_un_rmdir"
     _selftest_assert_eq "状态页: 标签色就是 key 色" "97" "$(style_color key)"
     # 颜色名清单只是"枚举源"，真正决定渲染的是 style_code_of_name 的 case 分支。
     # 只比清单的话，把 case 标签写错一个字母（darkgray -> darkgrey）不会有任何断言红，

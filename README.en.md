@@ -653,6 +653,27 @@ The items in `mac/monitor/` are local runtime state. Deleting them is harmless (
 
 **The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
 
+#### What each button actually removes
+
+The three actions differ a lot in force. Read before clicking:
+
+| What you click | Deletes | Keeps |
+|---|---|---|
+| `5 Stop monitoring` | the process and its pid file | every other file |
+| `1 Install / repair` | nothing; overwrites our own files | your config and logs |
+| `6 Restore everything` | all we wrote | the `monitor.log` you kept |
+
+What each one means in practice:
+
+- **Stop monitoring** switches nothing automatically until the next login, which brings it back. To have it back now, click `1`.
+- **Install / repair** loads the latest code and repairs a broken start-at-login item.
+- **Restore everything** returns the machine to the never-installed state, with no reboot needed. Anything you put in `~/.envproxy/` yourself is left alone.
+
+
+One rule applies to all three: `~/.envproxy/` is only removed when it is empty. If you keep something of your own there (notes, say), the folder survives uninstalling - only our files are gone.
+
+**Uninstalling is the only irreversible action**, so it asks first. When it cannot ask (a pipe, a script) it **will not decide for you**: it refuses and requires `--yes`.
+
 ### 12.7 Setting it up for a friend or a new Mac
 
 Copy the whole folder over, open `mac`, double-click `打开菜单.command`, pick `1 Install / Repair`, and you are done.

@@ -599,6 +599,31 @@ Assert-Eq 'Get-ActiveProxyPort 不再有 NoLog 参数' $false ((Get-Command Get-
 $opsSrc = Get-Content (Join-Path $ScriptDir 'lib\ops.ps1') -Raw -Encoding UTF8
 Assert-Eq '状态页调探测时不传任何开关' $false ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog')
 
+# 卸载必须把运行时状态清干净：漏一个就"没恢复到装之前"，而屏幕照样报"已完成"。
+# 具体后果（都实际发生过或差点发生）：
+#   version.cache     -> 重装后状态页显示上一次安装留下的版本号；
+#   update.inprogress -> 被读成"上次更新没完成"，其实是上一次安装的经历；
+#   stopped.intent    -> 重装后状态页说"你点过停止"而监控正在跑；
+#   monitor.beat      -> 上一个进程的心跳，留着会让"还活着吗"读到过期答案。
+# 这里抽源码核对：不 purge（保留日志）那一条分支必须逐个点到这些名字。
+# 判据取"Uninstall 函数体"而不是整个文件——整个文件里这些名字到处都是，
+# 拿全文匹配等于断言恒真（这类假绿在本项目里踩过好几次）。
+$unStart = $opsSrc.IndexOf('function Uninstall-EnvProxy')
+Assert-Eq '卸载函数存在' $true ($unStart -ge 0)
+$unBody = ''
+if ($unStart -ge 0) {
+    $unNext = $opsSrc.IndexOf("`nfunction ", $unStart + 10)
+    if ($unNext -lt 0) { $unNext = $opsSrc.Length }
+    $unBody = $opsSrc.Substring($unStart, $unNext - $unStart)
+}
+$unMissing = @()
+foreach ($unName in @('$PidFile', '$StopFlag', '$StopIntentFile', '$VersionCacheFile', '$UpdateInProgressFile', '$HeartbeatFile')) {
+    if (-not $unBody.Contains('Remove-ItemSafe ' + $unName)) { $unMissing += $unName }
+}
+Assert-Eq '卸载: 运行时状态逐项点到（不留过期答案）' '' ($unMissing -join ' ')
+# 目录只删空的：使用者在 %USERPROFILE%\.envproxy 里自己放的东西一个字节都不许动。
+Assert-Eq '卸载: 工具目录只在空时才删（不碰使用者的东西）' $true ($unBody -match 'Get-ChildItem -LiteralPath \$epHome')
+
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
 # switches, so every number must resolve and every switch must exist.

@@ -164,9 +164,15 @@ uninstall_envproxy() {
     if [ $_remove_log -eq 1 ]; then
         rm -rf "$MONITOR_DIR" 2>/dev/null || true
     else
-        rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" 2>/dev/null || true
+        # 卸载 = 恢复成没装过：所有运行时状态都不该活过它，唯一保留的是黑匣子日志。
+        # 漏掉任何一个的后果都很具体：version.cache 会让重装后的状态页显示上一次的版本号；
+        # update.inprogress 会被读成"上次更新没完成"（那是上一次安装的经历）；
+        # 强杀留下的 .lock 空目录会让新监控的 mkdir 失败、多绕一圈接管分支。
+        rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
+              "$VERSION_CACHE" "$MONITOR_DIR/update.inprogress" 2>/dev/null || true
+        rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
-            rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" 2>/dev/null || true
+            rmdir "$MONITOR_DIR" 2>/dev/null || true
         fi
     fi
     _ghost=$(get_monitor_pid || true)
