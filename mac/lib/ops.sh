@@ -906,7 +906,10 @@ _help_block_key_width() {
     # "宽度怎么算"只该有 _display_width 一个答案。
     _hbk_w=$(printf '%s\n' "$_HELP_BLOCK" | while IFS= read -r _hbk_l; do
         _hbk_c=${_hbk_l%% *}
-        case "$_hbk_c" in r|rc) : ;; *) continue ;; esac
+        # 只认两列行（r / rc）。这里用 if 而不是 case：这段嵌在
+        # $( ... | while read ... ) 里，而 macOS 自带的 bash 3.2 在这个位置
+        # 对 case 的分支终止符会报 syntax error（CI 实测），if 不受影响。
+        if [ "$_hbk_c" != "r" ] && [ "$_hbk_c" != "rc" ]; then continue; fi
         _hbk_rest=${_hbk_l#* }
         printf '%s\n' "${_hbk_rest%%|*}"
     done | _max_width_of)
