@@ -274,7 +274,7 @@ function Get-LocalVersion {
 # 带代理兜底的 HTTPS 取文本：先直连，失败且本地代理 active 时经代理重试一次。
 # DIVERGE(Win): Mac 侧 curl 自动继承环境变量代理，单次调用叠加直连回退即可；
 # Win 侧走系统代理恒为直连，需显式经 127.0.0.1 重试。
-# 失败原因记在 $script:UpdateLastVersionFailure：调用方要靠它区分"连不上"与"被限流"。
+# 失败原因记在 $script:VersionQueryFailure：调用方要靠它区分"连不上"与"被限流"。
 # 这一次失败，换一个出口 IP 有没有可能成功？
 #
 # 不是所有失败都值得重试一次：重试要花一次完整的网络往返，还会把真实原因盖掉。
@@ -306,13 +306,13 @@ function Get-UpdateRetryProxyPort {
 function Invoke-UpdateText([string]$Url) {
     $text = Invoke-UpdateTextVia $Url ""
     if ($text.Text) { return $text.Text }
-    $script:UpdateLastVersionFailure = $text.Failure
+    $script:VersionQueryFailure = $text.Failure
     if (Test-RetryWithProxy $text.Failure) {
         $port = Get-UpdateRetryProxyPort
         if ($port) {
             $t2 = Invoke-UpdateTextVia $Url "$port"
             if ($t2.Text) { return $t2.Text }
-            $script:UpdateLastVersionFailure = $t2.Failure
+            $script:VersionQueryFailure = $t2.Failure
         }
     }
     return $null
@@ -360,16 +360,16 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
 # 逐个源尝试，第一个答出来的胜出。
 # 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
 # 否则会出现"拿 A 源的版本号去下 B 源的包"。
-# 全都问不到时，$script:UpdateLastVersionFailure 记下原因（供提示用）。
-$script:UpdateLastVersionFailure = "network"
+# 全都问不到时，$script:VersionQueryFailure 记下原因（供提示用）。
+$script:VersionQueryFailure = "network"
 function Get-RemoteVersion {
     $kinds = @()
     foreach ($src in (Get-UpdateSources)) {
         $r = Get-RemoteVersionFrom $src
         if ($r) { return $r }
-        if ($script:UpdateLastVersionFailure) { $kinds += $script:UpdateLastVersionFailure }
+        if ($script:VersionQueryFailure) { $kinds += $script:VersionQueryFailure }
     }
-    $script:UpdateLastVersionFailure = (Select-UpdateFailureKind $kinds)
+    $script:VersionQueryFailure = (Select-UpdateFailureKind $kinds)
     return $null
 }
 
@@ -389,7 +389,7 @@ function Get-RemoteVersionFrom([hashtable]$Src) {
 }
 
 # 按这一源声明的优先顺序问版本，先答出来的那条胜出。
-# 两条路都没答出来时，$script:UpdateLastVersionFailure 记下原因（供最终提示用）。
+# 两条路都没答出来时，$script:VersionQueryFailure 记下原因（供最终提示用）。
 function Get-TagFromSource([hashtable]$Src) {
     $order = if ("$($Src.Preferred)" -eq "Web") { @("Web", "Api") } else { @("Api", "Web") }
     $kinds = @()
@@ -399,16 +399,16 @@ function Get-TagFromSource([hashtable]$Src) {
         $url = $tpl.Replace('@@', $Src.Repo)
         $tag = if ($kind -eq "Web") { Get-TagFromWeb $url } else { Get-TagFromApi $url }
         if ($tag) { return $tag }
-        if ($script:UpdateLastVersionFailure) { $kinds += $script:UpdateLastVersionFailure }
+        if ($script:VersionQueryFailure) { $kinds += $script:VersionQueryFailure }
     }
-    $script:UpdateLastVersionFailure = (Select-UpdateFailureKind $kinds)
+    $script:VersionQueryFailure = (Select-UpdateFailureKind $kinds)
     return ""
 }
 
 # API 路径：读 JSON 的 tag_name。
-# 拿不到时把原因记进 $script:UpdateLastVersionFailure（限流与连不上要分开说）。
+# 拿不到时把原因记进 $script:VersionQueryFailure（限流与连不上要分开说）。
 function Get-TagFromApi([string]$Url) {
-    $script:UpdateLastVersionFailure = ""
+    $script:VersionQueryFailure = ""
     try {
         $json = Invoke-UpdateText $Url
         if (-not $json) { return "" }
@@ -419,7 +419,7 @@ function Get-TagFromApi([string]$Url) {
             # 原因必须算进去，否则它会从挑选集合里消失，最后报成别的原因——
             # 同一个应答在 mac 侧报的是"连不上"（中间那层换了内容，该开代理或换网络），
             # 两边给用户的指示必须一致。
-            $script:UpdateLastVersionFailure = "network"
+            $script:VersionQueryFailure = "network"
             return ""
         }
         return $tag
@@ -427,7 +427,7 @@ function Get-TagFromApi([string]$Url) {
         # 200 但内容不是预期的 JSON：多半是网络中间层换了内容（劫持页、门户页）。
         # 报"连不上"比"服务端出错"贴近——服务端好好的，是中间那层不对，
         # 而用户该做的动作是开代理或换网络，不是干等。
-        $script:UpdateLastVersionFailure = "network"
+        $script:VersionQueryFailure = "network"
         return ""
     }
 }
@@ -454,19 +454,19 @@ function Get-TagFromLocation([string]$Location) {
 # 再让用户等一个必然超时的 8 秒，等于把"兜底"变成"再罚一次"。
 # 直连仍然作为第二跳保留：代理没在跑、或者代理不认这个目标时，它还有机会。
 function Get-TagFromWeb([string]$Url) {
-    $script:UpdateLastVersionFailure = ""
+    $script:VersionQueryFailure = ""
     $port = Get-UpdateRetryProxyPort
     if ($port) {
         $r = Get-TagFromWebVia $Url "$port"
         if ($r.Tag) { return $r.Tag }
-        $script:UpdateLastVersionFailure = $r.Failure
+        $script:VersionQueryFailure = $r.Failure
         # 代理这条路给出的是"确定结论"（404/5xx）时不必再试直连：
         # 那是对方的状态，与出口无关。
         if (-not (Test-RetryWithProxy $r.Failure)) { return "" }
     }
     $r2 = Get-TagFromWebVia $Url ""
     if ($r2.Tag) { return $r2.Tag }
-    $script:UpdateLastVersionFailure = $r2.Failure
+    $script:VersionQueryFailure = $r2.Failure
     return ""
 }
 
@@ -631,7 +631,7 @@ function Get-UpdateAsset([hashtable]$Remote, [string]$FileName) {
     if (-not $Remote.ApiRepo) { return @{ Id = ""; Digest = ""; Failure = "network" } }
     $url = "{0}/releases/tags/{1}" -f $Remote.ApiRepo, (ConvertTo-UrlSegment $Remote.Tag)
     $body = Invoke-UpdateText $url
-    $failure = $script:UpdateLastVersionFailure
+    $failure = $script:VersionQueryFailure
     $asset = Get-AssetFromJson $body $FileName
     if ($asset) { return $asset }
     if ($body) {
@@ -773,7 +773,7 @@ function Test-UsableZip([string]$Path) {
 # 从**指定源**取一个合格的安装包：下载 → 解压 → 结构校验，全过才算数。
 # 任何一步不过都返回 $null（换不换源由调用方决定），并把临时物清干净——
 # 失败路径绝不给安装区留下任何东西。
-# 失败原因写进脚本级变量 $UpdateLastFailure：调用方要靠它决定给用户什么提示，
+# 失败原因写进脚本级变量 $PackageFetchFailure：调用方要靠它决定给用户什么提示，
 # 在这里打印会让"每个源各说一句"和"最后一句总结"互相打架。
 # 清掉 24 小时以前留下的更新临时物。
 # 判据是**修改时间**，不是创建时间：文件被改过就说明它还在用。
@@ -800,7 +800,7 @@ function Remove-StaleUpdateTemp {
 
 function Get-UpdatePackage([hashtable]$Remote) {
     # DIVERGE(Win): Win 取 zip + Expand-Archive；Mac 取 tar.gz + tar（见 envproxy.sh）。
-    $script:UpdateLastFailure = "network"
+    $script:PackageFetchFailure = "network"
     # 先清掉以前留下的临时目录：进程被强杀（或者断电）会留下整个目录，不清就一直堆着。
     Remove-StaleUpdateTemp
     $tmpBase = Join-Path ([System.IO.Path]::GetTempPath()) ("EnvProxyUpdate-" + ($Remote.Tag -replace '[^A-Za-z0-9._-]','_') + "-" + [System.IO.Path]::GetRandomFileName())
@@ -850,7 +850,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
             }
             $kinds += $r
         }
-        if ($dl -ne "ok") { $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds) }
+        if ($dl -ne "ok") { $script:PackageFetchFailure = (Select-UpdateFailureKind $kinds) }
         if ($dl -eq "ok") {
             Write-Styled 'title' "正在解压并校验..."
             try {
@@ -859,7 +859,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
                 # 而那会被误归成"内容不对"，让人以为是发布包有问题。
                 Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
             } catch {
-                $script:UpdateLastFailure = "bad-content"
+                $script:PackageFetchFailure = "bad-content"
                 Remove-ItemSafe $zipFile
                 Remove-ItemSafe $extractDir
                 return $null
@@ -868,7 +868,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
                 Test-Package $extractDir $Remote.Version "win"
             } catch {
                 # 包能解开但结构不对 = 内容不对（发版漏文件、包被改写），不是网络问题。
-                $script:UpdateLastFailure = "bad-content"
+                $script:PackageFetchFailure = "bad-content"
                 Remove-ItemSafe $zipFile
                 Remove-ItemSafe $extractDir
                 return $null
@@ -876,7 +876,7 @@ function Get-UpdatePackage([hashtable]$Remote) {
             $ok = $true
         }
     } catch {
-        $script:UpdateLastFailure = "local"
+        $script:PackageFetchFailure = "local"
     }
     if (-not $ok) {
         Remove-ItemSafe $zipFile
@@ -929,7 +929,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $remote = Get-RemoteVersion
     if (-not $remote) {
         # 问版本失败也要说清原因：连不上要开代理，配额用尽要等，仓库改名/删库是另一回事。
-        Write-Styled 'warn' (Format-VersionCheckFailure $script:UpdateLastVersionFailure)
+        Write-Styled 'warn' (Format-VersionCheckFailure $script:VersionQueryFailure)
         $script:UpdateExitCode = 1
         return
     }
@@ -993,7 +993,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     $kinds = @()
     try {
         $pkg = Get-UpdatePackage $remote
-        if (-not $pkg) { $kinds += $script:UpdateLastFailure }
+        if (-not $pkg) { $kinds += $script:PackageFetchFailure }
         if (-not $pkg) {
             foreach ($src in (Get-UpdateSources)) {
                 # 同名源跳过必须排在联网之前：胜出源刚刚已经试过，再问一次只会白烧一次
@@ -1006,14 +1006,14 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
                 Write-Styled 'title' ("改用 {0} 重试（{1}）..." -f $alt.Name, $alt.Tag)
                 $pkg = Get-UpdatePackage $alt
                 if ($pkg) { break }
-                $kinds += $script:UpdateLastFailure
+                $kinds += $script:PackageFetchFailure
             }
         }
         # 一句话说清"为什么没成、接下来怎么办"：由真实失败原因决定，
         # 两句口径必须一致：这里说"下载失败或校验没过"会与上面"没有提供安装包"自相矛盾。
         if (-not $pkg) {
-            $script:UpdateLastFailure = (Select-UpdateFailureKind $kinds)
-            Write-Styled 'warn' ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:UpdateLastFailure $remote.Name))
+            $script:PackageFetchFailure = (Select-UpdateFailureKind $kinds)
+            Write-Styled 'warn' ("更新失败：{0}" -f (Get-UpdateFailureMessage $script:PackageFetchFailure $remote.Name))
             Write-Styled 'warn' "未做任何改动。"
             $script:UpdateExitCode = 1
             return

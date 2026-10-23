@@ -85,13 +85,28 @@ _display_width() {
         printf -v _dw_b '%d' "'$_dw_ch"
         if [ "$_dw_b" -lt 128 ]; then
             _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 1))
-        elif [ "$_dw_b" -ge 227 ]; then
-            # 3 字节序列且首字节 >= 0xE3（码位 > U+2E80）：两格
-            _dw_w=$((_dw_w + 2)); _dw_i=$((_dw_i + 3))
+        elif [ "$_dw_b" -ge 224 ]; then
+            # 3 字节序列：判据要与 Windows 侧"码位 > 0x2E80 占两格"严格等价，
+            # 而只看首字节做不到。U+2E80 的 UTF-8 是 E2 BA 80（首字节 226），
+            # 而 U+2026（…）、U+2192（→）、U+2014（—）也都是 E2 开头——
+            # 前者真宽 2、后者真宽 1，首字节一模一样，必须再看第二字节才分得开。
+            # 老判据用"首字节 >= 227"，等价于把整个 E2 段都当成 1 格：
+            # 那正好把 U+2E80–U+2FFF（CJK 部首补充区，真宽 2）判小了。
+            # 影响面很小（那些字日常几乎不出现），但两端口径必须一致，
+            # 否则同一行文案在两端占不同格数，两列对齐会歪。
+            # 正确判据：首字节 > E2，或首字节 = E2 且第二字节 >= BA（0xBA，对应 U+2E80）。
+            _dw_b2=_dw_b
+            if [ "$_dw_b" -eq 226 ]; then
+                printf -v _dw_b2 '%d' "'${_dw_s:$((_dw_i + 1)):1}"
+            fi
+            if [ "$_dw_b" -gt 226 ] || { [ "$_dw_b" -eq 226 ] && [ "$_dw_b2" -ge 186 ]; }; then
+                _dw_w=$((_dw_w + 2))
+            else
+                _dw_w=$((_dw_w + 1))
+            fi
+            _dw_i=$((_dw_i + 3))
         else
-            # 2 字节序列，或首字节 < 0xE3 的 3 字节序列：一格
-            if [ "$_dw_b" -ge 224 ]; then _dw_i=$((_dw_i + 3)); else _dw_i=$((_dw_i + 2)); fi
-            _dw_w=$((_dw_w + 1))
+            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 2))
         fi
     done
     printf '%s' "$_dw_w"
@@ -142,13 +157,14 @@ _truncate_width() {
     _tw_acc=0   # 已接受部分的字节数
     while [ "$_tw_i" -lt "$_tw_n" ]; do
         _tw_ch=${_tw_s:_tw_i:1}
+        # 宽度**不再自己算一遍**：这里原来复制了一份与 _display_width 相同的判据，
+        # 于是同一个 bug 要修两处——实测就踩到了（…/→/— 被判成两格，裁剪和补齐
+        # 给出互相矛盾的宽度，两列对齐歪掉）。判据只留 _display_width 一处。
+        _tw_cw=$(_display_width "$_tw_ch")
         printf -v _tw_b '%d' "'$_tw_ch"
-        if [ "$_tw_b" -lt 128 ]; then _tw_cw=1; _tw_cl=1
-        elif [ "$_tw_b" -ge 227 ]; then _tw_cw=2; _tw_cl=3
-        else
-            _tw_cw=1
-            if [ "$_tw_b" -ge 224 ]; then _tw_cl=3; else _tw_cl=2; fi
-        fi
+        if [ "$_tw_b" -lt 128 ]; then _tw_cl=1
+        elif [ "$_tw_b" -ge 224 ]; then _tw_cl=3
+        else _tw_cl=2; fi
         [ $((_tw_aw + _tw_cw)) -gt "$_tw_max" ] && break
         _tw_aw=$((_tw_aw + _tw_cw))
         _tw_i=$((_tw_i + _tw_cl))

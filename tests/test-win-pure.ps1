@@ -688,12 +688,12 @@ try {
 $srv = Start-OneShotServer 403 @{ 'X-RateLimit-Remaining' = '0' } '{"message":"API rate limit exceeded"}'
 try {
     $null = Invoke-UpdateText "http://127.0.0.1:$($srv.Port)/repos/o/r/releases/latest"
-    Assert-Eq 'a rate limited version query is reported as a quota problem' 'quota' $script:UpdateLastVersionFailure
+    Assert-Eq 'a rate limited version query is reported as a quota problem' 'quota' $script:VersionQueryFailure
 } finally { Stop-OneShotServer $srv }
 $srv = Start-OneShotServer 403 @{ 'X-RateLimit-Remaining' = '42' } '{"message":"Forbidden"}'
 try {
     $null = Invoke-UpdateText "http://127.0.0.1:$($srv.Port)/repos/o/r/releases/latest"
-    Assert-Eq 'a refused version query with quota left is reported as a server problem' 'server' $script:UpdateLastVersionFailure
+    Assert-Eq 'a refused version query with quota left is reported as a server problem' 'server' $script:VersionQueryFailure
 } finally { Stop-OneShotServer $srv }
 # The download is checked against the digest GitHub publishes for the asset. That digest comes
 # with the asset listing we already fetched, so the check costs no extra request and no extra

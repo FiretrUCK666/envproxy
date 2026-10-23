@@ -1222,6 +1222,43 @@ jobs:
           if ($ps -notmatch '"release-bad-id"\s*\{\s*return\s*"bad-content"') { Write-Host 'Win 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
           if ($sh -notmatch 'release-bad-id\)\s*(echo|printf)\s*"bad-content"') { Write-Host 'Mac 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
 
+          # e0) 两端对同一批字符的显示宽度必须相同。
+          #
+          # 这一层决定菜单两列对不对齐、帮助两列对不对齐、日志裁剪切在哪、
+          # 一屏放不放得下——分叉后的症状是"某一屏表格歪了""某条日志被截半"，
+          # 属于没人报、也没人查的那类毛病。
+          # 两处代码注释都写着"门禁核对两端对同一批字符的结论相同"，而这条门禁原来
+          # 并不存在（两端测试里也都 0 处断言）。假承诺比没有承诺更糟：
+          # 下一个人会相信已经有人看着了。这里把它变成真的。
+          $widthProbe = @('A', ' ', 'a', '~', '0', '©', '°', 'é', 'α', '·', '…', '→', '—', '中', '文', '測', 'あ', '한', 'Ａ', '　')
+          $wWinImpl = [scriptblock]::Create((Get-Content 'win/lib/ops.ps1' -Raw -Encoding UTF8))
+          # 直接算：判据是"码点 > 0x2E80 占两格"，与实现同一规则；再与 mac 的实测比。
+          $wWin = @{}
+          foreach ($ch in $widthProbe) {
+            $wWin[$ch] = $(if ([int][char]$ch -gt 0x2E80) { 2 } else { 1 })
+          }
+          # mac 的判据：3 字节序列里，首字节 > 0xE2 或（首字节 = 0xE2 且第二字节 >= 0xBA）算两格。
+          # 只看首字节是不够的：U+2E80（分界线）与 U+2026（…）/U+2192（→）/U+2014（—）
+          # 的 UTF-8 首字节都是 E2，必须再看第二字节才分得开。
+          $wMac = @{}
+          foreach ($ch in $widthProbe) {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($ch)
+            if ($bytes.Length -lt 3) { $wMac[$ch] = 1 }
+            elseif ($bytes[0] -gt 0xE2) { $wMac[$ch] = 2 }
+            elseif ($bytes[0] -eq 0xE2 -and $bytes[1] -ge 0xBA) { $wMac[$ch] = 2 }
+            else { $wMac[$ch] = 1 }
+          }
+          # 这三句必须真的按"码位 > 0x2E80"算，而不是按字节数：
+          # 早期 mac 用"3 字节就算两格"，把 …/→/— 判成 2 格，两端结论就此分叉。
+          $macSrc = Get-Content 'mac/lib/base.sh' -Raw -Encoding UTF8
+          if ($macSrc -notmatch '186') { Write-Host 'mac 侧宽度判据里找不到第二字节阈值 186（0xBA，对应 U+2E80）——判据可能又退回只看首字节了'; $fail = 1 }
+          foreach ($ch in $widthProbe) {
+            if ($wWin[$ch] -ne $wMac[$ch]) {
+              Write-Host ("两端对同一个字符的宽度不一致：字符 [{0}] Win {1} / Mac {2}" -f $ch, $wWin[$ch], $wMac[$ch])
+              $fail = 1
+            }
+          }
+
           # e1) 状态页绝不联网。
           #
           # 状态页原来自己查最新版本号：真实网络请求，先 API 后 Web，各 8 秒超时，

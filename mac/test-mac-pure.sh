@@ -165,7 +165,22 @@ self_test() {
     remove_shell_hooks 2>/dev/null || true
     _selftest_assert_file_eq "成对时正常移除" "$(printf '%s\n' 'export PATH=/x' 'alias ll="ls"')" "$HOME/.zshenv"
 
-    echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
+        # 显示宽度：判据必须与"码位 > 0x2E80 占两格"等价，不能只看 UTF-8 字节数。
+    # 实测过的坑：… / → / — 都是 3 字节，按"3 字节就算两格"会判成 2，
+    # 而它们在终端里只有 1 格——于是含省略号或箭头的行比 Windows 多占一格，
+    # 两列对齐跟着歪（日志裁剪、菜单两列、帮助两列都吃这个判据）。
+    _selftest_assert_eq "宽度：… 占一格" "1" "$(_display_width "…")"
+    _selftest_assert_eq "宽度：→ 占一格" "1" "$(_display_width "→")"
+    _selftest_assert_eq "宽度：— 占一格" "1" "$(_display_width "—")"
+    _selftest_assert_eq "宽度：中 占两格" "2" "$(_display_width "中")"
+    _selftest_assert_eq "宽度：全角 Ａ 占两格" "2" "$(_display_width "Ａ")"
+    _selftest_assert_eq "宽度：混合行 中+… 共 3 格" "3" "$(_display_width "中…")"
+    # 分界线本身：U+2E80（CJK 部首补充区起点，真宽 2）与 U+2026（…，真宽 1）
+    # 的 UTF-8 首字节都是 E2，只看首字节判不出差别——这条钉住"看第二字节"。
+    _selftest_assert_eq "宽度：U+2E80 占两格" "2" "$(_display_width "$(printf '\xe2\xba\x80')")"
+    _selftest_assert_eq "宽度：U+2E7F 占一格" "1" "$(_display_width "$(printf '\xe2\xb9\xbf')")"
+
+echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # prompt-sync.sh 是使用者 shell 去 source 的独立脚本（不进 CORE_LIBS、不被入口加载）。
     # 路径当场算出来：子 shell 里不会因为变量没导出而丢掉。
     _ps_file=$(cd "$SCRIPT_DIR" 2>/dev/null && pwd)/prompt-sync.sh
