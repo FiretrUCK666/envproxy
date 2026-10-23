@@ -1100,15 +1100,31 @@ jobs:
           # 帮助文案里印的那个数字也要守：它是用户直接读到的，而它不在 README 里，
           # 所以 README 那几条核对碰不到它。删 twitter 端点（7 → 6）时两侧帮助都漏改了，
           # 而所有门禁全绿——漂的正是"用户会照着数的那句话"。
-          foreach ($hp in @(@('win/lib/ops.ps1', 'win'), @('mac/lib/ops.sh', 'mac'))) {
-            $htxt = Get-Content $hp[0] -Raw -Encoding UTF8
-            $hm = [regex]::Matches($htxt, '试 (\d+) 个端点')
-            if ($hm.Count -eq 0) {
-              Write-Host ("{0}：帮助文案里找不到「试 N 个端点」这句（文案改了就要同步这条门禁）" -f $hp[1]); $fail = 1
+          # 端点数在**所有用户能看到的**地方都必须与代码一致。
+          # 这里用一张清单而不是逐个手写检查：漏掉一个就看不出漂移，而"漏掉了哪个"
+          # 恰恰是不知道的——只有把该查的列全，才谈得上"查过"。
+          # 每项：文件、正则（第 1 组是数字）、给用户看的说法。
+          $epPlaces = @(
+            @('win/lib/ops.ps1',                  '试 (\d+) 个端点',        'win 帮助'),
+            @('mac/lib/ops.sh',                   '试 (\d+) 个端点',        'mac 帮助'),
+            @('README.md',                        '(\d+) 个不同的端点',     '中文 README'),
+            @('README.en.md',                     '(\d+) different endpoints', '英文 README'),
+            @('assets/readme/mechanism.svg',      '(\d+) 个端点',           '中文配图'),
+            @('assets/readme/mechanism.en.svg',   '(\d+) endpoints',        '英文配图')
+          )
+          foreach ($pl in $epPlaces) {
+            if (-not (Test-Path $pl[0])) { Write-Host ("端点数核对清单里的文件不存在：" + $pl[0]); $fail = 1; continue }
+            $ptxt = Get-Content $pl[0] -Raw -Encoding UTF8
+            $pm = [regex]::Matches($ptxt, $pl[1])
+            if ($pm.Count -eq 0) {
+              # 找不到这句说明文案被改写了。这时不能静默放过——静默放过等于这条检查失效，
+              # 而它失效时屏幕上看不出任何区别。改文案的人要顺手改这条清单。
+              Write-Host ("{0}：找不到端点数那句（正则 {1}）。文案改了就要同步这条门禁。" -f $pl[2], $pl[1])
+              $fail = 1
             } else {
-              foreach ($h in $hm) {
+              foreach ($h in $pm) {
                 if ([int]$h.Groups[1].Value -ne $epCount) {
-                  Write-Host ("{0}：帮助里写「试 {1} 个端点」，代码里是 {2} 个" -f $hp[1], $h.Groups[1].Value, $epCount)
+                  Write-Host ("{0}：写的是 {1} 个端点，代码里是 {2} 个" -f $pl[2], $h.Groups[1].Value, $epCount)
                   $fail = 1
                 }
               }

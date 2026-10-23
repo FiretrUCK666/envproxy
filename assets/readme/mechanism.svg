@@ -38,7 +38,7 @@
       <text x="816" y="256" font-size="19" fill="#94A6BE">通过它访问一次外网</text>
       <text x="816" y="282" font-size="19" fill="#94A6BE">（只等响应头，不读正文）</text>
       <rect x="816" y="298" width="224" height="34" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="834" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">7 个端点 · 快路优先</text>
+      <text x="834" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">6 个端点 · 快路优先</text>
     </g>
   </g>
 

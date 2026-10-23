@@ -38,7 +38,7 @@
       <text x="816" y="256" font-size="19" fill="#94A6BE">Fetch once through it —</text>
       <text x="816" y="282" font-size="19" fill="#94A6BE">headers only, no body</text>
       <rect x="816" y="298" width="284" height="34" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="834" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">7 endpoints · fast lane</text>
+      <text x="834" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">6 endpoints · fast lane</text>
     </g>
   </g>
 

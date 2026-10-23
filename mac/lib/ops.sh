@@ -577,25 +577,51 @@ show_status() {
 # 为什么这么分：一次性把十几屏内容全刷出来，看到后面已经忘了前面讲什么；
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
 # 每一项在**三处**拼装：短名（_help_topic_short）、标题（_help_topic_title）、
-# 正文（_help_topic_body），三处按同一批编号分派，再加 HELP_TOPIC_KEYS 这张编号表。
-# 也就是说加一条主题要改四处，漏改不报错——症状是"目录里出现空标题"或"选中后是一页空白"。
-# （Windows 侧是单表：Get-HelpTopics 一条记录同时含 Key/Title/Short/Lines。）
-# 自检里有一条"标题不为空"的断言专门兜这个漏，但那是事后兜底，不改变这里要改四处的事实。
-HELP_TOPIC_KEYS=(1 2 3 4 5 6 7 8)
-_help_topic_short() {
-    case "$1" in
-        1) echo "用处" ;;
-        2) echo "装完" ;;
-        3) echo "窗口" ;;
-        4) echo "代理" ;;
-        5) echo "命令" ;;
-        6) echo "菜单" ;;
-        7) echo "连不上" ;;
-        8) echo "不行" ;;
-        *) echo "" ;;
-    esac
+# 帮助主题表：**一条记录就是一条主题**，编号 | 短名 | 标题。
+# 为什么合起来：原来是"编号表 + short 分派 + title 分派 + body 分派"四处平行结构，
+# 加一条主题要改四处、漏改不报错——症状是目录里出现空标题，或选中后是一页空白。
+# Windows 侧一直是单表（Get-HelpTopics 一条记录含 Key/Title/Short/Lines），这里对齐。
+# 正文（body）仍单独按编号分派：它太长，塞进这张表会把表撑得读不下去。
+#
+# 编号必须连续且没有重复——自检里有一条断言直接检查这张表的形状。
+HELP_TOPICS=(
+    '1|用处|这是干什么用的'
+    '2|装完|装完之后要我做什么'
+    '3|窗口|这个窗口固定直连 / 恢复自动'
+    '4|代理|这个窗口走公司代理'
+    '5|命令|我要让某条命令不走代理'
+    '6|菜单|菜单每一项是干什么的'
+    '7|连不上|装了还是连不上网 / 状态不对'
+    '8|不行|还是不行 / 想删掉它'
+)
+
+# 从 HELP_TOPICS 取第 N 段（$1=字段号，$2=主题编号）。
+_help_topic_field() {
+    _htf_want="$2"
+    for _htf_rec in "${HELP_TOPICS[@]}"; do
+        case "$_htf_rec" in
+            "$_htf_want"\|*)
+                _htf_rest=${_htf_rec#*|}
+                case "$1" in
+                    1) printf '%s' "${_htf_rest%%|*}" ;;
+                    2) printf '%s' "${_htf_rest#*|}" ;;
+                esac
+                return 0 ;;
+        esac
+    done
     return 0
 }
+_help_topic_short() { _help_topic_field 1 "$1"; }
+_help_topic_title() { _help_topic_field 2 "$1"; }
+
+# 全部主题编号，从表里派生 —— 不再单独维护一张编号表。
+# 名字保持 HELP_TOPIC_KEYS（状态页、帮助目录、底部编号行、自检都在读它），
+# 但内容由 HELP_TOPICS 算出来：改表就自动同步，没有第二处要记得改。
+HELP_TOPIC_KEYS=()
+for _htk_rec in "${HELP_TOPICS[@]}"; do
+    HELP_TOPIC_KEYS=("${HELP_TOPIC_KEYS[@]}" "${_htk_rec%%|*}")
+done
+unset _htk_rec
 
 # 主题页底部那一行：把全部编号和短名并排列出来，当前这条用方括号标。
 # 为什么需要它：用户在主题里只看到「输编号看别的」，却不知道别的编号是几号——
@@ -672,20 +698,6 @@ format_help_key_range() {
     if [ "$_hkr_n" -eq 0 ]; then echo "没有可用的编号"; return 0; fi
     if [ "$_hkr_n" -eq 1 ]; then echo "只有 ${HELP_TOPIC_KEYS[0]}"; return 0; fi
     echo "有 $(format_key_list "${HELP_TOPIC_KEYS[@]}")"
-}
-_help_topic_title() {
-    case "$1" in
-        1) echo "这是干什么用的" ;;
-        2) echo "装完之后要我做什么" ;;
-        3) echo "这个窗口固定直连 / 恢复自动" ;;
-        4) echo "这个窗口走公司代理" ;;
-        5) echo "我要让某条命令不走代理" ;;
-        6) echo "菜单每一项是干什么的" ;;
-        7) echo "装了还是连不上网 / 状态不对" ;;
-        8) echo "还是不行 / 想删掉它" ;;
-        *) echo "" ;;
-    esac
-    return 0
 }
 
 # 帮助里「菜单每一项是干什么的」那一屏的正文，从 MENU_ITEMS 生成。
