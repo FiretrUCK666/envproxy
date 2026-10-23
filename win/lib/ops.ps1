@@ -212,7 +212,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     # Git Bash 的同步脚本副本也要清：它装在 ~/.envproxy 下，不属于安装目录，
     # 单靠删安装夹带不走。与 Mac 侧 uninstall 删 prompt-sync.sh 再 rmdir 同一套动作。
     # 目录只在空的时候才删——里面若有使用者自己放的东西，一个字节都不动。
-    $epHome = Join-Path ([string]$env:USERPROFILE) '.envproxy'
+    $epHome = Get-ToolHomeDir
     Remove-Item -LiteralPath (Join-Path $epHome 'prompt-sync.sh') -Force -ErrorAction SilentlyContinue
     try {
         if ((Test-Item $epHome) -and -not (Get-ChildItem -LiteralPath $epHome -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
@@ -277,7 +277,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     if (Test-Item $LauncherDir) { $dirty += ("定位脚本所在目录仍在：" + $LauncherDir) }
     if (Test-RegKey (Get-ScriptPathRegKeyPath)) { $dirty += ("路径记录仍在：注册表 " + (Get-ScriptPathRegKeyPath)) }
     # 我们装进 ~/.envproxy 的只有 prompt-sync.sh 一个文件。它删不掉才算脏。
-    $epHome = Join-Path ([string]$env:USERPROFILE) ".envproxy"
+    $epHome = Get-ToolHomeDir
     if (Test-Item (Join-Path $epHome "prompt-sync.sh")) { $dirty += ("Git Bash 同步脚本副本仍在：" + (Join-Path $epHome "prompt-sync.sh")) }
     # 目录里别的东西**不算脏**，也不删：可能是使用者自己放的，删错比留着糟。
     # 但它必须被说出来，否则用户对着一个不知道是什么的文件夹发呆。
@@ -375,12 +375,19 @@ function Get-StatusSnapshot {
     $st.AutoRunLauncher = $launcher
     $st.AutoRunOk = [bool]($launcher -and (Test-Path -LiteralPath $launcher))
     $st.StopIntent = Test-Item $StopIntentFile
-    # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
-    # 这里不需要任何“别写日志”的开关：探测层（probe）本身不写日志了，
-    # 它只把“枚举成没成、为什么没成”放在 $script:PortEnumerationFailed / Reason 里。
-    # 记不记由调用方决定——监控每轮记，状态页一次都不记。
-    # 两端因此同形：mac 侧的状态页也是直接调探测函数，没有特殊开关。
-    $st.Port = Get-ActiveProxyPort -FullScan:$false
+    # 状态页要回答的是"我此刻正常吗"，所以它必须**看得见用户真正在用的那个端口**。
+    #
+    # 原来这里用快扫（-FullScan:$false，约 55 毫秒）："快"换来的代价是只认
+    # 常见端口表 + 进程名。用户把端口改成表外的值（实测 7099）后，快扫返回空，
+    # 屏幕打"未检测到（当前无翻墙代理在运行）"；而同一屏的"代理变量"那行
+    # 读的是注册表真实值、试连还通着 —— 两行自相矛盾，用户以为工具坏了。
+    #
+    # 现在改走 Get-InUseProxyPort：先直接验注入值指向的那个端口（那是我们自己写的，
+    # 就是用户此刻在用的），命中即返回（约 100 毫秒）；真没命中才退到候选集，
+    # 且那里的 FullScan 用 $true——状态页一天点不了几次，"慢 1 秒"远比"说谎"便宜。
+    # 探测层本身不写日志：成败与原因放在 $script:PortEnumerationFailed / Reason 里，
+    # 记不记由调用方决定（监控每轮记，状态页一次都不记）。
+    $st.Port = Get-InUseProxyPort -FullScan:$true
     $st.PortUnknown = [bool]$script:PortEnumerationFailed
     try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
     $st.ProxyValue = Get-EnvProxyValue
@@ -1036,8 +1043,8 @@ function Get-HelpTopics {
                 # cmd 这一行是表格的第三行，不是正文：写成正文会变成"缩进 2 格的灰字"，
                 # 与上面两行既不对齐、也不白——用户看到的就是"这里格式坏了"。
                 # 它下面的命令用空左列的 rc：左列补成同样的宽度，命令正好落在右列下方。
-                'r cmd|没有这个开关，只能自己清 5 个变量（& 两边别留空格）：',
-                'rc |set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=',
+                ('r cmd|没有这个开关，只能自己清 {0} 个变量（& 两边别留空格）：' -f @($ProxyVarNames).Count),
+                ('rc |set ' + ((@($ProxyVarNames) | ForEach-Object { $_ + '=' }) -join '&set ')),
                 'b ',
                 'w 别用 unset HTTP_PROXY：我们写进 Git Bash 的是小写拼写，',
                 't unset 大写的清不掉小写，curl 照样走代理，下个提示符还会写回来。',
@@ -1115,7 +1122,6 @@ function Get-HelpTopics {
                 'b ',
                 'i 2. 有值还是连不上：看菜单顶上「监控」写的是运行中还是未运行。',
                 't2 未运行就选 1（安装 / 修复）。',
-                'b ',
                 'i 3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
                 'b ',
                 'h 状态页怎么读',
@@ -1124,15 +1130,16 @@ function Get-HelpTopics {
                 'r 翻墙代理|本机有没有翻墙软件在监听端口',
                 'r 终端同步|已经开着的窗口会不会跟着变',
                 'r 代理变量|这个工具往终端里设代理了没有',
-                't 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被你停了，不是坏了。',
+                't 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被停了，不是坏了。',
                 't 其余几行是系统代理、版本号、更新状态。',
                 'b ',
                 'h 日志和 AI 排查',
-                't 日志在 win\monitor\monitor.log，反馈附最后 20 行。',
-                't AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，',
-                't 不是网络坏了。菜单选 2 看「代理变量」那行会直接说清。',
-                't 它只管 HTTP/HTTPS 变量；ping、游戏、BT 这类走自己协议的',
-                't 不认——那些要开翻墙软件的 TUN 模式。'
+                't 反馈时附最后 20 行日志。先 cd 到装它的文件夹，再照下面敲：',
+                'c Get-Content .\win\monitor\monitor.log -Tail 20',
+                'c tail -n 20 win/monitor/monitor.log',
+                't AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，不是网络坏了；',
+                't 菜单选 2 看「代理变量」那行会直接说清。',
+                't 它只管 HTTP/HTTPS 变量；ping、游戏、BT 走自己协议的不认，要开 TUN 模式。'
             )
         },
         @{

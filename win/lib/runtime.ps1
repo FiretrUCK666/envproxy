@@ -19,10 +19,9 @@ $RunKeyName       = "EnvProxyMonitor"
 #                 与路径记录是父子关系——卸载清注册表键时连同删掉，不留痕迹
 #   我们写下的值（变量名 -> 值）：终端同步的钩子据此判断"当前值是不是我们的"。
 #                 与 Mac 侧 ~/.envproxy/owned.env 同义：没有这份记录就一个都不许删。
-# 顶层取值必须加载期安全：CI 自检会在 Linux 上点源本文件测纯函数，
-# 那里没有 LOCALAPPDATA。运行时只在 Windows 走，兜底值走不到业务逻辑。
-$_localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
-$LauncherDir      = Join-Path $_localAppData "EnvProxy"
+# 安装目录与 terminal.env 的目录是同一个（都在 %LOCALAPPDATA%\EnvProxy），
+# 所以只能有一处声明：Get-InstallDir 在 base 层，已处理"CI 在 Linux 上点源"的兜底。
+$LauncherDir      = Get-InstallDir
 $LauncherPath     = Join-Path $LauncherDir "launcher.ps1"
 
 # 登录定位器的正文住在 win\locator.ps1 这个**真实文件**里，不再内嵌成字符串。
@@ -859,7 +858,7 @@ fi
 # 判据是内容比对，与 Mac 侧 install_prompt_sync 同一套：模板变了副本才更新。
 function Install-BashrcPromptSync {
     # 正文来自内嵌模板（见 Get-PromptSyncContent 上方的说明），不再读随包文件。
-    $dstDir = Join-Path ([string]$env:USERPROFILE) ".envproxy"
+    $dstDir = Get-ToolHomeDir
     $dst = Join-Path $dstDir "prompt-sync.sh"
     try {
         if (-not (Test-Item $dstDir)) { [System.IO.Directory]::CreateDirectory($dstDir) | Out-Null }

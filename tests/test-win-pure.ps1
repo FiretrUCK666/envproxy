@@ -1898,8 +1898,10 @@ foreach ($c in $cmdTexts) {
 # 允许的首词表刻意写得小而明确：帮助里只该出现这么多工具。
 # `$env:NAME = 'value'` 是赋值语句，所以绿色行也可以以变量引用开头。
 # 保持明确：帮助不该悄悄开始展示没人审过的工具。
-$allowed = @('powershell', 'set', 'unset', 'export', 'Remove-Item', 'curl', 'curl.exe',
-             'git', 'npm', 'wget', 'wget.exe', 'echo', '.', 'source')
+# `tail`（Git Bash 自带）与 `Get-Content`（PowerShell 自带）用于帮助第 7 条
+# 教用户怎么取最后 20 行日志——两者都是系统自带命令，不破零依赖。
+$allowed = @('powershell', 'set', 'unset', 'export', 'Remove-Item', 'Get-Content', 'tail',
+             'curl', 'curl.exe', 'git', 'npm', 'wget', 'wget.exe', 'echo', '.', 'source')
 foreach ($first in $cmdFirstTokens.Keys) {
     $isAssignment = $first -match '^\$env:[A-Za-z_][A-Za-z0-9_]*$'
     Assert-Eq ('a green line starts with a real program: ' + $first) $true (($allowed -contains $first) -or $isAssignment)

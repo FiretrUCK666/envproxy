@@ -463,6 +463,44 @@ function Get-ActiveProxyPort([bool]$FullScan = $true) {
     return $null
 }
 
+# 探测"现在真实在用的代理端口"，供**只读画面**（状态页）使用。
+#
+# 为什么不直接用 Get-ActiveProxyPort：它只能靠"常见端口表 + 进程名"去猜。
+# 用户把端口改成 7099 这种不在表里的值时，猜不中；而状态页那边又必须快，
+# 于是快扫(non-FullScan)返回空 -> 屏幕打"未检测到"，可同一屏的"代理变量"那行
+# 读的是注册表里的真实值、试连还通着 —— 两行自相矛盾。
+# 实测过：7099 三层判据（监听/CONNECT/节点）全过，快扫 55ms 却给 []。
+#
+# 正确的顺序是"从已知推未知"，而不是每轮从零开始猜：
+#   1) 环境变量里那个值是我们自己写下的，它指向哪个端口就先验哪个（1 个 TCP 连接，
+#      毫秒级）。命中即返回——绝大多数情况下第一步就够，比扫全端口快得多也准得多。
+#   2) 没命中（变量没写、或变量指向的端口已死）才去找候选集。
+#      这里用 FullScan：状态页一年也点不了几次，"慢 1 秒"远比"说谎"便宜。
+#      fullScan 默认给 $true，调用方不必记得传。
+# 返回 $null 表示"确实没找到"，与"没读到"由 $script:PortEnumerationFailed 区分。
+function Get-InUseProxyPort([bool]$FullScan = $true) {
+    # 1) 先验注入值：它是我们写的，指向的就是"用户此刻在用的那个"。
+    $known = $null
+    try {
+        $val = Get-EnvProxyValue
+        if ($val) {
+            $parts = Split-ProxyUrl $val
+            if ($parts -and $parts.Port -gt 0) { $known = [int]$parts.Port }
+        }
+    } catch {}
+    if ($known) {
+        # 三层里能便宜地验的都验：端口在听、且是 HTTP 代理（CONNECT 回 200）。
+        # 不走 Test-NodeAlive 的节流缓存——状态页要的是"此刻"，而且只验一个端口，
+        # 一次请求的代价可以接受；这也避免"节流窗口内沿用旧结论"导致再次说谎。
+        $listen = Test-PortListening $known
+        if ($listen -eq "listening") {
+            try { if (Test-HttpProxy $known) { return $known } } catch {}
+        }
+    }
+    # 2) 注入值不可用：退回候选集（状态页用全扫，别让"看不见"变成"没检测到"）。
+    return (Get-ActiveProxyPort -FullScan:$FullScan)
+}
+
 # 有序试活：按候选顺序逐个验证，返回第一个真活的端口或 $null（只读，不写状态）。
 # 规则只有两条：
 #   1) $Preferred（上次验活过、仍在集合里）先按该端口自己的节流缓存试
@@ -917,6 +955,10 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
 # 性能：on 状态每轮只做轻量监听检查，节点验证带 15 秒节流（控制真实请求流量）。
 #       off 状态轻量发现（毫秒级）；全端口批量探测每 10 轮（约 30 秒）一次。
 $script:CachedPort = $null
+# 刚丢掉缓存（端口停了 / 在位复核失守）时置位：下一轮立刻深扫一次。
+# 用户改端口、换软件、断开重连都走这条路径，新端口往往不在常见表里，
+# 靠"每 10 轮才全扫一次"会让空窗拖到约 27 秒。
+$script:NeedDeepScan = $false
 $script:LastSeenSet = ""
 $script:LastAlivePort = $null
 $script:Round = 0
@@ -939,12 +981,17 @@ function Get-CurrentState {
             # 返回的 off 照常进调用方的双轮去抖，不会单轮抖动。
             if ((($script:Round % 10) -eq 0) -and (-not (Test-HttpProxy $port))) {
                 $script:CachedPort = $null
+                # 刚失去这个端口：下一轮立刻深扫一次再下结论。
+                # 否则要等第 10 轮全扫，而用户此刻多半已经换到表外的端口上了。
+                $script:NeedDeepScan = $true
                 return "off"
             }
             # 端口仍在监听：节点验证（15 秒节流，断开连接后内核仍活着时在此识别）
             if (Test-NodeAlive $port) { return "on:$port" }
             # 节点不通：视作关闭（删除变量恢复直连）
             $script:CachedPort = $null
+            # 同上：换节点/重连/改端口都会走到这里，下一轮深扫一次。
+            $script:NeedDeepScan = $true
             return "off"
         }
         # 端口停止：可能是"断开→改端口→重连/换软件"的过渡期，先睡 2 秒跳过
@@ -963,14 +1010,63 @@ function Get-CurrentState {
         return "off"
     }
 
-    # 无缓存（off 状态）：轻量候选集；每 10 轮补一次全端口批量尾巴
-    $fullScan = (($script:Round % 10) -eq 0)
+    # 无缓存（off 状态）：轻量候选集；每 10 轮补一次全端口批量尾巴。
+    #
+    # 但"每 10 轮一次"不能是唯一入口：用户改端口/换软件时，CachedPort 刚被清空，
+    # 而新端口往往不在常见表里——快扫看不见它，只能等第 10 轮。实测：off 态每轮 3 秒，
+    # 那意味着**最长约 27 秒**空窗，期间状态是"不知道"，用户的代理变量已经在指向新端口
+    # 却拿不到确认。这正是"等了很久"的第三个来源。
+    #
+    # 所以加一条：**刚丢缓存的那一轮立刻全扫**。判据是 LastAlivePort 有值但 CachedPort 空
+    # ——说明上一轮还在用某个端口，这一轮它没了，正是"断开/改端口/换软件"的时刻，
+    # 此刻最需要一次深扫。稳态下（一直 off，从没活过）仍然按 10 轮节流，不白烧 CPU。
+    # 深度决策（扫之前就要定，不能"扫空了再补救"）。
+    #
+    # 三种情况要全扫：
+    #   ① 到了 10 轮的节流点；
+    #   ② 刚丢掉缓存（端口停了 / 在位复核失守 / 节点不通）——用户正改端口；
+    #   ③ 还没确认过任何端口（LastSeenSet 为空）：此时快扫的"什么都没看见"
+    #      无法区分"真没有"与"端口在表外"，必须全扫一次才能下结论。
+    #      少了③就会卡在 unknown 里出不来（实测：改端口后 6 轮全是 unknown）。
+    $justLostCache = [bool]$script:NeedDeepScan
+    $script:NeedDeepScan = $false
+    $neverConfirmed = ($script:LastSeenSet -eq '') -and ($null -eq $script:LastAlivePort)
+    $fullScan = (($script:Round % 10) -eq 0) -or $justLostCache -or $neverConfirmed
     $cands = Find-CandidatePorts -FullScan:$fullScan
     # 端口枚举失败 = 这一轮不知道，不是不在翻墙。判 off 会删掉用户的代理变量，
     # 而真实情况可能只是这一次没读到。交给主循环"沿用上一状态"。
     if ($script:PortEnumerationFailed) { return "unknown" }
     $sig = ($cands -join ",")
-    if ($sig -ne $script:LastSeenSet) {
+    # 快扫只认"常见端口表 + 进程名"，它给出的是全集的一个**子集**，不是完整观测。
+    # 这带来两个必须分开处理的问题：
+    #
+    # ① 签名不能被快扫覆盖。全扫记下 "7099"，下一轮快扫算出 ""，两串不同 ->
+    #    判"集合变化" -> 重新试活 -> 候选集空 -> off -> 再下一轮全扫又"发现变化"。
+    #    "集合变化 = 强信号"就这样被自己的节流反复触发，恢复被钉在最多 10 轮
+    #    （off 态每轮 3 秒，约 30 秒）——实测复现，用户说的"等很久"就是它。
+    #    故：**只有全扫轮更新签名**。
+    #
+    # ② 快扫轮"什么都没看到"不构成"没有代理"的证据。它没看到的可能是非标准端口。
+    #    这时唯一安全的动作是"不知道"（沿用上一状态、不动变量），
+    #    与端口枚举失败时同一处置——把"没看见"当成"不存在"会删掉用户的代理变量。
+    if (-not $fullScan) {
+        if ($cands.Count -eq 0) { return "unknown" }
+        # 快扫有结果：不动签名，但可以按现有签名判断"是否已知变化"。
+        # 签名里本来就有这个端口 = 与上次全扫一致；否则说明快扫看到了新东西，按变化处理。
+        if ($sig -eq $script:LastSeenSet) {
+            # 与上次全扫一致：落到下面的稳定态节流单查。
+        } else {
+            # 快扫看到了签名里没有的端口：这是真的新面孔（不是深度差异造成的），
+            # 但**不更新签名**（签名只能由全扫写），直接验活。
+            $hit = Confirm-CandidatePort $cands $script:LastAlivePort
+            if ($hit) {
+                $script:CachedPort = $hit
+                $script:LastAlivePort = $hit
+                return "on:$hit"
+            }
+            return "off"
+        }
+    } elseif ($sig -ne $script:LastSeenSet) {
         # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。
         # 上次验活的仍在就认回它（缓存结论，零新增探测）；新面孔当场验 → 秒级收敛。
         $script:LastSeenSet = $sig

@@ -132,6 +132,8 @@ monotonic_now() {
 NODE_FIRST_FAIL_AT=0     # 本轮连续失败的起点（单调秒），成功后清零
 NODE_FAST_UNTIL=0        # 刚下结论后的加密观察窗口截止时刻（epoch 秒）
 CACHED_PORT=""
+# 刚丢掉缓存时置 1：下一轮立刻深扫（与 Windows 侧 $script:NeedDeepScan 同义）。
+NEED_DEEP_SCAN=0
 LAST_SEEN_SET=""
 LAST_ALIVE_PORT=""
 ROUND=0
@@ -404,6 +406,36 @@ get_suspect_ports() {
 # 输出空格分隔的端口表（可能为空串，无状态，可安全用于命令替换）。
 # 状态机按集合签名判断变化并逐个试活；只要首选不要全集的调用方继续用
 # 只要首选不要全集的调用方自行取第一个元素。
+# 探测"现在真实在用的代理端口"，供**只读画面**（状态页）使用。
+#
+# 为什么不直接用 find_candidate_ports：它只能靠"常见端口表 + 进程名"去猜。
+# 用户把端口改成表外的值（实测 7099）时猜不中，状态页就打"未检测到"；
+# 可同一屏的"代理变量"那行读的是真实值、试连还通着 —— 两行自相矛盾。
+# 与 Windows 侧 Get-InUseProxyPort 同一套顺序、同一套理由。
+#
+#   1) 环境变量里那个值是我们自己写下的，它指向哪个端口就先验哪个（一次 TCP，毫秒级）。
+#   2) 没命中才去找候选集，且**用全扫**：状态页一年点不了几次，"慢一点"远比"说谎"便宜。
+# 输出端口号；找不到时输出空、返回 1。
+get_in_use_proxy_port() {
+    _giu_known=$(get_current_proxy_port 2>/dev/null || echo "")
+    case "$_giu_known" in
+        ''|*[!0-9]*) ;;
+        *)
+            # 端口在听、且是 HTTP 代理（CONNECT 回 200）。不走节点的节流缓存：
+            # 状态页要的是"此刻"，而且只验一个端口，代价可以接受。
+            if test_port_listening "$_giu_known" && test_http_proxy "$_giu_known"; then
+                printf '%s' "$_giu_known"
+                return 0
+            fi
+            ;;
+    esac
+    _giu_cands=$(find_candidate_ports 1) || return 1
+    _giu_first=$(printf '%s' "$_giu_cands" | awk '{print $1}')
+    [ -n "$_giu_first" ] || return 1
+    printf '%s' "$_giu_first"
+    return 0
+}
+
 find_candidate_ports() {
     _full="$1"
     _cands=""
@@ -638,6 +670,9 @@ get_current_state() {
             if [ $((ROUND % 10)) -eq 0 ]; then
                 if ! test_http_proxy "$CACHED_PORT"; then
                     CACHED_PORT=""
+                    # 刚失去这个端口：下一轮立刻深扫一次再下结论。
+                    # 否则要等第 10 轮全扫，而用户此刻多半已经换到表外的端口上了。
+                    NEED_DEEP_SCAN=1
                     CURRENT_STATE="off"
                     return 0
                 fi
@@ -646,6 +681,8 @@ get_current_state() {
                 CURRENT_STATE="on:$CACHED_PORT"
             else
                 CACHED_PORT=""
+                # 同上：换节点/重连/改端口都会走到这里，下一轮深扫一次。
+                NEED_DEEP_SCAN=1
                 CURRENT_STATE="off"
             fi
             return 0
@@ -672,7 +709,12 @@ get_current_state() {
         fi
         return 0
     fi
-    if [ $((ROUND % 10)) -eq 0 ]; then _full=1; else _full=0; fi
+    # 刚丢掉缓存（端口停了 / 在位复核失守 / 节点不通）时立刻全扫一次：
+    # 用户改端口、换软件、断开重连都走这条路径，新端口往往不在常见表里，
+    # 靠"每 10 轮才全扫"会让空窗拖到约 27 秒（off 态每轮 sleep 3）。
+    # 稳态（一直 off、从没活过）仍按 10 轮节流，不白烧 CPU。
+    if [ $((ROUND % 10)) -eq 0 ] || [ "$NEED_DEEP_SCAN" = "1" ]; then _full=1; else _full=0; fi
+    NEED_DEEP_SCAN=0
     _cands=$(find_candidate_ports "$_full")
     _rc=$?
     if [ $_rc -ne 0 ]; then

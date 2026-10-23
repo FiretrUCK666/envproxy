@@ -1474,13 +1474,22 @@ jobs:
           # 这一条是踩出来的：monitor.beat / version.cache / stopped.intent /
           # update.inprogress / stop.flag 在两侧都真实存在，两份 README 一个都没写。
           # 用户看到家目录或安装目录里冒出几个不认识的文件，无从判断该不该删。
-          $runWin = @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:MonitorDir|LauncherDir)\s+"([^"$]+)"') |
-                      ForEach-Object { $_.Groups[1].Value })
+          # 四条来源，缺一条就有文件逃过检查：
+          #   MonitorDir / LauncherDir  —— 安装目录与安装区间里的
+          #   (Get-ToolHomeDir)         —— 家目录下那个 .envproxy 里的（prompt-sync.sh 住这里）
+          # 最后一条是补上来的：它原来用 Join-Path $env:USERPROFILE ".envproxy" 手拼，
+          # 正则抽不到，于是 prompt-sync.sh 在 README 里出现是"人记得写"，不是门禁保证的。
+          $runWin = @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:MonitorDir|LauncherDir|dstDir|epHome)\s+"([^"$]+)"|Join-\s*Path\s+\(Get-ToolHomeDir\)\s+"([^"$]+)"') |
+                      ForEach-Object { if ($_.Groups[1].Value) { $_.Groups[1].Value } else { $_.Groups[2].Value } })
           $runMac = @([regex]::Matches($sh, '\$(?:MONITOR_DIR|ENVPROXY_HOME)/([A-Za-z0-9._-]+)"') |
                       ForEach-Object { $_.Groups[1].Value })
           $runWin = @($runWin | Sort-Object -Unique)
           $runMac = @($runMac | Sort-Object -Unique)
-          if ($runWin.Count -lt 5) { Write-Host ("Win 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runWin.Count); $fail = 1 }
+          if ($runWin.Count -lt 6) { Write-Host ("Win 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runWin.Count); $fail = 1 }
+          if ($runWin -notcontains 'prompt-sync.sh') {
+            Write-Host '没抽到 prompt-sync.sh：家目录那一路的抽取规则失效了（改过 Get-ToolHomeDir 的用法？）'
+            $fail = 1
+          }
           if ($runMac.Count -lt 5) { Write-Host ("Mac 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runMac.Count); $fail = 1 }
           $zhDoc = Get-Content 'README.md' -Raw -Encoding UTF8
           $enDoc = Get-Content 'README.en.md' -Raw -Encoding UTF8

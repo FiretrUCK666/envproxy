@@ -280,12 +280,19 @@ get_status_snapshot() {
     if [ "$_autorun_reg" = "1" ] && [ -f "$LOCATOR_PATH" ]; then _autorun_ok=1; fi
 
     # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
-    # 只枚举一次（枚举两次之间状态可能变，两次结论可能自相矛盾）；
-    # 深度与 Windows 侧一致：都只做快扫（全端口扫留给监控与诊断入口）。
+    # 状态页要回答"我此刻正常吗"，所以必须**看得见用户真正在用的那个端口**。
+    #
+    # 只做快扫（find_candidate_ports 0）的问题是它只认"常见端口表 + 进程名"：
+    # 用户把端口改成表外的值（如 7099）后，快扫返回空，屏幕打"未检测到"；
+    # 而同一屏的"代理变量"那行读的是真实值、试连还通着 —— 两行自相矛盾。
+    # 与 Windows 侧 Get-InUseProxyPort 同一套顺序、同一套理由：
+    #   1) 先直接验注入值指向的那个端口（我们自己写的，就是用户此刻在用的），
+    #      命中即返回，一次 TCP，毫秒级；
+    #   2) 没命中才退到候选集，且用**全扫**——状态页一天点不了几次，
+    #      "慢一点"远比"说谎"便宜。
     _port=""
     _port_unknown=0
-    _cands=$(find_candidate_ports 0) || _port_unknown=1
-    [ "$_port_unknown" = "0" ] && _port=$(printf '%s' "$_cands" | awk '{print $1}')
+    _port=$(get_in_use_proxy_port) || _port_unknown=1
 
     # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
     # 「看起来装好了，实则每次开窗口都不同步」。与 Win 侧 Get-TerminalSyncState 同语义。

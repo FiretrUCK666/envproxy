@@ -621,7 +621,7 @@ function Write-TerminalStateFile([string]$State) {
     #   其他（off/unknown/空）-> 注册表 Owned 键里的历史值
     #                          （此时变量已删，只能从记录取；绝不拿当前环境变量顶替——
     #                            那可能是用户自己的公司代理，冒充"我们写的"会让钩子删掉它）
-    $dir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "EnvProxy"
+    $dir = Get-InstallDir
     $path = Join-Path $dir "terminal.env"
     # 名单从变量表来，不手抄：手抄的那份在新增变量时会静默漏掉，
     # 症状是"某个变量在我们的归属记录里有、在镜像文件里没有"——钩子于是清不掉它。

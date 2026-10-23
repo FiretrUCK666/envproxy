@@ -79,6 +79,21 @@ function Get-RegPath([string]$SubKey) { return ('HKCU:\' + $SubKey) }
 # ——抄一份的后果自检与生产会走两个不同位置，跑一次自检就把使用者真实的键写成测试值。
 function Get-RegSubKeyPath([string]$SubKey) { return $SubKey }
 function Get-OwnedRegSubKey { return (Get-RegSubKeyPath $OwnedRegSubKey) }
+
+# 家目录下那个我们自己用的文件夹（Git Bash 同步脚本住在这里）。
+# 与注册表落点同理：做成可替换的，自检才能把 install 那条真实路径跑一遍
+# 而不往使用者家目录写字。默认值就是真实位置，正常安装行为一个字节不变。
+$ToolHomeDirName = '.envproxy'
+function Get-ToolHomeDir { return (Join-Path ([string]$env:USERPROFILE) $ToolHomeDirName) }
+
+# 镜像文件 terminal.env 住在 %LOCALAPPDATA%\EnvProxy（给 Git Bash 的钩子读）。
+# 同样可替换：它是安装与状态翻转都会写的文件，自检不该写进使用者真实的那一份。
+# 顶层取值必须加载期安全：CI 会在 Linux 上点源本文件，那里没有 LocalApplicationData。
+function Get-InstallDir {
+    $base = [Environment]::GetFolderPath('LocalApplicationData')
+    if (-not $base) { $base = [System.IO.Path]::GetTempPath() }
+    return (Join-Path $base 'EnvProxy')
+}
 function Get-UserEnvKeyPath { return (Get-RegPath $UserEnvSubKey) }
 function Get-OwnedRegKeyPath { return (Get-RegPath $OwnedRegSubKey) }
 function Get-PrevEnvRegKeyPath { return (Get-RegPath $PrevEnvSubKey) }
