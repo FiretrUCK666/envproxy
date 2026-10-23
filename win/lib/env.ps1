@@ -600,25 +600,26 @@ function Write-TerminalStateFile([string]$State) {
     #                            那可能是用户自己的公司代理，冒充"我们写的"会让钩子删掉它）
     $dir = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "EnvProxy"
     $path = Join-Path $dir "terminal.env"
-    $names = @("HTTP_PROXY","HTTPS_PROXY","ALL_PROXY","NO_PROXY","NODE_USE_ENV_PROXY")
+    # 名单从变量表来，不手抄：手抄的那份在新增变量时会静默漏掉，
+    # 症状是"某个变量在我们的归属记录里有、在镜像文件里没有"——钩子于是清不掉它。
+    $names = $ProxyVarNames
     $lines = @()
     $own = @{}
     if ($State -and $State -ne "unknown" -and $State.StartsWith("on:")) {
         # 与注入端同源：镜像文件里写的地址必须就是变量里那个，否则 Git Bash 跟着它写进
         # 窗口的地址会连不上（只绑 ::1 的代理在 IPv4 上是拒绝的）。
         $url = Get-ProxyUrlForPort ([int]$State.Substring(3))
-        $np = [string](Get-UserEnvRaw "NO_PROXY")
-        $node = [string](Get-UserEnvRaw "NODE_USE_ENV_PROXY")
-        $lines += "HTTP_PROXY=$url"
-        $lines += "HTTPS_PROXY=$url"
-        $lines += "ALL_PROXY=$url"
-        if ($np) { $lines += "NO_PROXY=$np" }
-        if ($node) { $lines += "NODE_USE_ENV_PROXY=$node" }
-        $own["HTTP_PROXY"] = $url
-        $own["HTTPS_PROXY"] = $url
-        $own["ALL_PROXY"] = $url
-        if ($np) { $own["NO_PROXY"] = $np }
-        if ($node) { $own["NODE_USE_ENV_PROXY"] = $node }
+        foreach ($n in $names) {
+            # 取值按变量角色分派，与 Sync-UserEnvVars / Remove-UserEnvVars 同一套规则：
+            # 前三个是地址，NO_PROXY 是例外清单，NODE_USE_ENV_PROXY 是开关。
+            # 三个地方各写一遍的话，加一个新变量时必然有一处漏改。
+            $v = switch ($n) {
+                "NO_PROXY"           { [string](Get-UserEnvRaw $n) }
+                "NODE_USE_ENV_PROXY" { [string](Get-UserEnvRaw $n) }
+                default              { $url }
+            }
+            if ($v) { $lines += ("$n=$v"); $own[$n] = $v }
+        }
     } else {
         try {
             $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $false)
