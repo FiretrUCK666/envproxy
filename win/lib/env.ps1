@@ -189,7 +189,14 @@ function Sync-UserEnvVars([string]$Port) {
     if (-not $changed) { return $false }
     # 写失败时返回 $false 而不是抛给上层：调用方（Apply-State / 安装流程）要的是
     # "这一轮没写成"，好如实报告；抛异常会让安装整个中断，连后面几步都不跑。
-    try { Write-UserEnvValues -Values $desired } catch { return $false }
+    # 写失败与"本来就齐"对调用方是同一件事（都不该广播，下一轮会再试），
+    # 所以返回值保持 $false。但**要留一行痕迹**：不留的话，磁盘满、组策略拦住写入
+    # 这类真故障在日志里完全看不见，只剩"每轮都判要写、每轮都没写成"这个现象，
+    # 而现象本身长得跟正常运行一样。调用方不看日志，看日志的是排查问题的人。
+    try { Write-UserEnvValues -Values $desired } catch {
+        try { Write-MonitorLog ("环境变量写入失败：" + $_.Exception.Message) } catch {}
+        return $false
+    }
     return $true
 }
 
