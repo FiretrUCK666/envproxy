@@ -14,7 +14,7 @@ fi
 # 只判"文件在不在"不够——记录写坏了、而那个文件恰好存在时，会一直去 exec 一个跑不起来的
 # 文件，搜索却永远不触发，登录自启动就此静默失效。
 case "$_target" in
-    */envproxy.sh) ;;
+    */envproxy.sh) : ;;
     *) _target="" ;;
 esac
 

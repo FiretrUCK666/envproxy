@@ -415,7 +415,7 @@ apply_state() {
     # 畸形的一律不写、也不报成功——"什么都没做却报成功"是最难查的一种故障：
     # 屏幕上一切正常，只有终端连不上网。Windows 侧同一判据（Invoke-EnvStateWrite）。
     case "$_state" in
-        off) ;;
+        off) : ;;
         on:*)
             _pv_port="${_state#on:}"
             case "$_pv_port" in

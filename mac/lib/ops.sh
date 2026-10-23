@@ -426,7 +426,7 @@ show_status() {
 "
     elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="$_pb代理变量指向的端口已经不在
 "; fi
-    case "$_ts_state" in ok) ;; *) _pb="$_pb终端同步没生效
+    case "$_ts_state" in ok) : ;; *) _pb="$_pb终端同步没生效
 ";; esac
     [ "$_sp_bad" = "1" ] && _pb="$_pb系统代理可能残留（不是本工具写的）
 "
@@ -906,7 +906,7 @@ _help_block_key_width() {
     # "宽度怎么算"只该有 _display_width 一个答案。
     _hbk_w=$(printf '%s\n' "$_HELP_BLOCK" | while IFS= read -r _hbk_l; do
         _hbk_c=${_hbk_l%% *}
-        case "$_hbk_c" in r|rc) ;; *) continue ;; esac
+        case "$_hbk_c" in r|rc) : ;; *) continue ;; esac
         _hbk_rest=${_hbk_l#* }
         printf '%s\n' "${_hbk_rest%%|*}"
     done | _max_width_of)

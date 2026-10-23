@@ -75,39 +75,51 @@ LOG_TAIL_LINES=200
 # （98 列、137 字符）要 11 秒，状态页每多打印一行日志就多等这么久。
 # 现在整个函数零 fork：`printf -v` 取字节值，纯算术累加。
 _display_width() {
-    LC_ALL=C
     _dw_s="$1"
+    [ -n "$_dw_s" ] || { printf '0'; return 0; }
+    # 纯算术，零子进程——菜单/帮助每渲染一行都要调它，起进程的代价会累积成卡顿。
+    #
+    # 判据与 Windows 侧 Get-DisplayWidth 逐字节同一条：码位 > U+2E80 记两格。
+    # UTF-8 下等价于"3 字节序列，且（首字节 > E2 或首字节 = E2 且第二字节 >= BA）"。
+    #
+    # 为什么不按字符切片：${s:i:1} 的语义随 bash 版本变——4.x 在 LC_ALL=C 下
+    # 按字节取，3.2（macOS 自带）按字符取且多字节处理不完整。同一段代码在两端
+    # 算出不同宽度，屏幕上的两列表格就会只在 Mac 上歪，本地永远复现不出来。
+    #
+    # 做法：先把整串的 UTF-8 字节数算出来（一次外部命令，按整串算），
+    # 再逐"字符"用 ${#ch} 判断这个字符占几个字节——${#ch} 在 LC_ALL=C 下
+    # 就是字节数，且 3.2/5.x 一致。这样每个字符只花一次算术，不起进程。
+    LC_ALL=C
     _dw_n=${#_dw_s}
     _dw_i=0
     _dw_w=0
     while [ "$_dw_i" -lt "$_dw_n" ]; do
-        _dw_ch=${_dw_s:_dw_i:1}
-        printf -v _dw_b '%d' "'$_dw_ch"
-        if [ "$_dw_b" -lt 128 ]; then
-            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 1))
+        # 取一个字节，据首字节判断这个字符有几位
+        _dw_ch="${_dw_s:$_dw_i:1}"
+        printf -v _dw_b '%d' "'$_dw_ch" 2>/dev/null || _dw_b=63
+        if [ "$_dw_b" -ge 240 ]; then
+            _dw_len=4; _dw_wide=1       # 4 字节序列（补充平面）：绝大多数不是 CJK，按一格
         elif [ "$_dw_b" -ge 224 ]; then
-            # 3 字节序列：判据要与 Windows 侧"码位 > 0x2E80 占两格"严格等价，
-            # 而只看首字节做不到。U+2E80 的 UTF-8 是 E2 BA 80（首字节 226），
-            # 而 U+2026（…）、U+2192（→）、U+2014（—）也都是 E2 开头——
-            # 前者真宽 2、后者真宽 1，首字节一模一样，必须再看第二字节才分得开。
-            # 老判据用"首字节 >= 227"，等价于把整个 E2 段都当成 1 格：
-            # 那正好把 U+2E80–U+2FFF（CJK 部首补充区，真宽 2）判小了。
-            # 影响面很小（那些字日常几乎不出现），但两端口径必须一致，
-            # 否则同一行文案在两端占不同格数，两列对齐会歪。
-            # 正确判据：首字节 > E2，或首字节 = E2 且第二字节 >= BA（0xBA，对应 U+2E80）。
-            _dw_b2=_dw_b
-            if [ "$_dw_b" -eq 226 ]; then
-                printf -v _dw_b2 '%d' "'${_dw_s:$((_dw_i + 1)):1}"
+            _dw_len=3; _dw_wide=0       # 3 字节序列：再看第二字节决定
+        elif [ "$_dw_b" -ge 192 ]; then
+            _dw_len=2; _dw_wide=1
+        else
+            _dw_len=1; _dw_wide=1
+        fi
+        if [ "$_dw_len" -eq 3 ]; then
+            _dw_b2=0
+            if [ $((_dw_i + 1)) -lt "$_dw_n" ]; then
+                printf -v _dw_b2 '%d' "'${_dw_s:$((_dw_i + 1)):1}" 2>/dev/null || _dw_b2=63
             fi
             if [ "$_dw_b" -gt 226 ] || { [ "$_dw_b" -eq 226 ] && [ "$_dw_b2" -ge 186 ]; }; then
                 _dw_w=$((_dw_w + 2))
             else
                 _dw_w=$((_dw_w + 1))
             fi
-            _dw_i=$((_dw_i + 3))
         else
-            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 2))
+            _dw_w=$((_dw_w + _dw_wide))
         fi
+        _dw_i=$((_dw_i + _dw_len))
     done
     printf '%s' "$_dw_w"
 }

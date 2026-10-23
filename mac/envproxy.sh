@@ -162,7 +162,7 @@ case "${OSTYPE:-}" in
     darwin*) ;;
     *)
         case "$_CMD_NORM" in
-            help|self-test) ;;
+            help|self-test) : ;;
             menu|install|stop|uninstall|status|update|repair-profile|'')
                 echo "这是 macOS 版，只能在 macOS 上运行（当前系统不是 macOS）。" >&2
                 echo "Windows 请用 win 目录里的 envproxy.ps1，或双击「打开菜单」。" >&2
