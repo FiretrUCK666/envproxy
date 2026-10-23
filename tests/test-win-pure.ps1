@@ -468,13 +468,32 @@ Assert-Eq 'a live non-monitor pid is not a finished install' $false (Test-Instal
 Remove-Item -LiteralPath $root10 -Recurse -Force
 
 Write-Host '[10b] status display stays read-only'
-# 契约：状态显示永不写文件。它内部会快扫一次端口，而端口枚举失败时
-# Find-CandidatePorts 会写日志——只读路径必须用 -NoLog 把这一路关掉，
-# 否则一次 -Status 就往黑匣子里塞一行，既违反契约也污染日志。
-Assert-Eq 'Get-ActiveProxyPort accepts -NoLog' $true ((Get-Command Get-ActiveProxyPort).Parameters.ContainsKey('NoLog'))
-Assert-Eq 'Find-CandidatePorts accepts -NoLog' $true ((Get-Command Find-CandidatePorts).Parameters.ContainsKey('NoLog'))
+# 契约：状态显示永不写文件。
+# 这条原来靠一个 -NoLog 开关守着（探测层会写日志，只读路径把它关掉）。
+# 那是"错位 + 补丁"：probe 调 runtime 的日志函数本身就是反向依赖，开关只是把它盖住。
+# 现在探测层根本不写日志——它只把"枚举成没成、为什么"放进脚本级变量，记录由调用方决定。
+# 于是这条契约变成结构性的：**没有任何开关可以忘传**。
+# 断言改成钉住这个结构：探测层里不许出现写日志的调用。
+$probeSrc = Get-Content (Join-Path $ScriptDir 'lib\probe.ps1') -Raw -Encoding UTF8
+# 只数**真正的调用**（行首不是注释且带左括号）：解释性注释里提到这个函数名是正常的，
+# 而"-match 'Write-MonitorLog'" 会把注释也算进去，于是把"已经改对"报成"没改"。
+# 逐行数真正的调用：跳过注释行。用行长而不是正则的 \s*——\s 会吃掉换行，
+# 跨行匹配会让整条判据失效（实测踩到过：变异后命中数仍是 0，断言假绿）。
+$probeCalls = 0
+foreach ($pl in ($probeSrc -split "`r?`n")) {
+    $plTrim = $pl.Trim()
+    if (-not $plTrim) { continue }
+    if ($plTrim.StartsWith('#')) { continue }
+    # 用 Contains 而不是 -match：带括号的正则在 PowerShell 里这里匹配不到，
+    # 而且它失败时只返回 False、不报错——一条永远为假的判据比没有判据更糟
+    # （实测踩到过：变异注入了真实调用，断言仍然绿）。
+    if ($plTrim.Contains('Write-MonitorLog')) { $probeCalls++ }
+}
+Assert-Eq 'probe 层不写日志（结构保证，不靠开关）' 0 $probeCalls
+Assert-Eq 'probe 层把失败原因交出来' $true ($probeSrc -match 'PortEnumerationReason')
+Assert-Eq 'Get-ActiveProxyPort 不再有 NoLog 参数' $false ((Get-Command Get-ActiveProxyPort).Parameters.ContainsKey('NoLog'))
 $opsSrc = Get-Content (Join-Path $ScriptDir 'lib\ops.ps1') -Raw -Encoding UTF8
-Assert-Eq 'status scan passes -NoLog' $true ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog:\$true')
+Assert-Eq '状态页调探测时不传任何开关' $false ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog')
 
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these

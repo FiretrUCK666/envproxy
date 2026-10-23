@@ -1482,7 +1482,16 @@ function Run-MonitorLoop {
             if ($state -eq "unknown") {
                 # 这一轮不知道（端口枚举失败）：沿用上一状态，不动环境变量，
                 # 也不计入去抖——把"没读到"当成"没在翻墙"会删掉用户的代理变量。
-                Write-MonitorLog "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+                # 失败原因由探测层放在 $script:PortEnumerationReason 里，这里带上一句：
+                # 只写"枚举失败"等于把唯一的线索丢掉，事后分不清是 netstat 形状变了、
+                # 输出被裁剪、还是权限问题，而这几种的排查方向完全不同。
+                $why = ""
+                try { $why = [string]$script:PortEnumerationReason } catch {}
+                if ($why) {
+                    Write-MonitorLog ("端口枚举失败（两次都没成功：" + $why + "）-> 本轮沿用上一状态，不动环境变量")
+                } else {
+                    Write-MonitorLog "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+                }
                 $state = $lastState
             }
 

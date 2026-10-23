@@ -238,10 +238,14 @@ get_current_proxy_url() {
     printf '%s' "$_gpu_line" | sed -E 's/^export HTTP_PROXY="?([^"]*)"?$/\1/'
 }
 
-show_status() {
-    style_out title "======== EnvProxy 状态 ========"
-    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
-    # 读完 8 行再自己合成判断，是这屏原来最大的问题；正常项与异常项也不再同构平铺。
+# 采集状态页需要的事实。**只读**：不写文件、不提问、不联网（版本缓存由监控写）。
+# 结果留在全局变量里（本项目不用 local），由 show_status 负责显示。
+#
+# 为什么分两层：这一段原来与渲染混在同一个 358 行的函数里，读的人要在几十行
+# 显示语句之间翻找"这个值从哪来"。Windows 侧早就是 Get-StatusSnapshot /
+# Show-StatusSnapshot 两层，这里与它对齐。分开之后还有一个结构性的好处：
+# "状态页只读"不再靠自觉——采集函数里没有一句显示，渲染函数里没有一处探测。
+get_status_snapshot() {
     _m=$(get_monitor_pid || true)
     # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
     # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
@@ -333,6 +337,14 @@ show_status() {
 
     # 版本信息（只读：查不到只提示，不写文件、不提问）
     _local_ver=$(get_local_version || true)
+    return 0
+}
+
+show_status() {
+    style_out title "======== EnvProxy 状态 ========"
+    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
+    # 读完 8 行再自己合成判断，是这屏原来最大的问题；正常项与异常项也不再同构平铺。
+    get_status_snapshot
 
     # ---- 结论行 ----
     # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。

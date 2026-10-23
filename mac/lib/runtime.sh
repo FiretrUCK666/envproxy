@@ -881,8 +881,19 @@ run_monitor_loop() {
             # 变量自检：apply_state 只在状态翻转时动手，稳态下它永远不会被调用，
             # 于是"别的东西改坏了变量"没人纠正。这里按同一周期整表核对，不齐就补回来
             # （幂等，齐了则零写入）。只核对我们本该持有的那几个，与用户自己的变量无关。
+            # on 态先判齐不齐再写，与 apply_state 同一判据；写完要真的核对一遍，
+            # 不能只看"我调用过 set_user_env_vars"——它失败时不报错，屏幕上与正常一样。
             case "$_last" in
-                on:*) sync_user_env_vars "${_last#on:}" || true ;;
+                on:*)
+                    _heal_port="${_last#on:}"
+                    if ! env_vars_in_sync "$_heal_port"; then
+                        if set_user_env_vars "$_heal_port"; then
+                            log_msg "变量被人改坏了 -> 已按当前代理端口重新写回"
+                        else
+                            log_msg "变量自检没能写回（下一轮再试）"
+                        fi
+                    fi
+                    ;;
                 off)
                     # off 态残留兜底（与 Windows 侧 30 轮自检同语义）：整表判据走同一套，
                     # 稳态 off 下外部改动或旧残留也能被纠正，而不是等到下次翻转。

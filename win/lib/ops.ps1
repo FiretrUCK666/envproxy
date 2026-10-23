@@ -342,11 +342,11 @@ function Get-StatusSnapshot {
     $st.AutoRunOk = [bool]($launcher -and (Test-Path -LiteralPath $launcher))
     $st.StopIntent = Test-Item $StopIntentFile
     # 状态页只做快扫：全端口批量探测约 1 秒，放在只读的状态显示里太重。
-    # DIVERGE(Win): 这里用 Get-ActiveProxyPort 并把日志关掉（-NoLog），Mac 侧状态页
-    #   直接调 find_candidate_ports ——那个函数本身就不写日志。两端都是只读，
-    #   只是 Mac 的日志写在 get_current_state 里、Windows 的写在 Find-CandidatePorts 里，
-    #   所以 Windows 需要显式传 -NoLog 才能守住"状态显示永不写文件"这条契约。
-    $st.Port = Get-ActiveProxyPort -FullScan:$false -NoLog:$true
+    # 这里不需要任何“别写日志”的开关：探测层（probe）本身不写日志了，
+    # 它只把“枚举成没成、为什么没成”放在 $script:PortEnumerationFailed / Reason 里。
+    # 记不记由调用方决定——监控每轮记，状态页一次都不记。
+    # 两端因此同形：mac 侧的状态页也是直接调探测函数，没有特殊开关。
+    $st.Port = Get-ActiveProxyPort -FullScan:$false
     $st.PortUnknown = [bool]$script:PortEnumerationFailed
     try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
     $st.ProxyValue = Get-EnvProxyValue

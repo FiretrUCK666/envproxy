@@ -339,7 +339,7 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
 # 握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
 # 返回 [int[]]，可能为空。调用方（状态机）按集合签名判断变化并逐个试活；
 # 只要首选不要全集的调用方继续用 Get-ActiveProxyPort（取第一个）。
-function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
+function Find-CandidatePorts([bool]$FullScan = $true) {
     $ordered = @()
     # 端口枚举失败 ≠ 本机没有端口：失败的后果是候选集为空 → 调用方两轮后判 off 并删变量。
     # 所以这里先做一次即时重试；仍失败就记下"这一轮不知道"（$script:PortEnumerationFailed），
@@ -360,16 +360,24 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
         }
     }
     $script:PortEnumerationFailed = (-not $enumerated)
-    # 失败原因必须写进日志：只写"两次都没成功"等于把唯一的线索丢掉，
-    # 事后既分不清是 netstat 形状变了、被裁剪、还是权限问题，也无法判断严重程度。
-    # 异常消息可能很长/带换行，压成一行并截断，避免把日志撑爆。
-    if (-not $enumerated -and -not $NoLog) {
+    # 失败原因整理好放在 $script:PortEnumerationReason 里，**这一层不写日志**。
+    #
+    # 为什么：probe 是探测层，它的职责是回答"本机有没有可用的代理端口"。
+    # 它原来直接调 Write-MonitorLog（那是 runtime 层的函数），于是形成了
+    # probe → runtime 的反向依赖："状态页永不写文件"这条契约没法靠结构保证，
+    # 只能在调用点显式传一个 -NoLog 开关去关掉——那个开关本身就是这个错位的症状。
+    # 现在这一层只把事实（成败 + 原因）交出去，记录由调用方按场合决定：
+    # 监控每轮都记，状态页一次都不记（它连日志都还没打开）。
+    # 原因仍然保留：只写"两次都没成功"等于把唯一的线索丢掉，事后分不清是
+    # netstat 形状变了、被裁剪、还是权限问题。
+    $script:PortEnumerationReason = ""
+    if (-not $enumerated) {
         $why = ""
         try { $why = "$($script:PortEnumerationError)" } catch {}
         $why = ($why -replace "\s+", " ").Trim()
         if ($why.Length -gt 200) { $why = $why.Substring(0, 200) + "..." }
         if (-not $why) { $why = "（无异常消息）" }
-        try { Write-MonitorLog ("端口枚举失败（两次都没成功：" + $why + "）-> 本轮沿用上一状态，不动环境变量") } catch {}
+        $script:PortEnumerationReason = $why
     }
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
@@ -449,8 +457,8 @@ function Find-CandidatePorts([bool]$FullScan = $true, [bool]$NoLog = $false) {
 # 组合发现（薄封装）：只要首选不要全集的调用方（状态显示、更新走代理）继续调这个，
 # 语义与平台无关（第一个候选或 $null）。状态机走集合 + 试活，不调这个。
 # FullScan 控制是否启用昂贵的全端口批量探测（off 状态降频用）。
-function Get-ActiveProxyPort([bool]$FullScan = $true, [bool]$NoLog = $false) {
-    $cands = Find-CandidatePorts -FullScan:$FullScan -NoLog:$NoLog
+function Get-ActiveProxyPort([bool]$FullScan = $true) {
+    $cands = Find-CandidatePorts -FullScan:$FullScan
     if ($cands -and ($cands.Count -gt 0)) { return $cands[0] }
     return $null
 }
