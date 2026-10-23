@@ -1384,7 +1384,18 @@ jobs:
           # 这三句必须真的按"码位 > 0x2E80"算，而不是按字节数：
           # 早期 mac 用"3 字节就算两格"，把 …/→/— 判成 2 格，两端结论就此分叉。
           $macSrc = Get-Content 'mac/lib/base.sh' -Raw -Encoding UTF8
-          if ($macSrc -notmatch '186') { Write-Host 'mac 侧宽度判据里找不到第二字节阈值 186（0xBA，对应 U+2E80）——判据可能又退回只看首字节了'; $fail = 1 }
+          # 这一条查的是"判据里有没有第二字节的分界"，不是某个十进制字面量：
+          # 0xBA 可以写成 186、\272（八进制）、$'\\272'、[$'\272'-$'\277'] 等等，
+          # 绑死一种写法会让重构（把比较换成 case 字节区间）被误判成"判据丢了"。
+          # 真实发生过：判据换成 case 区间后，这条门禁报红，而代码是对的。
+          $macHasSecondByte = ($macSrc -match '186') -or
+                              ($macSrc -match '\\272') -or
+                              ($macSrc -match '0xBA') -or
+                              ($macSrc -match 'BA 80')
+          if (-not $macHasSecondByte) {
+            Write-Host 'mac 侧宽度判据里找不到第二字节的分界（0xBA / 186 / \272 都算）——判据可能又退回只看首字节了'
+            $fail = 1
+          }
           foreach ($ch in $widthProbe) {
             if ($wWin[$ch] -ne $wMac[$ch]) {
               Write-Host ("两端对同一个字符的宽度不一致：字符 [{0}] Win {1} / Mac {2}" -f $ch, $wWin[$ch], $wMac[$ch])
