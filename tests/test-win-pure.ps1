@@ -228,6 +228,36 @@ if ($env:OS -eq 'Windows_NT') {
     Write-Host '  SKIP 快照归属判定（本机没有注册表）'
 }
 
+Write-Host '[2c] NO_PROXY reclaim (pure function, no registry)'
+# 这一段测的是"用判据的那段循环"，不是判据本身。
+# 上面 [2] 段把"什么算我们写的"钉得很死，但那些断言全在测 Test-IsOwnedProxyValue——
+# 把 Remove-UserEnvVars 里逐项分类的循环改坏（比如删掉"快照里本来就有的条目原样留"
+# 那一支），判据断言照样全绿，而用户的 NO_PROXY=localhost 会在 off 态被删掉。
+# 循环已经抽成纯函数 Get-NoProxyAfterReclaim，所以这里可以直接喂值、不用动真实注册表。
+$dnp = $DefaultNoProxy
+# 关键用例：使用者的值里含一个**默认项**（localhost），它在快照里 -> 必须留。
+# 而 127.0.0.1 在默认集里但不在快照里 -> 必须摘。这一对是唯一能区分两条分支的形状。
+$got = Get-NoProxyAfterReclaim ("localhost,corp.example," + $dnp) 'localhost,corp.example' $dnp
+Assert-Eq 'reclaim: 快照里的默认项原样留' $true ([bool](@($got -split ',') -contains 'localhost'))
+Assert-Eq 'reclaim: 不在快照的默认项被摘掉' $false ([bool](@($got -split ',') -contains '127.0.0.1'))
+Assert-Eq 'reclaim: 使用者的非默认项也留着' $true ([bool](@($got -split ',') -contains 'corp.example'))
+# 没有快照时：默认项全是我们的，全摘；剩下的留着
+$got2 = Get-NoProxyAfterReclaim ("corp.example," + $dnp) $null $dnp
+Assert-Eq 'reclaim: 无快照时默认项全摘' 'corp.example' $got2
+# 只剩我们的项：整份该删（返回 $null）
+$got3 = Get-NoProxyAfterReclaim $dnp $null $dnp
+Assert-Eq 'reclaim: 只剩我们的项时整份删除' $null $got3
+# 快照里记着使用者的 NO_PROXY 原本就是空 -> 我们加的项照摘
+$got4 = Get-NoProxyAfterReclaim 'example.com' 'example.com' $dnp
+Assert-Eq 'reclaim: 使用者原值原样不动' 'example.com' $got4
+# 大小写：使用者的写法要原样保留，不能顺手改成小写。
+# 注意期望值里有三个条目：LocalHost、Corp.Example 是使用者的；默认集里那个 localhost
+# 规范化后与快照里的 localhost 相等，所以它也算使用者的、同样保留。
+# 这不是漏摘——"它是不是我们写的"按规范化后的值判，判到了就在快照里，就该留。
+$got5 = Get-NoProxyAfterReclaim ('LocalHost,Corp.Example,' + $dnp) 'localhost,corp.example' $dnp
+Assert-Eq 'reclaim: 保留使用者的原始大小写' 'LocalHost,Corp.Example,localhost' $got5
+Assert-Eq 'reclaim: 大小写不同不算我们的（不被摘）' $true ([bool](@($got5 -split ',') -contains 'LocalHost'))
+
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
 

@@ -193,6 +193,34 @@ function Sync-UserEnvVars([string]$Port) {
     return $true
 }
 
+# 回收 NO_PROXY：从当前值里减掉我们加的默认项，使用者自己的条目（含安装快照里记着的）原样留。
+#
+# 返回"该写回去的值"，或者 $null 表示"整份都该删"。
+# 抽成纯函数的理由有两条：
+#   ① 它是这段逻辑里唯一有判断的部分（其余都是读写注册表），做成纯函数才测得到；
+#      原来它埋在 Remove-UserEnvVars 的循环里直接读注册表，只能靠"真改用户环境变量"去测——
+#      那个代价没人愿意付，于是这条路径一直零覆盖。
+#   ② 判据与动作分开之后，"要不要减这一项"只在这一处，不会再和 Test-SnapshotRecorded 分叉。
+#
+# 判定的顺序是有意的：先问"是不是使用者本来就有的"，再问"是不是我们加的"。
+# 反过来会让一个既在快照里、又长得像默认项的值被我们删掉（localhost 就是这种）。
+function Get-NoProxyAfterReclaim([string]$Current, [string]$SnapshotRaw, [string]$Ours) {
+    $oursSet = @(Get-NormalizedNoProxyEntries $Ours)
+    $bakSet = @()
+    if ($SnapshotRaw) { $bakSet = @(Get-NormalizedNoProxyEntries $SnapshotRaw) }
+    $keep = @()
+    foreach ($part in ($Current -split ',')) {
+        $t = $part.Trim()
+        if (-not $t) { continue }
+        $key = $t.ToLowerInvariant()
+        if ($bakSet -contains $key) { $keep += $t; continue }   # 使用者自己的，原样留
+        if ($oursSet -contains $key) { continue }                # 我们加的，摘掉
+        $keep += $t                                              # 与两者都无关的，原样留
+    }
+    if ($keep.Count -eq 0) { return $null }
+    return ($keep -join ',')
+}
+
 function Remove-UserEnvVars {
     # 注入与删除共用一张表，两者不可能漂移；再按名复查一遍，确保"按名之后确实一个都不剩"——
     # 无主残留正是"半代理"诡异行为的来源。
@@ -216,25 +244,15 @@ function Remove-UserEnvVars {
             # 减空了才删变量。不能按"整份等于默认集"判断——用户原本就有 NO_PROXY 时，我们加的那几项
             # 会永远留在他的值里，回收不干净。
             # 但快照里本来就有的条目是使用者的，哪怕它正好等于默认项也不许减（见 Test-SnapshotRecorded）。
-            $oursSet = Get-NormalizedNoProxyEntries $ours
-            $bakSet = @()
+            $bakRaw = $null
             try {
                 if (Test-RegKey $PrevEnvRegKey) {
                     # 快照也要不展开地读：Get-ItemProperty 对 REG_EXPAND_SZ 同样会展开。
-                    $rawBak = Get-PrevEnvRaw "NO_PROXY"
-                    if ($rawBak) { $bakSet = Get-NormalizedNoProxyEntries ([string]$rawBak) }
+                    $bakRaw = Get-PrevEnvRaw "NO_PROXY"
                 }
             } catch {}
-            $keep = @()
-            foreach ($part in ($cur -split ',')) {
-                $t = $part.Trim()
-                if (-not $t) { continue }
-                $key = $t.ToLowerInvariant()
-                if ($bakSet -contains $key) { $keep += $t; continue }      # 使用者自己的，原样留
-                if ($oursSet -contains $key) { continue }                   # 我们加的，摘掉
-                $keep += $t
-            }
-            if ($keep.Count -eq 0) { $drop += $n } else { $plan[$n] = ($keep -join ',') }
+            $after = Get-NoProxyAfterReclaim $cur $bakRaw $ours
+            if ($null -eq $after) { $drop += $n } else { $plan[$n] = $after }
             continue
         }
         if ($n -eq "NODE_USE_ENV_PROXY") {
