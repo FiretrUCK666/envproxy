@@ -11,7 +11,7 @@ function Install-EnvProxy {
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" }
     # 先说清楚要动什么、不动什么，再说"正在做"——安装要改四处系统设置，
     # 用户在按完编号之后得先知道会发生什么，而不是盯着静止的屏幕猜。
-    Write-Host "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
+    Write-Styled 'text' "会改这 4 处：开机自启、终端配置、环境变量、后台监控。"
     Write-Styled 'dim' "不会动你的其他设置。"
     Write-Host ""
     # 每一步各自兜住异常：某一处失败不该把后面几步一起带走。
@@ -35,7 +35,7 @@ function Install-EnvProxy {
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
-    $firstInstall = -not ((Get-ItemProperty $ScriptPathRegKey -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
+    $firstInstall = -not ((Get-ItemProperty (Get-ScriptPathRegKeyPath) -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
     Update-ScriptPathRecord
     # 先快照用户原值，再动任何东西：监控一启动就会在几秒内自愈、把代理变量写进去，
     # 那时再快照，存下的就是"我们写下的值"而不是用户原值，卸载还原会留下我们的条目。
@@ -108,14 +108,18 @@ function Install-EnvProxy {
     # 左边那一列用 Format-MenuCell 按最长的条目补齐，不靠手敲空格：
     # 手敲的话，改一个字就整列歪掉，而"歪一格"这种事只有人眼看得出来。
     Write-Styled 'ok' "装好了。之后怎么用："
+    # 每一行三格：左列标签 / 右列的说明 / 右列里那段能照抄的命令（没有就留空）。
+    # 命令单独列一格、而不是靠正则从整行里认出来——认形状会错：
+    # "在它里面执行  $env:ENVPROXY_TERM = 'off'" 开头不是命令，
+    # 整行就被判成说明（暗），用户看不出哪一段能复制。这正是配色坏过的老原因。
     $tipRows = @(
-        @('新开的终端 / 程序', '自动就是对的，什么都不用做。'),
-        @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。'),
-        @('装之前就开着的窗口', '重开一个，或者手动加载一次'),
-        @('', '菜单选 4（帮助）第 2 条，各种终端都有现成命令。'),
-        @('想让某个窗口固定直连', "在它里面执行  `$env:ENVPROXY_TERM = 'off'"),
-        @('改回跟着翻墙软件走', 'Remove-Item Env:ENVPROXY_TERM'),
-        @('忘了怎么用', '菜单选 4（帮助）。')
+        @('新开的终端 / 程序', '自动就是对的，什么都不用做。', ''),
+        @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。', ''),
+        @('装之前就开着的窗口', '重开一个，或者手动加载一次', ''),
+        @('', '菜单选 4（帮助）第 2 条，各种终端都有现成命令。', ''),
+        @('想让某个窗口固定直连', '在它里面执行', "`$env:ENVPROXY_TERM = 'off'"),
+        @('改回跟着翻墙软件走', '在它里面执行', 'Remove-Item Env:ENVPROXY_TERM'),
+        @('忘了怎么用', '菜单选 4（帮助）。', '')
     )
     $tipW = 0
     foreach ($r in $tipRows) {
@@ -123,12 +127,12 @@ function Install-EnvProxy {
         if ($len -gt $tipW) { $tipW = $len }
     }
     foreach ($r in $tipRows) {
-        # 前三条是"你会遇到的情况"，正常亮度；后三条是"想改的时候怎么做"，压暗一档。
-        # 用"这一行右边有没有要照抄的命令"分，而不是逐条判名字：以后加一条也自动归到对的一边。
-        $hasCmd = ($r[1] -match '^\$env:|^Remove-Item |^export |^unset ')
-        $role = if ($hasCmd -or -not $r[0]) { 'dim' } else { 'ok' }
         $cell = if ($r[0]) { Format-MenuCell $r[0] $tipW } else { ' ' * $tipW }
-        Write-Styled $role (('   ' + $cell + '   ' + $r[1]))
+        # 左列是标签（暗）、右列说明是正文（默认色）、命令是绿色。
+        # 三层各司其职才有"哪一段能复制"这回事；整行一个颜色等于没有层次。
+        Write-Styled 'dim' ('   ' + $cell + '   ') -NoNewline
+        Write-Styled 'text' $r[1] -NoNewline
+        if ($r[2]) { Write-Styled 'cmd' ('  ' + $r[2]) } else { Write-Host '' }
     }
 }
 
@@ -196,7 +200,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     Restore-PrevEnv
     # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
     Broadcast-EnvironmentChange
-    Remove-Item -LiteralPath $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Get-ScriptPathRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $LauncherPath -Force -ErrorAction SilentlyContinue
     # Git Bash 同步用的状态镜像也在定位器目录里：它由本工具新引入，卸载必须带走。
     # 先删文件再删目录，否则目录非空、Remove-Item 不带 -Recurse 会失败（原来就是这样漏的）。
@@ -271,8 +275,23 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
           $dirty += ("开机自启动项仍在：" + $RunKeyPath + " 里的 " + $RunKeyName) } catch {}
     if (Test-Item $LauncherPath) { $dirty += ("定位脚本仍在：" + $LauncherPath) }
     if (Test-Item $LauncherDir) { $dirty += ("定位脚本所在目录仍在：" + $LauncherDir) }
-    if (Test-RegKey $ScriptPathRegKey) { $dirty += ("路径记录仍在：注册表 " + $ScriptPathRegKey) }
-    if (Test-Item (Join-Path ([string]$env:USERPROFILE) ".envproxy\prompt-sync.sh")) { $dirty += "Git Bash 同步脚本副本仍在" }
+    if (Test-RegKey (Get-ScriptPathRegKeyPath)) { $dirty += ("路径记录仍在：注册表 " + (Get-ScriptPathRegKeyPath)) }
+    # 我们装进 ~/.envproxy 的只有 prompt-sync.sh 一个文件。它删不掉才算脏。
+    $epHome = Join-Path ([string]$env:USERPROFILE) ".envproxy"
+    if (Test-Item (Join-Path $epHome "prompt-sync.sh")) { $dirty += ("Git Bash 同步脚本副本仍在：" + (Join-Path $epHome "prompt-sync.sh")) }
+    # 目录里别的东西**不算脏**，也不删：可能是使用者自己放的，删错比留着糟。
+    # 但它必须被说出来，否则用户对着一个不知道是什么的文件夹发呆。
+    # 这一条走单独一句、不进"没清干净"：卸载确实完成了自己的部分，
+    # 报成"未完成"会让人再选一次「一键恢复」——那对他毫无作用，因为我们本来就不删它，
+    # 而"照上面列出的位置手动删"更会让他删掉本来不该动的东西。
+    # 措辞也不用"不是本工具写的"：实测这种情况多半就是本工具另一个平台版本写的
+    # （在 Git Bash 里跑过 macOS 版的 install），说成外人的残留会让人以为中毒。
+    $epLeftover = @()
+    if (Test-Item $epHome) {
+        $epLeftover = @(Get-ChildItem -LiteralPath $epHome -Force -ErrorAction SilentlyContinue |
+                        Where-Object { $_.Name -ne 'prompt-sync.sh' } |
+                        ForEach-Object { $_.Name })
+    }
     if ((Test-Item $PidFile) -or (Test-Item $StopFlag)) { $dirty += "监控运行时文件仍在" }
     # 变量复检不用整表判据：有快照的名字必须与快照一致（用户原值含重合项也算干净），
     # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。
@@ -311,6 +330,16 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
             Write-Styled 'dim' "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。"
         }
         Write-Styled 'ok' "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。"
+        # 目录里剩下的东西：卸载确实做完了自己那部分，所以放在"完成"之后单独说，
+        # 用 dim（背景信息）而不是 warn——它不是警告，是告知。
+        # 给绝对路径、不给 ~/.envproxy：Windows 用户没有 ~ 这个概念，而且机器上
+        # 还有一个长得很像的 %LOCALAPPDATA%\EnvProxy\，写相对写法更容易找错地方。
+        if ($epLeftover.Count -gt 0) {
+            Write-Styled 'dim' ("        这个文件夹里还留着几样没有动：" + $epHome)
+            Write-Styled 'dim' ("          " + ($epLeftover -join '、'))
+            Write-Styled 'dim' "        它们可能是你自己放的（也可能是在 Git Bash 里跑过 macOS 版留下的），"
+            Write-Styled 'dim' "        不确定就先留着；确定不要了再自己删，程序不会再用到它们。"
+        }
     } else {
         Write-Styled 'warn' "[未完成] 这几处没清干净："
         foreach ($d in $dirty) { Write-Styled 'warn' ("        - " + $d) }
@@ -396,7 +425,7 @@ function Get-StatusSnapshot {
     # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。
     # 用途是避免把"从没装过"说成"崩溃/被结束任务"：后者是故障语气，
     # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
-    $st.NeverInstalled = -not ((Get-ItemProperty $ScriptPathRegKey -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
+    $st.NeverInstalled = -not ((Get-ItemProperty (Get-ScriptPathRegKeyPath) -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
     $st.LocalVersion = Get-LocalVersion
     # 最新版本号来自**监控写下的缓存**，状态页自己绝不联网：
     # 否则每次"查看状态"都要等一次外网往返（离线/限流时是注定失败的等待）。
@@ -1131,42 +1160,51 @@ function Get-HelpTopics {
     )
 }
 
-# 帮助目录屏（带配色）。编号用命令色、标题用强调色、底部说明用灰：
-# 与主菜单同一套三层区分，用户在两个页面之间切换时不用重新认一遍。
-function Show-HelpIndexColored {
+# 帮助目录屏的内容。整屏只有这一份：纯文本与彩屏都从它取，
+# 于是"改一个字只改一处"，也不可能出现"屏幕上有、测试里没有"。
+#
+# 编号用命令色、标题用强调色、底部说明用灰：与主菜单同一套三层区分，
+# 用户在两个页面之间切换时不用重新认一遍。
+function Get-HelpIndexRenderedLines {
     $ver = Get-LocalVersion
     if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '未知' }
-    Write-Styled 'title' '================ EnvProxy 帮助 ================'
-    Write-Host ''
-    Write-Styled 'text' '  按你遇到的问题挑一条：'
+    $out = @()
+    $out += [pscustomobject]@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================'
+                               Segments = @(@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================' }) }
+    $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
+    $out += [pscustomobject]@{ Role = 'text'; Text = '  按你遇到的问题挑一条：'
+                               Segments = @(@{ Role = 'text'; Text = '  按你遇到的问题挑一条：' }) }
     foreach ($t in (Get-HelpTopics)) {
-        Write-Styled 'cmd' ('    ' + $t.Key) -NoNewline
-        Write-Styled 'value' ('  ' + $t.Title)
+        $segs = @(
+            @{ Role = 'cmd';   Text = ('    ' + $t.Key) },
+            @{ Role = 'value'; Text = ('  ' + $t.Title) }
+        )
+        $joined = ''
+        foreach ($sg in $segs) { $joined += $sg.Text }
+        $out += [pscustomobject]@{ Role = 'item'; Text = $joined; Segments = $segs }
     }
-    Write-Host ''
-    Write-Styled 'dim' ('  本机版本 v' + $ver)
-    Write-Host ''
-    Write-Styled 'dim' '  输编号查看    直接回车 = 回主菜单'
+    $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
+    $out += [pscustomobject]@{ Role = 'dim'; Text = ('  本机版本 v' + $ver)
+                               Segments = @(@{ Role = 'dim'; Text = ('  本机版本 v' + $ver) }) }
+    $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
+    $out += [pscustomobject]@{ Role = 'dim'; Text = '  输编号查看    直接回车 = 回主菜单'
+                               Segments = @(@{ Role = 'dim'; Text = '  输编号查看    直接回车 = 回主菜单' }) }
+    return $out
 }
 
-# 帮助目录的纯文本（非交互与自检用）。
-# 注意：目录页的彩屏版（Show-HelpIndexColored）与本函数**不是**同源——
-# 两者各自硬编码了抬头、导语、本机版本、底部提示四段文案，改一处必须同改另一处。
-# 真正做到同源的是主题页（Format-HelpTopic 与 Show-HelpTopicColored 都读 Get-HelpRenderedLines）。
+# 帮助目录屏（带配色）。
+function Show-HelpIndexColored {
+    foreach ($r in (Get-HelpIndexRenderedLines)) {
+        if ($r.Role -eq 'blank') { Write-Host ''; continue }
+        foreach ($s in $r.Segments) { Write-Styled $s.Role $s.Text -NoNewline }
+        Write-Host ''
+    }
+}
+
+# 帮助目录的纯文本（非交互与自检用）。与彩屏同一份内容，只差上不上色。
 function Format-HelpIndex {
     $out = New-Object System.Collections.Generic.List[string]
-    [void]$out.Add('================ EnvProxy 帮助 ================')
-    [void]$out.Add('')
-    [void]$out.Add('  按你遇到的问题挑一条：')
-    foreach ($t in (Get-HelpTopics)) {
-        [void]$out.Add(('    {0}  {1}' -f $t.Key, $t.Title))
-    }
-    [void]$out.Add('')
-    $ver = Get-LocalVersion
-    if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '未知' }
-    [void]$out.Add(('  本机版本 v{0}' -f $ver))
-    [void]$out.Add('')
-    [void]$out.Add('  输编号查看    直接回车 = 回主菜单')
+    foreach ($r in (Get-HelpIndexRenderedLines)) { [void]$out.Add($r.Text) }
     return ($out -join "`n")
 }
 

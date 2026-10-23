@@ -1,5 +1,10 @@
-﻿# EnvProxy Windows pure-function regression tests (no side effects, registry untouched).
+﻿# EnvProxy Windows pure-function regression tests.
 # Run: pwsh tests/test-win-pure.ps1   (PowerShell 5.1 compatible, UTF-8 with BOM)
+#
+# 注册表用例写在临时键上，不碰使用者的真实环境：下面把四个落点整体改道，
+# 跑完删掉沙箱键。生产路径一字未改——改的只是"写到哪个键"。
+# （以前这些用例直接改真实的 HKCU\Environment，靠 finally 还原。
+#   finally 挡不住 Ctrl+C：中断一次，代理变量就留在被删状态，屏幕上一句话都没有。）
 #
 # The core is loaded through its real entry point: that exercises the library loader and its
 # completeness check, and the entry returns immediately when dot-sourced.
@@ -19,6 +24,39 @@ foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__
 $ErrorActionPreference = 'Stop'
 $script:fails = 0
 . (Join-Path $PSScriptRoot '../win/envproxy.ps1')
+
+# ------------------------------------------------------------------------------
+# 注册表沙箱：把所有落点改到临时键，跑完整段真实路径却一个字节都不碰使用者环境。
+# ------------------------------------------------------------------------------
+# 为什么必须沙箱：这一份自检要验证"写入 / 删除 / 快照还原 / 终端钩子"整套真实行为，
+# 那些函数只认注册表。原来它们直接改 HKCU\Environment，靠 finally 还原——
+# 而 finally 挡不住 Ctrl+C / 关窗口 / 进程被杀。用户跑一次自检、中途按一下中断，
+# 代理变量就留在被删状态，屏幕上没有任何提示，他也不会知道该去查什么。
+#
+# 做法是把**落点**换掉，不是另写一套假对象：调用的仍是 Write-UserEnvValues、
+# Snapshot-PrevEnv、Get-ProfileBlockLines 这些真函数，连生成的钩子正文都一样
+# 指向沙箱键，于是那段钩子逻辑照旧被真跑一遍。
+# 四个子键在 base 层各声明一次，这里改一次就全跟着走。
+if ($env:OS -eq 'Windows_NT') {
+    $script:SavedRegSandbox = @{
+        UserEnv       = $UserEnvSubKey
+        Owned         = $OwnedRegSubKey
+        PrevEnv       = $PrevEnvSubKey
+        ScriptPathReg = $ScriptPathRegSubKey
+    }
+    $env:OS | Out-Null
+    $UserEnvSubKey       = 'Software\EnvProxy\__t_env'
+    $OwnedRegSubKey      = 'Software\EnvProxy\__t_owned'
+    $PrevEnvSubKey       = 'Software\EnvProxy\__t_prev'
+    $ScriptPathRegSubKey = 'Software\EnvProxy\__t_scriptpath'
+    if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) {
+        New-Item -Path 'HKCU:\Software\EnvProxy' -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
+        Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -Path (Get-UserEnvKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null
+}
 
 # 日志隔离：把 $LogFile 换到临时目录，绝不写进仓库里的 win\monitor\monitor.log。
 #
@@ -158,20 +196,13 @@ $t = Get-ProxyVarTable '17890'
 Assert-Eq 'var table count' '5' ($t.Count)
 Assert-Eq 'var table value' 'http://127.0.0.1:17890' ($t['HTTP_PROXY'])
 
-# 这一组必须跑在沙箱里。Test-IsOwnedProxyValue 内部会去读**安装快照**（Backup 键）
-# 判断「这个名字装前就有了吗」。直接裸测的话，结论取决于这台机器装没装过本工具：
-# 装过 -> 快照里有这几个名字 -> 判成使用者的 -> 断言拿到 False -> 本地必红。
-# 而 CI 的干净容器永远没有快照，于是永远绿 —— 同一份测试两边结论相反，
-# 「本地全绿」这个前提对维护者自己就不成立，门禁最终会被忽略。
-# 做法：把快照指向一个临时空键，测完还原。判据本身的行为由下一段专门测。
-$__bakOrig = $PrevEnvRegKey
-$__bakTmp = 'HKCU:\Software\EnvProxy\__test_empty_snapshot'
-$__bakMade = $false
+# 这一组的快照键就是沙箱键（文件开头已整体改道），跑之前先清空它。
+# Test-IsOwnedProxyValue 内部会去读安装快照判断「这个名字装前就有了吗」，
+# 那结论必须由本用例自己控制：装过的机器上快照里有这几个名字，断言就会拿到
+# 与干净 CI 相反的结论——同一份测试两边结论相反，是最难查的一类红。
 if ($env:OS -eq 'Windows_NT') {
-    if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) { New-Item -Path 'HKCU:\Software\EnvProxy' -Force | Out-Null; $__bakMade = $true }
-    Remove-Item -Path $__bakTmp -Recurse -Force -ErrorAction SilentlyContinue
-    New-Item -Path $__bakTmp -Force | Out-Null
-    Set-Variable -Name PrevEnvRegKey -Value $__bakTmp -Scope Global
+    Remove-Item -LiteralPath (Get-PrevEnvRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -Path (Get-PrevEnvRegKeyPath) -Force | Out-Null
 }
 Write-Host '[2] ownership convention (real predicate)'
 Assert-Eq 'local counts as ours' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7890')
@@ -181,31 +212,16 @@ Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 
 Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
 Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
 Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
-if ($env:OS -eq 'Windows_NT') {
-    Set-Variable -Name PrevEnvRegKey -Value $__bakOrig -Scope Global
-    Remove-Item -Path $__bakTmp -Recurse -Force -ErrorAction SilentlyContinue
-}
-Remove-Variable __bakOrig, __bakTmp, __bakMade -ErrorAction SilentlyContinue
 
 # 归属判定的第二层：安装快照里本来就记着的值，哪怕长得像我们的，也永远是使用者的。
 # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy（127.0.0.1:8080）
 # 会在 off 态每 30 轮被定时删掉，日志还谎称"回收残留"。
 if ($env:OS -eq 'Windows_NT') {
-    # 用**临时键**，不碰真实的 Backup 键。
-    #
-    # 真实 Backup 键里存着使用者安装前的原值快照（可能带 HTTPS_PROXY / ALL_PROXY /
-    # NODE_USE_ENV_PROXY 以及配套的 __Kind 类型记录）。原来这里直接往真实键写
-    # NO_PROXY 与 HTTP_PROXY、跑完再把这两个名字删掉——如果使用者恰好在这两个名字上
-    # 有原值，跑一次自检就把他的原值覆盖成测试值、再删掉，快照从此残缺，
-    # 卸载时还原不回去。这属于"测试损坏用户数据"，不是理论风险。
-    # [2] 段已经示范了正确手法（把 PrevEnvRegKey 指到临时键），这里照同一形态写。
-    $bakKey = 'HKCU:\Software\EnvProxy\__test_snapshot'
-    $madeParent = $false
-    if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) { New-Item -Path 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue | Out-Null; $madeParent = $true }
-    Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue
+    # 照样只碰沙箱键：真实快照里存着使用者安装前的原值，
+    # 往那里写测试值、跑完再删，等于把他的快照改残，卸载还原不回去。
+    $bakKey = Get-PrevEnvRegKeyPath
+    Remove-Item -LiteralPath $bakKey -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -Path $bakKey -ErrorAction SilentlyContinue | Out-Null
-    $__pvOrig = $PrevEnvRegKey
-    Set-Variable -Name PrevEnvRegKey -Value $bakKey -Scope Global
     try {
         Set-ItemProperty -Path $bakKey -Name 'NO_PROXY' -Value 'localhost' -ErrorAction Stop
         Set-ItemProperty -Path $bakKey -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:8080' -ErrorAction Stop
@@ -218,11 +234,7 @@ if ($env:OS -eq 'Windows_NT') {
         Assert-Eq '掺了默认项的混合值算我们写的' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,127.0.0.1,::1')
         Assert-Eq '全在快照里的值算使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
     } finally {
-        # 临时键整个删掉；PrevEnvRegKey 还原回去。
-        Set-Variable -Name PrevEnvRegKey -Value $__pvOrig -Scope Global
-        Remove-Item -Path $bakKey -Recurse -Force -ErrorAction SilentlyContinue
-        if ($madeParent) { Remove-Item -Path 'HKCU:\Software\EnvProxy' -Recurse -Force -ErrorAction SilentlyContinue }
-        Remove-Variable __pvOrig -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $bakKey -Recurse -Force -ErrorAction SilentlyContinue
     }
 } else {
     Write-Host '  SKIP 快照归属判定（本机没有注册表）'
@@ -623,6 +635,27 @@ foreach ($t in $helpTopics) {
 foreach ($r in @('heading', 'cmd', 'text', 'item', 'key', 'value', 'dim')) {
     Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r)
 }
+# 配色契约：命令色必须一眼可辨。与 Mac 侧同一组断言（那边在 test-mac-pure.sh）。
+#
+# 原来这里是空的：只有"角色已在表里定义"一条，把 cmd 改成和标题一样的青色也照样绿。
+# 用户报的就是这个——命令、大标题、段标题同色，一眼分不清哪行能整行复制去跑。
+$cmdColor = Get-StyleColorName 'cmd'
+Assert-Eq 'cmd colour is set (not the default foreground)' $true ($cmdColor -ne 'none')
+Assert-Eq 'cmd colour differs from the screen title' $true ($cmdColor -ne (Get-StyleColorName 'title'))
+Assert-Eq 'cmd colour differs from section headings' $true ($cmdColor -ne (Get-StyleColorName 'heading'))
+$clash = @()
+foreach ($r in @('item', 'key', 'value', 'warn', 'dim', 'text')) {
+    if ((Get-StyleColorName $r) -eq $cmdColor) { $clash += $r }
+}
+Assert-Eq 'cmd colour clashes with no other role' '' ($clash -join ' ')
+# 每个角色的颜色名都要能在映射表里查到：写错一个名字不会报错，只会静默变默认色。
+$unresolved = @()
+foreach ($r in $StyleRoles) {
+    $n = Get-StyleColorName $r
+    if ($n -eq 'none') { continue }
+    if (-not (Get-StyleColor $r)) { $unresolved += ($r + '=' + $n) }
+}
+Assert-Eq 'every role resolves to a real console colour' '' ($unresolved -join ' ')
 # 用到的角色必须都在配色表里：写错一个角色名不会报错，只会静默变成默认色，
 # 而"这一行怎么没颜色"正是这次要治的那类毛病。
 # blank/row 是排版结构（空行、多列行），不是颜色，不参与这条断言。
@@ -924,6 +957,34 @@ Assert-Eq 'the table puts the local problem first' 'local' $UpdateFailureKinds[0
 Assert-Eq 'the table puts the missing-package case last' 'missing' $UpdateFailureKinds[$UpdateFailureKinds.Count - 1]
 Assert-Eq 'no reason at all falls back to unreachable' 'network' (Select-UpdateFailureKind @())
 Assert-Eq 'an empty reason falls back to unreachable' 'network' (Select-UpdateFailureKind @(''))
+# 接线：重试之后必须走挑选规则，不许把后一次的原因直接盖上去。
+# 回环判据：与 Mac 侧 is_loopback_url 同一张表、同一批结论（两侧各跑一遍，门禁 10 互比）。
+Assert-Eq 'loopback url: http://127.0.0.1:7078' 'true' (Test-LoopbackUrl 'http://127.0.0.1:7078')
+Assert-Eq 'loopback url: http://[::1]:7078' 'true' (Test-LoopbackUrl 'http://[::1]:7078')
+Assert-Eq 'loopback url: http://localhost:8080/' 'true' (Test-LoopbackUrl 'http://localhost:8080/')
+Assert-Eq 'loopback url: http://LOCALHOST:7890' 'true' (Test-LoopbackUrl 'http://LOCALHOST:7890')
+Assert-Eq 'loopback url: http://127.0.0.2:7890' 'true' (Test-LoopbackUrl 'http://127.0.0.2:7890')
+Assert-Eq 'loopback url: http://user:pw@localhost:7890' 'true' (Test-LoopbackUrl 'http://user:pw@localhost:7890')
+Assert-Eq 'loopback url: https://api.github.com/repos/o/r' 'false' (Test-LoopbackUrl 'https://api.github.com/repos/o/r')
+Assert-Eq 'loopback url: http://192.168.1.5:7078/' 'false' (Test-LoopbackUrl 'http://192.168.1.5:7078/')
+Assert-Eq 'loopback url: http://[2001:db8::1]:8080/' 'false' (Test-LoopbackUrl 'http://[2001:db8::1]:8080/')
+Assert-Eq 'loopback url: http://localhost.:7890' 'false' (Test-LoopbackUrl 'http://localhost.:7890')
+
+#
+# 这条防的是一个真实发生过的 bug：挑选函数与它的断言都在，但调用方
+# 直接 `$script:VersionQueryFailure = $t2.Failure`，绕过了整个规则。
+# 于是"第一次 quota（配额用尽，等一小时）、重试后 server（对方故障）"时报了 server——
+# 用户照着等一会儿，怎么等都没用。
+# 断言测函数怎么挑，测不出"没人调它"；只能读源码看调用点。
+$uSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/update.ps1'))
+$iFn = $uSrc.IndexOf('function Invoke-UpdateText(')
+Assert-Eq '接线：Invoke-UpdateText 找到了' $true ($iFn -ge 0)
+if ($iFn -ge 0) {
+    $uBody = $uSrc.Substring($iFn, [Math]::Min(1400, $uSrc.Length - $iFn))
+    Assert-Eq '接线：重试路径把两次原因都交给挑选规则' $true ($uBody -match 'Select-UpdateFailureKind')
+    # 反面：不许出现 "= $t2.Failure" 这种直接覆盖。
+    Assert-Eq '接线：重试路径不直接覆盖失败原因' $false ([regex]::IsMatch($uBody, 'VersionQueryFailure\s*=\s*\$t2\.Failure'))
+}
 # The advice must name the action, otherwise the user still has to guess.
 $msgMissing = Get-UpdateFailureMessage 'missing' 'GitHub'
 $msgQuota = Get-UpdateFailureMessage 'quota' 'GitHub'
@@ -1254,8 +1315,8 @@ if ($env:OS -eq 'Windows_NT') {
 $script:SavedOwned = $null
 $script:SavedOwnedNames = @()
 try {
-    if (Test-RegKey $OwnedRegKey) {
-        $ok0 = Get-Item -LiteralPath $OwnedRegKey -ErrorAction SilentlyContinue
+    if (Test-RegKey (Get-OwnedRegKeyPath)) {
+        $ok0 = Get-Item -LiteralPath (Get-OwnedRegKeyPath) -ErrorAction SilentlyContinue
         if ($ok0) {
             foreach ($n in $ok0.GetValueNames()) {
                 if ($script:SavedOwned -eq $null) { $script:SavedOwned = @{} }
@@ -1265,10 +1326,10 @@ try {
         }
     }
     # 造一份受控记录：只记 HTTP_PROXY 与 NODE_USE_ENV_PROXY（两个代表值）
-    if (Test-RegKey $OwnedRegKey) { Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue }
-    New-Item -Path $OwnedRegKey -Force | Out-Null
-    Set-ItemProperty -Path $OwnedRegKey -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:7890'
-    Set-ItemProperty -Path $OwnedRegKey -Name 'NODE_USE_ENV_PROXY' -Value '1'
+    if (Test-RegKey (Get-OwnedRegKeyPath)) { Remove-Item -LiteralPath (Get-OwnedRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -Path (Get-OwnedRegKeyPath) -Force | Out-Null
+    Set-ItemProperty -Path (Get-OwnedRegKeyPath) -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:7890'
+    Set-ItemProperty -Path (Get-OwnedRegKeyPath) -Name 'NODE_USE_ENV_PROXY' -Value '1'
 
     # 归属记录里有的值：即使是"首次安装"，也不该进快照（否则卸载还原时又装回去）。
     Assert-Eq '首次安装：归属记录里有的值不进快照' $true (Test-SnapshotSkip 'HTTP_PROXY' 'http://127.0.0.1:7890' $true)
@@ -1280,16 +1341,16 @@ try {
     Assert-Eq '空值不跳过' $false (Test-SnapshotSkip 'HTTP_PROXY' '' $false)
 
     # 清掉记录，验证"重装时靠形状判"那条老规则仍然成立（记录缺失时的降级）。
-    Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Get-OwnedRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     Assert-Eq '重装：本机地址是我们上次写的，跳过' $true (Test-SnapshotSkip 'HTTPS_PROXY' 'http://127.0.0.1:7890' $false)
     Assert-Eq '重装：NODE_USE_ENV_PROXY=1 是我们写的，跳过' $true (Test-SnapshotSkip 'NODE_USE_ENV_PROXY' '1' $false)
 } finally {
     # 还原真实归属记录：这一组断言不该改动这台机器上的安装状态。
-    Remove-Item -LiteralPath $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Get-OwnedRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     if ($script:SavedOwnedNames.Count -gt 0) {
-        New-Item -Path $OwnedRegKey -Force | Out-Null
+        New-Item -Path (Get-OwnedRegKeyPath) -Force | Out-Null
         foreach ($n in $script:SavedOwnedNames) {
-            Set-ItemProperty -Path $OwnedRegKey -Name $n -Value $script:SavedOwned[$n] -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path (Get-OwnedRegKeyPath) -Name $n -Value $script:SavedOwned[$n] -ErrorAction SilentlyContinue
         }
     }
     Remove-Variable -Name SavedOwned -Scope Script -ErrorAction SilentlyContinue
@@ -1560,10 +1621,10 @@ foreach ($n in $ProxyVarNames) { $savedEnv[$n] = [Environment]::GetEnvironmentVa
 # 测试中途会把它删掉（模拟「没有归属记录」那一档），跑完必须原样放回——
 # 否则跑一次自检就把用户机器的归属记录清空，Git Bash 的钩子从此再也清不掉变量
 #（契约：没有归属记录时一个都不动），而且不报任何错。
-$savedOwnedExist = Test-Path $OwnedRegKey
+$savedOwnedExist = Test-Path (Get-OwnedRegKeyPath)
 $savedOwnedValues = @{}
 if ($savedOwnedExist) {
-    $__so = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $false)
+    $__so = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($OwnedRegSubKey, $false)
     if ($null -ne $__so) {
         foreach ($__sn in $__so.GetValueNames()) { $savedOwnedValues[$__sn] = [string]$__so.GetValue($__sn) }
         $__so.Close()
@@ -1573,7 +1634,7 @@ if ($savedOwnedExist) {
 # WM_SETTINGCHANGE 广播超时（实测 5 个变量约 26 秒），自检会卡到超时。
 # 钩子读的就是注册表这一层，直接写它等价，而且更快。
 function Set-RegValue([string]$Name, $Value) {
-    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($UserEnvSubKey, $true)
     if ($null -eq $k) { return }
     if ($null -eq $Value) { try { $k.DeleteValue($Name, $false) } catch {} }
     else { $k.SetValue($Name, [string]$Value, [Microsoft.Win32.RegistryValueKind]::String) }
@@ -1581,7 +1642,7 @@ function Set-RegValue([string]$Name, $Value) {
 }
 try {
     foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
-    if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force }
+    if (Test-Path (Get-OwnedRegKeyPath)) { Remove-Item (Get-OwnedRegKeyPath) -Recurse -Force }
     foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
     Remove-Item Env:__EnvProxyPromptWrapped -ErrorAction SilentlyContinue
     Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
@@ -1594,8 +1655,8 @@ try {
     Set-RegValue 'ALL_PROXY'   'http://127.0.0.1:7078'
     Set-RegValue 'NO_PROXY'    'localhost,127.0.0.1,::1'
     Set-RegValue 'NODE_USE_ENV_PROXY' '1'
-    if (-not (Test-RegKey $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force | Out-Null }
-    $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+    if (-not (Test-RegKey (Get-OwnedRegKeyPath))) { New-Item -Path (Get-OwnedRegKeyPath) -Force | Out-Null }
+    $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($OwnedRegSubKey, $true)
     if ($ok) {
         $ok.SetValue('HTTP_PROXY',  'http://127.0.0.1:7078', [Microsoft.Win32.RegistryValueKind]::String)
         $ok.SetValue('HTTPS_PROXY', 'http://127.0.0.1:7078', [Microsoft.Win32.RegistryValueKind]::String)
@@ -1648,13 +1709,13 @@ try {
     # 钩子的判据只有两条：注册表有值就注入；没有值但当前值等于归属记录里记的那个就清除。
     # 所以每条用例都必须先把归属记录摆成真实状态，再只改被测的那一个维度——
     # 否则所有用例都会落进同一个"没有归属记录→什么都不做"的分支，断言再多条也是假的。
-    $savedBakExist = Test-Path $PrevEnvRegKey
+    $savedBakExist = Test-Path (Get-PrevEnvRegKeyPath)
     Write-Host '[14b] 归属边界：什么时候可以清'
 
     # 造一份真实的归属记录，模拟"我们确实写过这些值"。
     function Set-OwnedRecord([string]$Value) {
-        if (-not (Test-Path $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
-        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+        if (-not (Test-Path (Get-OwnedRegKeyPath))) { New-Item -Path (Get-OwnedRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null }
+        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($OwnedRegSubKey, $true)
         if ($null -eq $ok) { return }
         foreach ($n in $ProxyVarNames) {
             if ($n -eq 'NODE_USE_ENV_PROXY') { $ok.SetValue($n, '1', [Microsoft.Win32.RegistryValueKind]::String) }
@@ -1681,7 +1742,7 @@ try {
     Assert-Eq '值不等于记录值：保住别的端口的本机代理' 'http://127.0.0.1:9090' $env:HTTPS_PROXY
 
     # (d) 没有归属记录 → 判不了，一个都不动
-    if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force }
+    if (Test-Path (Get-OwnedRegKeyPath)) { Remove-Item (Get-OwnedRegKeyPath) -Recurse -Force }
     $env:HTTPS_PROXY = 'http://127.0.0.1:7078'
     $null = prompt
     Assert-Eq '无归属记录时不动任何值（判不了就不猜）' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
@@ -1694,23 +1755,23 @@ try {
     foreach ($n in $ProxyVarNames) { Set-RegValue $n $savedEnv[$n] }
     # 快照键：测试往 Backup 里种过值。原本就有的只删我们种的那一项；
     # 原本没有的整棵删掉——否则会在使用者机器上留一个空键。
-    if (Test-Path $PrevEnvRegKey) {
-        $bk2 = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Backup", $true)
+    if (Test-Path (Get-PrevEnvRegKeyPath)) {
+        $bk2 = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($PrevEnvSubKey, $true)
         $emptyNow = $false
         if ($null -ne $bk2) {
             try { $bk2.DeleteValue('HTTPS_PROXY', $false) } catch {}
             $emptyNow = (@($bk2.GetValueNames()).Count -eq 0)
             $bk2.Close()
         }
-        if ($emptyNow -and (-not $savedBakExist)) { Remove-Item $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue }
+        if ($emptyNow -and (-not $savedBakExist)) { Remove-Item (Get-PrevEnvRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue }
     }
     # 归属记录：整份放回原样。
     # 测试中途会删掉它（模拟「没有归属记录」那一档），跑完必须还原——
     # 它是「哪些值是我们写的」的唯一凭据：清空了，Git Bash 的钩子就再也清不掉变量
     #（契约：没有归属记录时一个都不动），而且不报任何错。
     if ($savedOwnedExist) {
-        if (-not (Test-Path $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
-        $__ro = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $true)
+        if (-not (Test-Path (Get-OwnedRegKeyPath))) { New-Item -Path (Get-OwnedRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null }
+        $__ro = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($OwnedRegSubKey, $true)
         if ($null -ne $__ro) {
             foreach ($__rn in $savedOwnedValues.Keys) {
                 $__ro.SetValue($__rn, $savedOwnedValues[$__rn], [Microsoft.Win32.RegistryValueKind]::String)
@@ -1718,10 +1779,10 @@ try {
             $__ro.Close()
         }
     } else {
-        if (Test-Path $OwnedRegKey) { Remove-Item $OwnedRegKey -Recurse -Force -ErrorAction SilentlyContinue }
+        if (Test-Path (Get-OwnedRegKeyPath)) { Remove-Item (Get-OwnedRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue }
         # 只有它空了才删父键（父键可能装着真实的 ScriptPath）。
-        if ((Test-Path $ScriptPathRegKey) -and -not (@(Get-ChildItem $ScriptPathRegKey -ErrorAction SilentlyContinue).Count)) {
-            Remove-Item $ScriptPathRegKey -Recurse -Force -ErrorAction SilentlyContinue
+        if ((Test-Path (Get-ScriptPathRegKeyPath)) -and -not (@(Get-ChildItem (Get-ScriptPathRegKeyPath) -ErrorAction SilentlyContinue).Count)) {
+            Remove-Item (Get-ScriptPathRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
     foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
@@ -2081,6 +2142,26 @@ try {
     }
     if ($script:SavedLogFile) { $LogFile = $script:SavedLogFile }
 } catch {}
+
+# 注册表沙箱：删掉临时键、把四个子键复原。
+# 两件事都要做——只删键不够，因为 Get-*KeyPath 是现算的，
+# 变量还指着沙箱时，后面任何清理都会打到沙箱而不是真实位置。
+if ($env:OS -eq 'Windows_NT' -and $script:SavedRegSandbox) {
+    try {
+        foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
+            Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        # 父键只在空了的时候删（它可能装着使用者的真实数据）
+        if ((Test-Path 'HKCU:\Software\EnvProxy') -and
+            -not (@(Get-ChildItem 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue).Count)) {
+            Remove-Item 'HKCU:\Software\EnvProxy' -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $UserEnvSubKey       = $script:SavedRegSandbox.UserEnv
+        $OwnedRegSubKey      = $script:SavedRegSandbox.Owned
+        $PrevEnvSubKey       = $script:SavedRegSandbox.PrevEnv
+        $ScriptPathRegSubKey = $script:SavedRegSandbox.ScriptPathReg
+    } catch {}
+}
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

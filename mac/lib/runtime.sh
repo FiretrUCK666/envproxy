@@ -14,7 +14,6 @@ STOP_INTENT="$MONITOR_DIR/stopped.intent"
 # 心跳：监控每几轮刷新一次，记录「pid + 该进程启动时刻」。
 # 用途与 Windows 侧同一件事（见那边的 Test-MonitorAlive）：在没有可靠进程查询的
 # 环境下也能判断监控还活着，并且挡得住 pid 复用。
-HEARTBEAT="$MONITOR_DIR/monitor.beat"
 # 版本号缓存：由监控刷新、状态页只读。状态页不许联网（理由见 write_version_cache）。
 VERSION_CACHE="$MONITOR_DIR/version.cache"
 LOG_FILE="$MONITOR_DIR/monitor.log"
@@ -577,60 +576,6 @@ is_monitor_args() {
     case "$_ima_arg" in
         install|stop|uninstall|status|purge|update|menu|self-test) return 1;;
     esac
-    return 0
-}
-
-# 「某个 pid 的启动时刻」。mac 上 ps 的 lstart 是人读格式，用 etime（已运行时长）
-# 换算更稳：同一进程在两次调用之间 etime 相差很小，pid 复用的新进程一定差很多。
-# 这里只用它做**同一时刻的一致性核对**，不跨时刻比较，所以取秒级精度足够。
-_pid_start_ticks() {
-    _pst_pid="$1"
-    [ -n "$_pst_pid" ] || return 1
-    # BSD ps：etime 形如 05:12 / 1-02:03:04。转成秒。
-    _pst_e=$(ps -p "$_pst_pid" -o etime= 2>/dev/null | tr -d ' ')
-    [ -n "$_pst_e" ] || return 1
-    _pst_days=0
-    case "$_pst_e" in
-        *-*) _pst_days=${_pst_e%%-*}; _pst_e=${_pst_e#*-} ;;
-    esac
-    _pst_h=0; _pst_m=0; _pst_s=0
-    case "$_pst_e" in
-        *:*:*) _pst_h=${_pst_e%%:*}; _pst_e=${_pst_e#*:}; _pst_m=${_pst_e%%:*}; _pst_s=${_pst_e#*:} ;;
-        *:*)   _pst_m=${_pst_e%%:*}; _pst_s=${_pst_e#*:} ;;
-        *)     _pst_s=$_pst_e ;;
-    esac
-    case "$_pst_days$_pst_h$_pst_m$_pst_s" in
-        ''|*[!0-9]*) return 1 ;;
-    esac
-    printf '%s' "$(( _pst_days * 86400 + _pst_h * 3600 + _pst_m * 60 + _pst_s ))"
-}
-
-# 刷新心跳：pid + 该进程的已运行秒数（两者一起才能挡住 pid 复用）。
-write_heartbeat() {
-    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-    _wh_ticks=$(_pid_start_ticks $$ 2>/dev/null || echo "")
-    [ -n "$_wh_ticks" ] || _wh_ticks=0
-    printf '%s %s\n' "$$" "$_wh_ticks" > "$HEARTBEAT" 2>/dev/null || true
-}
-
-# 读心跳判活：pid 存在、且它的已运行秒数不小于心跳里记的值（时间只会变大），
-# 且差值不超过心跳的最大间隔（否则说明这是另一个进程，pid 被复用了）。
-# 这一条不依赖 pid 文件、也不依赖命令行特征。
-monitor_beat_alive() {
-    [ -f "$HEARTBEAT" ] || return 1
-    _mba=$(cat "$HEARTBEAT" 2>/dev/null)
-    [ -n "$_mba" ] || return 1
-    _mba_pid=${_mba%% *}
-    _mba_ticks=${_mba#* }
-    case "$_mba_pid" in ''|*[!0-9]*) return 1 ;; esac
-    [ "$_mba_pid" != "$$" ] || return 1
-    kill -0 "$_mba_pid" 2>/dev/null || return 1
-    [ "$_mba_ticks" = "$_mba_pid" ] && return 0   # 老格式只有 pid，降级接受
-    _mba_now=$(_pid_start_ticks "$_mba_pid" 2>/dev/null || echo "")
-    case "$_mba_now" in ''|*[!0-9]*) return 0 ;; esac   # 拿不到就按「活着」处理（兜底不添乱）
-    # 现在应当 >= 记下的值；差值超过 600 秒说明这不是同一个进程（pid 复用）。
-    [ "$_mba_now" -ge "$_mba_ticks" ] || return 1
-    [ $(( _mba_now - _mba_ticks )) -le 600 ] || return 1
     return 0
 }
 

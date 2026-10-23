@@ -303,15 +303,22 @@ function Get-UpdateRetryProxyPort {
 function Invoke-UpdateText([string]$Url) {
     $text = Invoke-UpdateTextVia $Url ""
     if ($text.Text) { return $text.Text }
-    $script:VersionQueryFailure = $text.Failure
-    if (Test-RetryWithProxy $text.Failure) {
+    $kinds = @($text.Failure)
+    # 回环地址不过代理：给 127.0.0.1 设代理没有意义，代理那次请求的主机名仍然是
+    # 127.0.0.1，看的是代理进程自己那一侧；只会让"本机服务"看起来忽好忽坏。
+    # 这条也是自检能跑通的前提：测试桩只监听回环，代理一插手就取不到它的应答。
+    if ((Test-RetryWithProxy $text.Failure) -and -not (Test-LoopbackUrl $Url)) {
         $port = Get-UpdateRetryProxyPort
         if ($port) {
             $t2 = Invoke-UpdateTextVia $Url "$port"
             if ($t2.Text) { return $t2.Text }
-            $script:VersionQueryFailure = $t2.Failure
+            # 两次的原因都留着，交给挑选规则，不许后一次直接盖掉前一次：
+            # 第一次是 quota（配额用尽，等一小时）、第二次是 server（对方故障）时，
+            # 该报的是前者——用户能照它做，后者他做什么都没用。
+            $kinds += $t2.Failure
         }
     }
+    $script:VersionQueryFailure = (Select-UpdateFailureKind $kinds)
     return $null
 }
 
@@ -967,7 +974,7 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
     }
     # 防呆：点的是备份文件夹时警告（正式路径以注册表记录为准）
     $regPath = $null
-    try { $regPath = (Get-ItemProperty $ScriptPathRegKey -ErrorAction SilentlyContinue).ScriptPath } catch {}
+    try { $regPath = (Get-ItemProperty (Get-ScriptPathRegKeyPath) -ErrorAction SilentlyContinue).ScriptPath } catch {}
     if ($regPath -and (("$regPath").ToLower() -ne ("$ScriptPath").ToLower())) {
         Write-Styled 'warn' ("注意：你现在点的是 [{0}]，" -f $ScriptPath)
         Write-Styled 'warn' ("但正式安装在 [{0}]。" -f $regPath)

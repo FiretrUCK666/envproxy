@@ -61,9 +61,9 @@ function Broadcast-EnvironmentChange {
 function Get-PrevEnvRaw([string]$Name) {
     $key = $null
     try {
-        # $PrevEnvRegKey 是 PowerShell 提供程序路径（HKCU:\Software\...），
+        # (Get-PrevEnvRegKeyPath) 是 PowerShell 提供程序路径（HKCU:\Software\...），
         # 转成 .NET 的键路径再用 DoNotExpandEnvironmentNames 读原文。
-        $sub = $PrevEnvRegKey -replace '^HKCU:\\', ''
+        $sub = (Get-PrevEnvRegKeyPath) -replace '^HKCU:\\', ''
         $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($sub, $false)
         if ($null -eq $key) { return $null }
         $v = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
@@ -78,7 +78,7 @@ function Get-PrevEnvRaw([string]$Name) {
 function Get-UserEnvRaw([string]$Name) {
     $key = $null
     try {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($UserEnvSubKey, $false)
         if ($null -eq $key) { return $null }
         $v = $key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if ($null -eq $v) { return $null }
@@ -94,7 +94,7 @@ function Set-UserEnvRaw([hashtable]$Values) {
     if (-not $Values -or $Values.Count -eq 0) { return }
     $key = $null
     try {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $true)
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($UserEnvSubKey, $true)
         if ($null -eq $key) { return }
         foreach ($n in $Values.Keys) {
             $v = $Values[$n]
@@ -175,8 +175,8 @@ function Sync-UserEnvVars([string]$Port) {
     # SetValue 会抛 "Cannot write to the registry key"。这个异常会被 catch 吞掉，
     # 于是键建出来了、内容却是空的——钩子的归属判据等于不存在。
     try {
-        if (-not (Test-RegKey $OwnedRegKey)) { New-Item -Path $OwnedRegKey -Force -ErrorAction Stop | Out-Null }
-        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $true)
+        if (-not (Test-RegKey (Get-OwnedRegKeyPath))) { New-Item -Path (Get-OwnedRegKeyPath) -Force -ErrorAction Stop | Out-Null }
+        $ok = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey((Get-OwnedRegSubKey), $true)
         if ($null -ne $ok) {
             # 重新持有这些值 = 撤回"已归还"标记。不删的话，off 时打的标记会一直留着，
             # 此后钩子永远认为"这些值已经不是我们的"，on 态反而不会跟随。
@@ -253,7 +253,7 @@ function Remove-UserEnvVars {
             # 但快照里本来就有的条目是使用者的，哪怕它正好等于默认项也不许减（见 Test-SnapshotRecorded）。
             $bakRaw = $null
             try {
-                if (Test-RegKey $PrevEnvRegKey) {
+                if (Test-RegKey (Get-PrevEnvRegKeyPath)) {
                     # 快照也要不展开地读：Get-ItemProperty 对 REG_EXPAND_SZ 同样会展开。
                     $bakRaw = Get-PrevEnvRaw "NO_PROXY"
                 }
@@ -309,7 +309,7 @@ function Test-OwnedProxyShape([string]$Name, [string]$Value) {
 # http://127.0.0.1:8080 当成我们的，在 off 态每 30 轮定时删掉，日志还谎称"回收残留"。
 function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     try {
-        if (-not (Test-RegKey $PrevEnvRegKey)) { return $false }
+        if (-not (Test-RegKey (Get-PrevEnvRegKeyPath))) { return $false }
         $raw = Get-PrevEnvRaw $Name
         if ($null -eq $raw) { return $false }
         # 判据是「快照里**记过这个名字**」，不是「值恰好相等」。
@@ -415,8 +415,8 @@ function Test-SnapshotSkip([string]$Name, [string]$Value, [bool]$FirstInstall) {
 # 混用会把使用者的配置当成我们的（丢配置），或把我们的当成使用者的（永远清不掉）。
 function Test-IsOurOwnedValue([string]$Name, [string]$Value) {
     try {
-        if (-not (Test-RegKey $OwnedRegKey)) { return $false }
-        $k = Get-Item -LiteralPath $OwnedRegKey -ErrorAction SilentlyContinue
+        if (-not (Test-RegKey (Get-OwnedRegKeyPath))) { return $false }
+        $k = Get-Item -LiteralPath (Get-OwnedRegKeyPath) -ErrorAction SilentlyContinue
         if (-not $k) { return $false }
         $rec = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if ($null -eq $rec) { return $false }
@@ -440,11 +440,11 @@ function Test-IsOurOwnedValue([string]$Name, [string]$Value) {
 # 所以读未展开值、存类型，还原时按原类型写回。
 function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
     try {
-        if (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue) { return }
+        if (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue) { return }
         # 父键按需建；子键不带 -Force——注册表上的 -Force 是"清空重建"，不是"已存在就跳过"。
-        if (-not (Test-RegKey $ScriptPathRegKey)) { New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null }
-        New-Item -Path $PrevEnvRegKey -ErrorAction Stop | Out-Null
-        $envKey = Get-Item -LiteralPath "HKCU:\Environment" -ErrorAction SilentlyContinue
+        if (-not (Test-RegKey (Get-ScriptPathRegKeyPath))) { New-Item -Path (Get-ScriptPathRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null }
+        New-Item -Path (Get-PrevEnvRegKeyPath) -ErrorAction Stop | Out-Null
+        $envKey = Get-Item -LiteralPath (Get-UserEnvKeyPath) -ErrorAction SilentlyContinue
         foreach ($n in $ProxyVarNames) {
             $raw = $null
             $kind = "String"
@@ -456,8 +456,8 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
             }
             if ($null -eq $raw) { continue }
             if (Test-SnapshotSkip $n $raw $FirstInstall) { continue }
-            Set-ItemProperty -Path $PrevEnvRegKey -Name $n -Value $raw -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path $PrevEnvRegKey -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name $n -Value $raw -ErrorAction SilentlyContinue
+            Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction SilentlyContinue
         }
     } catch {}
 }
@@ -466,7 +466,7 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
 # 按快照时的原类型写回：REG_EXPAND_SZ 的原值若按 REG_SZ 写回，里面的 %引用% 会被提前展开。
 function Restore-PrevEnv {
     try {
-        if (-not (Get-Item -LiteralPath $PrevEnvRegKey -ErrorAction SilentlyContinue)) { return }
+        if (-not (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue)) { return }
         $plain = @{}
         foreach ($n in $ProxyVarNames) {
             $bak = Get-PrevEnvRaw $n
@@ -479,7 +479,7 @@ function Restore-PrevEnv {
             if ($null -ne $bak) {
                 $kindName = Get-PrevEnvRaw ("{0}__Kind" -f $n)
                 if ($kindName -eq "ExpandString") {
-                    Set-ItemProperty -Path "HKCU:\Environment" -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
+                    Set-ItemProperty -Path (Get-UserEnvKeyPath) -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
                 } else {
                     $plain[$n] = $bak
                 }
@@ -487,7 +487,7 @@ function Restore-PrevEnv {
         }
         # 非 ExpandString 的那些一次性写回：来源明确是"字符串"，不必再猜原类型。
         if ($plain.Count -gt 0) { Write-UserEnvValues -Values $plain }
-        Remove-Item -LiteralPath $PrevEnvRegKey -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-PrevEnvRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     } catch {}
 }
 
@@ -645,7 +645,7 @@ function Write-TerminalStateFile([string]$State) {
         }
     } else {
         try {
-            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\EnvProxy\Owned', $false)
+            $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey((Get-OwnedRegSubKey), $false)
             if ($null -ne $k) {
                 foreach ($n in $names) {
                     $v = $k.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)

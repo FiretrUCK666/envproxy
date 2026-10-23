@@ -136,6 +136,42 @@ if [ $_usage_rc -ne 0 ]; then
     exit 2
 fi
 
+# 平台守卫：这个入口只属于 macOS。
+#
+# 为什么需要它：`~/.envproxy/` 下那一套运行时文件（proxy.env、owned.env、prev.env）
+# 是这一侧的格式，Windows 侧从不写它们、也不认识它们。可是这份脚本在 Git Bash 里
+# 照样能跑——只要有人在 Windows 上执行一次 install 或 stop，就会往使用者的
+# Windows 家目录里写一堆 mac 专属文件；而 Windows 侧的卸载只认 `prompt-sync.sh`
+# （那是它唯一的合法产出），对别的一字节不动、也不报告。用户看到的症状就是
+# "家目录里莫名多出一个 .envproxy 文件夹，一键恢复了还在"。
+#
+# 判据放在入口而不是各函数里：不管从哪个子命令进来，只有这一道门。
+# 位置必须在用法校验**之后**：参数写错仍然要拿到退出码 2——那是动作契约，
+# 不该因为平台不对就变成另一种失败。
+#
+# 名单写的是**放行**的那几个，不是要拦的那几个——方向反了就是个陷阱：
+# 列要拦的，将来加一个新子命令而作者没想起来回来补一行，它就能在 Windows 的
+# Git Bash 里照常跑，往使用者家目录写 mac 格式的 proxy.env / owned.env，
+# 而 Windows 卸载只认 prompt-sync.sh——正是上面那段说的事故。
+# 现在只有「只读本机、不碰用户环境」的两条放行，新增子命令默认被拦。
+#
+# 认不出的命令词要**放行到这里之后的分派**去判：它本来就不是平台问题，
+# 而是参数写错，退出码必须是 2（两侧同一套契约，门禁 10 拿这条互相比）。
+# 在本层把它改判成 1，等于让同一个错误在 Windows 上和在 macOS 上拿到不同退出码。
+case "${OSTYPE:-}" in
+    darwin*) ;;
+    *)
+        case "$_CMD_NORM" in
+            help|self-test) ;;
+            menu|install|stop|uninstall|status|update|repair-profile|'')
+                echo "这是 macOS 版，只能在 macOS 上运行（当前系统不是 macOS）。" >&2
+                echo "Windows 请用 win 目录里的 envproxy.ps1，或双击「打开菜单」。" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+esac
+
 
 case "$_CMD_NORM" in
     install|update|stop|uninstall)

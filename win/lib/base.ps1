@@ -56,6 +56,33 @@ function Remove-ItemSafe([string]$Path) {
 # ------------------------------------------------------------------------------
 # 2. 读写用户级环境变量（注册表 HKCU\Environment，不需要管理员）
 # ------------------------------------------------------------------------------
+# 注册表落点：每一样只声明一次（下面四个子键），别处一律从它派生。
+#
+# 以前 "Environment" 在 6 个地方各写一遍、"Software\EnvProxy\..." 在 5 处各写一遍。
+# 同一个地址散着写，改一处漏一处只是时间问题；更要紧的是——自检要把
+# "写入 / 删除 / 快照还原 / 终端钩子"整套真实路径跑一遍，却**不能碰使用者的真环境**
+# （它原来靠 finally 还原，而 finally 挡不住 Ctrl+C：按一次中断，代理变量就留在
+#  被删状态，屏幕上一句话都没有）。地址只要能被指向别处，自检就能整段跑在临时键上，
+# 而调用的仍是同一条生产通道，不是另写一套。
+#
+# 路径用函数现算、不用变量缓存：变量是库加载时求值一次的普通赋值，
+# 自检在加载之后才改道，变量不会跟着变（mac 侧自检注释里点名过这个地雷）。
+$UserEnvSubKey       = 'Environment'
+$OwnedRegSubKey      = 'Software\EnvProxy\Owned'
+$PrevEnvSubKey       = 'Software\EnvProxy\Backup'
+$ScriptPathRegSubKey = 'Software\EnvProxy'
+
+function Get-RegPath([string]$SubKey) { return ('HKCU:\' + $SubKey) }
+
+# 同一落点的另一种形态：.NET 的 OpenSubKey 吃"HKCU:\"后面的裸子键，
+# 不吃 PowerShell 提供程序路径。两条形态都从上面的子键声明派生，别处不许再抄字面量
+# ——抄一份的后果自检与生产会走两个不同位置，跑一次自检就把使用者真实的键写成测试值。
+function Get-RegSubKeyPath([string]$SubKey) { return $SubKey }
+function Get-OwnedRegSubKey { return (Get-RegSubKeyPath $OwnedRegSubKey) }
+function Get-UserEnvKeyPath { return (Get-RegPath $UserEnvSubKey) }
+function Get-OwnedRegKeyPath { return (Get-RegPath $OwnedRegSubKey) }
+function Get-PrevEnvRegKeyPath { return (Get-RegPath $PrevEnvSubKey) }
+function Get-ScriptPathRegKeyPath { return (Get-RegPath $ScriptPathRegSubKey) }
 # 变量名一律用规范大写拼写；一张表同时是「注入清单」与「删除清单」，两者不可能再漂移。
 #
 # DIVERGE(Win): Windows 的环境命名空间大小写不敏感（注册表 HKCU\Environment 尤其如此），
@@ -92,28 +119,50 @@ $HelpMaxLines = 30
 $LogMaxBytes = 200KB
 $LogTailLines = 200
 
-# 屏幕角色的配色表：所有用户可见页面（菜单、帮助、状态、安装、卸载、更新）都从这里取色。
-# 为什么要有这张表：颜色散在各页面时，同一个概念会在不同页面用不同颜色——用户每换一屏
-# 就要重新认一遍"哪一行是能照抄的命令"。角色名与 Mac 侧 STYLE_ROLES 一致（门禁 6 核对），
-# 于是"两端口径一致"不靠人记得住，而是靠没有第二个地方可以改。
-# 取空串 = 用终端自己的默认前景色（不写颜色），避免与使用者的配色方案打架。
-$StyleMap = [ordered]@{
-    title   = 'Cyan'      # 每屏开头那一行等号标题
-    heading = 'Cyan'      # 段标题
-    item    = 'White'     # 编号条目
-    key     = 'White'     # 两列的左列（PowerShell / 监控进程…）
-    value   = 'White'     # 要强调的值（名字、版本号）
-    cmd     = 'Cyan'      # 能整行复制去跑的命令 / 编号
-    ok      = 'Green'     # 做成了
-    warn    = 'Yellow'    # 要留意
-    dim     = 'DarkGray'  # 次要说明，不该抢注意力
-    text    = ''          # 正文：跟终端默认色一致
+# 配色分两层：角色 -> 颜色名 -> 本平台怎么写。
+#
+# 为什么要多这一层名字：两侧写颜色的方式毫无共同语言（这里是 [ConsoleColor] 枚举，
+# Mac 侧是 ANSI 数字），于是"两端口径一致"只能靠人记得住，门禁也只比得了角色名、
+# 一个颜色都比不了——实测就这么放过去一次：`cmd` 从绿改成了青，命令与标题同色，
+# 用户在屏幕上一眼分不清，两侧门禁却全绿。多这一层之后，两侧共享的是颜色名，
+# 门禁直接比颜色名，"换个颜色只改一处"和"两侧不许分叉"才同时成立。
+$ColorCodes = @{
+    cyan        = 'Cyan'      # 标题、段标题
+    brightwhite = 'White'     # 条目、左列、要强调的值
+    green       = 'Green'     # 能整行复制的命令、做成了
+    yellow      = 'Yellow'    # 要留意
+    darkgray    = 'DarkGray'  # 次要说明
+    none        = ''          # 终端自己的默认前景色，不与使用者的配色方案打架
 }
-$StyleRoles = @('title', 'heading', 'item', 'key', 'value', 'cmd', 'ok', 'warn', 'dim', 'text')
 
+# 角色 -> 颜色名。顺序即声明顺序，$StyleRoles 从它派生，不另抄一份。
+# cmd 必须是绿色，且不许与其余任何角色同色：屏幕上的绿色就是"这一整行能复制去跑"。
+# 用户每换一屏都要重新认这件事，所以它是可读性问题，不是审美问题。
+# 门禁 6 与两侧自检都钉住这两条，改色当场红。
+$StyleMap = [ordered]@{
+    title   = 'cyan'        # 每屏开头那一行等号标题
+    heading = 'cyan'        # 段标题
+    item    = 'brightwhite' # 编号条目
+    key     = 'brightwhite' # 两列的左列（PowerShell / 监控进程…）
+    value   = 'brightwhite' # 要强调的值（名字、版本号）
+    cmd     = 'green'       # 要敲的东西：能整行复制去跑的命令，或要挑的编号
+    ok      = 'green'       # 做成了
+    warn    = 'yellow'      # 要留意
+    dim     = 'darkgray'    # 次要说明，不该抢注意力
+    text    = 'none'        # 正文：跟终端默认色一致
+}
+$StyleRoles = @($StyleMap.Keys)
 
+# 角色 -> 颜色名。没声明的角色一律按 none（不写颜色），不报错也不乱猜。
+function Get-StyleColorName([string]$Role) {
+    if ($StyleMap.Contains($Role)) { return [string]$StyleMap[$Role] }
+    return 'none'
+}
+
+# 角色 -> 本平台的前景色。Write-Styled 只认这一处，别处不许再写颜色字面量。
 function Get-StyleColor([string]$Role) {
-    if ($StyleMap.Contains($Role)) { return $StyleMap[$Role] }
+    $name = Get-StyleColorName $Role
+    if ($ColorCodes.ContainsKey($name)) { return $ColorCodes[$name] }
     return ''
 }
 
@@ -181,6 +230,21 @@ function Test-LoopbackProxyUrl([string]$Value) {
     # 于是它既不匹配真正的 http://[::1]:7078，反而可能匹配上别的东西。
     # 这里要的是字面前缀，就用字面比较。
     return ($Value.StartsWith("http://127.0.0.1:") -or $Value.StartsWith("http://[::1]:"))
+}
+
+# 这个地址是不是指向本机回环。
+# 与上面那条不是一个问题，所以也不共用一个函数：
+#   Test-LoopbackProxyUrl  问"这个代理**值**是不是我们写的本机地址"（归属判定用）
+#   本函数                 问"这个**目标**在本机吗"（决定要不要经代理去取）
+# 判据要认全三种写法：127.0.0.1、[::1]、localhost。给回环地址设代理没有意义——
+# 代理那次请求的主机名仍是回环，看的是代理进程自己那一侧，只会让"本机服务"
+# 看起来忽好忽坏。
+function Test-LoopbackUrl([string]$Url) {
+    if (-not $Url) { return $false }
+    $u = $null
+    if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$u)) { return $false }
+    if ($u.IsLoopback) { return $true }
+    return ($u.Host -eq "localhost")
 }
 
 function Get-ProxyVarTable([string]$Port, [string]$ProxyUrl = "") {

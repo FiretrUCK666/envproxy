@@ -156,10 +156,24 @@ fetch_update_text() {
     # 状态码是输出的最后一行（curl -w '\n%{http_code}' 的格式），拿不到就当空。
     _ftt_code=$(printf '%s' "$_ftt_out" | tail -n 1)
     _ftt_why=$(update_failure_kind "$_ftt_code" "$(_fetch_rate_remaining "$_ftt_h")")
-    if retry_with_other_exit "$_ftt_why"; then
-        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null
-        return $?
+    if retry_with_other_exit "$_ftt_why" && ! is_loopback_url "$1"; then
+        _ftt_out2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
+            curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null)
+        [ $? -eq 0 ] && { printf '%s' "$_ftt_out2"; return 0; }
+        # 两次都没成：交给挑选规则决定报哪一次，不许后一次直接盖掉前一次。
+        # 第一次是 quota（配额用尽，等一小时）、第二次是 server（对方故障）时，
+        # 该报的是前者——用户能照它做，后者他做什么都没用。
+        #
+        # 这里输出**被选中那一次**的完整应答，而不是失败原因：本函数的输出约定是
+        # "正文 + 末行状态码"，调用方靠状态码自己分类。直接把原因打印出去，
+        # 调用方会把它当成状态码那一行，分类跟着全错。
+        _ftt_code2=$(printf '%s' "$_ftt_out2" | tail -n 1)
+        _ftt_why2=$(update_failure_kind "$_ftt_code2" "$(_fetch_rate_remaining "$_ftt_h")")
+        case "$(select_update_failure_kind "$_ftt_why $_ftt_why2")" in
+            "$_ftt_why") printf '%s' "$_ftt_out" ;;
+            *)           printf '%s' "$_ftt_out2" ;;
+        esac
+        return 1
     fi
     printf '%s' "$_ftt_out"
     return 1

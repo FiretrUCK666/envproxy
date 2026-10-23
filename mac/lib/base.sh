@@ -121,10 +121,59 @@ _menu_cell_pad() {
     [ "$_mcp_pad" -lt 0 ] && _mcp_pad=0
     printf '%s%*s' "$_mcp_text" "$_mcp_pad" ''
 }
-# 屏幕角色的配色表：与 Windows 侧 $StyleRoles 同一批角色名、同一套语义，门禁 6 核对。
-# 为什么要有这张表：颜色散在各页面时，同一个概念会在不同页面用不同颜色——用户每换一屏
-# 就要重新认一遍"哪一行是能照抄的命令"。改配色只改这里。
-# 取空串 = 用终端自己的默认前景色（不写转义序列），避免与使用者的配色方案打架。
+# 这个地址是不是指向本机回环。
+# 它问的是"这个**目标**在本机吗"，用来决定要不要经代理去取；
+# 与归属判定那条（"这个代理值是不是我们写的本机地址"）不是一个问题，不共用函数。
+# 判据认全三种写法：127.0.0.1、[::1]、localhost。
+# 给回环地址设代理没有意义——代理那次请求的主机名仍是回环，看的是代理进程
+# 自己那一侧，只会让"本机服务"看起来忽好忽坏。
+# 判据与 Windows 侧 Test-LoopbackUrl 必须**逐例同结论**（自检拿同一张表两侧各跑一遍）：
+# 它的用途是"这个地址要不要经代理去取"，两侧结论不同就成了行为分叉。
+# 所以这里做的是同一个 URI 解析，不是逐字面量比对——
+# 逐字面量会把 http://LOCALHOST:7890、user:pw@localhost、127.0.0.2 判成"不是回环"，
+# 而 Windows 的 [System.Uri] 认整个 127.0.0.0/8、会把 host 归一成小写、会剥掉 UserInfo。
+# 输出一个字段：host（小写、去掉方括号与端口、去掉 userinfo）。解析不出来就输出空。
+_url_host() {
+    _uh_u="$1"
+    case "$_uh_u" in
+        *://*) _uh_u="${_uh_u#*://}" ;;
+    esac
+    _uh_u="${_uh_u%%/*}"
+    _uh_u="${_uh_u%%\?*}"
+    _uh_u="${_uh_u%%#*}"
+    # userinfo：最后一个 @ 之后才是主机（密码里可能有 @）
+    case "$_uh_u" in
+        *@*) _uh_u="${_uh_u##*@}" ;;
+    esac
+    case "$_uh_u" in
+        '['*)
+            # 方括号 IPv6：[::1]:7078 —— 取方括号里的内容。
+            # 不能用 %%:* 截端口：它会在第一个冒号处切断，"[::1]" 变成 "["。
+            _uh_u="${_uh_u#[}"
+            _uh_u="${_uh_u%%]*}"
+            ;;
+        *)
+            # 没有方括号：最后一个冒号之后是端口（也覆盖 :::1 这种畸形写法）
+            case "$_uh_u" in
+                *:*) _uh_u="${_uh_u%%:*}" ;;
+            esac
+            ;;
+    esac
+    # Windows 的 URI 解析把 host 归一成小写，这里跟上
+    printf '%s' "$_uh_u" | tr '[:upper:]' '[:lower:]'
+}
+
+is_loopback_url() {
+    [ -n "${1:-}" ] || return 1
+    _ilu_host=$(_url_host "$1")
+    [ -n "$_ilu_host" ] || return 1
+    # 127.0.0.0/8 整段都算回环：Windows 的 Uri.IsLoopback 就这么判，只认 127.0.0.1 会分叉。
+    case "$_ilu_host" in
+        127.*|localhost|::1) return 0 ;;
+    esac
+    return 1
+}
+
 # 把一段文字按终端显示宽度截断，超出时补省略号。
 # 必须按"字符"走而不是按字节切：中文占两格，按字节切会把一个汉字切成半个，
 # 屏幕上就是乱码。逐字符累加显示宽度，超过就停。
@@ -173,17 +222,60 @@ _truncate_width() {
     printf '%s…' "${_tw_s:0:_tw_acc}"
 }
 
-STYLE_ROLES="title heading item key value cmd ok warn dim text"
-style_color() {
+# 配色分两层：角色 -> 颜色名 -> 本平台怎么写。
+#
+# 为什么要多这一层名字：两侧写颜色的方式毫无共同语言（Windows 侧是 [ConsoleColor]
+# 枚举，这里是 ANSI 数字），于是"两端口径一致"只能靠人记得住，门禁也只比得了角色名、
+# 一个颜色都比不了——实测就这么放过去一次：`cmd` 从绿改成了青，命令与标题同色，
+# 用户在屏幕上一眼分不清，两侧门禁却全绿。多这一层之后，两侧共享的是颜色名，
+# 门禁直接比颜色名，"换个颜色只改一处"和"两侧不许分叉"才同时成立。
+# 颜色名 -> ANSI 前景色码。
+# 颜色名清单：与上面 case 的分支一一对应（自检核对"每个角色的颜色名都在里面"）。
+# 写在映射函数旁边，因为这就是那张表的目录；挪到别处放就会漂。
+STYLE_COLOR_NAMES="cyan brightwhite green yellow darkgray none"
+
+style_code_of_name() {
     case "$1" in
-        title|heading) echo "36" ;;
-        item|key|value) echo "97" ;;
-        cmd) echo "36" ;;
-        ok) echo "32" ;;
-        warn) echo "33" ;;
-        dim) echo "90" ;;
-        *) echo "" ;;
+        cyan)        echo "36" ;;
+        brightwhite) echo "97" ;;
+        green)       echo "32" ;;
+        yellow)      echo "33" ;;
+        darkgray)    echo "90" ;;
+        *)           echo "" ;;
     esac
+}
+
+# 角色 -> 颜色名，一条记录一个角色（空格分隔）。
+# cmd 必须是绿色，且不许与其余任何角色同色：屏幕上的绿色就是"这一整行能复制去跑"。
+# 用户每换一屏都要重新认这件事，所以它是可读性问题，不是审美问题。
+# 门禁 6 与两侧自检都钉住这两条，改色当场红。
+STYLE_MAP="title:cyan heading:cyan item:brightwhite key:brightwhite value:brightwhite cmd:green ok:green warn:yellow dim:darkgray text:none"
+# 角色名清单从表里派生，不另抄一份（抄一份就会有一天两边不一样）。
+STYLE_ROLES=""
+for _sr_rec in $STYLE_MAP; do
+    STYLE_ROLES="$STYLE_ROLES ${_sr_rec%%:*}"
+done
+STYLE_ROLES="${STYLE_ROLES# }"
+unset _sr_rec
+
+# 角色 -> 颜色名。没声明的角色一律按 none（不写颜色），不报错也不乱猜。
+style_color_of_role() {
+    case " $STYLE_MAP " in
+        *" $1:"*) ;;
+        *) echo "none"; return 0 ;;
+    esac
+    for _scr_rec in $STYLE_MAP; do
+        case "$_scr_rec" in
+            "$1":*) echo "${_scr_rec#*:}"; unset _scr_rec; return 0 ;;
+        esac
+    done
+    unset _scr_rec
+    echo "none"
+}
+
+# 角色 -> ANSI 码。渲染只认这一处，别处不许再写颜色字面量。
+style_color() {
+    style_code_of_name "$(style_color_of_role "$1")"
 }
 # 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
 # stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。

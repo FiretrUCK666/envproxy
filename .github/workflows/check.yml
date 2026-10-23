@@ -881,17 +881,85 @@ jobs:
           # 留着假承诺比没有承诺更糟：下一个人会相信已经有人看着了，于是放心只改一侧。
           # 这三句注释都写着"与 Win 侧同形，门禁 6 核对"，而门禁里一个都没提到过它们。
 
-          # (1) 配色角色表：两侧角色名集合必须相同（顺序无关）。
-          $srWin = Grab $ps '\$StyleRoles\s*=\s*@\(([^)]*)\)' 'Win 配色角色表'
-          $srMac = Grab $sh 'STYLE_ROLES="([^"]*)"' 'Mac 配色角色表'
-          if ((-not $srWin) -or (-not $srMac)) { $fail = 1 }
+          # (1) 配色：两层结构，两侧共享颜色名。
+          #
+          # 只比角色名是不够的——实测就这么放过去一次：`cmd` 从绿改成青，
+          # 命令与标题同色，用户在屏幕上一眼分不清，而两侧角色名一个字都没变，门禁全绿。
+          # 现在两侧都声明成 "角色 -> 颜色名"，共享的是颜色名（平台写法各自映射），
+          # 于是可以逐角色比颜色值，也可以钉住"命令色必须一眼可辨"。
+          # 角色清单从**映射表**派生：两侧各有一张唯一的表，运行期的角色名变量
+          # 只是它的键。门禁读派生结果就成了"读第二处真相"，派生绕一圈就找不到落点。
+          $mapWinRaw = Grab $ps '\$StyleMap\s*=\s*\[ordered\]@\{([^}]*)\}' 'Win 配色映射表'
+          $mapMacRaw = Grab $sh 'STYLE_MAP="([^"]*)"' 'Mac 配色映射表'
+          if ((-not $mapWinRaw) -or (-not $mapMacRaw)) { $fail = 1 }
           else {
-            $setWin = @([regex]::Matches($srWin, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
-            $setMac = @($srMac -split '\s+' | Where-Object { $_ } | Sort-Object)
+            # Win 表项形如  title   = 'cyan'  # 注释
+            $colWin = [ordered]@{}
+            foreach ($m in [regex]::Matches($mapWinRaw, "(?m)^\s*([a-z]+)\s*=\s*'([a-z]+)'")) {
+              $colWin[$m.Groups[1].Value] = $m.Groups[2].Value
+            }
+            $colMac = [ordered]@{}
+            foreach ($rec in ($mapMacRaw -split '\s+')) {
+              if ($rec -match '^([a-z]+):([a-z]+)$') { $colMac[$Matches[1]] = $Matches[2] }
+            }
+            $setWin = @($colWin.Keys | Sort-Object)
+            $setMac = @($colMac.Keys | Sort-Object)
             if (($setWin -join ',') -ne ($setMac -join ',')) {
               Write-Host ("配色角色表两侧不一致：Win [{0}] / Mac [{1}]" -f ($setWin -join ' '), ($setMac -join ' '))
               $fail = 1
             } else { Write-Host ("配色角色表两侧一致：{0} 个" -f $setWin.Count) }
+            if ($setWin.Count -lt 10) {
+              Write-Host ("配色映射解析出来的角色太少（{0} 个），解析规则可能失效了" -f $setWin.Count)
+              $fail = 1
+            }
+            if ($true) {
+              $colDiff = @()
+              foreach ($r in $setWin) {
+                if ($colWin[$r] -ne $colMac[$r]) { $colDiff += ($r + ' Win=' + $colWin[$r] + ' Mac=' + $colMac[$r]) }
+              }
+              if ($colDiff.Count) {
+                Write-Host ("配色两侧不一致：" + ($colDiff -join '；'))
+                $fail = 1
+              } else { Write-Host ("配色两侧一致：{0} 个角色颜色名相同" -f $setWin.Count) }
+              # 颜色名必须都在各自的映射表里：写错一个名字不会报错，只会静默变默认色。
+              $winCodes = Grab $ps '\$ColorCodes\s*=\s*@\{([^}]*)\}' 'Win 颜色映射表'
+              $macColorNames = Grab $sh 'STYLE_COLOR_NAMES="([^"]*)"' 'Mac 颜色名清单'
+              $knownWin = @()
+              if ($winCodes) { $knownWin = @([regex]::Matches($winCodes, "(?m)^\s*([a-z]+)\s*=") | ForEach-Object { $_.Groups[1].Value }) }
+              $knownMac = @()
+              if ($macColorNames) { $knownMac = @($macColorNames -split '\s+' | Where-Object { $_ }) }
+              if (-not $winCodes) { Write-Host 'Win 侧没有 $ColorCodes 映射表'; $fail = 1 }
+              if (-not $macColorNames) { Write-Host 'Mac 侧没有 STYLE_COLOR_NAMES 清单'; $fail = 1 }
+              $unknown = @()
+              foreach ($r in $setWin) {
+                if ($knownWin -notcontains $colWin[$r]) { $unknown += ('Win ' + $r + '=' + $colWin[$r]) }
+                if ($knownMac -notcontains $colMac[$r]) { $unknown += ('Mac ' + $r + '=' + $colMac[$r]) }
+              }
+              if ($unknown.Count) { Write-Host ("颜色名不在映射表里（会静默变默认色）：" + ($unknown -join '；')); $fail = 1 }
+              # 两侧颜色名清单本身也要一致：否则"同一批名字"是假的。
+              if ($winCodes -and $macColorNames) {
+                if (((@($knownWin) | Sort-Object) -join ',') -ne ((@($knownMac) | Sort-Object) -join ',')) {
+                  Write-Host ("颜色名清单两侧不一致：Win [{0}] / Mac [{1}]" -f ((@($knownWin) | Sort-Object) -join ' '), ((@($knownMac) | Sort-Object) -join ' '))
+                  $fail = 1
+                }
+              }
+              # 可读性契约：**同一屏上**命令色不许与其他角色同色。
+              # 这一条就是用户报的那件事的可测形式——"哪行能整行复制去跑"全靠颜色区分。
+              # 只比同一屏内的角色，不比整张表：cmd 与 ok 都是绿色是允许的，
+              # 它们从不同屏（ok 在安装/状态/卸载页，cmd 在帮助页）。
+              # 表里两两比会逼着改 ok 的颜色，而"绿 = 做成了"是通用语义，不该为这个让路。
+              # 同屏关系由两侧自检用真实渲染结果核对（比这里读源码准确得多）；
+              # 这里守的是更窄、也更硬的一条：命令色不许等于**标题色**。
+              # 标题在每一屏的最上面、命令在每一屏的中段，它们必然同屏——
+              # 这正是用户看到"命令和标题一个颜色"时说的那件事。
+              if ($colWin['cmd'] -eq $colWin['title']) {
+                Write-Host ("命令色与标题色相同（{0}）：屏幕上分不清哪行是能复制去跑的命令" -f $colWin['cmd'])
+                $fail = 1
+              } elseif ($colWin['cmd'] -eq $colWin['heading']) {
+                Write-Host ("命令色与段标题色相同（{0}）：段标题与命令必然同屏，会混成一片" -f $colWin['cmd'])
+                $fail = 1
+              } else { Write-Host ("命令色与标题/段标题都不同（命令 {0}，标题 {1}）" -f $colWin['cmd'], $colWin['title']) }
+            }
           }
 
           # (2) 帮助行标记集：两侧必须认同一批标记（顺序无关）。
@@ -1009,6 +1077,8 @@ jobs:
           }
           # e) 两侧变量名必须是同一批（只数个数挡不住改名或写错名）
           $winNames = @((Grab $ps '\$ProxyVarNames\s*=\s*@\(([^)]*)\)' 'Windows 变量集合') -split ',' |
+            ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ })
+          $winAddrVars = @((Grab $ps '\$ProxyAddrVarNames\s*=\s*@\(([^)]*)\)' 'Windows 地址变量集合') -split ',' |
             ForEach-Object { $_.Trim().Trim('"') } | Where-Object { $_ })
           $macUp = @($macNames | Where-Object { $_ -ceq $_.ToUpper() })
           if ((($winNames | Sort-Object) -join ',') -ne (($macUp | Sort-Object) -join ',')) {
@@ -1399,6 +1469,74 @@ jobs:
           if ($pkgMac -notmatch 'update\.inprogress') { Write-Host 'Mac 侧覆盖安装区没有进行中标记'; $fail = 1 }
           if ($pkgWin -notmatch 'Remove-Item -LiteralPath \$marker') { Write-Host 'Win 侧成功后没有撤掉进行中标记'; $fail = 1 }
           if ($pkgMac -notmatch 'rm -f "\$_pmark"') { Write-Host 'Mac 侧成功后没有撤掉进行中标记'; $fail = 1 }
+
+          # j) README 两份"安装后多出哪些东西"的表，必须覆盖代码里的每一个运行时文件。
+          # 这一条是踩出来的：monitor.beat / version.cache / stopped.intent /
+          # update.inprogress / stop.flag 在两侧都真实存在，两份 README 一个都没写。
+          # 用户看到家目录或安装目录里冒出几个不认识的文件，无从判断该不该删。
+          $runWin = @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:MonitorDir|LauncherDir)\s+"([^"$]+)"') |
+                      ForEach-Object { $_.Groups[1].Value })
+          $runMac = @([regex]::Matches($sh, '\$(?:MONITOR_DIR|ENVPROXY_HOME)/([A-Za-z0-9._-]+)"') |
+                      ForEach-Object { $_.Groups[1].Value })
+          $runWin = @($runWin | Sort-Object -Unique)
+          $runMac = @($runMac | Sort-Object -Unique)
+          if ($runWin.Count -lt 5) { Write-Host ("Win 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runWin.Count); $fail = 1 }
+          if ($runMac.Count -lt 5) { Write-Host ("Mac 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runMac.Count); $fail = 1 }
+          $zhDoc = Get-Content 'README.md' -Raw -Encoding UTF8
+          $enDoc = Get-Content 'README.en.md' -Raw -Encoding UTF8
+          $missingDoc = @()
+          foreach ($n in $runWin) {
+            if ($zhDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 少了 ' + $n) }
+            if ($enDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 少了 ' + $n) }
+          }
+          foreach ($n in $runMac) {
+            if ($zhDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 少了 ' + $n) }
+            if ($enDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 少了 ' + $n) }
+          }
+          if ($missingDoc.Count) {
+            Write-Host '安装后多出的运行时文件没在文档里交代清楚：'
+            foreach ($m in ($missingDoc | Select-Object -Unique)) { Write-Host ('  ' + $m) }
+            $fail = 1
+          } else {
+            Write-Host ("运行时文件清单两侧已落文档：Win {0} 个 / Mac {1} 个" -f $runWin.Count, $runMac.Count)
+          }
+
+          # k) 手抄的变量名不许漂。
+          # locator 两份与内嵌的 Git Bash 模板结构上必须自带数据：定位器跑在安装根
+          # 已经消失的时候（库都不在身边），内嵌模板跑在 bash 里。所以不能改成引用变量表。
+          # 改成机械核对——这三份副本里出现的代理变量名，必须与 $ProxyVarNames /
+          # PROXY_VAR_NAMES 口径一致。缺一个的后果是"某个变量永远清不掉"，
+          # 而它只在特定操作下才暴露。
+          $canon = @($winNames | Sort-Object)
+          $locWin = Get-Content 'win/locator.ps1' -Raw -Encoding UTF8
+          $locMac = Get-Content 'mac/locator.sh' -Raw -Encoding UTF8
+          $tplWin = $ps   # 内嵌模板住在 runtime，已经拼进 $ps
+          foreach ($pair in @(@('win/locator.ps1', $locWin), @('mac/locator.sh', $locMac))) {
+            $found = @([regex]::Matches($pair[1], '\b(HTTP_PROXY|https?_proxy|HTTPS_PROXY|ALL_PROXY|all_proxy|NO_PROXY|no_proxy|NODE_USE_ENV_PROXY)\b') |
+                       ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+            # 定位器只清**代理地址**类变量，故意不碰 NO_PROXY：
+            # 它是登录期独立脚本，跑在安装根可能已经消失的时候，读不到安装快照。
+            # 而 NO_PROXY 的回收必须"逐项减掉我们加的默认项、保留使用者自己加的那些"，
+            # 那需要快照做反证——读不到就猜，猜必错一个（把使用者的内网例外删掉）。
+            # 所以这里比的是地址类变量（Win 3 个 / Mac 6 个），并钉住它不许擅自加上 NO_PROXY。
+            $want = if ($pair[0] -like 'win/*') { @($winAddrVars | Sort-Object) } else { @($pavSet | Sort-Object) }
+            $miss = @($want | Where-Object { $found -notcontains $_ })
+            if ($miss.Count) {
+              Write-Host ("{0} 少了地址类变量：[{1}]——漏一个的后果是那个变量永远清不掉" -f $pair[0], ($miss -join ' '))
+              $fail = 1
+            } else { Write-Host ("{0} 的地址类变量齐全：{1} 个" -f $pair[0], $want.Count) }
+            if ($found -notcontains 'NODE_USE_ENV_PROXY') {
+              Write-Host ("{0} 没有处理 NODE_USE_ENV_PROXY：这个开关不清，Node 系工具会一直认为该走代理" -f $pair[0])
+              $fail = 1
+            }
+            # NO_PROXY 不许在这里出现：定位器读不到安装快照，而 NO_PROXY 的回收
+            # 必须逐项减、保留使用者自己加的那些——读不到反证就只能猜，猜必错一个。
+            $npHit = @($found | Where-Object { $_ -eq 'NO_PROXY' -or $_ -eq 'no_proxy' })
+            if ($npHit.Count) {
+              Write-Host ("{0} 不该处理 NO_PROXY：它读不到安装快照，猜必错一个" -f $pair[0])
+              $fail = 1
+            }
+          }
 
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'

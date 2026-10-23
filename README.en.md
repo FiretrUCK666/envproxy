@@ -500,13 +500,24 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | locator; the login item uses it to find the program |
 | | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
 | `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
-| `HKCU\Software\EnvProxy` | `Owned` and `Backup` keys | what we wrote, and what yours were |
+| `HKCU\Software\EnvProxy` | `ScriptPath` + `Owned`/`Backup` | where it is; what we wrote; yours |
 | `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
 | Your PowerShell profile | one block marked `EnvProxy` | syncs on every return to the prompt |
 | Your Git Bash `~/.bashrc` | one block, same markers | Git Bash reads the mirror on every prompt |
-| `win\monitor\` | `monitor.log`, `monitor.pid` | the decisions it made, and the process id |
+| `~\.envproxy\` | `prompt-sync.sh` | what Git Bash reads on every prompt |
+| `win\monitor\` | `monitor.log` | the decisions it made (black box) |
+| | `monitor.pid` | the process id of the background program |
+| | `monitor.beat` | heartbeat: process id plus start time |
+| | `version.cache` | cached version, written by the background program |
+| | `stopped.intent` | the record that you stopped it on purpose |
+| | `stop.flag` | temporary stop signal, deleted after use |
+| | `update.inprogress` | written while program files are being replaced |
+
+The items in `win\monitor\` are local runtime state. Deleting them is harmless (the background program recreates them) and does not touch the program files.
 
 Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
+
+`~\.envproxy\` contains **exactly one file, `prompt-sync.sh`**. Anything else appearing there means something other than this tool wrote it — uninstall names each one and reports it, but does not delete it for you (it may be yours).
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder, the runtime folder, and the folder root">
 
@@ -627,8 +638,18 @@ Installing writes files to three places. **None of them is the folder you downlo
 | `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
+| | `version.cache` | cached version, written by the background program |
+| | `stopped.intent` | the record that you stopped it on purpose |
+| | `stop.flag` | temporary stop signal, deleted after use |
+| | `update.inprogress` | written while program files are being replaced |
+| | `.lock` | single-instance lock, so two copies never run at once |
+| | `.op.lock` | one install/uninstall/stop/update at a time |
 
 Your shell config files (`~/.zshrc`, `~/.bashrc` and the like) also gain one small block, marked `EnvProxy` at both ends; removing that block turns off auto-follow for that terminal.
+
+The items in `mac/monitor/` are local runtime state. Deleting them is harmless (the background program recreates them) and does not touch the program files.
+
+**`proxy.env`, `owned.env` and `prev.env` are macOS-only**: Windows never writes them and does not recognise them. The Windows `~\.envproxy\` holds only `prompt-sync.sh`.
 
 **The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
 

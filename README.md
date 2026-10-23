@@ -494,13 +494,24 @@ EnvProxy\
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | 定位脚本，登录时用它找到程序 |
 | | `terminal.env` | 给 Git Bash 看的镜像文件：当前状态和代理地址 |
 | `HKCU\Environment` | 那 5 个代理变量 | 真正让终端走代理的地方 |
-| `HKCU\Software\EnvProxy` | `Owned`、`Backup` 两个键 | 记下我们写过哪些值、你原来的值是什么 |
+| `HKCU\Software\EnvProxy` | `ScriptPath` 值 + `Owned`、`Backup` 两键 | 程序在哪；我们写过什么；你的原值 |
 | `HKCU\...\Run` | 一条启动项 | 登录时自动把后台程序拉起来 |
 | PowerShell 的配置文件 | 一小段（首尾有 `EnvProxy` 标记） | 每次回到提示符时同步一次 |
 | `Git Bash 的 ~/.bashrc` | 一小段（同样的标记） | Git Bash 每次回到提示符读镜像文件 |
-| `win\monitor\` | `monitor.log`、`monitor.pid` | 它做过的判断、后台程序的进程号 |
+| `~\.envproxy\` | `prompt-sync.sh` | Git Bash 每次回到提示符要读的那个脚本，`.bashrc` 里那行指向它 |
+| `win\monitor\` | `monitor.log` | 它做过的判断（黑匣子，排查问题时看它） |
+| | `monitor.pid` | 后台程序的进程号 |
+| | `monitor.beat` | 心跳：进程号 + 它的启动时刻。判后台还活着没，光看进程号不够——号会被系统回收后重用 |
+| | `version.cache` | 版本号缓存，后台程序定期刷新。状态页只读它，所以**查看状态永远不联网** |
+| | `stopped.intent` | "是使用者自己点的停止"这条意图。没有它，崩溃和被停手事后分不出来 |
+| | `stop.flag` | 跨位置停止用的临时信号，用后即删 |
+| | `update.inprogress` | 覆盖程序文件时的进行中标记，正常结束会删掉；中途断电留下它就是证据 |
+
+`win\monitor\` 里那几项都是本机运行时状态，删掉也没关系（后台程序会重新建），不影响程序文件。
 
 卸载时上面这些全部清除，只保留你选择留下的 `monitor.log`。
+
+`~\.envproxy\` 里**只会有 `prompt-sync.sh` 这一个文件**。别的东西出现在那里，说明有本工具之外的东西写过它——卸载时会逐个点名报出来，但不会替你删（可能是你自己放的）。
 
 <img src="./assets/readme/boundary.svg" width="100%" alt="三个区域：程序目录、运行时目录、文件夹最外层">
 
@@ -621,8 +632,18 @@ Windows 写注册表并广播通知，Mac 写 `~/.envproxy/proxy.env` 并调用 
 | `~/Library/LaunchAgents/` | 一个 `*.plist` | 开机自启项，登录时把后台程序拉起来 |
 | 项目文件夹的 `mac/monitor/` | `monitor.log` | 它做过的判断（黑匣子） |
 | | `monitor.pid` | 后台程序的进程号 |
+| | `version.cache` | 版本号缓存，后台程序定期刷新。状态页只读它，所以**查看状态永远不联网** |
+| | `stopped.intent` | "是使用者自己点的停止"这条意图。没有它，崩溃和被停手事后分不出来 |
+| | `stop.flag` | 跨位置停止用的临时信号，用后即删 |
+| | `update.inprogress` | 覆盖程序文件时的进行中标记，正常结束会删掉；中途断电留下它就是证据 |
+| | `.lock` | 后台程序的单实例锁，防止同时跑两份 |
+| | `.op.lock` | 安装/卸载/停止/更新共用的操作锁，同一时刻只允许一个在跑 |
 
 `~/.zshrc`、`~/.bashrc` 这类配置文件里也会多出一小段（首尾都有 `EnvProxy` 标记），删掉那一段等于关掉那个终端的自动跟随。
+
+`mac/monitor/` 里那几项都是本机运行时状态，删掉也没关系（后台程序会重新建），不影响程序文件。
+
+**`proxy.env`、`owned.env`、`prev.env` 这三个是 macOS 独有的**：Windows 侧从不写它们、也不认识它们。Windows 的 `~\.envproxy\` 里只有 `prompt-sync.sh`。
 
 **项目文件夹可以随便搬**：下次登录会自动重新定位，备份文件夹不会被误选。卸载时上面这些全部清除，只保留你选择留下的 `monitor.log`。
 

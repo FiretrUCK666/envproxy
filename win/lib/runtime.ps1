@@ -12,13 +12,13 @@
 #       因此：移动文件夹后什么都不用点，下次开机自动完成重新定位。
 $RunKeyPath       = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
 $RunKeyName       = "EnvProxyMonitor"
-$ScriptPathRegKey = "HKCU:\Software\EnvProxy"
-# 用户原值快照：安装时记下被覆盖前的用户级代理变量，卸载时按快照还原。
-# 与 $ScriptPathRegKey 父子关系——卸载清注册表键时连同删掉，不留痕迹。
-$PrevEnvRegKey   = "HKCU:\Software\EnvProxy\Backup"
-# 我们写下的值（变量名 -> 值），终端同步的钩子据此判断"当前值是不是我们的"。
-# 与 Mac 侧 ~/.envproxy/owned.env 同义：不存在就说明不是我们写的，一个都不许删。
-$OwnedRegKey     = "HKCU:\Software\EnvProxy\Owned"
+# 下面三个注册表路径的子键声明在 base 层（$ScriptPathRegSubKey / $PrevEnvSubKey /
+# $OwnedRegSubKey），这里按需现算，不另抄一份。
+#   路径记录：定位器据此找到脚本现在的位置
+#   用户原值快照：安装时记下被覆盖前的用户级代理变量，卸载时按快照还原；
+#                 与路径记录是父子关系——卸载清注册表键时连同删掉，不留痕迹
+#   我们写下的值（变量名 -> 值）：终端同步的钩子据此判断"当前值是不是我们的"。
+#                 与 Mac 侧 ~/.envproxy/owned.env 同义：没有这份记录就一个都不许删。
 # 顶层取值必须加载期安全：CI 自检会在 Linux 上点源本文件测纯函数，
 # 那里没有 LOCALAPPDATA。运行时只在 Windows 走，兜底值走不到业务逻辑。
 $_localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { [System.IO.Path]::GetTempPath() }
@@ -71,10 +71,10 @@ function Update-ScriptPathRecord {
     # 只在键不存在时才建。注册表上的 New-Item -Force 会把这个键**清空重建**，
     # 连带删掉 Backup 快照——监控每次启动都调本函数，快照会在装上后一两秒内就没了，
     # 卸载时便无值可还原，使用者手设的代理配置凭空消失。
-    if (-not (Test-RegKey $ScriptPathRegKey)) {
-        New-Item -Path $ScriptPathRegKey -Force -ErrorAction SilentlyContinue | Out-Null
+    if (-not (Test-RegKey (Get-ScriptPathRegKeyPath))) {
+        New-Item -Path (Get-ScriptPathRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null
     }
-    Set-ItemProperty -Path $ScriptPathRegKey -Name "ScriptPath" -Value $ScriptPath -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path (Get-ScriptPathRegKeyPath) -Name "ScriptPath" -Value $ScriptPath -ErrorAction SilentlyContinue
 }
 
 # 自启动自愈：让固定位置的自启动配置**与当前代码生成的内容一致**——不只是"存在"。
@@ -212,8 +212,8 @@ function Get-ProfileBlockLines {
         ("    `$__epNames = @(" + $names + ")"),
         '    $__epSync = {',
         '        try {',
-        '            $__epReg = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment", $false)',
-        '            $__epOwn = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Software\EnvProxy\Owned", $false)',
+        ("            `$__epReg = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(`"" + $UserEnvSubKey + "`", `$false)"),
+        ("            `$__epOwn = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(`"" + $OwnedRegSubKey + "`", `$false)"),
         '            if ($null -ne $__epReg) {',
         '                if ($env:ENVPROXY_TERM -eq "off") {',
         '                    # Direct mode: clear only values we actually wrote.',

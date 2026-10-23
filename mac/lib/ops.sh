@@ -77,6 +77,10 @@ install_envproxy() {
     # 左边那一列按最长条目补齐，不靠手敲空格：改一个字就整列歪掉，
     # 而"歪一格"这种事只有人眼看得出来。与 Windows 侧同一套做法。
     style_out ok "装好了。之后怎么用："
+    # 每一行三格：左列标签（暗）/ 右列说明（正文色）/ 要照抄的命令（命令色）。
+    # 整行一个颜色就没有层次：用户看不出哪一段能复制。命令单独列一格，
+    # 而不是靠正则从整行里认——"在它里面执行  export ..." 开头不是命令，
+    # 会被整行判成说明。与 Windows 侧同一套三格结构。
     _tip_a1="新开的终端 / 程序"
     _tip_a2="一直开着的窗口"
     _tip_a3="装之前就开着的窗口"
@@ -84,17 +88,31 @@ install_envproxy() {
     _tip_a5="改回跟着翻墙软件走"
     _tip_a6="忘了怎么用"
     _tip_w=$(printf '%s\n' "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6" | _max_width_of)
-    # 前三条是"你会遇到的情况"，正常亮度；后三条是"想改的时候怎么做"，压暗一档。
-    # 与 Windows 侧同一套分法：按"这一行右边有没有要照抄的命令"分，
-    # 而不是逐条判名字——以后加一条也会自动归到对的一边。
     _tip_pad=$(printf '%*s' "$_tip_w" '')
-    style_out ok "   $(_menu_cell_pad "$_tip_a1" "$_tip_w")   自动就是对的，什么都不用做。"
-    style_out ok "   $(_menu_cell_pad "$_tip_a2" "$_tip_w")   敲一下回车就跟上。"
-    style_out ok "   $(_menu_cell_pad "$_tip_a3" "$_tip_w")   重开一个，或者手动加载一次"
-    style_out ok "   $_tip_pad   菜单选 4（帮助）第 2 条，有现成命令。"
-    style_out dim "   $(_menu_cell_pad "$_tip_a4" "$_tip_w")   在它里面执行  export ENVPROXY_TERM=off"
-    style_out dim "   $(_menu_cell_pad "$_tip_a5" "$_tip_w")   unset ENVPROXY_TERM"
-    style_out dim "   $(_menu_cell_pad "$_tip_a6" "$_tip_w")   菜单选 4（帮助）。"
+    # $1=左列 $2=说明 $3=命令（可空）
+    # 三段各上各的色，所以要拼成**一行**再输出：style_out 一次是一整行，
+    # 分开调两次就成了两行（标签一行、说明一行），版面会散掉。
+    # 这里手工拼转义序列，与 _seg 的判据同源（style_color 一个来源）。
+    _tip_row() {
+        _tr_left=$(if [ -n "$1" ]; then _menu_cell_pad "$1" "$_tip_w"; else printf '%s' "$_tip_pad"; fi)
+        if [ ! -t 1 ]; then
+            # 不是终端就纯文本，别往日志里塞控制字符（与 style_out 同一判据）
+            if [ -n "$3" ]; then printf '   %s   %s  %s\n' "$_tr_left" "$2" "$3"
+            else printf '   %s   %s\n' "$_tr_left" "$2"; fi
+            return 0
+        fi
+        _tr_dim=$(style_color dim)
+        _tr_cmd=$(style_color cmd)
+        printf '\033[%sm   %s   \033[0m%s' "$_tr_dim" "$_tr_left" "$2"
+        if [ -n "$3" ]; then printf '  \033[%sm%s\033[0m\n' "$_tr_cmd" "$3"; else printf '\n'; fi
+    }
+    _tip_row "$_tip_a1" "自动就是对的，什么都不用做。" ""
+    _tip_row "$_tip_a2" "敲一下回车就跟上。" ""
+    _tip_row "$_tip_a3" "重开一个，或者手动加载一次" ""
+    _tip_row "" "菜单选 4（帮助）第 2 条，有现成命令。" ""
+    _tip_row "$_tip_a4" "在它里面执行" "export ENVPROXY_TERM=off"
+    _tip_row "$_tip_a5" "在它里面执行" "unset ENVPROXY_TERM"
+    _tip_row "$_tip_a6" "菜单选 4（帮助）。" ""
 }
 
 uninstall_envproxy() {
@@ -176,6 +194,10 @@ uninstall_envproxy() {
     if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位脚本仍在（$LOCATOR_PATH）；"; fi
     if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在（$PROXY_ENV）；"; fi
     if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在（$PREV_ENV）；"; fi
+    # owned.env 上面删过，但复检原来没查它——删失败时报"已完成"，而它记着
+    # "我们写下的值"，留着会让终端钩子继续认为代理是我们设的。
+    # 复检项必须与删除项一一对应，删了不查等于没删。
+    if [ -f "$OWNED_ENV" ]; then _dirty="$_dirty 归属记录仍在（$OWNED_ENV）；"; fi
     if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
     # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
@@ -1025,47 +1047,44 @@ TOPIC
     return 0
 }
 
-# 帮助目录屏（带配色）。编号用命令色、标题用强调色、底部说明用灰：
-# 与主菜单同一套三层区分，用户在两个页面之间切换时不用重新认一遍。
-show_help_index_colored() {
-    _shic_ver=$(get_local_version 2>/dev/null || true)
-    [ -z "$_shic_ver" ] && _shic_ver="未知"
-    _SEG_COLORED=1
+# 帮助目录屏的内容。整屏只有这一份：纯文本与彩屏都走它，
+# 于是"改一个字只改一处"，也不可能出现"屏幕上有、测试里没有"。
+#
+# 编号用命令色、标题用强调色、底部说明用灰：与主菜单同一套三层区分，
+# 用户在两个页面之间切换时不用重新认一遍。
+# 参数 = 1 上色，= 0 纯文本；内容只有这一份。
+_render_help_index() {
+    _rhi_colored="$1"
+    _rhi_ver=$(get_local_version 2>/dev/null || true)
+    [ -z "$_rhi_ver" ] && _rhi_ver="未知"
+    _SEG_COLORED="$_rhi_colored"
     _SEG_LINE=""
     _seg title "================ EnvProxy 帮助 ================"
     _line_flush
     _line_blank
     _seg text "  按你遇到的问题挑一条："
     _line_flush
-    for _shic_k in "${HELP_TOPIC_KEYS[@]}"; do
-        _seg cmd "    $_shic_k"
-        _seg value "  $(_help_topic_title "$_shic_k")"
+    for _rhi_k in "${HELP_TOPIC_KEYS[@]}"; do
+        _seg cmd "    $_rhi_k"
+        _seg value "  $(_help_topic_title "$_rhi_k")"
         _line_flush
     done
     _line_blank
-    _seg dim "  本机版本 v$_shic_ver"
+    _seg dim "  本机版本 v$_rhi_ver"
+    _line_flush
     _line_blank
     _seg dim "  输编号查看    直接回车 = 回主菜单"
     _line_flush
 }
 
-# 帮助目录的纯文本（非交互与自检用）。
-# 注意：目录页的彩屏版（show_help_index_colored）与本函数**不是**同源——
-# 两者各自硬编码了抬头、导语、本机版本、底部提示四段文案，改一处必须同改另一处。
+# 帮助目录屏（带配色）。
+show_help_index_colored() {
+    _render_help_index 1
+}
+
+# 帮助目录的纯文本（非交互与自检用）。与彩屏同一份内容，只差上不上色。
 format_help_index() {
-    _hi_hv=$(get_local_version 2>/dev/null || true)
-    [ -z "$_hi_hv" ] && _hi_hv="未知"
-    echo "================ EnvProxy 帮助 ================"
-    echo ""
-    echo "  按你遇到的问题挑一条："
-    echo ""
-    for _hi_k in "${HELP_TOPIC_KEYS[@]}"; do
-        echo "    $_hi_k  $(_help_topic_title "$_hi_k")"
-    done
-    echo ""
-    echo "  本机版本 v$_hi_hv"
-    echo ""
-    echo "  输编号查看    直接回车 = 回主菜单"
+    _render_help_index 0
 }
 
 # 单个主题：正文前后各留一行，底部固定给返回方式。

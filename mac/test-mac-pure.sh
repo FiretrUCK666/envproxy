@@ -1055,6 +1055,51 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         esac
         _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"
     done
+    # 配色契约：命令色必须一眼可辨。
+    #
+    # 上面那组只验"标了 c/rc 的行出命令色"，是行为层面的同义反复——
+    # 把 cmd 改成与标题相同的青色，它照样全绿（实测：一条都不红）。
+    # 缺的正是用户实际感受到的那件事：能整行复制的命令，颜色必须与其他角色都不同。
+    _cc_cmd=$(style_color cmd)
+    _selftest_assert_eq "配色: 命令色有值（不是默认前景）" "1" "$([ -n "$_cc_cmd" ] && echo 1 || echo 0)"
+    _selftest_assert_eq "配色: 命令色不等于标题色" "1" "$([ "$_cc_cmd" != "$(style_color title)" ] && echo 1 || echo 0)"
+    _selftest_assert_eq "配色: 命令色不等于段标题色" "1" "$([ "$_cc_cmd" != "$(style_color heading)" ] && echo 1 || echo 0)"
+    _cc_clash=""
+    for _cc_r in item key value warn dim text; do
+        if [ "$_cc_cmd" = "$(style_color "$_cc_r")" ]; then _cc_clash="$_cc_clash $_cc_r"; fi
+    done
+    _selftest_assert_eq "配色: 命令色不与其余角色撞色" "" "$_cc_clash"
+    # 每个角色的颜色名都要在映射表里：写错一个名字不会报错，只会静默变默认色——
+    # 那正是"这一行怎么没颜色"这类毛病的来源。
+    _cc_missing=""
+    for _cc_r in $STYLE_ROLES; do
+        _cc_n=$(style_color_of_role "$_cc_r")
+        case " $STYLE_COLOR_NAMES " in
+            *" $_cc_n "*) ;;
+            *) _cc_missing="$_cc_missing $_cc_r=$_cc_n" ;;
+        esac
+    done
+    _selftest_assert_eq "配色: 每个角色的颜色名都在映射表里" "" "$_cc_missing"
+    # 颜色名清单只是"枚举源"，真正决定渲染的是 style_code_of_name 的 case 分支。
+    # 只比清单的话，把 case 标签写错一个字母（darkgray -> darkgrey）不会有任何断言红，
+    # 而那一档颜色会静默变成"无色"——实测确认过这一点。
+    # 所以这里逐个名字去求编码，要求非空（none 本来就该是空）。
+    _cc_bad=""
+    for _cc_n in $STYLE_COLOR_NAMES; do
+        [ "$_cc_n" = "none" ] && continue
+        if [ -z "$(style_code_of_name "$_cc_n")" ]; then _cc_bad="$_cc_bad $_cc_n"; fi
+    done
+    _selftest_assert_eq "配色: 每个颜色名都能查出编码" "" "$_cc_bad"
+    # 反过来也要查：角色表用到的每一个颜色名，都必须真的解析成非空编码。
+    # 这一条是"清单对、角色对、case 错"的唯一拦法。
+    _cc_unresolved=""
+    for _cc_r in $STYLE_ROLES; do
+        _cc_n=$(style_color_of_role "$_cc_r")
+        [ "$_cc_n" = "none" ] && continue
+        if [ -z "$(style_code_of_name "$_cc_n")" ]; then _cc_unresolved="$_cc_unresolved $_cc_r=$_cc_n"; fi
+    done
+    _selftest_assert_eq "配色: 每个角色都能解析出编码" "" "$_cc_unresolved"
+
     # 从 proxy.env 取端口：IPv6 地址必须取对。
     #
     # 判据是"取最后一段数字"，不是"第一个 :数字"。注入值可能是
@@ -1449,6 +1494,27 @@ EOF
     _selftest_assert_eq "挑原因：404 旁边的配额报配额" "quota" "$(select_update_failure_kind missing quota)"
     _selftest_assert_eq "挑原因：临时目录不可写比超时更该先说" "local" "$(select_update_failure_kind network local)"
     _selftest_assert_eq "挑原因：没有原因时退回连不上" "network" "$(select_update_failure_kind '')"
+    # 接线：重试之后必须走挑选规则，不许把后一次的原因直接盖上去。
+    #
+    # 这条防的是一个真实发生过的 bug：挑选函数与它的断言都在，但调用方
+    # 直接拿重试那次的结论覆盖了整个规则。于是"第一次 quota（配额用尽，等一小时）、
+    # 重试后 server（对方故障）"时报了 server——用户照着等一会儿，怎么等都没用。
+    # 断言测函数怎么挑，测不出"没人调它"，只能读源码看调用点。
+    _ftt_src=$(sed -n '/^fetch_update_text()/,/^}/p' "$SCRIPT_DIR/lib/update.sh")
+    _ftt_line=$(printf '%s\n' "$_ftt_src" | grep -c 'select_update_failure_kind')
+    _selftest_assert_eq "接线：问版本的重试路径走挑选规则" "1" "$_ftt_line"
+    # 回环地址不该经代理重试：给 127.0.0.1 设代理没有意义，只会让本机服务忽好忽坏。
+    _selftest_assert_eq "接线：重试前先判是不是回环地址" "1" "$(printf '%s\n' "$_ftt_src" | grep -c 'is_loopback_url')"
+    _selftest_assert_eq "回环判据: http://127.0.0.1:7078" "True" "$(is_loopback_url 'http://127.0.0.1:7078' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://[::1]:7078" "True" "$(is_loopback_url 'http://[::1]:7078' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://localhost:8080/" "True" "$(is_loopback_url 'http://localhost:8080/' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://LOCALHOST:7890" "True" "$(is_loopback_url 'http://LOCALHOST:7890' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://127.0.0.2:7890" "True" "$(is_loopback_url 'http://127.0.0.2:7890' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://user:pw@localhost:7890" "True" "$(is_loopback_url 'http://user:pw@localhost:7890' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: https://api.github.com/repos/o/r" "False" "$(is_loopback_url 'https://api.github.com/repos/o/r' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://192.168.1.5:7078/" "False" "$(is_loopback_url 'http://192.168.1.5:7078/' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://[2001:db8::1]:8080/" "False" "$(is_loopback_url 'http://[2001:db8::1]:8080/' && echo True || echo False)"
+    _selftest_assert_eq "回环判据: http://localhost.:7890" "False" "$(is_loopback_url 'http://localhost.:7890' && echo True || echo False)"
     # 词表的顺序就是报告优先级：加一个原因不能悄悄改掉建议的先后，
     # 而 missing（指控发布方）必须排在最后。
     _ufk_n=$(printf '%s\n' $UPDATE_FAILURE_KINDS | grep -c . || true)
