@@ -90,8 +90,32 @@ install_envproxy() {
 
 uninstall_envproxy() {
     _purge="$1"
+    _un_yes="${2:-}"
     style_out title "======== EnvProxy 卸载（一键恢复原状）========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
+    # 先问一句再动手。这是整个工具里**唯一不可逆**的动作：会删开机自启、摘终端配置、
+    # 清掉代理变量。而它在菜单里紧挨着「5 停止监控」（那个是可逆的）。
+    # 原来全函数里唯一的提问是"日志要不要保留"——那时监控已停、自启已删、配置已摘，问什么都晚了。
+    # 默认不卸载：危险动作的默认必须是"不做"。与 Windows 侧同一口径。
+    if [ "$_un_yes" = "1" ]; then
+        style_out dim "已确认（--yes）：开始卸载。"
+    elif [ -t 0 ]; then
+        echo "卸载后会删掉开机自启、终端配置和代理变量，恢复成没装之前的样子。"
+        printf '确定要卸载吗？输入 y 回车确认，直接回车 = 取消: '
+        _un_ans=""
+        read -r _un_ans || _un_ans=""
+        case "$_un_ans" in
+            y|Y|yes|YES|是) ;;
+            *) style_out dim "已取消，什么都没改。"; return 0 ;;
+        esac
+    else
+        # 没有可交互的终端：不能问，也不能替使用者答应。
+        # "问不到人就直接做"等于没有确认（Windows 侧实测过一次：管道里跑直接把工具卸干净了）。
+        style_out warn "这里没法问你要不要卸载（没有可交互的终端），所以什么都不会做。"
+        style_out dim "  真的要卸载，请双击 打开菜单.command 选 6；"
+        style_out dim "  或者确认无误后加 --yes：bash envproxy.sh uninstall --yes"
+        return 0
+    fi
     stop_monitor || true
     remove_autorun
     # prompt-sync.sh 是我们装到固定位置的实现，卸载时一并清掉；
@@ -293,9 +317,15 @@ show_status() {
     _local_ver=$(get_local_version || true)
 
     # ---- 结论行 ----
+    # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。
+    # 用途是避免把"从没装过"说成"崩溃/被强制退出"：后者是故障语气，
+    # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
+    # 必须算在结论行**之前**：结论行要用它。
+    if [ -f "$PATH_CONF" ]; then _never_installed=0; else _never_installed=1; fi
     _pb=""
     if [ -z "$_m" ]; then
         if [ -f "$STOP_INTENT" ]; then _pb="$_pb监控按你的选择停着
+"; elif [ "$_never_installed" = "1" ]; then _pb="$_pb还没安装
 "; else _pb="$_pb监控进程不在了（可能被强制退出或崩溃）
 "; fi
     fi
@@ -327,6 +357,10 @@ show_status() {
     fi
     if [ "$_pn" = "0" ]; then
         style_out ok "一切正常，不用做任何事。"
+    elif [ "$_never_installed" = "1" ]; then
+        # 从没装过：几件"没生效"都是同一个事实（还没装），
+        # 说成"有 N 项要注意"会让第一次打开的人以为机器有好几处毛病。
+        style_out dim "还没开始用。打开菜单选 1（安装 / 修复）就能装上。"
     else
         style_out warn "有 $_pn 项要注意："
         printf '%s' "$_pb" | while IFS= read -r _pb1; do
@@ -349,6 +383,11 @@ show_status() {
                 style_out warn "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
                 style_out dim "  打开菜单选 1（安装 / 修复）可以一起修好。"
             fi
+        elif [ "$_never_installed" = "1" ]; then
+            # 从没装过：这不是问题，是起点。用"崩溃/被强制退出"描述它，
+            # 第一次打开的人会以为自己的机器出了事（"我明明没装过"）。
+            style_out dim "  （还没装过。装上之后它会自己常驻，不用你管）"
+            style_out dim "  打开菜单选 1（安装 / 修复）开始使用。"
         else
             style_out warn "  （不是点了停止，是进程不在了：可能被强制退出，或崩溃）"
             style_out dim "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
@@ -375,6 +414,11 @@ show_status() {
         style_out warn "代理变量 : 已注入（$_cur），但没人维护"
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
         style_out dim "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
+    elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
+        # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
+        # 但本工具没在它上面工作（多半是使用者自己停的）。补一句桥接，否则会被判定"坏了"。
+        # 与 Windows 侧同一句、同一判据。
+        style_out dim "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
     fi
     case "$_ts_state" in
         unpaired)
@@ -415,7 +459,10 @@ show_status() {
     # 这里再打一遍就是同一件事说两次。
     if [ -n "$_cur" ] && [ "$_cur_alive" = "1" ] && [ -n "$_m" ]; then
         style_out ok "代理变量 : 已注入 ($_cur)"
-    elif [ -z "$_cur" ]; then
+    elif [ -z "$_cur" ] && [ -z "$_port" ]; then
+        # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
+        # 少了 [ -z "$_port" ] 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
+        # 同时命中：同一屏里"代理变量"出现两次、说法还相反。
         style_out dim "代理变量 : 无（直连状态）"
     fi
 
@@ -886,6 +933,9 @@ t 菜单选 6（一键恢复）。会问你要不要留日志。
 b 
 h 不开菜单也能用（适合写脚本，或远程连过来）
 r 开关|install  status  stop  uninstall  update  help  menu  self-test
+r 补充|--yes    跳过确认（检查和卸载时问的那句）
+r 补充|--purge  卸载时连历史日志一起删
+r 补充|repair-profile  摘掉配置文件里孤立的标记（会先备份）
 t --purge 连日志一起删，只配 uninstall 用。完整写法：
 c bash envproxy.sh status
 t self-test 是给排查问题用的：它在一个临时沙箱里跑一遍内部检查，

@@ -11,6 +11,10 @@ STOP_FLAG="$MONITOR_DIR/stop.flag"
 # 之前 mac 侧靠"自启动注册在不在"去猜，而"注册在、监控没跑"恰恰是被强杀的典型现场——
 # 于是把崩溃说成"已按你的选择停止"，用户会以为自己点错了。
 STOP_INTENT="$MONITOR_DIR/stopped.intent"
+# 心跳：监控每几轮刷新一次，记录「pid + 该进程启动时刻」。
+# 用途与 Windows 侧同一件事（见那边的 Test-MonitorAlive）：在没有可靠进程查询的
+# 环境下也能判断监控还活着，并且挡得住 pid 复用。
+HEARTBEAT="$MONITOR_DIR/monitor.beat"
 # 版本号缓存：由监控刷新、状态页只读。状态页不许联网（理由见 write_version_cache）。
 VERSION_CACHE="$MONITOR_DIR/version.cache"
 LOG_FILE="$MONITOR_DIR/monitor.log"
@@ -273,6 +277,54 @@ _repair_hooks() {
 # ------------------------------------------------------------------------------
 # 落点选择：`.zshenv` 是唯一在所有 shell 类型（登录/交互/脚本/ssh 远程命令）都会加载的文件，
 # 所以它是终端路的首选落点；`.zshrc` 作为冗余。hook 行本身无输出、无耗时。
+# 显式修复"标记不成对"的配置文件：先备份整份，再摘掉**孤立**的标记行，最后读回复检。
+#
+# 为什么需要它：安装/卸载遇到不成对的标记一律"一个字节都不改"（这是对的——猜必错），
+# 但它让一个可诊断、可修复的状态变成不可达：使用者照文档重跑安装，每次都被拒绝。
+# 人一旦明确说出"我同意修"，就不该再被拒。所以给一个显式入口，
+# 语义是"我确认这是半截标记，删掉它"，而不是"你猜一个"。
+# 与 Windows 侧 Repair-ProfileMarkers 同一语义。
+repair_hook_markers() {
+    _rhm_fixed=0
+    _rhm_failed=0
+    for _rc in $(rc_zsh_files) $(rc_bash_files); do
+        [ -f "$_rc" ] || continue
+        # 只处理"确有标记但不成对"的文件；成对的与完全没装的都不碰。
+        _rhm_s=0; _rhm_e=0
+        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null && _rhm_s=1
+        grep -qxF "$HOOK_END" "$_rc" 2>/dev/null && _rhm_e=1
+        [ "$_rhm_s" = "$_rhm_e" ] && continue
+        _rhm_tmp="$_rc.tmp.$$"
+        _backup_rc "$_rc"
+        # 缺结束行就删掉开始行；缺开始行就删掉结束行。
+        if [ "$_rhm_e" = "1" ]; then
+            grep -vxF "$HOOK_START" "$_rc" > "$_rhm_tmp" 2>/dev/null
+        else
+            grep -vxF "$HOOK_END" "$_rc" > "$_rhm_tmp" 2>/dev/null
+        fi
+        if [ -s "$_rhm_tmp" ] && _write_rc_atomic "$_rhm_tmp" "$_rc"; then
+            # 读回复检：修没修成由复读决定，不由"我调用了写入"决定。
+            if grep -qxF "$HOOK_START" "$_rc" 2>/dev/null || grep -qxF "$HOOK_END" "$_rc" 2>/dev/null; then
+                _rhm_failed=$((_rhm_failed + 1))
+            else
+                _rhm_fixed=$((_rhm_fixed + 1))
+                echo "  已摘掉孤立标记：$_rc（原文件已备份为 *.envproxy.bak）"
+            fi
+        else
+            _rhm_failed=$((_rhm_failed + 1))
+            echo "  没能修好：$_rc" >&2
+        fi
+        rm -f "$_rhm_tmp" 2>/dev/null || true
+    done
+    if [ "$_rhm_fixed" = "0" ] && [ "$_rhm_failed" = "0" ]; then
+        echo "没有需要修的：所有配置文件里的标记都是成对的。"
+        return 0
+    fi
+    [ "$_rhm_fixed" -gt 0 ] && echo "现在打开菜单选 1（安装 / 修复），把它重新写好。"
+    [ "$_rhm_failed" -gt 0 ] && return 1
+    return 0
+}
+
 insert_shell_hooks() {
     for _rc in $(rc_zsh_files); do
         touch "$_rc" 2>/dev/null || continue
@@ -487,6 +539,60 @@ is_monitor_args() {
     case "$_ima_arg" in
         install|stop|uninstall|status|purge|update|menu|self-test) return 1;;
     esac
+    return 0
+}
+
+# 「某个 pid 的启动时刻」。mac 上 ps 的 lstart 是人读格式，用 etime（已运行时长）
+# 换算更稳：同一进程在两次调用之间 etime 相差很小，pid 复用的新进程一定差很多。
+# 这里只用它做**同一时刻的一致性核对**，不跨时刻比较，所以取秒级精度足够。
+_pid_start_ticks() {
+    _pst_pid="$1"
+    [ -n "$_pst_pid" ] || return 1
+    # BSD ps：etime 形如 05:12 / 1-02:03:04。转成秒。
+    _pst_e=$(ps -p "$_pst_pid" -o etime= 2>/dev/null | tr -d ' ')
+    [ -n "$_pst_e" ] || return 1
+    _pst_days=0
+    case "$_pst_e" in
+        *-*) _pst_days=${_pst_e%%-*}; _pst_e=${_pst_e#*-} ;;
+    esac
+    _pst_h=0; _pst_m=0; _pst_s=0
+    case "$_pst_e" in
+        *:*:*) _pst_h=${_pst_e%%:*}; _pst_e=${_pst_e#*:}; _pst_m=${_pst_e%%:*}; _pst_s=${_pst_e#*:} ;;
+        *:*)   _pst_m=${_pst_e%%:*}; _pst_s=${_pst_e#*:} ;;
+        *)     _pst_s=$_pst_e ;;
+    esac
+    case "$_pst_days$_pst_h$_pst_m$_pst_s" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    printf '%s' "$(( _pst_days * 86400 + _pst_h * 3600 + _pst_m * 60 + _pst_s ))"
+}
+
+# 刷新心跳：pid + 该进程的已运行秒数（两者一起才能挡住 pid 复用）。
+write_heartbeat() {
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    _wh_ticks=$(_pid_start_ticks $$ 2>/dev/null || echo "")
+    [ -n "$_wh_ticks" ] || _wh_ticks=0
+    printf '%s %s\n' "$$" "$_wh_ticks" > "$HEARTBEAT" 2>/dev/null || true
+}
+
+# 读心跳判活：pid 存在、且它的已运行秒数不小于心跳里记的值（时间只会变大），
+# 且差值不超过心跳的最大间隔（否则说明这是另一个进程，pid 被复用了）。
+# 这一条不依赖 pid 文件、也不依赖命令行特征。
+monitor_beat_alive() {
+    [ -f "$HEARTBEAT" ] || return 1
+    _mba=$(cat "$HEARTBEAT" 2>/dev/null)
+    [ -n "$_mba" ] || return 1
+    _mba_pid=${_mba%% *}
+    _mba_ticks=${_mba#* }
+    case "$_mba_pid" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_mba_pid" != "$$" ] || return 1
+    kill -0 "$_mba_pid" 2>/dev/null || return 1
+    [ "$_mba_ticks" = "$_mba_pid" ] && return 0   # 老格式只有 pid，降级接受
+    _mba_now=$(_pid_start_ticks "$_mba_pid" 2>/dev/null || echo "")
+    case "$_mba_now" in ''|*[!0-9]*) return 0 ;; esac   # 拿不到就按"活着"处理（兜底不添乱）
+    # 现在应当 >= 记下的值；差值超过 600 秒说明这不是同一个进程（pid 复用）。
+    [ "$_mba_now" -ge "$_mba_ticks" ] || return 1
+    [ $(( _mba_now - _mba_ticks )) -le 600 ] || return 1
     return 0
 }
 

@@ -231,7 +231,7 @@ if ($Install) {
 }
 if ($Uninstall) {
     $opMutex = Exit-IfOpBusy
-    Uninstall-EnvProxy -Purge:$Purge
+    Uninstall-EnvProxy -Purge:$Purge -Yes:$Yes
     return
 }
 if ($Stop) {

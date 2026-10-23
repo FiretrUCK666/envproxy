@@ -329,8 +329,11 @@ usage_error() {
     esac
     case " ${USAGE_SWITCHES:-} " in
         *" yes "*)
-            if [ "${USAGE_COMMAND:-}" != "update" ]; then
-                printf -- '--yes 只在检查更新时才有意义：它表示跳过确认。请用 update --yes。'
+            # --yes 在两处有意义：跳过更新的确认，以及在**没法提问的环境里**明确表达
+            # "我知道我在做什么"（卸载）。后者不是多余：卸载在非交互环境下会被拒绝，
+            # 没有这个开关，脚本和 CI 就永远卸不掉。
+            if [ "${USAGE_COMMAND:-}" != "update" ] && [ "${USAGE_COMMAND:-}" != "uninstall" ]; then
+                printf -- '--yes 只在检查更新或卸载时才有意义：它表示跳过确认。请用 update --yes 或 uninstall --yes。'
                 return 1
             fi
             ;;

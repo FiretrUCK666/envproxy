@@ -130,9 +130,42 @@ function Install-EnvProxy {
     }
 }
 
-function Uninstall-EnvProxy([bool]$Purge = $false) {
+function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     Write-Styled 'title' "======== EnvProxy 卸载（一键恢复原状）========"
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" }
+    # 先问一句再动手。这是整个工具里**唯一不可逆**的动作：会删开机自启、摘终端配置、
+    # 清掉代理变量。而它在菜单里紧挨着「5 停止监控」（那个是可逆的，"下次开机会自己回来"），
+    # 手滑按错就没有回头路。原来全函数里唯一的提问是"日志要不要保留"——
+    # 而那时监控已停、自启已删、配置已摘，问什么都晚了。
+    # 默认 N（回车 = 不卸载）：危险动作的默认必须是"不做"。
+    # -Purge（清日志）本身就是"我知道我在干什么"的显式意图，但它不清这个确认——
+    # 意图明确的是"日志"，不是"卸载"。
+    # 确认必须在**任何**环境下生效，包括管道/脚本里：
+    # 危险动作"问不到人就直接做"等于没有确认（实测过一次，管道里跑 -Uninstall 直接卸干净了）。
+    # 问不到人时的正确行为是**拒绝并要求显式意图**，不是默默执行。
+    $confirmed = $false
+    if ($Yes) {
+        # 显式声明"跳过确认"。这一支存在的意义正是非交互环境：
+        # 问不到人的时候必须靠一个明确的开关放行，而不是靠沉默。
+        $confirmed = $true
+        Write-Styled 'dim' "已确认（-Yes）：开始卸载。"
+    } elseif (Test-CanPrompt) {
+        Write-Styled 'text' "卸载后会删掉开机自启、终端配置和代理变量，恢复成没装之前的样子。"
+        try {
+            $a = Read-Host "确定要卸载吗？输入 y 回车确认，直接回车 = 取消"
+            $confirmed = [bool]($a -and $a.Trim() -match '^(y|yes|是)$')
+        } catch { $confirmed = $false }
+        if (-not $confirmed) {
+            Write-Styled 'dim' "已取消，什么都没改。"
+            return
+        }
+    } else {
+        # 没有可交互的控制台：不能问，也不能替用户答应。
+        Write-Styled 'warn' "这里没法问你要不要卸载（没有可交互的控制台），所以什么都不会做。"
+        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 6；"
+        Write-Styled 'dim' "  或者确认无误后加 -Yes：envproxy.ps1 -Uninstall -Yes"
+        return
+    }
     Stop-Monitor
     Remove-AutoRun
     # 先摘终端同步的钩子块：它引用 $ProxyVarNames，留着会指向一个已经卸载的工具。
@@ -332,6 +365,10 @@ function Get-StatusSnapshot {
     # 那种情况下入口通常还能起来、启动自检全绿，但安装区可能新旧混合，
     # 表现为某些功能静默失效——所以必须主动说出来。
     $st.UpdateInProgress = Test-Item $UpdateInProgressFile
+    # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。
+    # 用途是避免把"从没装过"说成"崩溃/被结束任务"：后者是故障语气，
+    # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
+    $st.NeverInstalled = -not ((Get-ItemProperty $ScriptPathRegKey -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
     $st.LocalVersion = Get-LocalVersion
     # 最新版本号来自**监控写下的缓存**，状态页自己绝不联网：
     # 否则每次"查看状态"都要等一次外网往返（离线/限流时是注定失败的等待）。
@@ -350,6 +387,7 @@ function Show-StatusSnapshot($st) {
     $problems = @()
     if (-not $st.Monitor) {
         if ($st.StopIntent) { $problems += "监控按你的选择停着" }
+        elseif ($st.NeverInstalled) { $problems += "还没安装" }
         else { $problems += "监控进程不在了（可能被结束任务关掉或崩溃）" }
     }
     if (-not $st.AutoRunOk) { $problems += "开机自启没生效" }
@@ -366,6 +404,10 @@ function Show-StatusSnapshot($st) {
     Write-Styled 'title' "======== EnvProxy 状态 ========"
     if ($problems.Count -eq 0) {
         Write-Styled 'ok' "一切正常，不用做任何事。"
+    } elseif ($st.NeverInstalled) {
+        # 从没装过：三件"没生效"都是同一个事实（还没装），
+        # 说成"有 3 项要注意"会让第一次打开的人以为机器有三处毛病。
+        Write-Styled 'dim' "还没开始用。打开菜单选 1（安装 / 修复）就能装上。"
     } else {
         Write-Styled 'warn' ("有 {0} 项要注意：" -f $problems.Count)
         foreach ($p in $problems) { Write-Styled 'warn' ("  - " + $p) }
@@ -389,6 +431,11 @@ function Show-StatusSnapshot($st) {
                 Write-Styled 'warn' "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
                 Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以一起修好。"
             }
+        } elseif ($st.NeverInstalled) {
+            # 从没装过：这不是问题，是起点。用"崩溃/被结束任务"描述它，
+            # 第一次打开的人会以为自己的机器出了事（"我明明没装过"）。
+            Write-Styled 'dim' "  （还没装过。装上之后它会自己常驻，不用你管）"
+            Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）开始使用。"
         } else {
             Write-Styled 'warn' "  （不是点了停止，是进程不在了：可能被结束任务关掉，或崩溃）"
             Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
@@ -403,7 +450,7 @@ function Show-StatusSnapshot($st) {
         }
         Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以重建。"
     }
-    if (-not $st.ProxyValue -and $st.Port -and -not $m) {
+    if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
         Write-Styled 'dim' "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
@@ -448,8 +495,9 @@ function Show-StatusSnapshot($st) {
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
         Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
     }
-    if ($problems.Count -gt 0) { Write-Host '' }
-
+    # 这里**不再**补空行：问题清单那一段末尾（结论行之后）已经空过一行了。
+    # 再补一次就在同一屏里出现两个连续空行，本来紧凑的"结论—细节"分组被切出一道缝
+    # （实测复现：状态页第 4、5 行都是空行）。
     # ---- 参考信息：正常项压成最少的行，且统一用灰，不跟"要注意"抢注意力 ----
     # 全绿时也要能一眼确认"核心链路是通的"，所以正常的那几项各占一行但用 ok 色；
     # 版本号那三行对普通用户没有行动价值，压成一行。
@@ -470,7 +518,12 @@ function Show-StatusSnapshot($st) {
     # 这里再打一遍就是同一件事说两次，读者会以为有两处不同的问题。
     if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
         Write-Styled 'ok' ("代理变量 : 已注入 ({0})" -f $st.ProxyValue)
-    } elseif (-not $st.ProxyValue) {
+    } elseif (-not $st.ProxyValue -and -not $st.Port) {
+        # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
+        # 少了 -not $st.Port 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
+        # 同时命中：同一屏里"代理变量"出现两次，一次说"已停用"、一次说"直连"，
+        # 用户会以为有两处不同的设置要处理（实测复现过）。
+        # 判据必须是**完整**的：有代理在跑就不该说"直连"，那是两件事。
         Write-Styled 'dim' "代理变量 : 无（直连状态）"
     }
     Show-VersionLines $st
@@ -1013,6 +1066,9 @@ function Get-HelpTopics {
                 'b ',
                 'h 不开菜单也能用（适合写脚本，或远程连过来）',
                 'r 开关|-Install  -Status  -Stop  -Uninstall  -Update  -Help  -Menu',
+    'r 补充|-Yes        跳过确认（检查和卸载时问的那句）',
+    'r 补充|-Purge      卸载时连历史日志一起删',
+    'r 补充|-RepairProfile  摘掉配置文件里孤立的标记（会先备份）',
                 't -Purge 连日志一起删，只配 -Uninstall 用。完整写法：',
                 'c powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status'
             )
@@ -1215,7 +1271,7 @@ function Show-Menu {
             # 这也让 Format-MenuText 不再是"只有测试在用"的死函数。
             Write-Host (Format-MenuText)
             Write-Host ''
-            Write-Styled 'warn' "以上是菜单。管道里没法交互，请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。"
+            Write-Styled 'warn' "以上是菜单。管道里没法交互，请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关（全部开关见 -Help）。"
             return
         }
     } catch {}
@@ -1228,7 +1284,7 @@ function Show-Menu {
         try {
             $choice = Read-Host "输入编号"
         } catch {
-            Write-Styled 'warn' "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关。"
+            Write-Styled 'warn' "菜单需要双击 打开菜单.cmd 使用，管道调用请直接用 -Install/-Status/-Stop/-Uninstall/-Update/-Help 开关（全部开关见 -Help）。"
             return
         }
         # 先 Trim 再判空：纯空格应当与直接回车同义（Mac 侧 tr -d 之后再判空，两端同语义）。

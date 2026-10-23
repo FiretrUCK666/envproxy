@@ -1090,10 +1090,15 @@ $VersionCacheFile = Join-Path $MonitorDir "version.cache"
 # 覆盖安装区时的"进行中"标记。正常结束（成功或回滚）都会删掉它；
 # 断电/被杀才会留下——那种情况下安装区可能是新旧混合的，而没有任何自检看得出来。
 $UpdateInProgressFile = Join-Path $MonitorDir "update.inprogress"
-# pid 文件多久没更新就认为"心跳断了"。120 秒 = 稳定态两轮自愈周期（60–90 秒），
-# 容得下一次系统卡顿或休眠唤醒。它不是"监控死了"的判据（进程可能是活的），
-# 只用来在 WMI 不可用时兜底判断"是不是还活着"。
-$script:MonitorHeartbeatMaxSec = 120
+# 心跳文件：监控每轮把它刷新一次。它的唯一用途是"没有 WMI 时也能判断监控还活着"。
+# 与 pid 文件分开：pid 文件的语义是"我是哪个进程"（只在启动时写一次，缺失才补），
+# 让它兼当心跳会让两个语义互相污染——而实测过，稳态下 pid 的 mtime 会停在启动那一刻。
+$HeartbeatFile = Join-Path $MonitorDir "monitor.beat"
+# 心跳多久没更新就认为"监控不在了"。240 秒：稳定态一轮 2–3 秒，这个窗口容得下
+# 一次休眠唤醒、一次磁盘卡顿、一次系统更新后的短暂无响应，又足够短到
+# "监控真死了"能在几分钟内被发现。
+$HeartbeatMaxSec = 240
+
 $StopFlag   = Join-Path $MonitorDir "stop.flag"
 
 function Ensure-MonitorDir {
@@ -1128,34 +1133,59 @@ function Get-MonitorProcessFromPidFile {
 
 # 判据二（兜底）：命令行特征。判"有没有监控在跑"用它——pid 文件缺失或陈旧但确实有监控时
 # 靠它（手工启动、pid 文件被删、跨位置停止）；判"我刚启动的监控起来了吗"不能用它。
-# 监控进程是否活着：三条路任一为真即视为活着。
+# 监控进程是否活着：不依赖 WMI 的第二条判据。
 #
-# 为什么要三条：身份判定原来只走 WMI（Get-CimInstance / Invoke-CimMethod）一条通道，
+# 为什么需要它：身份判定原来只走 WMI（Get-CimInstance / Invoke-CimMethod）一条通道，
 # 而"停止"和"卸载"完全依赖它。各类"系统优化/精简"工具会关掉 Windows Management
 # Instrumentation，企业镜像、Ghost 装机盘也会，WMI 仓损坏同样会让它抛异常
-# （下面两处都 `catch { return @() }`）。通道一断，后果是三连击且全部静默：
+# （Get-OwnMonitorProcesses 自己就 `catch { return @() }`）。通道一断，后果是三连击且全部静默：
 #   1. -Stop 静默变成空操作 → 监控 2–3 秒后把变量重新注入，用户看到"停了又自己回来"；
 #   2. -Uninstall 停不掉 → 后续照做删掉 Run 键，而活着的监控每 30 轮自愈把 Run 键和
 #      launcher 重建回来（周期只有 60–90 秒，比人操作快）；
 #   3. 卸载复检用的是同一个通道 → 屏幕上打印"[完成] 电脑已恢复到安装前的状态"。
 # 也就是"卸载"这个最后的兜底手段会失效——比直接报错糟得多。
 #
-# 所以判据不吊在一根绳上。三条的来源各不相同：
-#   a) pid 文件 + mtime 心跳：监控每轮都在写日志/刷新，不依赖任何系统服务；
-#   b) Get-Process -Id：走进程快照 API，不是 WMI；
-#   c) WMI 命令行特征：能拿到就更好（它还能回答"是哪个脚本"），拿不到不影响结论。
+# 判据用 pid 文件里的 pid + Get-Process（进程快照 API，不是 WMI）。
+#
+# 这里**不**用"pid 文件的修改时间新不新"当心跳：监控只在启动时写一次 pid 文件
+# （文件缺失时才补写），稳态下它的 mtime 会一直停在启动那一刻。拿它当新鲜度判据，
+# 结果是监控正常运行几小时后这个判据恒为假——看起来"有兜底"，实际等于没有。
+#
+# 但光看"这个 pid 还活着"不够：pid 会被系统回收再分配。实测过——把 pid 文件改写成一个
+# 无关进程的号（哪怕是 explorer），判据照样为真，于是状态页会报"监控运行中 (PID <别人的号>)"，
+# 卸载复检也会认定"监控进程仍在"而报未完成。所以必须再核一次"这个进程跑的是不是本脚本"。
+# 这一步用 Get-Process 的 CommandLine（不是 WMI/CIM，普通用户可读），
+# 与本文件里 MonitorCmdLinePattern 同一套判据——**同一个判断不写两遍**。
 function Test-MonitorAlive {
-    # a) pid 文件新鲜度。120 秒 = 稳定态两轮自愈周期，容得下一次系统卡顿。
+    # 心跳文件里记着「pid + 那个进程的启动时刻」。两条都要对得上才算活着：
+    #   pid 对得上  → 大概率是它；
+    #   启动时刻也对得上 → 一定是它（系统回收 pid 后新进程的启动时刻必然不同）。
+    # 这样既不依赖 WMI，也不怕 pid 复用。
+    if (Test-Item $HeartbeatFile) {
+        try {
+            $parts = @((Read-Text $HeartbeatFile).Trim() -split '\s+')
+            $beatPid = 0
+            [void][int]::TryParse($parts[0], [ref]$beatPid)
+            if ($beatPid -gt 0 -and $beatPid -ne $PID) {
+                $proc = Get-Process -Id $beatPid -ErrorAction SilentlyContinue
+                if ($proc) {
+                    if ($parts.Count -lt 2) { return $true }
+                    $wantTicks = 0
+                    if ([long]::TryParse($parts[1], [ref]$wantTicks) -and $wantTicks -gt 0) {
+                        return ([long]$proc.StartTime.Ticks -eq $wantTicks)
+                    }
+                    return $true
+                }
+            }
+        } catch {}
+    }
+    # 心跳还没写过（刚启动的头几秒）时靠 pid 文件 + Get-Process。
+    # 这条单独用挡不住 pid 复用，所以只在心跳缺席时兜底——正常运行时心跳总在。
     if (Test-Item $PidFile) {
         try {
-            $ageSec = ((Get-Date) - (Get-Item -LiteralPath $PidFile).LastWriteTime).TotalSeconds
-            if ($ageSec -ge 0 -and $ageSec -le $script:MonitorHeartbeatMaxSec) {
-                $p = [int]((Read-Text $PidFile).Trim())
-                if ($p -gt 0 -and $p -ne $PID) {
-                    # 心跳新鲜 + 进程真在（Get-Process 不是 WMI）→ 认定为活着。
-                    $proc = Get-Process -Id $p -ErrorAction SilentlyContinue
-                    if ($proc) { return $true }
-                }
+            $p = [int]((Read-Text $PidFile).Trim())
+            if ($p -gt 0 -and $p -ne $PID) {
+                if (Get-Process -Id $p -ErrorAction SilentlyContinue) { return $true }
             }
         } catch {}
     }
@@ -1284,6 +1314,16 @@ function Stop-Monitor {
             Remove-Item -LiteralPath $targetDir -Recurse -Force -ErrorAction SilentlyContinue
         }
     }
+    # 强杀路径下监控来不及删自己的心跳；不清掉它，下面这条判定会读到一个
+    # "2 秒前刚刷新"的心跳，于是误报"未能停止"。所以判定之前主动清一次。
+    # 位置必须是目标目录（跨位置停止时目标不是本进程的 $MonitorDir）。
+    try {
+        $beatTarget = Join-Path $targetDir "monitor.beat"
+        if (Test-Item $beatTarget) { Remove-Item -LiteralPath $beatTarget -Force -ErrorAction SilentlyContinue }
+    } catch {}
+    if (-not (Test-Item $targetDir) -or $targetDir -eq $MonitorDir) {
+        try { Remove-ItemSafe $HeartbeatFile } catch {}
+    }
     if (Get-MonitorProcess) {
         Write-Styled 'warn' "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
     } else {
@@ -1383,6 +1423,21 @@ function Run-MonitorLoop {
         if (-not (Test-Item $MonitorDir)) { Ensure-MonitorDir }
         # pid 文件同理：它一旦丢失，对外就"查不到自己在跑"。重新写一份，代价是一次小文件写。
         if (-not (Test-Item $PidFile)) { try { Write-Text -Path $PidFile -Text ([string]$PID) } catch {} }
+        # 心跳：每轮刷新一次（写单个字节，代价可忽略）。
+        # 它的存在是为了让"没有 WMI 的机器上也能判断监控还活着"——
+        # 不依赖任何系统服务，也不依赖进程查询接口。
+        if ($repairRound % 3 -eq 0) {
+            try {
+                # 内容：本进程 pid + 启动时刻 ticks。
+                # 记启动时刻是为了挡住 pid 复用——系统回收 pid 再分配给别的进程后，
+                # 新进程的 StartTime 一定不同。这是 mac 侧 `ps -p <pid> -o args=` 的等价物：
+                # PowerShell 5.1 的 Get-Process 没有 CommandLine 属性（那是 7 才有的），
+                # 而拿命令行在 5.1 下只能走 WMI/CIM —— 正是本判据要绕开的通道。
+                $me = Get-Process -Id $PID -ErrorAction SilentlyContinue
+                $stamp = if ($me) { [string]$me.StartTime.Ticks } else { "0" }
+                Write-Text -Path $HeartbeatFile -Text (([string]$PID) + " " + $stamp)
+            } catch {}
+        }
         # 日志文件也要补。它只在"状态有变化"时才写，稳态下一条都不产生——
         # 只补目录和 pid 的话，删过目录之后 monitor.log 会一直不存在，
         # 等到真出问题时用户手上没有任何线索可查（"日志永远是空的"比"没日志"更误导）。
@@ -1496,6 +1551,9 @@ function Run-MonitorLoop {
         # 确保旧位置完全消失（下次移回时 Move-Item 不会因空壳而嵌套）。
         try { Apply-State "off" } catch {}
         try {
+            # 整个目录一起删，心跳自然也在里面；但删之前先把文件删掉，
+            # 免得目录删除失败（被占用）时留下一个新鲜心跳骗后续判据。
+            try { Remove-ItemSafe $HeartbeatFile } catch {}
             Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue
             $left = Get-ChildItem -LiteralPath $ScriptDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $left) {
@@ -1509,6 +1567,11 @@ function Run-MonitorLoop {
         # 告诉 Git Bash 钩子的地方。漏了它，已开着的 Git Bash 窗口永远不会被清空。
         try { Write-TerminalStateFile "off" } catch {}
         try { Remove-ItemSafe $PidFile } catch {}
+        # 心跳必须和 pid 一起删。留着它的后果是：任何一个"监控刚退出"的瞬间，
+        # 心跳还是新鲜的（最长 240 秒），于是 Test-MonitorAlive 判"还活着"，
+        # 停止流程就打印"监控进程未能停止（请检查是否有别的窗口正在运行它）"——
+        # 而监控其实已经退干净了。测试里真出现过这句，用户会以为出了问题。
+        try { Remove-ItemSafe $HeartbeatFile } catch {}
         try { Remove-ItemSafe $StopFlag } catch {}
     }
     $mutex.ReleaseMutex()

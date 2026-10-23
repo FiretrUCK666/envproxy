@@ -249,13 +249,16 @@ function Get-UsageError {
         $parts = foreach ($e in $Extra) { if ($e -eq "") { '""' } else { $e } }
         return ("无法识别的参数：{0}" -f ($parts -join ' '))
     }
-    # 开关必须跟着它的命令：-Purge 只配 -Uninstall，-Yes 只配 -Update。
+    # 开关必须跟着它的命令：-Purge 只配 -Uninstall，-Yes 只配 -Update 或 -Uninstall。
     # 单独给会一路落到监控模式：用户以为在清日志或在答"是"，工具却把监控起来了。
     if ("purge" -in $Switches -and $Command -ne "uninstall") {
         return "-Purge 只在卸载时才有意义：它表示连日志一起删。请用 -Uninstall -Purge。"
     }
-    if ("yes" -in $Switches -and $Command -ne "update") {
-        return "-Yes 只在检查更新时才有意义：它表示跳过确认。请用 -Update -Yes。"
+    # -Yes 在两个地方有意义：跳过更新的确认，以及在**没法提问的环境里**明确表达
+    # "我知道我在做什么"（卸载）。后者不是多余：卸载在非交互环境下会被拒绝，
+    # 没有这个开关，脚本和 CI 就永远卸不掉（而"问不到人就默默执行"更糟，实测过）。
+    if ("yes" -in $Switches -and $Command -notin @("update", "uninstall")) {
+        return "-Yes 只在检查更新或卸载时才有意义：它表示跳过确认。请用 -Update -Yes 或 -Uninstall -Yes。"
     }
     return $null
 }

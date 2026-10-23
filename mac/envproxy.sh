@@ -132,7 +132,7 @@ _usage_err=$(usage_error)
 _usage_rc=$?
 if [ $_usage_rc -ne 0 ]; then
     echo "$_usage_err" >&2
-    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test} [--purge] [--yes]" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile} [--purge] [--yes]" >&2
     exit 2
 fi
 
@@ -170,8 +170,11 @@ case "$_CMD_NORM" in
           # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
           # 与其让人以为"工具坏了"，不如说清楚。
           echo "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。";;
-    uninstall) uninstall_envproxy "$_PURGE";;
+    uninstall) uninstall_envproxy "$_PURGE" "$_YES";;
     status) show_status;;
+    # 显式修复"配置文件里标记不成对"。安装/卸载遇到它会一个字节都不改（猜必错），
+    # 所以那个状态本来是死路：照文档重跑安装，每次都被拒绝。人明确说"我同意修"时要能修。
+    repair-profile) repair_hook_markers; exit $?;;
     # 退出码要如实反映结果（计划任务、脚本靠它判断更新成功没有）。
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
@@ -189,6 +192,6 @@ case "$_CMD_NORM" in
         fi;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test} [--purge] [--yes]"; exit 2;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile} [--purge] [--yes]"; exit 2;;
 esac
 fi
