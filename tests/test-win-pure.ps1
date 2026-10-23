@@ -258,6 +258,24 @@ $got5 = Get-NoProxyAfterReclaim ('LocalHost,Corp.Example,' + $dnp) 'localhost,co
 Assert-Eq 'reclaim: 保留使用者的原始大小写' 'LocalHost,Corp.Example,localhost' $got5
 Assert-Eq 'reclaim: 大小写不同不算我们的（不被摘）' $true ([bool](@($got5 -split ',') -contains 'LocalHost'))
 
+Write-Host '[2d] malformed state strings are refused, not silently accepted'
+# 状态串只有两种合法形状：off，或 on:<1..65535>。
+# 畸形的一律不许写、也不许报成功——"什么都没做却报成功"是最难查的一种故障：
+# 屏幕上一切正常，只有终端连不上网。
+# 为什么这里能安全地测：Invoke-EnvStateWrite 对畸形输入在**拿锁之前**就返回了，
+# 所以这些断言不会碰注册表，也不会写用户的环境变量。
+foreach ($bad in @('on:', 'garbage', 'on:abc', 'on:0', 'on:70000', 'on:-1')) {
+    $r = $null
+    try { $r = Invoke-EnvStateWrite $bad '' '' } catch { $r = 'threw' }
+    Assert-Eq ("畸形状态串被拒：" + $bad) 1 $r
+}
+# 合法输入必须放行（off 与 unknown 不动变量，返回 0 = 没有失败）
+foreach ($good in @('off', 'unknown', '')) {
+    $r = $null
+    try { $r = Invoke-EnvStateWrite $good '' '' } catch { $r = 'threw' }
+    Assert-Eq ("合法状态串放行：" + $good) 0 $r
+}
+
 Write-Host '[3] closed ports'
 Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
 

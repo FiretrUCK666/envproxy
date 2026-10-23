@@ -417,6 +417,20 @@ apply_state() {
         ""|unknown) return 0 ;;
     esac
     _state="$1"
+    # 状态串只有两种合法形状：off，或 on:<1..65535>。
+    # 畸形的一律不写、也不报成功——"什么都没做却报成功"是最难查的一种故障：
+    # 屏幕上一切正常，只有终端连不上网。Windows 侧同一判据（Invoke-EnvStateWrite）。
+    case "$_state" in
+        off) ;;
+        on:*)
+            _pv_port="${_state#on:}"
+            case "$_pv_port" in
+                ''|*[!0-9]*) return 1 ;;
+            esac
+            [ "$_pv_port" -ge 1 ] && [ "$_pv_port" -le 65535 ] || return 1
+            ;;
+        *) return 1 ;;
+    esac
     if [ "$_state" = "off" ]; then
         if proxy_vars_present; then
             # sentinel：留一份守卫式 unset 给已开着的终端，敲回车就能把旧变量清掉。

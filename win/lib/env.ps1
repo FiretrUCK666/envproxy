@@ -512,6 +512,18 @@ function Restore-PrevEnv {
 # 但**做**的事必须一模一样。
 function Invoke-EnvStateWrite([string]$state, [string]$LogOff, [string]$LogOn) {
     if (-not $state -or $state -eq "unknown") { return 0 }
+    # 状态串只有两种合法形状：off，或 on:<端口>。畸形的一律不写、也不报成功。
+    #
+    # 为什么必须显式挡：`on:` 这种空端口会让 $state.Substring(3) 得到空串，
+    # 而 [int]"" 等于 0，于是 Test-ProxyVarsMatch 0 会认真去比对"端口 0 的变量表"，
+    # 结论碰巧是"齐"——函数返回 0，调用方当成"写好了"。实际一个变量都没写。
+    # 这类"什么都没做却报成功"是最难查的一种：屏幕上一切正常，只有终端连不上网。
+    if ($state -ne "off") {
+        $portText = if ($state.Length -gt 3) { $state.Substring(3) } else { "" }
+        $portNum = 0
+        if (-not [int]::TryParse($portText, [ref]$portNum)) { return 1 }
+        if ($portNum -lt 1 -or $portNum -gt 65535) { return 1 }
+    }
     $gate = $null
     $held = $false
     try {

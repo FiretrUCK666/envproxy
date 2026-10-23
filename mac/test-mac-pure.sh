@@ -180,6 +180,19 @@ self_test() {
     _selftest_assert_eq "宽度：U+2E80 占两格" "2" "$(_display_width "$(printf '\xe2\xba\x80')")"
     _selftest_assert_eq "宽度：U+2E7F 占一格" "1" "$(_display_width "$(printf '\xe2\xb9\xbf')")"
 
+    # 畸形状态串必须被拒，不许静默当成功。与 Windows 侧同一判据。
+    # 为什么能安全地测：apply_state 对畸形输入在动任何东西之前就返回了。
+    _bad_states_ok=1
+    for _bs in "on:" "garbage" "on:abc" "on:0" "on:70000" "on:-1"; do
+        if apply_state "$_bs" >/dev/null 2>&1; then _bad_states_ok=0; fi
+    done
+    _selftest_assert_eq "畸形状态串一律被拒" "1" "$_bad_states_ok"
+    _good_states_ok=1
+    for _gs in "off" "unknown" ""; do
+        apply_state "$_gs" >/dev/null 2>&1 || _good_states_ok=0
+    done
+    _selftest_assert_eq "合法状态串一律放行" "1" "$_good_states_ok"
+
 echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # prompt-sync.sh 是使用者 shell 去 source 的独立脚本（不进 CORE_LIBS、不被入口加载）。
     # 路径当场算出来：子 shell 里不会因为变量没导出而丢掉。
