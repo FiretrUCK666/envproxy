@@ -190,7 +190,8 @@ env_vars_in_sync() {
     done
     # launchd 的会话环境是易失的（每次登录/重启清空），而 proxy.env 一直存在——只比对它就等于
     # 认为"第二路也齐了"，重启后那 9 个 setenv 一次都不会重放。两条腿都要核：任一条不符就判"不齐"，
-    # 交给 sync_user_env_vars 整体重写（apply_state、安装、自愈因此共用同一个判据）。
+    # 调用方据此决定要不要 set_user_env_vars 整体重写——apply_state、安装、自愈
+    # 三处都读这一个判据，所以"齐不齐"只有一种答案。
     if command -v launchctl >/dev/null 2>&1; then
         # 逐个核，列表与取值规则同写入端（同一张 PROXY_VAR_NAMES、同一套 case 分派）：
         # 小写拼写也是我们写下的那一份，少核一个就是真的漏（macOS 大小写敏感）。
@@ -217,13 +218,6 @@ env_vars_in_sync() {
 }
 
 # 幂等同步：不齐就补齐，齐了则什么都不做、零写入。
-sync_user_env_vars() {
-    _port="$1"
-    env_vars_in_sync "$_port" && return 0
-    set_user_env_vars "$_port"
-    return 0
-}
-
 # 快照时这个值要不要当成"我们写的"跳过（纯函数，不碰任何状态，可单测）。
 # 用法：snapshot_skip_value 变量名 变量值 是否首次安装（1 = 是）
 # "像我们写的"不够——还要机器上本来就有本工具的安装记录，才可能是我们留下的。
