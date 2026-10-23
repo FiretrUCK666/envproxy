@@ -172,18 +172,41 @@ install_package() {
         _pbak="$_pstage/backup"
         rm -rf "$_pbak" 2>/dev/null || true
         mkdir -p "$_pbak" 2>/dev/null || true
+        # 备份失败必须**中止**，不能继续覆盖。
+        #
+        # 原因在回滚那一侧：回滚的判据是"备份里没有的文件就删掉"（第 253 行）——
+        # 因为覆盖会删掉新包里没有的旧文件，回滚就要把它们还原回来，
+        # 而"备份里没有"被当成了"本来就不该有"。
+        # 一旦备份本身是部分的，这两条合起来就变成：**没备份成功的文件，回滚时被删掉**。
+        # 实测复现过：备份只成功 1 个文件时，回滚删掉另外 2 个，安装区只剩 1 个文件。
+        # 也就是说"更新失败"从一个可恢复的状态变成了丢文件。
+        #
+        # 备份完整性只有这里能保证——回滚后的复读查的是"备份清单里的文件是否都还原了"，
+        # 它按定义查不出"清单本身就缺项"（缺的那项不在清单里，也就没有比对对象）。
+        _pbak_bad=0
         # shellcheck disable=SC2086
         for _pd in $_peff; do
-            [ -d "$_pdest/$_pd" ] && cp -pR "$_pdest/$_pd" "$_pbak/$_pd" 2>/dev/null
+            [ -d "$_pdest/$_pd" ] || continue
+            if ! cp -pR "$_pdest/$_pd" "$_pbak/$_pd" 2>/dev/null; then _pbak_bad=1; fi
             # monitor 不备份：日志与 pid 是活的运行时状态，回滚也不碰它们。
             rm -rf "$_pbak/$_pd/monitor" 2>/dev/null || true
         done
         # 根目录那几个随包文件也要备份：只备份程序目录的话，中途失败回滚后会留下
         # "版本号是新的、程序目录是旧的"——比不滚还难查。名单从包里取，不写死。
-        _pkg_root_files | while IFS= read -r _pf; do
+        # 这里用重定向而不是管道：管道右边跑在子 shell 里，_pbak_bad 的赋值出不来。
+        _pkg_root_files > "$_pstage/root-files.list" 2>/dev/null || true
+        while IFS= read -r _pf; do
             [ -n "$_pf" ] || continue
-            [ -f "$_pdest/$_pf" ] && cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null
-        done
+            [ -f "$_pdest/$_pf" ] || continue
+            if ! cp -p "$_pdest/$_pf" "$_pbak/$_pf" 2>/dev/null; then _pbak_bad=1; fi
+        done < "$_pstage/root-files.list"
+        rm -f "$_pstage/root-files.list" 2>/dev/null || true
+        if [ "$_pbak_bad" = "1" ] || [ ! -d "$_pbak" ]; then
+            echo "拒绝更新：覆盖前的备份没有完整做成（磁盘满、权限不足或被安全软件挡住）。" >&2
+            echo "  没有完整备份就没有可靠回滚，所以现在一个文件都没改。" >&2
+            echo "  请腾出磁盘空间或检查安装目录权限后重试。" >&2
+            return 1
+        fi
     fi
     # shellcheck disable=SC2086
     for _pd in $_peff; do

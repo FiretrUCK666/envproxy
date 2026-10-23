@@ -511,8 +511,14 @@ align_state_once() {
         log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
         return 1
     fi
-    apply_state "$CURRENT_STATE" || true
-    return 0
+    # 状态判出来了，但变量没写成——这两件事必须分开传。
+    # 原来这里写 `|| true`：于是"读到了状态、也写失败了"与"一切正常"对调用方完全一样，
+    # 安装第 3 步就会打印绿色的"已按当前状态校正"（实测过：两个变量文件一个都没写出来）。
+    # 返回值语义：0 = 已对齐（或本来就齐）、1 = 这一轮判不出状态、2 = 判出来了但没写成。
+    if apply_state "$CURRENT_STATE"; then
+        return 0
+    fi
+    return 2
 }
 
 # ------------------------------------------------------------------------------
@@ -589,7 +595,7 @@ monitor_beat_alive() {
     kill -0 "$_mba_pid" 2>/dev/null || return 1
     [ "$_mba_ticks" = "$_mba_pid" ] && return 0   # 老格式只有 pid，降级接受
     _mba_now=$(_pid_start_ticks "$_mba_pid" 2>/dev/null || echo "")
-    case "$_mba_now" in ''|*[!0-9]*) return 0 ;; esac   # 拿不到就按"活着"处理（兜底不添乱）
+    case "$_mba_now" in ''|*[!0-9]*) return 0 ;; esac   # 拿不到就按「活着」处理（兜底不添乱）
     # 现在应当 >= 记下的值；差值超过 600 秒说明这不是同一个进程（pid 复用）。
     [ "$_mba_now" -ge "$_mba_ticks" ] || return 1
     [ $(( _mba_now - _mba_ticks )) -le 600 ] || return 1

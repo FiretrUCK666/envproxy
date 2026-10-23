@@ -974,10 +974,14 @@ self_test() {
             _SEG_LINE=""
             _help_render_line "$_cl_case"
         )
+        # 命令色**从配色表读**，不写死 32：颜色是可调的，写死数字会让"换一个颜色"
+        # 变成"改一处代码 + 改一条测试"。要断言的是行为——"标成 c/rc 的行出命令色，
+        # 别的行不出"，不是"命令色必须是 32"。
+        _cl_color=$(style_color cmd)
         case "$_cl_code:$_cl_got" in
-            c:*"$_cl_esc[32m"*|rc:*"$_cl_esc[32m"*) _cl_ok=1 ;;
+            c:*"$_cl_esc[${_cl_color}m"*|rc:*"$_cl_esc[${_cl_color}m"*) _cl_ok=1 ;;
             c:*|rc:*) _cl_ok=0 ;;
-            *"$_cl_esc[32m"*) _cl_ok=0 ;;
+            *"$_cl_esc[${_cl_color}m"*) _cl_ok=0 ;;
             *) _cl_ok=1 ;;
         esac
         _selftest_assert_eq "配色: $_cl_case" "1" "$_cl_ok"

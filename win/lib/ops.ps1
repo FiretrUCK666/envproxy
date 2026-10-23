@@ -218,12 +218,21 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     #   - 自动化模式（-Uninstall -Purge）：直接彻底删除，不询问
     $removeLog = $Purge
     if (-not $Purge) {
-        try {
-            $choice = Read-Host "历史日志 monitor\monitor.log 是否保留？[Y] 保留（默认） / [N] 彻底删除"
-            if ($choice -match '^[Nn]') { $removeLog = $true }
-        } catch {
-            # 无交互环境（管道/后台调用）：安全默认 = 保留日志
+        # 先判"能不能问"再问。没有护栏时它照样能返回（stdin 重定向到 nul 时 Read-Host
+        # 立即返回空串，实测 0 秒），但那是**碰巧**安全的：屏幕上的提问没人看得见、
+        # 也没人能答，等于问了一个注定被当成"保留"的问题。
+        # 明确不提问、直接按默认值走，比"问了个没人能答的问题"更清楚。
+        if (Test-CanPrompt) {
+            try {
+                $choice = Read-Host "历史日志 monitor\monitor.log 是否保留？[Y] 保留（默认） / [N] 彻底删除"
+                if ($choice -match '^[Nn]') { $removeLog = $true }
+            } catch {
+                $removeLog = $false
+            }
+        } else {
+            # 无交互环境（管道/后台调用）：安全默认 = 保留日志（黑匣子留着，日后能查）
             $removeLog = $false
+            Write-Styled 'dim' "历史日志默认保留（这里没法提问；要一并删除请用 -Uninstall -Purge）。"
         }
     }
     if ($removeLog) {
@@ -267,7 +276,12 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     # 只有没快照的名字才按"有无我们的痕迹"判——否则正确的还原会被误报成残留。
     $varsClean = $true
     foreach ($n in $ProxyVarNames) {
-        $cur = [Environment]::GetEnvironmentVariable($n, "User")
+        # 必须用**不展开**的读法：$restoredWant 来自 Backup 键的 REG_EXPAND_SZ 原文
+        # （可能含 %USERPROFILE%），而 GetEnvironmentVariable 读出来是展开后的字面路径。
+        # 拿展开值跟原文比，凡是快照里带引用的变量都必然"不相等"——功能其实已正确还原，
+        # 复检却报"代理变量仍在"，还提示用户去手动删。用户照做就会删掉自己公司代理的
+        # NO_PROXY 项。同一条判据的两端必须是同一种读法。
+        $cur = Get-UserEnvRaw $n
         if ($restoredWant.ContainsKey($n)) { if ($cur -ne $restoredWant[$n]) { $varsClean = $false } }
         elseif (Test-IsOwnedProxyValue $n $cur) { $varsClean = $false }
     }

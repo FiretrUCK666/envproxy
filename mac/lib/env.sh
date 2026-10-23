@@ -84,6 +84,13 @@ set_user_env_vars() {
     launchctl setenv NO_PROXY "$_np" 2>/dev/null || true
     launchctl setenv no_proxy "$_np" 2>/dev/null || true
     launchctl setenv NODE_USE_ENV_PROXY "1" 2>/dev/null || true
+    # 写没写成由**复读**决定，不由"我执行了 mv"决定。
+    # 上面每一处 `|| true` 都是必要的容错（launchctl 在无 GUI 会话里必然失败，
+    # 而终端路才是主路），但它们把"两个文件一个都没写出来"这种真故障也一起吞了。
+    # 复读判据只问一件事：终端路的两份文件（当前值 + 归属记录）在不在、有没有内容。
+    # 这是真正会让人连不上网的那条路；launchctl 那条缺失只影响 Dock 启动的 App，
+    # 由状态页的终端同步那项单独体现，不在这里混为一谈。
+    [ -s "$PROXY_ENV" ] && [ -s "$OWNED_ENV" ]
 }
 
 # off 态也写这个文件，内容不是"删除"而是"带着归属守卫的 unset"。
@@ -412,8 +419,17 @@ apply_state() {
     else
         _port=$(printf '%s' "$_state" | sed 's/^on://')
         if ! env_vars_in_sync "$_port"; then
-            set_user_env_vars "$_port"
-            log_msg "检测到本地代理端口 $_port -> 已注入代理 $_http"
+            if set_user_env_vars "$_port"; then
+                log_msg "检测到本地代理端口 $_port -> 已注入代理 $_http"
+            else
+                # 写失败必须如实记，不能记"已注入"。
+                # 原来这里无条件记成功：磁盘满、~/.envproxy 不可写、被安全软件挡住时，
+                # 黑匣子里每 60–90 秒刷一条"已注入代理"的假消息，把 200 行历史冲干净，
+                # 而屏幕上（安装第 3 步）是一句绿色的"已按当前状态校正"。
+                log_msg "检测到本地代理端口 $_port -> 环境变量写入失败（见下一条）"
+                return 1
+            fi
         fi
     fi
+    return 0
 }

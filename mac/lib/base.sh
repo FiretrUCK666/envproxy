@@ -157,13 +157,14 @@ _truncate_width() {
     printf '%s…' "${_tw_s:0:_tw_acc}"
 }
 
-STYLE_ROLES="title heading item key value cmd ok warn bad dim text"
+STYLE_ROLES="title heading item key value cmd ok warn dim text"
 style_color() {
     case "$1" in
         title|heading) echo "36" ;;
         item|key|value) echo "97" ;;
-        cmd|ok) echo "32" ;;
-        warn|bad) echo "33" ;;
+        cmd) echo "36" ;;
+        ok) echo "32" ;;
+        warn) echo "33" ;;
         dim) echo "90" ;;
         *) echo "" ;;
     esac

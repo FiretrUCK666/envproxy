@@ -98,14 +98,13 @@ $StyleMap = [ordered]@{
     item    = 'White'     # 编号条目
     key     = 'White'     # 两列的左列（PowerShell / 监控进程…）
     value   = 'White'     # 要强调的值（名字、版本号）
-    cmd     = 'Green'     # 能整行复制去跑的命令
+    cmd     = 'Cyan'      # 能整行复制去跑的命令 / 编号
     ok      = 'Green'     # 做成了
     warn    = 'Yellow'    # 要留意
-    bad     = 'Yellow'    # 没做成 / 有残留
     dim     = 'DarkGray'  # 次要说明，不该抢注意力
     text    = ''          # 正文：跟终端默认色一致
 }
-$StyleRoles = @('title', 'heading', 'item', 'key', 'value', 'cmd', 'ok', 'warn', 'bad', 'dim', 'text')
+$StyleRoles = @('title', 'heading', 'item', 'key', 'value', 'cmd', 'ok', 'warn', 'dim', 'text')
 
 # 「最新版本 : 检查失败（…）」这一句的唯一出处。
 # 早先它在状态页与更新入口各硬编码一遍（共四处），改一次措辞要改四处，
