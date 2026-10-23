@@ -2017,18 +2017,21 @@ jobs:
           nc -h 2>&1 | head -3 || true
       - name: mac 侧自检（真实运行）
         run: |
-          set -o pipefail
-          # 失败摘要同时写进 job summary：它公开可读、跟着运行留档。
-          # 只靠控制台日志的话，没有 API 凭据的人排查时看不到是哪条断言挂了。
-          /bin/bash mac/envproxy.sh self-test 2>&1 | tee /tmp/envproxy-selftest.log
-          rc=${PIPESTATUS[0]}
+          set +e
+          /bin/bash mac/envproxy.sh self-test > /tmp/st.log 2>&1
+          rc=$?
+          cat /tmp/st.log
           if [ "$rc" -ne 0 ]; then
+            grep -E '^  FAIL|unbound variable|syntax error|command not found' /tmp/st.log > /tmp/st.fail 2>/dev/null || true
             {
               echo '## mac 侧自检失败'
               echo ''
               echo '```'
-              grep -E '^  FAIL|^自检' /tmp/envproxy-selftest.log | head -40 || true
+              head -30 /tmp/st.fail
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r line; do
+              echo "::error title=mac-self-test::$line"
+            done < /tmp/st.fail
           fi
           exit "$rc"
