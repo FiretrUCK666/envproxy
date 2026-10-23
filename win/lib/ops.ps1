@@ -491,6 +491,9 @@ function Show-StatusSnapshot($st) {
                          } else {
                              Write-Styled 'dim' "  在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。"
                          } }
+            'stale'    { Write-Styled 'warn' "终端同步 : 同步块是旧版本的"
+                         # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
+                         Write-Styled 'dim' "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" }
             'missing'  { Write-Styled 'warn' "终端同步 : 配置文件里没有同步块"
                          Write-Styled 'dim' "  打开菜单选 1 可以写入。" }
             'unknown'  { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断"
@@ -924,7 +927,7 @@ function Get-HelpTopics {
                 't 每 2 到 3 秒看一次。要同时满足三条才算：',
                 'i 1. 本机有端口在监听；',
                 'i 2. 它确实是个代理，会回应握手；',
-                'i 3. 它确实连得通外面，试 7 个端点任意一个通就算。',
+                'i 3. 它确实连得通外面，试 6 个端点任意一个通就算。',
                 't 三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。',
                 't 它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。'
             )

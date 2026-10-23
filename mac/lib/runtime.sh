@@ -254,7 +254,7 @@ _repair_hooks() {
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
         [ -f "$_rc" ] || continue
         _any=1
-        if ! _hook_block_paired "$_rc" 2>/dev/null || ! grep -qxF "$HOOK_LINE" "$_rc" 2>/dev/null; then
+        if ! _hook_block_paired "$_rc" 2>/dev/null || ! _hook_marker_present "$_rc" "$HOOK_LINE"; then
             _need=1
             break
         fi
@@ -284,6 +284,21 @@ _repair_hooks() {
 # 人一旦明确说出"我同意修"，就不该再被拒。所以给一个显式入口，
 # 语义是"我确认这是半截标记，删掉它"，而不是"你猜一个"。
 # 与 Windows 侧 Repair-ProfileMarkers 同一语义。
+# "我们的标记行在不在这份文件里"——全项目唯一的判据（与 Windows 侧 Test-MarkerPresent 同义）。
+#
+# 为什么不能直接用 grep -qxF：那是整行精确匹配，末尾多一个空格就当没有。
+# 而"标记在不在"被用在五处（判有没有块、判成对、状态页判 missing/unpaired/stale、
+# 修复入口判要不要修、卸载时判要不要摘）。各处严格度不一样，同一个文件就会给出
+# 互相矛盾的结论，其中一个后果是修复入口看不见问题、那条补救路变成死路（实测过）。
+# 判据只认"去掉首尾空白后逐字节相等"。
+_hook_marker_present() {
+    _hmp_file="$1"
+    _hmp_mark="$2"
+    [ -f "$_hmp_file" ] || return 1
+    # 用 awk 而不是 grep：需要按行去首尾空白再比。awk 是 POSIX 自带，无依赖。
+    awk -v m="$_hmp_mark" '{ line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line); if (line == m) { found=1; exit } } END { exit found ? 0 : 1 }' "$_hmp_file" 2>/dev/null
+}
+
 repair_hook_markers() {
     _rhm_fixed=0
     _rhm_failed=0
@@ -291,8 +306,8 @@ repair_hook_markers() {
         [ -f "$_rc" ] || continue
         # 只处理"确有标记但不成对"的文件；成对的与完全没装的都不碰。
         _rhm_s=0; _rhm_e=0
-        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null && _rhm_s=1
-        grep -qxF "$HOOK_END" "$_rc" 2>/dev/null && _rhm_e=1
+        _hook_marker_present "$_rc" "$HOOK_START" && _rhm_s=1
+        _hook_marker_present "$_rc" "$HOOK_END" && _rhm_e=1
         [ "$_rhm_s" = "$_rhm_e" ] && continue
         _rhm_tmp="$_rc.tmp.$$"
         _backup_rc "$_rc"
@@ -304,7 +319,7 @@ repair_hook_markers() {
         fi
         if [ -s "$_rhm_tmp" ] && _write_rc_atomic "$_rhm_tmp" "$_rc"; then
             # 读回复检：修没修成由复读决定，不由"我调用了写入"决定。
-            if grep -qxF "$HOOK_START" "$_rc" 2>/dev/null || grep -qxF "$HOOK_END" "$_rc" 2>/dev/null; then
+            if _hook_marker_present "$_rc" "$HOOK_START" || _hook_marker_present "$_rc" "$HOOK_END"; then
                 _rhm_failed=$((_rhm_failed + 1))
             else
                 _rhm_fixed=$((_rhm_fixed + 1))
@@ -329,20 +344,20 @@ insert_shell_hooks() {
     for _rc in $(rc_zsh_files); do
         touch "$_rc" 2>/dev/null || continue
         _normalize_hook_block "$_rc" || true
-        if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
+        if ! _hook_marker_present "$_rc" "$HOOK_START"; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
     for _rc in $(rc_bash_files); do
         [ -f "$_rc" ] || continue
         _normalize_hook_block "$_rc" || true
-        if ! grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then
+        if ! _hook_marker_present "$_rc" "$HOOK_START"; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
     done
     # 落点判据：两个 zsh 落点至少一个有完整 hook 块，否则终端路不通。
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
-        if _hook_block_paired "$_rc" 2>/dev/null && grep -qxF "$HOOK_LINE" "$_rc" 2>/dev/null; then
+        if _hook_block_paired "$_rc" 2>/dev/null && _hook_marker_present "$_rc" "$HOOK_LINE"; then
             return 0
         fi
     done
@@ -353,12 +368,23 @@ insert_shell_hooks() {
 # 经临时文件写回原文件，不改 inode/软链/权限——mv 替换会把软链换成普通文件，不用。
 # 安全三条：判定与删除统一用整行匹配；开始行与结束行必须成对且有序才动手，
 # 缺一侧或顺序错乱就一个字节都不改；动手前先备份。
+# 按与 _hook_marker_present 完全相同的判据（去首尾空白后逐字节相等）找行号。
+# 取行号也必须用这一套：先用宽容判据判"在不在"、再用 grep -nxF 取行号的话，
+# 标记带尾随空格时会出现"存在=true、行号取不到、于是判不成对"——两套判据打架，
+# 结果就是那个"看得到问题却修不了"的死状态。
+_hook_marker_line() {
+    _hml_file="$1"
+    _hml_mark="$2"
+    [ -f "$_hml_file" ] || return 1
+    awk -v m="$_hml_mark" '{ line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line); if (line == m) { print NR; exit } }' "$_hml_file" 2>/dev/null
+}
+
 _hook_block_paired() {
     _hrc="$1"
-    grep -qxF "$HOOK_START" "$_hrc" 2>/dev/null || return 1
-    grep -qxF "$HOOK_END" "$_hrc" 2>/dev/null || return 1
-    _s=$(grep -nxF "$HOOK_START" "$_hrc" 2>/dev/null | head -n 1 | cut -d: -f1)
-    _e=$(grep -nxF "$HOOK_END" "$_hrc" 2>/dev/null | head -n 1 | cut -d: -f1)
+    _hook_marker_present "$_hrc" "$HOOK_START" || return 1
+    _hook_marker_present "$_hrc" "$HOOK_END" || return 1
+    _s=$(_hook_marker_line "$_hrc" "$HOOK_START")
+    _e=$(_hook_marker_line "$_hrc" "$HOOK_END")
     _s=$(printf '%s' "$_s" | tr -cd '0-9'); _e=$(printf '%s' "$_e" | tr -cd '0-9')
     [ -n "$_s" ] && [ -n "$_e" ] && [ "$_s" -lt "$_e" ] || return 1
     return 0
@@ -445,7 +471,7 @@ _write_rc_atomic() {
 
 _normalize_hook_block() {
     _hrc="$1"
-    grep -qxF "$HOOK_START" "$_hrc" 2>/dev/null || return 0
+    _hook_marker_present "$_hrc" "$HOOK_START" || return 0
     if ! _hook_block_paired "$_hrc"; then
         log_msg "shell hook 标记不完整（缺结束行或顺序错乱），未改动：$_hrc"
         return 0
@@ -455,7 +481,9 @@ _normalize_hook_block() {
     [ "$_have" = "$_hwant" ] && return 0
     _htmp="$_hrc.tmp.$$"
     _backup_rc "$_hrc"
-    if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_hrc" > "$_htmp" 2>/dev/null; then
+    # 判据与 _hook_marker_present 一致（去首尾空白后比）。
+    # 这里同样踩过：整行精确匹配 + 宽容判"有块" = 摘不到开始行 = 后面全删。
+    if awk -v s="$HOOK_START" -v e="$HOOK_END" '{ line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line); if(line==s){skip=1;next} if(line==e){skip=0;next} if(!skip) print }' "$_hrc" > "$_htmp" 2>/dev/null; then
         if ! _write_rc_atomic "$_htmp" "$_hrc"; then
             log_msg "shell hook 改写失败（原文件保持不变）：$_hrc"
         fi
@@ -474,7 +502,7 @@ remove_shell_hooks() {
         # 留着它只会让家目录多出一堆 .envproxy.bak，而屏幕上还印着"已恢复到安装前的状态"。
         # 注意只在块确实被摘掉之后才删，否则那份快照还是唯一的还原依据。
         _had_block=0
-        grep -qxF "$HOOK_START" "$_rc" 2>/dev/null && _had_block=1
+        _hook_marker_present "$_rc" "$HOOK_START" && _had_block=1
         # 没有标记的文件碰都不碰：全量重写会改 mtime，白白弄脏用户文件。
         [ "$_had_block" = "1" ] || continue
         if ! _hook_block_paired "$_rc"; then
@@ -483,7 +511,11 @@ remove_shell_hooks() {
         fi
         _tmp="$_rc.tmp.$$"
         _backup_rc "$_rc"
-        if awk -v s="$HOOK_START" -v e="$HOOK_END" '$0==s{skip=1;next} $0==e{skip=0;next} !skip' "$_rc" > "$_tmp" 2>/dev/null; then
+        # 摘除用的判据必须与"判有没有块"完全一致（去首尾空白后比较）。
+        # 原来这里写 `$0==s`（整行精确），而上面判断用的是宽容判据：标记带尾随空格时，
+        # 判"有块"成立、这里却匹配不到开始行 → skip 永远不置位 → **文件后半部分被整段删掉**。
+        # 实测踩到过（自检里那条"结束行尾随空格"的用例，文件被清空）。
+        if awk -v s="$HOOK_START" -v e="$HOOK_END" '{ line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line); if(line==s){skip=1;next} if(line==e){skip=0;next} if(!skip) print }' "$_rc" > "$_tmp" 2>/dev/null; then
             if ! _write_rc_atomic "$_tmp" "$_rc"; then
                 log_msg "shell hook 清理失败（原文件保持不变）：$_rc"
             else

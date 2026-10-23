@@ -179,6 +179,12 @@ case "$_CMD_NORM" in
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     help) show_help;;
+    # DIVERGE(Mac): self-test 只有 mac 有，Windows 侧没有对应子命令。
+    #   为什么：这份自检跑在临时沙箱里（重定向 HOME、不碰真实配置），靠的是 shell 的
+    #   变量替换与子进程隔离，用 bash 实现是自然的。Windows 侧的同等回归住在
+    #   tests\test-win-pure.ps1 里，由 CI 跑（5.1 与 7 各一遍），不随安装包分发——
+    #   随包发一份 .ps1 自检会让包内文件集多一项、而它从不被用户调用。
+    #   两边都要有"能自检"这个能力，但入口形状不同是有意的，不是漏了。
     self-test)
         # 自检的正文住在一个单独的文件里，不随运行时库加载：它是"沙箱里跑断言"，体量超过任何一个库，
         # 不是使用者每次 install/status 都要解析的逻辑。Windows 侧的对应物一直是独立文件。

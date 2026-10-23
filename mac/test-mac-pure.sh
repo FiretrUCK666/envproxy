@@ -156,10 +156,15 @@ self_test() {
     _normalize_hook_block "$HOME/.zshenv" || true
     _selftest_assert_eq "缺结束行时一个字节都不改" "$_before" "$(cat "$HOME/.zshenv" 2>/dev/null)"
 
+    # 结束行尾随空格：**要认得出来并正常移除**，不能当成"没这个标记"。
+    # 为什么改了判据：原来这里断言"一个字节都不改"，那等于把"标记带空格就看不见"
+    # 固定成行为。而这个盲目与"标记在不在"的其它四处（状态页、修复入口、安装、卸载）
+    # 各用一套严格度时，同一个文件会给出互相矛盾的结论——状态页说"没有同步块"、
+    # 修复入口说"没有需要修的"，那条补救路就是死的（实测过）。
+    # 判据已统一成"去首尾空白后逐字节相等"，所以这里改成断言真的摘干净。
     printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' 'HOOK' '# <<< EnvProxy <<< ' 'alias ll="ls"' > "$HOME/.zshenv"
-    _before=$(cat "$HOME/.zshenv" 2>/dev/null)
     remove_shell_hooks 2>/dev/null || true
-    _selftest_assert_eq "结束行尾随空格时不截断" "$_before" "$(cat "$HOME/.zshenv" 2>/dev/null)"
+    _selftest_assert_file_eq "结束行尾随空格也能正常移除" "$(printf '%s\n' 'export PATH=/x' 'alias ll="ls"')" "$HOME/.zshenv"
 
     printf '%s\n' 'export PATH=/x' '# >>> EnvProxy >>>' "$HOOK_LINE" '# <<< EnvProxy <<<' 'alias ll="ls"' > "$HOME/.zshenv"
     remove_shell_hooks 2>/dev/null || true

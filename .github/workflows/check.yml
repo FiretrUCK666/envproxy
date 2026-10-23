@@ -1097,6 +1097,23 @@ jobs:
           $hiRaw = $thr + $pto + [math]::Max(($flr - 1) * ($fast + $pto), $dwl) + $debDown
           $lo = [int]([math]::Ceiling($loRaw / 5.0) * 5)
           $hi = [int]([math]::Ceiling($hiRaw / 5.0) * 5)
+          # 帮助文案里印的那个数字也要守：它是用户直接读到的，而它不在 README 里，
+          # 所以 README 那几条核对碰不到它。删 twitter 端点（7 → 6）时两侧帮助都漏改了，
+          # 而所有门禁全绿——漂的正是"用户会照着数的那句话"。
+          foreach ($hp in @(@('win/lib/ops.ps1', 'win'), @('mac/lib/ops.sh', 'mac'))) {
+            $htxt = Get-Content $hp[0] -Raw -Encoding UTF8
+            $hm = [regex]::Matches($htxt, '试 (\d+) 个端点')
+            if ($hm.Count -eq 0) {
+              Write-Host ("{0}：帮助文案里找不到「试 N 个端点」这句（文案改了就要同步这条门禁）" -f $hp[1]); $fail = 1
+            } else {
+              foreach ($h in $hm) {
+                if ([int]$h.Groups[1].Value -ne $epCount) {
+                  Write-Host ("{0}：帮助里写「试 {1} 个端点」，代码里是 {2} 个" -f $hp[1], $h.Groups[1].Value, $epCount)
+                  $fail = 1
+                }
+              }
+            }
+          }
           $facts = @(
             @('端点个数', "$epCount 个不同的端点", "$epCount different endpoints"),
             @('日志上限', "${psKB}KB", "${psKB}KB"),

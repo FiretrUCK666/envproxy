@@ -179,7 +179,7 @@ uninstall_envproxy() {
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
     # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
     for _rc in $(rc_check_files); do
-        if grep -qxF "$HOOK_START" "$_rc" 2>/dev/null; then _dirty="$_dirty 终端同步的配置块还在（$_rc）；"; break; fi
+        if _hook_marker_present "$_rc" "$HOOK_START"; then _dirty="$_dirty 终端同步的配置块还在（$_rc）；"; break; fi
     done
     if proxy_vars_present 2>/dev/null; then _dirty="$_dirty 代理变量仍在；"; fi
     if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
@@ -265,14 +265,15 @@ show_status() {
     _ts_state="missing"
     _ts_hits=0
     _ts_unpaired=0
+    _ts_stale=0
     _ts_badline=""
     for _ts_p in $(rc_check_files); do
         [ -f "$_ts_p" ] || continue
         # 先看有没有我们的标记：连标记都没有的文件不是「不成对」，是「没装过」，不计数。
         _ts_has_s=0
-        grep -qxF "$HOOK_START" "$_ts_p" 2>/dev/null && _ts_has_s=1
+        _hook_marker_present "$_ts_p" "$HOOK_START" && _ts_has_s=1
         _ts_has_e=0
-        grep -qxF "$HOOK_END" "$_ts_p" 2>/dev/null && _ts_has_e=1
+        _hook_marker_present "$_ts_p" "$HOOK_END" && _ts_has_e=1
         [ "$_ts_has_s" = "0" ] && [ "$_ts_has_e" = "0" ] && continue
         if ! _hook_block_paired "$_ts_p"; then
             _ts_unpaired=$((_ts_unpaired + 1))
@@ -282,12 +283,21 @@ show_status() {
             continue
         fi
         # 成对了还要看钩子行是不是当前版本：标记在、钩子行被改过就不算生效。
-        grep -qxF "$HOOK_LINE" "$_ts_p" 2>/dev/null && _ts_hits=$((_ts_hits + 1))
+        if _hook_marker_present "$_ts_p" "$HOOK_LINE"; then
+            _ts_hits=$((_ts_hits + 1))
+        else
+            # 块成对、但不是当前版本：这是"过期"，不是"没有块"。
+            # 报成 missing 会让用户以为从没装过；而它其实装过、只是那段代码旧了。
+            # 与 Windows 侧 stale 同一口径（安装会按当前版本重写，不用用户动手）。
+            _ts_stale=$((_ts_stale + 1))
+        fi
     done
     if [ "$_ts_hits" -gt 0 ]; then
         _ts_state="ok"
     elif [ "$_ts_unpaired" -gt 0 ]; then
         _ts_state="unpaired"
+    elif [ "$_ts_stale" -gt 0 ]; then
+        _ts_state="stale"
     fi
 
     # 代理变量：整条地址读回来（不只端口），再试连看它指向的端口还在不在。
@@ -436,6 +446,10 @@ show_status() {
             else
                 style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再选 1。"
             fi ;;
+        stale)
+            style_out warn "终端同步 : 同步块是旧版本的"
+            # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
+            style_out dim "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" ;;
         missing)
             style_out warn "终端同步 : 配置文件里没有同步块"
             style_out dim "  打开菜单选 1 可以写入。" ;;
@@ -644,11 +658,16 @@ get_menu_key_range() {
     echo "$_mkr_text"
 }
 
+# 底部那一行「有 1-8」/「有 1 2 3 5 6 7 8」。
+# **不能只取首尾**：从主题表里删掉一项之后，首尾相减仍然给出「1-8」，
+# 而那段时间里 4 已经不存在了——用户照着敲 4，得到「没有这个编号」。
+# 提示的用途是告诉他能敲什么，说错比不说更糟。
+# 判据只有一处：format_key_list（它已经会处理断层），这里只加前缀。
 format_help_key_range() {
     _hkr_n=${#HELP_TOPIC_KEYS[@]}
     if [ "$_hkr_n" -eq 0 ]; then echo "没有可用的编号"; return 0; fi
     if [ "$_hkr_n" -eq 1 ]; then echo "只有 ${HELP_TOPIC_KEYS[0]}"; return 0; fi
-    echo "有 ${HELP_TOPIC_KEYS[0]}-${HELP_TOPIC_KEYS[$((_hkr_n - 1))]}"
+    echo "有 $(format_key_list "${HELP_TOPIC_KEYS[@]}")"
 }
 _help_topic_title() {
     case "$1" in
@@ -816,7 +835,7 @@ h 它怎么判断你现在在翻墙
 t 每 2 到 3 秒看一次。要同时满足三条才算：
 i 1. 本机有端口在监听；
 i 2. 它确实是个代理，会回应握手；
-i 3. 它确实连得通外面，试 7 个端点任意一个通就算。
+i 3. 它确实连得通外面，试 6 个端点任意一个通就算。
 t 三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。
 t 它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
 TOPIC
@@ -828,12 +847,13 @@ i 1. 装完之后才打开的窗口
 t2 启动时读到的就是当前状态，什么都不用做。
 b 
 i 2. 装完之后打开的窗口，后来代理又变了
-t2 按一次回车即可。
+t2 按一次回车即可。cmd 窗口没有这个机制，只能重开。
 b 
 i 3. 装之前就已经开着的窗口
 t2 同步代码还没装进去。在那个窗口里敲下面这一条，或者重开窗口：
 b 
 rc zsh / bash|. ~/.envproxy/prompt-sync.sh
+rc cmd|Windows 的 cmd 窗口没有这条命令，只能重开
 b 
 t 开头的点号和后面的空格都不能少；fish 不支持。
 b 
@@ -850,6 +870,9 @@ rc zsh / bash|export ENVPROXY_TERM=off
 b 
 t 敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
 t fish 不支持：它不读这些配置文件，这个开关对它无效。
+b 
+w 别只 unset 一个拼写：mac 上大写和小写是两个变量，各写一份。
+t 只清大写的话，小写那份还在，curl 照样走代理——两个都要清。
 b 
 h 二、改回自动跟随
 b 
@@ -946,7 +969,7 @@ r 补充|--purge  卸载时连历史日志一起删
 r 补充|repair-profile  摘掉配置文件里孤立的标记（会先备份）
 t --purge 连日志一起删，只配 uninstall 用。完整写法：
 c bash envproxy.sh status
-t self-test 是给排查问题用的：它在一个临时沙箱里跑一遍内部检查，
+t self-test 是 mac 独有（Windows 的同等检查不进安装包，由开发侧跑）。
 t 不碰你的 ~/.zshrc 和环境变量，只报告自检结果或指出哪一项不对。
 TOPIC
     ;;

@@ -340,18 +340,35 @@ function Read-ProfileLines([string]$Path) {
 # 全项目只用这一个判据：混用 -ceq 与 -contains 会让"装"与"卸"得出相反结论——
 # 标记大小写被改过时，安装报 verify-failed、卸载报 unpaired，用户从此既装不上也卸不掉。
 # 与 Mac 侧 grep -qxF（字节比较）同口径。
+# "我们的标记行在不在这份文件里"——**全项目唯一的判据**。
+#
+# 为什么必须容忍首尾空白：编辑器保存、手工编辑、Markdown 工具补空格，都会让标记行
+# 末尾多一个空格。而"标记在不在"被用在五处：安装前判有没有块、判成对、状态页判
+# missing/unpaired、修复入口判要不要修、卸载时判要不要摘。这些地方原来各写一份比较，
+# 严格度还不一样（有的整行 -ceq、有的 .Trim() -ceq），于是同一个文件能给出三种结论：
+# 状态页说"没有同步块"、安装说"标记不成对"、修复入口说"没有需要修的"——而修复入口
+# 存在的唯一理由就是把"不成对"这个死状态救回来。它看不见，那条路就是死的。
+# 实测复现过：开始标记末尾一个空格，四处的结论分别是 False / False / missing / Fixed 0。
+#
+# 判据本身只认"去掉首尾空白后逐字节相等"：标记是我们自己写的固定字符串，
+# 大小写敏感是对的（-ceq 保留），但首尾空白不该影响"它是不是那一行"。
 function Test-MarkerPresent([string[]]$Lines, [string]$Marker) {
-    foreach ($l in $Lines) { if ($l -ceq $Marker) { return $true } }
+    $want = $Marker.Trim()
+    foreach ($l in $Lines) { if ($l.Trim() -ceq $want) { return $true } }
     return $false
 }
 
 function Test-ProfileBlockPaired([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return $false }
     $lines = @(Read-ProfileLines $Path)
+    # 与 Test-MarkerPresent 同一判据（去首尾空白后逐字节比）：同一个概念不准有两套严格度。
+    $bs = $ProfileBlockStart.Trim()
+    $be = $ProfileBlockEnd.Trim()
     $s = -1; $e = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
-        if ($lines[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+        $t = $lines[$i].Trim()
+        if ($t -ceq $bs -and $s -lt 0) { $s = $i }
+        if ($t -ceq $be -and $e -lt 0) { $e = $i }
     }
     return (($s -ge 0) -and ($e -gt $s))
 }
@@ -362,8 +379,8 @@ function Test-ProfileBlockCurrent([string]$Path) {
     $lines = @(Read-ProfileLines $Path)
     $s = -1; $e = -1
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
-        if ($lines[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+        if ($lines[$i].Trim() -ceq $ProfileBlockStart.Trim() -and $s -lt 0) { $s = $i }
+        if ($lines[$i].Trim() -ceq $ProfileBlockEnd.Trim() -and $e -lt 0) { $e = $i }
     }
     if ($s -lt 0 -or $e -le $s) { return $false }
     $have = @($lines[$s..$e])
@@ -517,6 +534,17 @@ function Get-TerminalSyncState {
     if ($pol) { return @{ State = 'blocked'; Detail = $pol } }
     if ($current -gt 0) { return @{ State = 'ok'; Detail = '' } }
     if ($unpaired -gt 0) { return @{ State = 'unpaired'; Detail = '配置文件里的标记不成对，未改动它'; Path = $badPath; Line = $badLine } }
+    # 到这儿还有第三种情况：标记成对、但块内容与当前版本不一致（升级后没走"安装"、
+    # 或者块被改过）。它既不是"没有块"也不是"不成对"——报成 missing 会让用户以为
+    # 从没装过，而去点"安装"（能修好，但屏幕先给了一个错的事实）。
+    # 判据与安装侧同一件事：Test-ProfileBlockCurrent 不成立就是过期。
+    $stale = 0
+    foreach ($p in $paths) {
+        if (-not (Test-Item $p)) { continue }
+        if (-not (Test-MarkerPresent @(Read-ProfileLines $p) $ProfileBlockStart)) { continue }
+        if (Test-ProfileBlockPaired $p) { $stale++ }
+    }
+    if ($stale -gt 0) { return @{ State = 'stale'; Detail = '同步块是旧版本的，没自动改' } }
     return @{ State = 'missing'; Detail = '配置文件里没有同步块' }
 }
 
@@ -909,8 +937,8 @@ function Install-OneShellProfile([string]$path) {
                 # 有完整旧块：摘掉它，换成新版
                 $s = -1; $e = -1
                 for ($i = 0; $i -lt $existing.Count; $i++) {
-                    if ($existing[$i] -ceq $ProfileBlockStart -and $s -lt 0) { $s = $i }
-                    if ($existing[$i] -ceq $ProfileBlockEnd -and $e -lt 0) { $e = $i }
+                    if ($existing[$i].Trim() -ceq $ProfileBlockStart.Trim() -and $s -lt 0) { $s = $i }
+                    if ($existing[$i].Trim() -ceq $ProfileBlockEnd.Trim() -and $e -lt 0) { $e = $i }
                 }
                 for ($i = 0; $i -lt $existing.Count; $i++) {
                     if ($i -ge $s -and $i -le $e) { continue }
@@ -981,13 +1009,13 @@ function Remove-OneShellProfile([string]$path) {
     $removed = 0
     for ($i = 0; $i -lt $existing.Count; $i++) {
         $line = $existing[$i]
-        if (-not $skipping -and $line -ceq $ProfileBlockStart) {
+        if (-not $skipping -and $line.Trim() -ceq $ProfileBlockStart.Trim()) {
             $skipping = $true
             $removed++
             continue
         }
         if ($skipping) {
-            if ($line -ceq $ProfileBlockEnd) { $skipping = $false }
+            if ($line.Trim() -ceq $ProfileBlockEnd.Trim()) { $skipping = $false }
             continue
         }
         [void]$keep.Add($line)
