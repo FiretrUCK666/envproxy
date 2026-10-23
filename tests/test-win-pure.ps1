@@ -332,7 +332,25 @@ foreach ($ss in @('ok', 'blocked', 'unpaired', 'missing', 'stale', 'nohost')) {
     # 于是"正常态被误判成未知"这种 bug 会假绿（真发生过：补 nohost 时漏了 ok，
     # 屏幕上打成"终端同步 : 状态未知（ok）"，而这条断言当时是绿的）。
     # 现在要求：正常态必须说"已生效"，异常态不许出现"状态未知"。
-    $syncLine = @($probeOut | Where-Object { $_ -match '终端同步' })
+    #
+    # 状态行是**两段**渲染的（标签用 key、内容按状态上色），所以 6>&1 捕获到的是
+    # 一行拆成的两个元素。这里先把同一个标签后面的内容接回去再判断，
+    # 否则只会看到"终端同步 : "这半截，断言永远红（实测踩过）。
+    $joined = [System.Collections.Generic.List[string]]::new()
+    $pending = $null
+    foreach ($o in $probeOut) {
+        $s = [string]$o
+        if ($s -match '(监控进程|开机自启|翻墙代理|终端同步|代理变量|版本)\s*:\s*$') {
+            $pending = $s.TrimEnd()
+        } elseif ($null -ne $pending) {
+            $joined.Add(($pending + ' ' + $s.Trim()))
+            $pending = $null
+        } else {
+            $joined.Add($s)
+        }
+    }
+    if ($null -ne $pending) { $joined.Add($pending) }
+    $syncLine = @($joined | Where-Object { $_ -match '终端同步' })
     $hasLine = $syncLine.Count -gt 0
     Assert-Eq ("终端同步状态必须有对应那一行：" + $ss) $true $hasLine
     if ($ss -eq 'ok') {
@@ -958,6 +976,22 @@ Assert-Eq 'the table puts the missing-package case last' 'missing' $UpdateFailur
 Assert-Eq 'no reason at all falls back to unreachable' 'network' (Select-UpdateFailureKind @())
 Assert-Eq 'an empty reason falls back to unreachable' 'network' (Select-UpdateFailureKind @(''))
 # 接线：重试之后必须走挑选规则，不许把后一次的原因直接盖上去。
+# 状态页的行结构：标签固定 key 色，内容按状态取角色。
+#
+# 为什么要有这条断言：原来状态页每一行把「标签 : 内容」整行套一个角色，
+# 于是"代理变量 : 无（直连状态）"整行变灰，标签也跟着灰——用户最先看的恰恰是标签。
+# 状态好的行整行绿、状态无的行整行灰，扫一眼只看到"有的绿有的灰"，分不清哪段是名字。
+# 这条断言钉住"标签用 key"这个结构，改回整行同色就红。
+$labelRoles = @()
+$src = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '../win/lib/ops.ps1'))
+# 状态页里每个标签都必须经 Write-StatusRow 输出（它会用 key 上色）
+foreach ($lbl in @('监控进程', '开机自启', '翻墙代理', '终端同步', '代理变量', '版本')) {
+    $inRow = [regex]::IsMatch($src, "Write-StatusRow '" + $lbl + "'")
+    $inBare = [regex]::IsMatch($src, "Write-Styled '\w+' ""?" + $lbl + " : ")
+    Assert-Eq ('status row uses the split renderer: ' + $lbl) $true $inRow
+    Assert-Eq ('status label is not painted by the whole-line colour: ' + $lbl) $false $inBare
+}
+
 # 回环判据：与 Mac 侧 is_loopback_url 同一张表、同一批结论（两侧各跑一遍，门禁 10 互比）。
 Assert-Eq 'loopback url: http://127.0.0.1:7078' 'true' (Test-LoopbackUrl 'http://127.0.0.1:7078')
 Assert-Eq 'loopback url: http://[::1]:7078' 'true' (Test-LoopbackUrl 'http://[::1]:7078')

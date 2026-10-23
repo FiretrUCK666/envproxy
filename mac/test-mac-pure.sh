@@ -1080,6 +1080,19 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         esac
     done
     _selftest_assert_eq "配色: 每个角色的颜色名都在映射表里" "" "$_cc_missing"
+    # 状态页的行结构：标签固定 key 色，内容按状态取角色。
+    # 原来每一行把「标签 : 内容」整行套一个角色，于是"代理变量 : 无"整行变灰、
+    # 标签也跟着灰——用户最先看的恰恰是标签。这条钉住"标签走 _status_row"这个结构。
+    _sr_bad=""
+    for _sr_lbl in 监控进程 开机自启 翻墙代理 终端同步 代理变量 版本; do
+        grep -q "_status_row \"$_sr_lbl\"" "$SCRIPT_DIR/lib/ops.sh" || _sr_bad="$_sr_bad $_sr_lbl(缺)"
+        # 不许再有"整行同色 + 标签 : 内容"的老写法
+        if grep -qE "style_out (ok|warn|dim) \"$_sr_lbl : " "$SCRIPT_DIR/lib/ops.sh"; then
+            _sr_bad="$_sr_bad $_sr_lbl(整行同色)"
+        fi
+    done
+    _selftest_assert_eq "状态页: 每行都走分段渲染" "" "$_sr_bad"
+    _selftest_assert_eq "状态页: 标签色就是 key 色" "97" "$(style_color key)"
     # 颜色名清单只是"枚举源"，真正决定渲染的是 style_code_of_name 的 case 分支。
     # 只比清单的话，把 case 标签写错一个字母（darkgray -> darkgrey）不会有任何断言红，
     # 而那一档颜色会静默变成"无色"——实测确认过这一点。

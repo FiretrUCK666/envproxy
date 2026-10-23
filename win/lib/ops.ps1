@@ -442,6 +442,18 @@ function Get-StatusSnapshot {
     return $st
 }
 
+# 状态页的一行：左列标签固定一种颜色，右侧内容按状态取角色。
+#
+# 为什么不一整行一个颜色：标签（"监控进程"、"翻墙代理"）是**固定的名词**，
+# 它不该随状态变色。整行同色时，状态好的行整行绿、状态无的行整行灰，
+# 用户扫一眼看到的是"有的绿有的灰"，却分不清哪一段是名字、哪一段是结论。
+# 标签统一用 key（与帮助左列、菜单名字同色），内容按状态用 ok/warn/dim/text，
+# 于是"名词—判断"这条结构在任何状态下都长得一样。
+function Write-StatusRow([string]$Label, [string]$Value, [string]$Role = 'text') {
+    Write-Styled 'key' ($Label + ' : ') -NoNewline
+    Write-Styled $Role $Value
+}
+
 # 把状态对象渲染成屏幕。纯渲染：不再做任何探测，也不再写任何东西。
 
 function Show-StatusSnapshot($st) {
@@ -482,7 +494,7 @@ function Show-StatusSnapshot($st) {
     # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
     $m = $st.Monitor
     if (-not $m) {
-        Write-Styled 'warn' "监控进程 : 未运行"
+        Write-StatusRow '监控进程' '未运行' 'warn'
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
         # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
@@ -508,29 +520,29 @@ function Show-StatusSnapshot($st) {
     }
     if (-not $st.AutoRunOk) {
         if ($st.AutoRunRaw) {
-            Write-Styled 'warn' "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
+            Write-StatusRow '开机自启' '记录还在，但启动文件已不存在（登录时不会启动）' 'warn'
             Write-Styled 'dim' ("  记录指向：{0}" -f $(if ($st.AutoRunLauncher) { $st.AutoRunLauncher } else { $st.AutoRunRaw }))
         } else {
-            Write-Styled 'warn' "开机自启 : 未启用"
+            Write-StatusRow '开机自启' '未启用' 'warn'
         }
         Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以重建。"
     }
     if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
-        Write-Styled 'dim' "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
+        Write-StatusRow '代理变量' '无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）' 'dim'
     } elseif ($st.ProxyValue -and $null -eq $st.ProxyAlive) {
         # 值在，但不是个能解析的地址。与"端口已不在"分开说：那个等监控自愈就行，
         # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
         # 不许落绿字"已注入"——那等于告诉用户一切正常。
-        Write-Styled 'warn' ("代理变量 : 值不是合法地址（{0}）" -f $st.ProxyValue)
+        Write-StatusRow '代理变量' ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
-        Write-Styled 'warn' ("代理变量 : 指向的端口已不在（{0}）" -f $st.ProxyValue)
+        Write-StatusRow '代理变量' ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
         Write-Styled 'dim' "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"
     } elseif ($st.ProxyValue -and -not $m) {
-        Write-Styled 'warn' ("代理变量 : 已注入（{0}），但没人维护" -f $st.ProxyValue)
+        Write-StatusRow '代理变量' ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
         Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
     }
@@ -540,10 +552,10 @@ function Show-StatusSnapshot($st) {
         # 这个 switch 只管"有问题的那几种"，default 负责兜住将来新增而这里没跟上的状态。
         switch ($st.TermSync.State) {
             'ok'       { }
-            'blocked'  { Write-Styled 'warn' "终端同步 : 装了但跑不起来"
+            'blocked'  { Write-StatusRow '终端同步' '装了但跑不起来' 'warn'
                          Write-Styled 'dim' ("  " + $st.TermSync.Detail)
                          Write-Styled 'dim' "  按提示改一次，改完重开一个窗口。" }
-            'unpaired' { Write-Styled 'warn' "终端同步 : 配置文件里的标记不成对，未改动它"
+            'unpaired' { Write-StatusRow '终端同步' '配置文件里的标记不成对，未改动它' 'warn'
                          # 这里不能说"重跑一次安装可修复"——重跑同样会被这条护栏拒绝，
                          # 用户会反复重跑、每次都被"安全起见一个字节都没动"回绝。
                          # 必须给一条真的能做成的动作。
@@ -552,12 +564,12 @@ function Show-StatusSnapshot($st) {
                          } else {
                              Write-Styled 'dim' "  在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。"
                          } }
-            'stale'    { Write-Styled 'warn' "终端同步 : 同步块是旧版本的"
+            'stale'    { Write-StatusRow '终端同步' '同步块是旧版本的' 'warn'
                          # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
                          Write-Styled 'dim' "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" }
-            'missing'  { Write-Styled 'warn' "终端同步 : 配置文件里没有同步块"
+            'missing'  { Write-StatusRow '终端同步' '配置文件里没有同步块' 'warn'
                          Write-Styled 'dim' "  打开菜单选 1 可以写入。" }
-            'nohost'   { Write-Styled 'warn' "终端同步 : 这一轮读不到配置文件路径，无法判断"
+            'nohost'   { Write-StatusRow '终端同步' '这一轮读不到配置文件路径，无法判断' 'warn'
                          Write-Styled 'dim' "  过几秒再看一次；一直在就选 1。" }
             default    {
                 # 走到这里说明 Get-TerminalSyncState 又加了新状态而这里没跟上。
@@ -565,18 +577,18 @@ function Show-StatusSnapshot($st) {
                 # 找不到"终端同步"四个字——用户被指向一个不存在的提示。
                 # 这是真发生过的一次（State 叫 nohost，switch 处理的是 unknown，
                 # 两者恰好错位，于是这一项永远不打印）。
-                Write-Styled 'warn' ("终端同步 : 状态未知（" + $st.TermSync.State + "）")
+                Write-StatusRow '终端同步' ("状态未知（" + $st.TermSync.State + "）") 'warn'
                 Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重写一次。"
             }
         }
     }
     if ($st.UpdateInProgress) {
-        Write-Styled 'warn' "上次更新 : 没有完成（覆盖过程中断）"
+        Write-StatusRow '上次更新' '没有完成（覆盖过程中断）' 'warn'
         Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
         Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重做一次即可。"
     }
     if ($st.SysProxy) {
-        Write-Styled 'warn' ("系统代理 : 疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server)
+        Write-StatusRow '系统代理' ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
         # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
         Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
@@ -587,30 +599,30 @@ function Show-StatusSnapshot($st) {
     # ---- 参考信息：正常项压成最少的行，且统一用灰，不跟"要注意"抢注意力 ----
     # 全绿时也要能一眼确认"核心链路是通的"，所以正常的那几项各占一行但用 ok 色；
     # 版本号那三行对普通用户没有行动价值，压成一行。
-    if ($m) { Write-Styled 'ok' ("监控进程 : 运行中 (PID {0})" -f $m.ProcessId) }
-    if ($st.AutoRunOk) { Write-Styled 'ok' "开机自启 : 已启用" }
+    if ($m) { Write-StatusRow '监控进程' ("运行中 (PID {0})" -f $m.ProcessId) 'ok' }
+    if ($st.AutoRunOk) { Write-StatusRow '开机自启' '已启用' 'ok' }
     if ($st.Port) {
-        Write-Styled 'ok' ("翻墙代理 : 已开启（本地端口 {0} 监听中）" -f $st.Port)
+        Write-StatusRow '翻墙代理' ("已开启（本地端口 {0} 监听中）" -f $st.Port) 'ok'
     } elseif ($st.PortUnknown) {
-        Write-Styled 'warn' "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
+        Write-StatusRow '翻墙代理' '这一轮没读到本机端口，无法判断（正常，会自动重试）' 'warn'
     } else {
-        Write-Styled 'dim' "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+        Write-StatusRow '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
     }
     if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
-        Write-Styled 'ok' "终端同步 : 已生效（已开着的窗口敲回车即跟上）"
+        Write-StatusRow '终端同步' '已生效（已开着的窗口敲回车即跟上）' 'ok'
     }
     # 代理变量只有"已注入且活着"这一种情况才进参考区；
     # 指向死端口、没人维护、翻墙在跑但工具停用这三种都已在上面说过，
     # 这里再打一遍就是同一件事说两次，读者会以为有两处不同的问题。
     if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
-        Write-Styled 'ok' ("代理变量 : 已注入 ({0})" -f $st.ProxyValue)
+        Write-StatusRow '代理变量' ("已注入 ({0})" -f $st.ProxyValue) 'ok'
     } elseif (-not $st.ProxyValue -and -not $st.Port) {
         # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
         # 少了 -not $st.Port 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
         # 同时命中：同一屏里"代理变量"出现两次，一次说"已停用"、一次说"直连"，
         # 用户会以为有两处不同的设置要处理（实测复现过）。
         # 判据必须是**完整**的：有代理在跑就不该说"直连"，那是两件事。
-        Write-Styled 'dim' "代理变量 : 无（直连状态）"
+        Write-StatusRow '代理变量' '无（直连状态）' 'dim'
     }
     Show-VersionLines $st
     Show-RecentLog
@@ -631,7 +643,7 @@ function Show-VersionLines($st) {
     $localText = if ($localVer) { "v$localVer" } else { "未知" }
     if (-not $cache) {
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        Write-Styled 'dim' ("版本 : {0}（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" -f $localText)
+        Write-StatusRow '版本' ("{0}（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" -f $localText) 'dim'
         return
     }
     $ageText = ""
@@ -654,9 +666,9 @@ function Show-VersionLines($st) {
             $state = "已是最新"; $role = 'dim'
         }
         if ($role -eq 'dim') {
-            Write-Styled 'dim' ("版本 : {0}（{1}）{2}" -f $localText, $state, $ageText)
+            Write-StatusRow '版本' ("{0}（{1}）{2}" -f $localText, $state, $ageText) 'dim'
         } else {
-            Write-Styled $role ("版本 : {0}（{1}）{2}" -f $localText, $state, $ageText)
+            Write-StatusRow '版本' ("{0}（{1}）{2}" -f $localText, $state, $ageText) $role
         }
     }
 }

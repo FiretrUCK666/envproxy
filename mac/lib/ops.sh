@@ -377,6 +377,25 @@ get_status_snapshot() {
     return 0
 }
 
+# 状态页的一行：左列标签固定一种颜色，右侧内容按状态取角色。
+# 与 Windows 侧 Write-StatusRow 同一套判据。
+# 为什么不一整行一个颜色：标签（「监控进程」「翻墙代理」）是固定名词，
+# 不该随状态变色。整行同色时状态好的行整行绿、状态无的行整行灰，
+# 用户扫一眼看到"有的绿有的灰"，却分不清哪段是名字、哪段是结论。
+# 标签统一 key（与帮助左列、菜单名字同色），内容按状态 ok/warn/dim/text。
+_status_row() {
+    _sr_label="$1"; _sr_value="$2"; _sr_role="${3:-text}"
+    if [ ! -t 1 ]; then printf '%s : %s\n' "$_sr_label" "$_sr_value"; return 0; fi
+    _sr_lc=$(style_color key)
+    _sr_vc=$(style_color "$_sr_role")
+    if [ -z "$_sr_vc" ]; then
+        printf '\033[%sm%s : \033[0m%s\n' "$_sr_lc" "$_sr_label" "$_sr_value"
+    else
+        printf '\033[%sm%s : \033[0m\033[%sm%s\033[0m\n' "$_sr_lc" "$_sr_label" "$_sr_vc" "$_sr_value"
+    fi
+    return 0
+}
+
 show_status() {
     style_out title "======== EnvProxy 状态 ========"
     # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
@@ -440,7 +459,7 @@ show_status() {
 
     # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
     if [ -z "$_m" ]; then
-        style_out warn "监控进程 : 未运行"
+        _status_row "监控进程" "未运行" warn
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
         # 强制退出/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
@@ -464,88 +483,88 @@ show_status() {
     fi
     if [ "$_autorun_ok" = "0" ]; then
         if [ "$_autorun_reg" = "1" ]; then
-            style_out warn "开机自启 : 记录还在，但启动文件已不存在（登录时不会启动）"
+            _status_row "开机自启" "记录还在，但启动文件已不存在（登录时不会启动）" warn
             style_out dim "  记录指向：$LOCATOR_PATH"
             style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
         elif [ -f "$PLIST_PATH" ]; then
-            style_out warn "开机自启 : 已写入但未加载"
+            _status_row "开机自启" "已写入但未加载" warn
             style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
         else
-            style_out warn "开机自启 : 未启用"
+            _status_row "开机自启" "未启用" warn
             style_out dim "  打开菜单选 1（安装 / 修复）可以启用。"
         fi
     fi
     if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then
-        style_out warn "代理变量 : 值不是合法地址（$_cur）"
+        _status_row "代理变量" "值不是合法地址（$_cur）" warn
         style_out dim "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
     elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
-        style_out warn "代理变量 : 指向的端口已不在（$_cur）"
+        _status_row "代理变量" "指向的端口已不在（$_cur）" warn
         style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
         style_out dim "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"
     elif [ -n "$_cur" ] && [ -z "$_m" ]; then
-        style_out warn "代理变量 : 已注入（$_cur），但没人维护"
+        _status_row "代理变量" "已注入（$_cur），但没人维护" warn
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
         style_out dim "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
     elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是使用者自己停的）。补一句桥接，否则会被判定"坏了"。
         # 与 Windows 侧同一句、同一判据。
-        style_out dim "代理变量 : 无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）"
+        _status_row "代理变量" "无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" dim
     fi
     case "$_ts_state" in
         unpaired)
-            style_out warn "终端同步 : 配置文件里的标记不成对，未改动它"
+            _status_row "终端同步" "配置文件里的标记不成对，未改动它" warn
             if [ -n "$_ts_badline" ]; then
                 style_out dim "  删掉配置文件里孤立的那行标记（第 $_ts_badline 行）再选 1。"
             else
                 style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再选 1。"
             fi ;;
         stale)
-            style_out warn "终端同步 : 同步块是旧版本的"
+            _status_row "终端同步" "同步块是旧版本的" warn
             # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
             style_out dim "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" ;;
         missing)
-            style_out warn "终端同步 : 配置文件里没有同步块"
+            _status_row "终端同步" "配置文件里没有同步块" warn
             style_out dim "  打开菜单选 1 可以写入。" ;;
         *)
             # 走到这里说明判定端又加了新状态而这里没跟上。静默跳过不行：
             # 上面的问题清单会说"终端同步没生效"，而往下整屏找不到"终端同步"
             # 四个字——用户被指向一个不存在的提示。Windows 侧真发生过一次
             # （State 叫 nohost、switch 处理的是 unknown，恰好错位）。
-            style_out warn "终端同步 : 状态未知（$_ts_state）"
+            _status_row "终端同步" "状态未知（$_ts_state）" warn
             style_out dim "  打开菜单选 1（安装 / 修复）重写一次。" ;;
     esac
     if [ "$_upd_prog" = "1" ]; then
-        style_out warn "上次更新 : 没有完成（覆盖过程中断）"
+        _status_row "上次更新" "没有完成（覆盖过程中断）" warn
         style_out dim "  程序文件可能新旧混合，某些功能会静默失效。"
         style_out dim "  打开菜单选 1（安装 / 修复）重做一次即可。"
     fi
     if [ "$_sp_bad" = "1" ]; then
-        style_out warn "系统代理 : 疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）。"
+        _status_row "系统代理" "疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）。" warn
         style_out dim "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
     fi
     [ "$_pn" != "0" ] && echo ""
 
     # ---- 参考信息：正常项 ----
-    [ -n "$_m" ] && style_out ok "监控进程 : 运行中 (PID $_m)"
-    [ "$_autorun_ok" = "1" ] && style_out ok "开机自启 : 已启用"
+    [ -n "$_m" ] && _status_row "监控进程" "运行中 (PID $_m)" ok
+    [ "$_autorun_ok" = "1" ] && _status_row "开机自启" "已启用" ok
     if [ -n "$_port" ]; then
-        style_out ok "翻墙代理 : 已开启（本地端口 $_port 监听中）"
+        _status_row "翻墙代理" "已开启（本地端口 $_port 监听中）" ok
     elif [ "$_port_unknown" = "1" ]; then
-        style_out warn "翻墙代理 : 这一轮没读到本机端口，无法判断（正常，会自动重试）"
+        _status_row "翻墙代理" "这一轮没读到本机端口，无法判断（正常，会自动重试）" warn
     else
-        style_out dim "翻墙代理 : 未检测到（当前无翻墙代理在运行）"
+        _status_row "翻墙代理" "未检测到（当前无翻墙代理在运行）" dim
     fi
-    [ "$_ts_state" = "ok" ] && style_out ok "终端同步 : 已生效（已开着的窗口敲回车即跟上）"
+    [ "$_ts_state" = "ok" ] && _status_row "终端同步" "已生效（已开着的窗口敲回车即跟上）" ok
     # 代理变量只有"已注入且活着且监控在跑"才进参考区；其余分支上半段已经说过，
     # 这里再打一遍就是同一件事说两次。
     if [ -n "$_cur" ] && [ "$_cur_alive" = "1" ] && [ -n "$_m" ]; then
-        style_out ok "代理变量 : 已注入 ($_cur)"
+        _status_row "代理变量" "已注入 ($_cur)" ok
     elif [ -z "$_cur" ] && [ -z "$_port" ]; then
         # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
         # 少了 [ -z "$_port" ] 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
         # 同时命中：同一屏里"代理变量"出现两次、说法还相反。
-        style_out dim "代理变量 : 无（直连状态）"
+        _status_row "代理变量" "无（直连状态）" dim
     fi
 
     # 版本那三行：正常时压成一行。原来"本地版本/最新版本/更新状态"各占一行、
@@ -565,7 +584,7 @@ show_status() {
     fi
     if [ -z "$_vc" ]; then
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        style_out dim "版本 : $_local_text（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）"
+        _status_row "版本" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" dim
     else
         REMOTE_VERSION="$_vc"
         REMOTE_TAG="v$_vc"
