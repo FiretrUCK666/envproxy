@@ -316,8 +316,20 @@ foreach ($ss in @('ok', 'blocked', 'unpaired', 'missing', 'stale', 'nohost')) {
     # 2>&1 只接错误流，捕获到的是 0 行——那样这条断言会永远红或永远绿，
     # 取决于怎么读结果，而两种都不说明任何事。
     $probeOut = @(Show-StatusSnapshot $probeSt 6>&1)
-    $hasLine = @($probeOut | Where-Object { $_ -match '终端同步' }).Count -gt 0
+    # 判据不能只是"出现了'终端同步'四个字"——default 分支也会打印它，
+    # 于是"正常态被误判成未知"这种 bug 会假绿（真发生过：补 nohost 时漏了 ok，
+    # 屏幕上打成"终端同步 : 状态未知（ok）"，而这条断言当时是绿的）。
+    # 现在要求：正常态必须说"已生效"，异常态不许出现"状态未知"。
+    $syncLine = @($probeOut | Where-Object { $_ -match '终端同步' })
+    $hasLine = $syncLine.Count -gt 0
     Assert-Eq ("终端同步状态必须有对应那一行：" + $ss) $true $hasLine
+    if ($ss -eq 'ok') {
+        Assert-Eq '正常态必须说"已生效"' $true (@($syncLine | Where-Object { $_ -match '已生效' }).Count -gt 0)
+        Assert-Eq '正常态不许说"状态未知"' $false (@($syncLine | Where-Object { $_ -match '状态未知' }).Count -gt 0)
+        Assert-Eq '正常态只打印一次（不许重复）' 1 $syncLine.Count
+    } else {
+        Assert-Eq ("异常态不许落进未知兜底：" + $ss) $false (@($syncLine | Where-Object { $_ -match '状态未知' }).Count -gt 0)
+    }
 }
 
 Write-Host '[3] closed ports'

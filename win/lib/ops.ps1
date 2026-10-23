@@ -499,7 +499,11 @@ function Show-StatusSnapshot($st) {
         Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
     }
     if ($st.TermSync) {
+        # 注意正常的 'ok' 不在这张表里：它在下面"参考信息"那一段单独打印
+        # （正常项与异常项分区显示，不是一个 switch 能表达的）。
+        # 这个 switch 只管"有问题的那几种"，default 负责兜住将来新增而这里没跟上的状态。
         switch ($st.TermSync.State) {
+            'ok'       { }
             'blocked'  { Write-Styled 'warn' "终端同步 : 装了但跑不起来"
                          Write-Styled 'dim' ("  " + $st.TermSync.Detail)
                          Write-Styled 'dim' "  按提示改一次，改完重开一个窗口。" }
