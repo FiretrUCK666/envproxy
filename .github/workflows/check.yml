@@ -1204,6 +1204,60 @@ jobs:
           if ($sh -notmatch 'release\)\s*(echo|printf)\s*"missing"') { Write-Host 'Mac 侧的失败原因映射里没有"缺包"这一档'; $fail = 1 }
           if ($ps -notmatch '"release-bad-id"\s*\{\s*return\s*"bad-content"') { Write-Host 'Win 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
           if ($sh -notmatch 'release-bad-id\)\s*(echo|printf)\s*"bad-content"') { Write-Host 'Mac 侧的失败原因映射里没有"编号取不出来"这一档'; $fail = 1 }
+
+          # e1) 状态页绝不联网。
+          #
+          # 状态页原来自己查最新版本号：真实网络请求，先 API 后 Web，各 8 秒超时，
+          # 限流时还换出口重试。离线、限流、走白名单网络的人，每次"查看状态"都在等一个
+          # 注定失败的请求——而用户对"点一下要等几秒"的归因通常是"这工具很慢"。
+          # 现在版本号来自监控写下的缓存（status 只读、永不写文件这条契约不变）。
+          # 守的是"状态页里出现了联网函数的调用"这一件事：一旦有人图省事又把它加回去，
+          # 症状只会是"变慢"，没有任何断言会红，所以必须在这里挡住。
+          $statusWin = [regex]::Match($ps, '(?s)function Show-Status(.*?)(?=\nfunction )')
+          if (-not $statusWin.Success) { Write-Host '找不到 Show-Status，无法核对状态页是否联网'; $fail = 1 }
+          else {
+            $body = $statusWin.Groups[1].Value
+            foreach ($netFn in @('Get-RemoteVersion', 'Get-UpdateInfo', 'Get-ReleaseAssets', 'Invoke-WebRequest', 'Invoke-RestMethod')) {
+              if ($body -match [regex]::Escape($netFn)) { Write-Host ("Win 状态页在联网：调用了 {0}（状态页必须只读，版本号取自监控写的缓存）" -f $netFn); $fail = 1 }
+            }
+          }
+          $statusMac = [regex]::Match($sh, '(?s)show_status\(\) \{(.*?)\n\}')
+          if (-not $statusMac.Success) { Write-Host '找不到 show_status，无法核对状态页是否联网'; $fail = 1 }
+          else {
+            $body2 = $statusMac.Groups[1].Value
+            foreach ($netFn2 in @('get_remote_version', 'get_update_info', 'fetch_update_file')) {
+              if ($body2 -match $netFn2) { Write-Host ("Mac 状态页在联网：调用了 {0}（状态页必须只读，版本号取自监控写的缓存）" -f $netFn2); $fail = 1 }
+            }
+          }
+          # 版本缓存的写入方必须是监控，不能顺手塞回状态页（那就等于把联网搬了个地方）。
+          if ($ps -notmatch 'function Write-VersionCache') { Write-Host 'Win 侧缺少 Write-VersionCache'; $fail = 1 }
+          if ($sh -notmatch 'write_version_cache\(\)') { Write-Host 'Mac 侧缺少 write_version_cache'; $fail = 1 }
+          if ($ps -notmatch 'function Read-VersionCache') { Write-Host 'Win 侧缺少 Read-VersionCache'; $fail = 1 }
+          if ($sh -notmatch 'read_version_cache\(\)') { Write-Host 'Mac 侧缺少 read_version_cache'; $fail = 1 }
+
+          # e2) 新版准入必须查"能不能跑"，且必须在覆盖之前。
+          #
+          # 一个语法上跑不起来的包能完整通过所有形状校验（文件齐、库清单对、VERSION 一致、
+          # BOM 与行尾都对）。装上去之后没有退路：新入口在解析预检就退出 1，
+          # 提示"选一次安装/修复"而菜单是同一个入口——机器进入"程序坏了、装不回、
+          # 开机也不自启"，只能手动去 Releases 重下。
+          # 守两件事：准入里有解析/语法检查；它出现在覆盖调用之前。
+          if ($ps -notmatch 'Parser\]::ParseFile') { Write-Host 'Win 侧准入没有语法检查（Parser::ParseFile）'; $fail = 1 }
+          if ($sh -notmatch 'verify_package\(\)' -or $sh -notmatch 'bash -n') { Write-Host 'Mac 侧准入没有语法检查（bash -n）'; $fail = 1 }
+          $pkgWin = Get-Content 'win/lib/package.ps1' -Raw -Encoding UTF8
+          $iSyntax = $pkgWin.IndexOf('Parser]::ParseFile')
+          if ($iSyntax -lt 0) { Write-Host 'Win 侧 package 层没有语法准入'; $fail = 1 }
+          $pkgMac = Get-Content 'mac/lib/package.sh' -Raw -Encoding UTF8
+          if ($pkgMac -notmatch 'bash -n') { Write-Host 'Mac 侧 package 层没有语法准入'; $fail = 1 }
+
+          # e3) 覆盖安装区必须有"进行中"标记，且成功与回滚两条路都要撤掉它。
+          # 没有标记时，"半新半旧的安装区"和"正常安装"事后长得一样：入口能起来、
+          # 自检全绿，但某些功能静默失效。标记是唯一能区分二者的落盘证据。
+          if ($pkgWin -notmatch 'update\.inprogress') { Write-Host 'Win 侧覆盖安装区没有进行中标记'; $fail = 1 }
+          if ($pkgMac -notmatch 'update\.inprogress') { Write-Host 'Mac 侧覆盖安装区没有进行中标记'; $fail = 1 }
+          if ($pkgWin -notmatch 'Remove-Item -LiteralPath \$marker') { Write-Host 'Win 侧成功后没有撤掉进行中标记'; $fail = 1 }
+          if ($pkgMac -notmatch 'rm -f "\$_pmark"') { Write-Host 'Mac 侧成功后没有撤掉进行中标记'; $fail = 1 }
+
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 
