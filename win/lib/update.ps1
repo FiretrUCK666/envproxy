@@ -116,6 +116,23 @@ function Get-UpdateFailureMessage([string]$Kind, [string]$SourceName) {
     }
 }
 
+# 「最新版本 : 检查失败（…）」这一句的唯一出处。
+# 早先它在状态页与更新入口各硬编码一遍（共四处），改一次措辞要改四处，
+# 漏一处就是"同一个故障，状态页和更新入口两种说法"。
+#
+# 它住在 update 层而不是 base 层：它调 Get-UpdateFailureMessage（同层），
+# 而 base 层必须能在不带其它库的情况下单独加载（那一层只放纯函数与契约常量）。
+# 早先把它放 base 会形成 base → update 的反向依赖：base 单独加载时这个函数直接不可用，
+# 而它的文件头声明"自检只加载这一层"——一句会被人当真的假契约。
+# mac 侧同一个函数一直住在 update 层，这里与它对齐。
+$UPD_FAIL_ALL_SOURCES = "所有更新源"
+function Format-VersionCheckFailure([string]$Kind) {
+    # 句子外壳（前缀、来源名、括号）收在这一处；具体原因由 Get-UpdateFailureMessage
+    # 按失败类别生成——它需要一个来源名才能把话说完整（"连不上 <来源>"），
+    # 所以来源名必须传进去，不能在外面拼。
+    return ("最新版本 : " + (Get-UpdateFailureMessage $Kind $UPD_FAIL_ALL_SOURCES))
+}
+
 # 从多条尝试的失败原因里挑一个报给用户（纯函数，可单测）。
 # 规则：
 #   1. 只有"全部都是 missing"才报 missing。404 必须是没有别的解释时才算数——

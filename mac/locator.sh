@@ -96,7 +96,16 @@ fi
     rm -f "$HOME/.envproxy/proxy.env" 2>/dev/null
     for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
-        case "$_cur" in http://127.0.0.1:*) launchctl unsetenv "$_v" 2>/dev/null;; esac
+        # **两种回环写法都要认**：注入端按实际能连上的地址拼 URL，只绑 ::1 的代理
+        # 注入的就是 http://[::1]:port。只认 127.0.0.1 会让这类用户的死代理永远清不掉——
+        # 而这段代码只在"安装根已经找不到"时跑，那时没有任何活着的组件会再纠正变量。
+        # 与 Windows 侧 locator.ps1 同一判据（那边连注释都写了这条）。这里同上：
+        # 用前缀匹配而不是 case 通配符，因为 [ ] 在通配符里是字符类定界符，
+        # "http://[::1]:*" 会被解释成"http:// 加一个 : 或 1 加 :任意"，判据整个作废。
+        case "$_cur" in
+            http://127.0.0.1:*) launchctl unsetenv "$_v" 2>/dev/null ;;
+            'http://[::1]:'*) launchctl unsetenv "$_v" 2>/dev/null ;;
+        esac
     done
     _node=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
     [ "$_node" = "1" ] && launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null

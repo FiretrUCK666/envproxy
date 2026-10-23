@@ -17,7 +17,7 @@ PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shado
 # 端点池的两条硬要求，缺一不可：
 #   1) 跨厂商/跨域段——单个域段被干扰时其余端点仍能证明节点活着；
 #   2) 响应体"零字节或极小"——探针发 HEAD 请求（--head），只收响应头、不收正文。
-#      现有 7 个端点：5 个 /generate_204（0 字节 204）+ 2 个被墙站点（重定向或 KB 级响应）。
+#      现有 6 个端点：5 个 /generate_204（0 字节 204）+ 1 个被墙站点（重定向）。
 # 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
 # 端点表：三张平行字符串（host / path / expect）必须逐项对齐，条数由门禁 6 核对。
 #
@@ -34,7 +34,7 @@ CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com y
 CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 /"
 # 每个端点自己声明期望应答，与 Windows 侧端点表逐项一致（门禁 6 核查）。
 # /generate_204 类只认 204：被强制门户劫持时会回 200 或 302，那都不是「通」。
-# wikipedia/twitter 只认 3xx：它们正常就回重定向，按 204 判会让这两个跨域段兜底端点
+# wikipedia 只认 3xx：它的正常应答就是重定向，按 204 判会让这个跨域段兜底端点
 # 永远判死、端点池退化成纯 Google 段——那正是它们存在的意义所在。
 CHECK_EXPECTS="204 204 204 204 204 3xx"
 
@@ -220,10 +220,8 @@ _handshake_at() {
 # 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
 # 命中的地址放进 $LOOPBACK_HIT（注入端要用它拼 URL）。
 test_http_proxy() {
-    LOOPBACK_HIT=""
     for _tp_addr in $LOOPBACK_PROBES; do
         if _handshake_at "$_tp_addr" "$1"; then
-            LOOPBACK_HIT="$_tp_addr"
             return 0
         fi
     done
@@ -421,7 +419,7 @@ find_candidate_ports() {
 # 端点应答的状态码判定（唯一的判据实现，与 Windows 侧 Test-EndpointStatus 同义）。
 # $1 = 状态码，$2 = 该端点声明的期望值（204 / 3xx）。
 # 只认端点自己声明的那种应答：/generate_204 只认 204（被强制门户劫持时回 200 或 302，
-# 那两种都不是"节点通"）；wikipedia/twitter 只认 3xx（它们的正常应答就是重定向，
+# 那两种都不是"节点通"）；wikipedia 只认 3xx（它的正常应答就是重定向，
 # 收 204 会让这两个跨域段兜底端点永远判死、端点池退化成纯 Google 段）。
 test_endpoint_status() {
     case "$2" in
@@ -466,7 +464,7 @@ test_real_connectivity() {
     _fast_host=$(printf '%s' "$CHECK_HOSTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
     _fast_path=$(printf '%s' "$CHECK_PATHS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
     _fast_exp=$(printf '%s' "$CHECK_EXPECTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
-    # 期望值必须跟着端点走：不传就吃默认 204，wikipedia/twitter（期望 3xx）会永远判死。
+    # 期望值必须跟着端点走：不传就吃默认 204，wikipedia（期望 3xx）会永远判死。
     if [ -n "$_fast_host" ] && [ -n "$_fast_path" ] \
         && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}"; then
         return 0

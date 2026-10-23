@@ -153,7 +153,7 @@ Three things that trip people up:
 - **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
 - Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
 
-**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 12.7).
+**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 12.1).
 
 ### 3.1 A window you already have open needs one Enter press
 
@@ -308,7 +308,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 
 ### 3.6 Use it without the menu (scripts, remote sessions)
 
-The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first six rows match the six menu items one to one; the last two have no menu entry.
+The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first six rows match the six menu items one to one; row 7 (`-Menu`) simply opens the menu itself; only the last row, `self-test`, has no menu entry (it exists for troubleshooting).
 
 | Goal | Windows | Mac |
 |---|---|---|
@@ -320,10 +320,11 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Full restore | `-Uninstall` | `uninstall` |
 | Open the menu | `-Menu` | `menu` |
 | Self-check (troubleshooting) | — | `self-test` |
+| Repair a broken marker in your profile | `-RepairProfile` | `repair-profile` |
 
 The order matches the menu: four everyday items first, then the two upkeep ones. The last row is a Mac-only troubleshooting command: it runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables.
 
-`-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates only and means stop asking before installing.
+`-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates and full restore: it means stop asking. For restore it is also the only way to uninstall where nothing can ask (scripts, remote sessions), since that command refuses to run without an answer.
 
 Go into the folder that holds the program first. **Skipping this gives "file not found"**, because the program lives under `win\` and `mac\`.
 
@@ -355,8 +356,22 @@ bash envproxy.sh status
 | "Missing program files" | Folder not copied in full, or deleted | Re-download and unzip over it |
 | Variables come back after removal | Node is unstable | Expected. If it persists, switch nodes |
 | Variables linger after disconnect | "Disconnect" leaves the core running | Expected. Quit the app |
-| Sync "installed but cannot run" | Execution policy blocks it | Follow that line's hint |
+| Sync "installed but cannot run" | Execution policy blocks the profile | See the section below |
 | All of the above tried | — | Pick 2, screenshot, then pick 1 |
+
+**If "Terminal sync" says "installed but cannot run"**
+
+PowerShell does not run profile files by default, and terminal sync depends on exactly that. Run this once in PowerShell:
+
+```powershell
+Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+`RemoteSigned` means locally written scripts run, while anything downloaded must be signed. It is looser than the default `Restricted` and safer than `Unrestricted`, which is the usual choice for daily use. Reopen a window afterwards.
+
+If it still fails, the policy is being enforced by Group Policy (common on work or school machines); only an administrator can change that. The status page tells you which case you are in.
+
+> Do not confuse this with the note in section 2: "do not change your execution policy" refers to the downloaded package being blocked, which you fix by unblocking the file or running `Unblock-File`, not by touching the policy. This section is about the profile itself failing to run, which is a different thing.
 
 > Most problems are solved by **picking 1** in the menu. It does not install a second copy, does not cut your network, and does not lose your own settings.
 

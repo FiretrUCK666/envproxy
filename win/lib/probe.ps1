@@ -584,7 +584,7 @@ function Get-ProxyUrlForPort([int]$Port) {
 # 每个端点声明它**该回什么**，判据不再各处各写一套。
 # /generate_204 这类连通性检查端点的契约就是 204：正常返 204；被强制门户劫持时
 # 回 200 + 登录页、或 302 跳登录页——那两种都不是"节点通"，必须判断。
-# wikipedia / twitter 是跨域段的兜底端点，它们的正常应答就是 3xx（跟随与否都算通），
+# wikipedia 是跨域段的兜底端点，它的正常应答就是 3xx（跟随与否都算通），
 # 收 204 会让这两个端点永远判死、端点池退化成纯 Google 段。
 # 所以 Expect 只有两种取值：
 #   204  -> 只认 204
@@ -726,7 +726,7 @@ function Test-RealConnectivity([int]$Port) {
         # HttpClient 不可用等极端环境：回退串行 TCP 探测（原逻辑）
         foreach ($i in 0..($CheckEndpoints.Count - 1)) {
             if ($i -eq $last) { continue }
-            # 第 4 个参数（期望值）必须传：不传就吃默认 204，而 wikipedia/twitter 的
+            # 第 4 个参数（期望值）必须传：不传就吃默认 204，而 wikipedia 的
             # 期望值是 3xx——它们正常就回重定向，按 204 判会永远判死，端点池退化成纯 Google 段。
             # 同一判断只准有一处实现：这条串行兜底与上面的并行兜底必须同判据。
             if (Test-SingleEndpoint $Port $CheckEndpoints[$i].Host $CheckEndpoints[$i].Path $CheckEndpoints[$i].Expect) {
