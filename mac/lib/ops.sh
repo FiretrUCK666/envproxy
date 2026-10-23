@@ -700,8 +700,13 @@ _help_topic_title() { _help_topic_field 2 "$1"; }
 # 名字保持 HELP_TOPIC_KEYS（状态页、帮助目录、底部编号行、自检都在读它），
 # 但内容由 HELP_TOPICS 算出来：改表就自动同步，没有第二处要记得改。
 HELP_TOPIC_KEYS=()
-for _htk_rec in "${HELP_TOPICS[@]}"; do
-    HELP_TOPIC_KEYS=("${HELP_TOPIC_KEYS[@]}" "${_htk_rec%%|*}")
+# 用 ${ARR[@]+"${ARR[@]}"} 而不是裸的 "${ARR[@]}"：bash 3.2（macOS 自带）
+# 在 set -u 下展开"尚未赋过值"的数组会报 "unbound variable"——4.x 才修。
+# 而 HELP_TOPIC_KEYS 正是先声明成空、再逐个 append，第一次 append 时
+# 它就是"还没赋过值"的状态，真机上当场崩（CI 报的就是这一行）。
+# 入口开着 set -u，这个坑绕不过去。
+for _htk_rec in ${HELP_TOPICS[@]+"${HELP_TOPICS[@]}"}; do
+    HELP_TOPIC_KEYS=(${HELP_TOPIC_KEYS[@]+"${HELP_TOPIC_KEYS[@]}"} "${_htk_rec%%|*}")
 done
 unset _htk_rec
 

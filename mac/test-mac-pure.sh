@@ -332,9 +332,9 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
                  for _round in 1 2 3; do
                      _ep_keep=()
                      for _ep_fn in ${precmd_functions[@]}; do
-                         [ "$_ep_fn" = "$_f" ] || _ep_keep+=("$_ep_fn")
+                         [ "$_ep_fn" = "$_f" ] || _ep_keep=(${_ep_keep[@]+"${_ep_keep[@]}"} "$_ep_fn")
                      done
-                     precmd_functions=(${_ep_keep[@]} "$_f")
+                     precmd_functions=(${_ep_keep[@]+"${_ep_keep[@]}"} "$_f")
                  done
                  _n=0
                  for _ep_fn in "${precmd_functions[@]}"; do
