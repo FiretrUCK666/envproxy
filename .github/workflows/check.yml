@@ -915,7 +915,18 @@ jobs:
           # 改成 204 门禁照样绿，而判决口径已经分叉——跨域段兜底端点收到 204 会永远判死。
           $epWin = @([regex]::Matches($ps, '@\{ Host = "([^"]+)";[^}]*?Expect = "([^"]+)"') |
                      ForEach-Object { $_.Groups[1].Value + '=' + $_.Groups[2].Value })
-          $epMac = Grab $sh 'CHECK_EXPECTS="([^"]*)"' 'Mac 端点期望值'
+          # 端点表是三段一行的记录（host|path|expect），逐行取字段即可，
+          # 不再是三条按空格对齐的平行串——那样"第 n 项"对不对上没有东西在保证。
+          # 先把 CHECK_ENDPOINTS 数组那一段截出来，再在里面取记录。
+          # 不先截就抓的话，会给别处恰好长成 host|path|expect 的示例文本（包括这段门禁自己的注释）误抓。
+          $probeShTxt = Get-Content 'mac/lib/probe.sh' -Raw -Encoding UTF8
+          $macEpBlock = ''
+          $macEpM = [regex]::Match($probeShTxt, '(?s)CHECK_ENDPOINTS=\((.*?)\n\)')
+          if ($macEpM.Success) { $macEpBlock = $macEpM.Groups[1].Value }
+          if (-not $macEpBlock) { Write-Host '找不到 CHECK_ENDPOINTS 数组'; $fail = 1 }
+          $macEpRecs = @([regex]::Matches($macEpBlock, "'([^'|]+)\|([^'|]+)\|([^'|]+)'") | ForEach-Object { ,@($_.Groups[1].Value, $_.Groups[2].Value, $_.Groups[3].Value) })
+          $epMac = ($macEpRecs | ForEach-Object { $_[2] }) -join ' '
+          if (-not $epMac) { Write-Host 'Mac 端点期望值取不到（应为 CHECK_ENDPOINTS 里的 host|path|expect 记录）'; $fail = 1 }
           if ((@($epWin).Count -eq 0) -or (-not $epMac)) {
             Write-Host '端点期望值取不到（两侧都要有具名表）'; $fail = 1
           } else {
@@ -1005,8 +1016,12 @@ jobs:
             $fail = 1
           }
           # f) 端点表：两侧条数一致、macOS 的 host 与 path 条数一致（平行字符串不许错位）
-          $hosts = Grab $sh 'CHECK_HOSTS="([^"]*)"' 'macOS 端点表'
-          $paths = Grab $sh 'CHECK_PATHS="([^"]*)"' 'macOS 端点路径表'
+          # host 与 path 用的是上面同一次解析的结果：一条记录就是一个端点，
+          # 所以两者必然同长、同序。拼装处写错就会不等长，下面有断言。
+          $hosts = ($macEpRecs | ForEach-Object { $_[0] }) -join ' '
+          $paths = ($macEpRecs | ForEach-Object { $_[1] }) -join ' '
+          if (-not $hosts) { Write-Host '找不到 macOS 端点表（应为 CHECK_ENDPOINTS 里的 host|path|expect 记录）'; $fail = 1 }
+          if (-not $paths) { Write-Host '找不到 macOS 端点路径（同上，同一条记录的第二段）'; $fail = 1 }
           $hostCount = @($hosts -split '\s+' | Where-Object { $_ }).Count
           $pathCount = @($paths -split '\s+' | Where-Object { $_ }).Count
           # 端点行必须**三项俱全**（Host / Path / Expect）才计数。
@@ -1017,6 +1032,23 @@ jobs:
           $epCount = @([regex]::Matches($ps, '@\{ Host = "[^"]+";\s*Path = "[^"]+";\s*Expect = "[^"]+"')).Count
           if ($epCount -ne $hostCount) { Write-Host ("端点个数两侧不一致：Win {0} / Mac {1}" -f $epCount, $hostCount); $fail = 1 }
           if ($pathCount -ne $hostCount) { Write-Host ("macOS 端点表 host 与 path 条数不一致：{0} / {1}" -f $hostCount, $pathCount); $fail = 1 }
+          # 逐主机核对 path 与期望值。只比条数是不够的：把某一条记录的 path 改错
+          # （或者两个端点的 path/expect 互换），条数不变、期望值集合也可能不变，
+          # 门禁会全部通过——而那个端口每轮都白等一次超时，判据永远不成立。
+          # 判据是"同一个端点的三件事必须来自 Windows 侧对应的那一行"。
+          foreach ($rec in $macEpRecs) {
+            $mh = $rec[0]; $mp = $rec[1]; $me = $rec[2]
+            $winLine = [regex]::Match($ps, '@\{ Host = "' + [regex]::Escape($mh) + '";\s*Path = "([^"]+)";\s*Expect = "([^"]+)"')
+            if (-not $winLine.Success) {
+              Write-Host ("mac 端点 {0} 在 Windows 側找不到同名主机" -f $mh); $fail = 1; continue
+            }
+            if ($winLine.Groups[1].Value -ne $mp) {
+              Write-Host ("端点 {0} 的 path 两侧不一致：Win [{1}] / Mac [{2}]" -f $mh, $winLine.Groups[1].Value, $mp); $fail = 1
+            }
+            if ($winLine.Groups[2].Value -ne $me) {
+              Write-Host ("端点 {0} 的期望值两侧不一致：Win [{1}] / Mac [{2}]" -f $mh, $winLine.Groups[2].Value, $me); $fail = 1
+            }
+          }
           # g) 事实清单：数字从代码取值，再查双语 README——代码改了、文档没跟上就当场失败
           $zh = Get-Content 'README.md' -Raw -Encoding UTF8
           $en = Get-Content 'README.en.md' -Raw -Encoding UTF8

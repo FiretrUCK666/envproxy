@@ -30,13 +30,49 @@ PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shado
 #
 # 已经删掉的：twitter.com —— 实测一律回 520，既非 204 也非 3xx，
 # 占着"跨域段兜底"的名额却永远判死，还每轮白等一次 6 秒超时。
-CHECK_HOSTS="clients3.google.com connectivitycheck.gstatic.com www.gstatic.com youtubei.googleapis.com www.google.com www.wikipedia.org"
-CHECK_PATHS="/generate_204 /generate_204 /generate_204 /generate_204 /generate_204 /"
-# 每个端点自己声明期望应答，与 Windows 侧端点表逐项一致（门禁 6 核查）。
+# 端点表：一条记录就是一个端点，三件事写在一起——主机 | 路径 | 期望应答。
+#
+# 为什么不是三张平行的字符串：原来是 CHECK_HOSTS / CHECK_PATHS / CHECK_EXPECTS 三条
+# 按空格对齐的串，取值靠三次 `cut -f$n`。三条串的"第 n 项"必须指同一个端点，
+# 而这件事没有任何东西在保证——把第 3 个 path 和第 4 个写反、或者只删掉其中一条的
+# 某一项，门禁只比条数，看不出来；症状是某些端点永远判不通，而屏幕上看不出原因。
+# 写成一条记录后，"哪个主机配哪个路径"在一处，不会错位。Windows 侧一直是这个形状
+# （$CheckEndpoints 里每项是 @{Host;Path;Expect}），这里与它对齐。
+#
 # /generate_204 类只认 204：被强制门户劫持时会回 200 或 302，那都不是「通」。
 # wikipedia 只认 3xx：它的正常应答就是重定向，按 204 判会让这个跨域段兜底端点
-# 永远判死、端点池退化成纯 Google 段——那正是它们存在的意义所在。
-CHECK_EXPECTS="204 204 204 204 204 3xx"
+# 永远判死、端点池退化成纯 Google 段——那正是它存在的意义所在。
+CHECK_ENDPOINTS=(
+    'clients3.google.com|/generate_204|204'
+    'connectivitycheck.gstatic.com|/generate_204|204'
+    'www.gstatic.com|/generate_204|204'
+    'youtubei.googleapis.com|/generate_204|204'
+    'www.google.com|/generate_204|204'
+    'www.wikipedia.org|/|3xx'
+)
+
+# 取第 N 个端点（1 起）的某一字段：1=主机 2=路径 3=期望应答。
+# 越界返回空串（调用方据此判"这一轮没有可用端点"，不用先数长度）。
+check_endpoint_field() {
+    _cef_want="$1"
+    _cef_field="$2"
+    _cef_i=0
+    for _cef_rec in "${CHECK_ENDPOINTS[@]}"; do
+        _cef_i=$((_cef_i + 1))
+        [ "$_cef_i" -eq "$_cef_want" ] || continue
+        _cef_rest=${_cef_rec#*|}
+        case "$_cef_field" in
+            1) printf '%s' "${_cef_rec%%|*}" ;;
+            2) printf '%s' "${_cef_rest%%|*}" ;;
+            3) printf '%s' "${_cef_rest#*|}" ;;
+        esac
+        return 0
+    done
+    return 0
+}
+
+# 端点个数（各处要遍历时用它，不写死数字）。
+check_endpoint_count() { printf '%s' "${#CHECK_ENDPOINTS[@]}"; }
 
 # 监控状态（进程内变量，不落地）
 LAST_GOOD_ENDPOINT=0
@@ -461,9 +497,9 @@ test_real_connectivity() {
     proxy_url_for_port "$_port"
     EP_PROXY_URL="$PROXY_URL_HIT"
     # 快路端点按索引取值（cut 实现，避免 set -- 篡改位置参数；索引越界则回退并行）
-    _fast_host=$(printf '%s' "$CHECK_HOSTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
-    _fast_path=$(printf '%s' "$CHECK_PATHS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
-    _fast_exp=$(printf '%s' "$CHECK_EXPECTS" | cut -d' ' -f$((LAST_GOOD_ENDPOINT + 1)) 2>/dev/null)
+    _fast_host=$(check_endpoint_field $((LAST_GOOD_ENDPOINT + 1)) 1)
+    _fast_path=$(check_endpoint_field $((LAST_GOOD_ENDPOINT + 1)) 2)
+    _fast_exp=$(check_endpoint_field $((LAST_GOOD_ENDPOINT + 1)) 3)
     # 期望值必须跟着端点走：不传就吃默认 204，wikipedia（期望 3xx）会永远判死。
     if [ -n "$_fast_host" ] && [ -n "$_fast_path" ] \
         && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}"; then
@@ -472,9 +508,12 @@ test_real_connectivity() {
     _tmpdir=$(mktemp -d ${TMPDIR:-/tmp}/envproxy_conn.XXXXXX 2>/dev/null) || return 1
     # 逐个按索引展开 host/path，避免后台闭包竞态（参数在父进程展开后传值）
     _idx=0
-    for _h in $CHECK_HOSTS; do
-        _pa_for_idx=$(printf '%s' "$CHECK_PATHS" | cut -d' ' -f$((_idx + 1)) 2>/dev/null)
-        _exp_for_idx=$(printf '%s' "$CHECK_EXPECTS" | cut -d' ' -f$((_idx + 1)) 2>/dev/null)
+    _ep_n=0
+    while [ "$_ep_n" -lt "$(check_endpoint_count)" ]; do
+        _ep_n=$((_ep_n + 1))
+        _h=$(check_endpoint_field "$_ep_n" 1)
+        _pa_for_idx=$(check_endpoint_field $((_idx + 1)) 2)
+        _exp_for_idx=$(check_endpoint_field $((_idx + 1)) 3)
         if [ $_idx -ne $LAST_GOOD_ENDPOINT ] && [ -n "$_pa_for_idx" ]; then
             _probe_endpoint_one "$_port" "$_h" "$_pa_for_idx" "$_idx" "$_tmpdir" "${_exp_for_idx:-204}" &
         fi
