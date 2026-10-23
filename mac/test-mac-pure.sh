@@ -1496,6 +1496,11 @@ EOF
     _ue_check "" 0 "" ""; _selftest_assert_eq "用法判定：无命令（监控模式）放行" "0" "$?"
     _ue_check "uninstall" 1 "purge" ""; _selftest_assert_eq "用法判定：卸载带 --purge 放行" "0" "$?"
     _ue_check "update" 1 "yes" ""; _selftest_assert_eq "用法判定：更新带 --yes 放行" "0" "$?"
+    # 卸载带 --yes 必须放行：问不到人时它会拒绝执行，--yes 是那种场合唯一的出路。
+    # 这条判据之前只有 update 一条断言，所以 AGENTS.md 里 "-Yes 只配 -Update" 那句
+    # 错的约定一直没人发现——改窄了不会有任何东西红。
+    _ue_check "uninstall" 1 "yes" ""; _selftest_assert_eq "用法判定：卸载带 --yes 放行" "0" "$?"
+    _ue_check "uninstall" 1 "yes purge" ""; _selftest_assert_eq "用法判定：卸载带 --yes --purge 放行" "0" "$?"
     _ue_check "install" 1 "purge" ""; _selftest_assert_eq "用法判定：--purge 跟着别的命令要拒" "1" "$?"
     _ue_check "status" 1 "yes" ""; _selftest_assert_eq "用法判定：--yes 跟着别的命令要拒" "1" "$?"
     _ue_check "status" 1 "" "--foo"; _selftest_assert_eq "用法判定：不认识的参数要拒" "1" "$?"

@@ -1125,6 +1125,13 @@ Assert-Eq '用法判定：-Purge 跟着别的命令要拒' '真' (Usage-Rejected
 Assert-Eq '用法判定：-Yes 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Switches @('yes')))
 Assert-Eq '用法判定：不认识的参数要拒' '真' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Extra @('-Foo')))
 Assert-Eq '用法判定：一次给两个命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'install' -CommandCount 2))
+# 放行方向：合法用法必须过。这两条之前只有 update 一条，uninstall 那条没有——
+# 而 AGENTS.md 里 "-Yes 只配 -Update" 那句错的约定了很久没人发现，正是因为它没有计数器。
+# 卸载问不到人时会拒绝执行，-Yes 是那种场合唯一的出路；把这条判据改窄 = 切断非交互卸载。
+Assert-Eq '用法判定：-Yes 配 update 放行' '假' (Usage-Rejected (Get-UsageError -Command 'update' -CommandCount 1 -Switches @('yes')))
+Assert-Eq '用法判定：-Yes 配 uninstall 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('yes')))
+Assert-Eq '用法判定：-Yes 配 uninstall 且带 -Purge 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('yes','purge')))
+Assert-Eq '用法判定：-Purge 配 uninstall 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('purge')))
 
 # ------------------------------------------------------------------------------
 # [7c] 端口枚举失败 = 这一轮不知道，不是"没有端口"
