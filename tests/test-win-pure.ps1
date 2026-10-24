@@ -1104,6 +1104,45 @@ Assert-Eq 'shortcut not ours: 不是 vbs' 'false' (Test-ProxyShortcutArgsOurs ('
 Assert-Eq 'shortcut not ours: 空参数' 'false' (Test-ProxyShortcutArgsOurs '')
 Assert-Eq 'shortcut not ours: 只有一个引号' 'false' (Test-ProxyShortcutArgsOurs '"')
 
+# 启动脚本要记住自己服务的是哪个程序。
+#
+# 为什么要测：脚本文件名是「程序名_哈希」，哈希那段对人没有意义。图标被删掉
+# 或挪到别处之后，launchers 目录里只剩脚本，管理页只能显示一个像
+# app_aabbccdd 的名字——用户看不出这是哪个程序的、该不该删。
+# 程序路径本身只存在压缩过的命令里（base64），外面读不出来，所以另留一行可读记录。
+#
+# 记录必须写成十六进制而不是原文：脚本文件要保持纯 ASCII，
+# 直接写中文路径会让某些旧版 WSH 读错文件、整个快捷方式失效。
+$tgtSbox = Join-Path ([System.IO.Path]::GetTempPath()) ("epsbx_tgt_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $tgtSbox -Force | Out-Null
+try {
+    $cnDir = Join-Path $tgtSbox '中文 目录 (测试)'
+    New-Item -ItemType Directory -Path $cnDir -Force | Out-Null
+    $cnApp = Join-Path $cnDir '我的 程序.exe'
+    [System.IO.File]::WriteAllText($cnApp, 'x', [System.Text.Encoding]::ASCII)
+
+    $encBody = Compress-ToBase64 'echo test'
+    $vbsText = New-ProxyLauncherVbs $encBody $cnApp
+    Assert-Eq 'launcher remembers its target: 有记录行' 'true' ($vbsText -match 'envproxy-target-hex:')
+    Assert-Eq 'launcher remembers its target: 正文是纯 ASCII' 'true' (-not ($vbsText.ToCharArray() | Where-Object { [int]$_ -gt 127 }))
+
+    $vbsFile = Join-Path $tgtSbox 'probe.vbs'
+    [System.IO.File]::WriteAllText($vbsFile, $vbsText, [System.Text.Encoding]::ASCII)
+    Assert-Eq 'launcher target round-trips: 中文路径 + 空格 + 括号' $cnApp (Get-ProxyLauncherTarget $vbsFile)
+    Assert-Eq 'launcher target: 不存在的文件返回空' '' (Get-ProxyLauncherTarget (Join-Path $tgtSbox 'nope.vbs'))
+    Assert-Eq 'launcher target: 空路径返回空' '' (Get-ProxyLauncherTarget '')
+    # 旧版本建的脚本没有这一行，读不出来要返回空而不是报错
+    $oldVbs = Join-Path $tgtSbox 'old.vbs'
+    [System.IO.File]::WriteAllText($oldVbs, 'CreateObject("WScript.Shell").Run "cmd.exe", 0, False' + "`r`n", [System.Text.Encoding]::ASCII)
+    Assert-Eq 'launcher target: 旧脚本（没有记录行）返回空' '' (Get-ProxyLauncherTarget $oldVbs)
+    # 记录行被写坏时也不能抛异常
+    $badVbs = Join-Path $tgtSbox 'bad.vbs'
+    [System.IO.File]::WriteAllText($badVbs, "' envproxy-target-hex: zzz" + "`r`n", [System.Text.Encoding]::ASCII)
+    Assert-Eq 'launcher target: 坏 hex 返回空' '' (Get-ProxyLauncherTarget $badVbs)
+} finally {
+    Remove-Item -LiteralPath $tgtSbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 #
 # 这条防的是一个真实发生过的 bug：挑选函数与它的断言都在，但调用方
 # 直接 `$script:VersionQueryFailure = $t2.Failure`，绕过了整个规则。

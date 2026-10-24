@@ -1581,7 +1581,7 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
 
 # 生成启动脚本（.vbs）的内容。
 # 纯 ASCII：VBS 文件带 BOM 或中文都可能被某些旧版 WSH 读错，而 base64 本来就没有中文。
-function New-ProxyLauncherVbs([string]$EncodedBody) {
+function New-ProxyLauncherVbs([string]$EncodedBody, [string]$TargetPath = "") {
     if (-not $EncodedBody) { throw '启动命令为空' }
     $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ' +
            '"$b=''' + $EncodedBody + ''';' +
@@ -1590,7 +1590,42 @@ function New-ProxyLauncherVbs([string]$EncodedBody) {
            '$r=[IO.StreamReader]::new($g);$s=$r.ReadToEnd();$r.Close();iex $s"'
     # VBS 字符串里的双引号要写两次
     $escaped = $cmd.Replace('"', '""')
-    return ('CreateObject("WScript.Shell").Run "' + $escaped + '", 0, False' + "`r`n")
+    $body = 'CreateObject("WScript.Shell").Run "' + $escaped + '", 0, False' + "`r`n"
+    # 在脚本里留一行注释，记下它服务的是哪个程序。
+    #
+    # 为什么必须留：脚本文件名是「程序名_哈希」，哈希那一段对人没有意义。
+    # 图标被删掉或挪走之后，launchers 目录里只剩这个脚本，而管理页当时只能显示
+    # 一个像 scene_test_aabbccdd 的名字——用户看不出这是哪个程序的、该不该删。
+    # 真正的程序路径只存在压缩过的命令里，外面读不出来，所以要另外留一份可读记录。
+    #
+    # 用注释而不是数据行：VBS 注释以单引号开头，语法上完全无副作用；
+    # 文件必须保持纯 ASCII，所以路径按 UTF-8 转成十六进制写进去，读的时候再还原。
+    # 直接写中文路径会破坏"VBS 文件必须纯 ASCII"这条（某些旧版 WSH 读它会出错）。
+    if ($TargetPath) {
+        try {
+            $hex = -join ([System.Text.Encoding]::UTF8.GetBytes($TargetPath) | ForEach-Object { $_.ToString('x2') })
+            $body += "' envproxy-target-hex: " + $hex + "`r`n"
+        } catch {}
+    }
+    return $body
+}
+
+# 从一个启动脚本里读出它服务的程序路径。读不出来返回空串。
+function Get-ProxyLauncherTarget([string]$LauncherPath) {
+    if (-not $LauncherPath) { return '' }
+    try {
+        if (-not (Test-Path -LiteralPath $LauncherPath)) { return '' }
+        $text = [System.IO.File]::ReadAllText($LauncherPath, [System.Text.Encoding]::ASCII)
+        $m = [regex]::Match($text, "envproxy-target-hex:\s*([0-9a-fA-F]+)")
+        if (-not $m.Success) { return '' }
+        $hex = $m.Groups[1].Value
+        if ($hex.Length % 2 -ne 0) { return '' }
+        $bytes = New-Object 'byte[]' ($hex.Length / 2)
+        for ($i = 0; $i -lt $bytes.Length; $i++) {
+            $bytes[$i] = [Convert]::ToByte($hex.Substring($i * 2, 2), 16)
+        }
+        return [System.Text.Encoding]::UTF8.GetString($bytes)
+    } catch { return '' }
 }
 
 # 为一个程序生成启动脚本，返回脚本路径。
@@ -1614,7 +1649,7 @@ function New-ProxyLauncherScript([string]$TargetPath, [string]$WorkingDir) {
     $vbsPath = Join-Path $dir ($base + '_' + $sb.ToString() + '.vbs')
 
     $enc = New-ProxyLauncherBody $TargetPath $WorkingDir
-    $vbs = New-ProxyLauncherVbs $enc
+    $vbs = New-ProxyLauncherVbs $enc $TargetPath
     # 先写临时文件再整体替换：中途失败不会留下半个脚本。
     # 临时文件名带 PID：两个进程同时给同一个程序建快捷方式时不会撞同一个临时文件。
     #
@@ -1785,20 +1820,23 @@ function Test-ProxyShortcutArgsOurs([string]$Arguments) {
 function Get-ProxyShortcutRecords {
     $records = @()
 
-    # 三处要扫：桌面、任务栏、开始菜单（用户与公共）
+    # 四处要扫，每处都带一个给人看的位置名。
+    # 位置名必须写进界面：同一个程序的图标可能同时出现在桌面、任务栏和开始菜单
+    # （固定到任务栏时 Windows 会**复制**一份），只列文件名的话用户看到两行
+    # 一模一样的内容，分不清哪个是哪个，也不敢删任何一个。
     $dirs = @(
-        [Environment]::GetFolderPath('Desktop'),
-        (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'),
-        [Environment]::GetFolderPath('Programs'),
-        [Environment]::GetFolderPath('CommonPrograms')
+        @{ Path = [Environment]::GetFolderPath('Desktop'); Where = '桌面' },
+        @{ Path = (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'); Where = '任务栏' },
+        @{ Path = [Environment]::GetFolderPath('Programs'); Where = '开始菜单' },
+        @{ Path = [Environment]::GetFolderPath('CommonPrograms'); Where = '开始菜单（所有用户）' }
     )
     $seen = @{}
     $shell = $null
     try {
         $shell = New-Object -ComObject WScript.Shell
         foreach ($d in $dirs) {
-            if (-not $d -or -not (Test-Path -LiteralPath $d)) { continue }
-            foreach ($f in @(Get-ChildItem -LiteralPath $d -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
+            if (-not $d.Path -or -not (Test-Path -LiteralPath $d.Path)) { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $d.Path -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
                 if ($seen.ContainsKey($f.FullName)) { continue }
                 $lnk = $null
                 try { $lnk = $shell.CreateShortcut($f.FullName) } catch { continue }
@@ -1823,6 +1861,7 @@ function Get-ProxyShortcutRecords {
                     LauncherPath = $vbsPath
                     Name         = $name
                     State        = $state
+                    Where        = $d.Where
                     Target       = [string]$lnk.TargetPath
                 }
             }
@@ -1846,7 +1885,12 @@ function Get-OrphanProxyLaunchers {
     $out = @()
     foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter '*.vbs' -File -ErrorAction SilentlyContinue)) {
         if (-not $used.ContainsKey($f.FullName.ToLower())) {
-            $out += [pscustomobject]@{ LauncherPath = $f.FullName; Name = $f.BaseName }
+            # 名字里那段哈希对人没有意义，把脚本自己记下的程序路径一并带出去，
+            # 界面才能显示"这个脚本是给哪个程序的"。读不到就留空，界面另有说法。
+            $tgt = Get-ProxyLauncherTarget $f.FullName
+            $nm = $f.BaseName
+            if ($tgt) { $nm = [System.IO.Path]::GetFileNameWithoutExtension($tgt) }
+            $out += [pscustomobject]@{ LauncherPath = $f.FullName; Name = $nm; Target = $tgt }
         }
     }
     return $out
@@ -2205,23 +2249,44 @@ function Invoke-ManageProxyShortcuts {
                     default        { $r.State }
                 }
                 $stateRole = if ($r.State -eq 'ok') { 'ok' } else { 'warn' }
-                Write-Styled 'item' ('    ' + $idx.ToString().PadLeft(2) + '  ' + $r.Name)
+                # 名字后面跟位置：同一个程序可以同时出现在桌面和任务栏
+                # （固定到任务栏时 Windows 会复制一份），不带位置的话两行内容一模一样。
+                # 名字本身可能已经带括号（''Antigravity（走代理）''），后面再接一个''（桌面）''
+                # 连成三个括号读着别扭。中间加分隔点，两段身份各自清楚。
+                Write-Styled 'item' ('    ' + $idx.ToString().PadLeft(2) + '  ' + $r.Name + '  ·  ' + $r.Where)
                 Write-Styled $stateRole ('        状态  ' + $stateText)
+                # 完整路径 + 位置都写出来。路径长到折行也照写：
+                # 截短了用户就没法照着去找、也没法复制，而这一屏的作用正是"我要删哪一个"。
                 Write-Styled 'dim'  ('        图标  ' + $r.LnkPath)
-                Write-Styled 'dim'  ('        脚本  ' + $r.LauncherPath)
+                # 启动脚本被多个图标共用时说清楚：删掉这条不会弄坏别人。
+                $shareCount = @($recs | Where-Object { $_.LauncherPath -eq $r.LauncherPath }).Count
+                $shareNote = if ($shareCount -gt 1) { ('（' + $shareCount + ' 个图标共用）') } else { '' }
+                Write-Styled 'dim'  ('        脚本  ' + $r.LauncherPath + $shareNote)
             }
         }
         if ($orphans.Count -gt 0) {
             Write-Host ''
-            Write-Styled 'heading' '  没有图标的启动脚本（可能图标已固定到任务栏，或已被删）'
+            # 这一段的意思是"还有启动脚本，但它的图标我找不到"。
+            # 用户完全可能把图标挪到别处（自己建的文件夹、移动硬盘），那不算错，
+            # 所以措辞不能写成"图标已经被删了"——那会让他以为自己弄坏了什么。
+            Write-Styled 'heading' '  这些启动脚本没有对应的图标'
+            Write-Styled 'dim' '  （图标可能被你挪到别处了，也可能删掉了）'
             foreach ($o in $orphans) {
                 $idx++
                 Write-Styled 'item' ('    ' + $idx.ToString().PadLeft(2) + '  ' + $o.Name)
+                if ($o.Target) {
+                    Write-Styled 'dim' ('        程序  ' + $o.Target)
+                } else {
+                    Write-Styled 'dim' '        程序  （这个脚本没记下是哪个程序，可能是旧版本建的）'
+                }
                 Write-Styled 'dim'  ('        脚本  ' + $o.LauncherPath)
             }
         }
         Write-Host ''
-        Write-Styled 'dim' '  输编号 = 删掉那一个（连同它的启动脚本）    0 = 返回'
+        # 底部说明要说清两件事：删的是图标；脚本被共用时会保留。
+        # 原来只写"连同它的启动脚本"，共用时那句话是假的。
+        Write-Styled 'dim' '  输编号 = 删掉那个图标（启动脚本还被别的图标用着时会保留）'
+        Write-Styled 'dim' '  0 = 返回'
 
         $ans = ''
         try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
