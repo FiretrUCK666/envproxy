@@ -1137,9 +1137,10 @@ function Get-HelpTopics {
             Key = '7'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
             Lines = @(
                 'h 连不上网，按这个顺序查',
-                'i 1. 在那个窗口里看变量有没有值。PowerShell 输入：',
-                'c $env:HTTPS_PROXY',
-                't2 空的就是没注入，重开一个窗口就好。',
+                'i 1. 在出问题的窗口里敲对应的一条，看有没有值（空的 = 没注入，重开窗口）：',
+                'rc PowerShell|$env:HTTPS_PROXY',
+                'rc cmd|set HTTPS_PROXY',
+                'rc Git Bash|echo $HTTPS_PROXY',
                 'b ',
                 'i 2. 有值还是连不上：看菜单顶上「监控」写的是运行中还是未运行。',
                 't2 未运行就选 1（安装 / 修复）。',
@@ -1152,15 +1153,14 @@ function Get-HelpTopics {
                 'r 终端同步|已经开着的窗口会不会跟着变',
                 'r 代理变量|这个工具往终端里设代理了没有',
                 't 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被停了，不是坏了。',
-                't 其余几行是系统代理、版本号、更新状态。',
                 'b ',
                 'h 日志和 AI 排查',
-                't 反馈时附最后 20 行日志。先 cd 到装它的文件夹，再照下面敲：',
-                'c Get-Content .\win\monitor\monitor.log -Tail 20',
-                'c tail -n 20 win/monitor/monitor.log',
-                't AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，不是网络坏了；',
-                't 菜单选 2 看「代理变量」那行会直接说清。',
-                't 它只管 HTTP/HTTPS 变量；ping、游戏、BT 走自己协议的不认，要开 TUN 模式。'
+                't 反馈时附最后 20 行日志。先 cd 到装它的文件夹，再照对应的一条敲：',
+                'rc PowerShell|Get-Content .\win\monitor\monitor.log -Tail 20',
+                'rc Git Bash|tail -n 20 win/monitor/monitor.log',
+                't AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，不是网络坏了。',
+                't 菜单选 2 看「代理变量」那行会说清。它只管 HTTP/HTTPS 变量，ping、',
+                't 游戏、BT 走自己协议的不认，要开 TUN 模式。'
             )
         },
         @{

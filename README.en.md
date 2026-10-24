@@ -138,6 +138,17 @@ Uninstalling asks whether to keep it. Keep it and this is the only file left; ev
 
 Each subsection stands on its own; there is no need to read them in order.
 
+**Jump straight to what you need:**
+
+| What you want to do | Section |
+|---|---|
+| A window is stuck on old values | [3.1](#31-a-window-you-already-have-open-needs-one-enter-press) |
+| Keep this window direct | [3.2](#32-pin-this-window-to-a-direct-connection--go-back-to-automatic) |
+| Use a corporate proxy | [3.3](#33-send-this-window-through-a-corporate-proxy) |
+| Skip the proxy for one command | [3.4](#34-make-one-command-skip-the-proxy) |
+| Confirm it is installed | [3.5](#35-how-to-confirm-it-really-took) |
+| Use switches, not the menu | [3.6](#36-use-it-without-the-menu-scripts-remote-sessions) |
+
 First, work out which terminal you are in. The four take different commands:
 
 | Prompt looks like | What you are using | How to open it |
@@ -188,6 +199,16 @@ If you would rather not reopen and not press Enter, load it by hand once:
 
 The leading `.` and the space after it are both required; it means "run this file in this window". It affects only this window, so other open windows each need their own. If EnvProxy was never installed from this window, you may see a red "cannot find path" error: that is expected, just open a new window.
 
+**Confirm it took:**
+
+| Window | Type this | What success looks like |
+|---|---|---|
+| PowerShell | `$env:HTTPS_PROXY` | A value means it caught up; empty means still direct |
+| cmd | `set HTTPS_PROXY` | Same as above |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+
+If the proxy app is running and you see nothing, this window has not caught up yet: press Enter once more.
+
 ### 3.2 Pin this window to a direct connection / go back to automatic
 
 **Pin this window to a direct connection**
@@ -228,6 +249,16 @@ Leave no spaces around `&`. A space makes the value a single space instead of em
 
 **Do not use `unset HTTP_PROXY ...`**: the hook writes the lower-case spellings (`http_proxy` and friends) into Git Bash. Unsetting the upper-case one leaves the lower-case one behind, and curl in Git Bash honours it — so you would still be going through the proxy. The next prompt puts them all back too. The switch above is the only real takeover.
 
+**Confirm it took:**
+
+| Window | Type this | What success looks like |
+|---|---|---|
+| PowerShell | `$env:HTTPS_PROXY` | Empty means it is pinned to direct |
+| cmd | `set HTTPS_PROXY` | Same as above |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+
+The variables clear at the next prompt, so do not check on the same command line.
+
 ---
 
 **Going back to following the proxy app**
@@ -239,6 +270,16 @@ Leave no spaces around `&`. A space makes the value a single space instead of em
 | cmd | Reopen the window |
 
 These changes only live in that window. Close it and they are gone.
+
+**Confirm it took:**
+
+| Window | Type this | What success looks like |
+|---|---|---|
+| PowerShell | `$env:HTTPS_PROXY` | A value means it follows the proxy app again |
+| cmd | `set HTTPS_PROXY` | Same as above |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+
+Still empty while the proxy app is running means the monitor is not running: pick 1 (Install / repair) in the menu.
 
 ### 3.3 Send this window through a corporate proxy
 
@@ -266,11 +307,15 @@ export HTTPS_PROXY=http://your-host:port
 
 Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
 
-**Check which one is in effect** (a value means through the proxy, empty means direct):
+**Confirm it took:**
 
-| PowerShell | cmd | Git Bash / Mac |
+| Window | Type this | What success looks like |
 |---|---|---|
-| `$env:HTTPS_PROXY` | `set HTTPS_PROXY` | `echo $HTTPS_PROXY` |
+| PowerShell | `$env:HTTPS_PROXY` | Your corporate address means it took |
+| cmd | `set HTTPS_PROXY` | Same as above |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+
+Seeing the proxy app's own port instead means step 3.2 did not take: go back and redo it.
 
 ### 3.4 Make one command skip the proxy
 
@@ -293,6 +338,8 @@ Three traps, all measured:
 Also: `git`'s `-c http.proxy=` must be left empty — empty means "this command skips the proxy", any other value means "use that proxy instead". npm reads only `HTTPS_PROXY`, not `HTTP_PROXY`; EnvProxy writes both, so npm works, but if you set only `HTTP_PROXY` yourself npm will not be proxied.
 
 These flags belong to each tool, not to EnvProxy. Without them, the tools read the variables EnvProxy wrote.
+
+**Confirm it took:** run the same command you just added the flag to. **If it works, the proxy really was bypassed.** If it fails instead, drop the flag and try again, which tells you whether the flag or the network was at fault.
 
 ### 3.5 How to confirm it really took
 
@@ -343,6 +390,8 @@ bash envproxy.sh status
 ```
 
 **Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
+
+**Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
 
 ## 4. Something is wrong: check in this order
 
