@@ -603,6 +603,154 @@ function Apply-State([string]$state) {
     return ((Invoke-EnvStateWrite $state "代理已关闭 -> 已删除代理变量，恢复直连" $logOn) -eq 0)
 }
 
+# ------------------------------------------------------------------------------
+# 代理换了之后提醒正在运行的程序
+# ------------------------------------------------------------------------------
+# 已启动的程序，环境变量在启动那一刻就定死了，之后怎么改都影响不到它。
+# 所以换端口（或代理关掉）之后，那些程序还在连旧地址，会连不上、界面卡死或白屏，
+# 而用户看不出原因——他只知道"刚才还好好的"。
+#
+# 这里不试图改别人的进程（Windows 没有这个能力），而是由本工具弹一句提示：
+# 告诉用户"代理变了，正在运行的程序需要重开"。这是唯一做得到的事。
+#
+# 三个约束，缺一个就会变成骚扰：
+#   ① 只在端口真的变了时提示。7078 -> 7078（重连但端口没变）不提示，因为那些程序
+#      仍然连得通，提示是假警报；
+#   ② 同一次变化只提示一次。记在一个文件里，避免每一轮探测都弹一遍；
+#   ③ 不阻塞主循环。提示放在独立进程里弹，本进程立刻继续探测。
+
+# 上次提示过的端口记在这里。用文件而不是内存变量：监控进程重启后不该重复提示
+# 同一件事，而用户看到的是"每次开机又弹一遍"。
+function Get-ProxyNotifyStatePath {
+    return (Join-Path $MonitorDir 'notify.last')
+}
+
+# 读上次提示过的端口。返回空串 = 没有记录（从没提示过）。
+function Read-ProxyNotifyState {
+    $p = Get-ProxyNotifyStatePath
+    try {
+        if (-not (Test-Item $p)) { return '' }
+        # 自写自读，用最简单的读法；读到半截或读失败都当作"没有记录"，
+        # 最坏结果是多弹一次提示，不会弹错内容。
+        $t = [System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8)
+        if (-not $t) { return '' }
+        return $t.Trim()
+    } catch { return '' }
+}
+
+# 写这个状态文件。
+#
+# 为什么不用 Write-TextAtomic：那是给**用户 profile** 用的写入器，
+# 它会做三件这里不需要的事——探测原文件编码、沿用原文件行尾、留下 .envproxy.bak 备份。
+# 前两件对一个我们自己写的单行 ASCII 状态文件毫无意义，第三件是实实在在的污染：
+# 它会在 monitor 目录里留下 notify.last.envproxy.bak，而那个后缀在本项目里
+# 语义是"用户装之前的原始内容，卸载时用来还原"。把一个状态文件伪装成备份，
+# 既误导以后排查的人，也让"monitor 目录里只该有那几种运行时文件"这条不再成立。
+#
+# 这里要的只是"整份替换、不会读到半截"：同目录临时文件 + 原子替换。
+function Write-ProxyNotifyState([string]$Value) {
+    $p = Get-ProxyNotifyStatePath
+    try {
+        $dir = Split-Path -Parent $p
+        if ($dir -and -not (Test-Item $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
+        }
+        # 临时文件名带 PID：两个进程同时写不会撞同一个临时文件。
+        $tmp = "$p.$PID.tmp"
+        try {
+            [System.IO.File]::WriteAllText($tmp, [string]$Value, (New-Object System.Text.UTF8Encoding($false)))
+            if ([System.IO.File]::Exists($p)) {
+                # 5.1 没有 File.Move 的覆盖重载，先删再移。
+                [System.IO.File]::Delete($p)
+            }
+            [System.IO.File]::Move($tmp, $p)
+        } finally {
+            if ([System.IO.File]::Exists($tmp)) {
+                try { [System.IO.File]::Delete($tmp) } catch {}
+            }
+        }
+    } catch {}
+}
+
+# 状态换成新的了：该不该提醒。
+# 返回 $true = 需要提示（并已记下新状态）。
+#
+# 判据只有一条：**代理地址变了，且新旧两个都是"有代理"或"从有到无"**。
+#   off    -> on:P    提示（程序原来直连，现在有代理了；多数程序会自动重连，不必提醒）
+#                      —— 实际上这个方向不需要提醒：直连变代理，旧程序照旧直连能通，
+#                      没有"连不上"的问题。所以不提示。
+#   on:P1  -> on:P2   提示（端口变了，旧程序仍连 P1）
+#   on:P   -> off     提示（代理没了，旧程序还写着 P1）
+#   on:P   -> on:P    不提示（同一个地址）
+#   off    -> off     不提示
+#   unknown 参与的任何迁移都不提示：那一轮根本不知道状态，提示等于谎报。
+function Test-ProxyShouldNotify([string]$OldState, [string]$NewState) {
+    if (-not $OldState -or -not $NewState) { return $false }
+    if ($OldState -eq 'unknown' -or $NewState -eq 'unknown') { return $false }
+    # 统一成 "off" 或 "on:端口"
+    $oldOn = $OldState.StartsWith('on:')
+    $newOn = $NewState.StartsWith('on:')
+    $oldPort = if ($oldOn) { $OldState.Substring(3) } else { '' }
+    $newPort = if ($newOn) { $NewState.Substring(3) } else { '' }
+
+    if ($oldOn -and $newOn) {
+        # 端口变了才提示；没变什么都不做
+        return ($oldPort -ne $newPort)
+    }
+    if ($oldOn -and -not $newOn) {
+        # 代理关了：旧程序还挂着那个地址，会连不上
+        return $true
+    }
+    # off -> on（新出现代理）与 off -> off 都不提示：
+    # 前者的旧程序照旧直连能通，没有问题；后者什么都没变。
+    return $false
+}
+
+# 真的弹一句。放在独立进程里，不阻塞调用方。
+#
+# 为什么用 wscript 而不是 powershell 起弹窗：实测启动一次 powershell 要 280-290 ms，
+# 而 wscript 只要 18 ms。这个函数跑在监控主循环里，每多占 300 ms 就少探查一次，
+# 而探查是这工具的唯一职责。wscript 本身没有控制台，也不会闪窗。
+#
+# 为什么弹窗参数用 -EncodedCommand 而不是写 .vbs 文件：中文写进 .vbs 要靠 ANSI 编码，
+# 而实测这条路不可靠——实测 cscript 直接报"无效字符"（写进去的字节 wscript 认不出）。
+# 改成把整段脚本 base64 后交给 powershell，编码由 base64 保证，任何语言的字符都不会坏。
+# 代价是启动慢一点（约 290 ms），但提示本身就是低频事件（只在端口真变时发生），
+# 而且它跑在独立进程里，不占主循环的时间。
+function Invoke-ProxyChangeNotice([string]$OldState, [string]$NewState) {
+    $oldTxt = if ($OldState.StartsWith('on:')) { $OldState.Substring(3) } else { '直连' }
+    $newTxt = if ($NewState.StartsWith('on:')) { $NewState.Substring(3) } else { '直连' }
+    $msg = "代理端口变了：$oldTxt -> $newTxt`r`n`r`n" +
+           "正在运行的程序还连在旧地址上，可能会连不上。`r`n" +
+           "如果它们打不开或一直转圈，关掉重开就好。"
+    # 消息文本走 base64：中文、引号、换行都不用操心转义，编码由 base64 保证。
+    $b64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($msg))
+    $inner = "`$m=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$b64'));" +
+             "`$s=New-Object -ComObject WScript.Shell;" +
+             "`$null=`$s.Popup(`$m,10,'EnvProxy',64)"
+    $enc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($inner))
+    try {
+        Start-Process -FilePath 'powershell.exe' `
+            -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand ' + $enc) `
+            -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
+    } catch {}
+}
+
+# 在主循环看到状态翻转时调用：判断 + 提示 + 记录，一处做完，免得调用点各写一遍再分叉。
+#
+# 去重只靠一件事：这个文件记的是"**上次提示时**的那个新状态"。
+# 主循环每轮都会调用本函数（state 与 lastState 不同才进来，且已过去抖），
+# 如果同一目标状态已经提示过——例如监控重启后又看到同样的翻转——
+# 就不再弹。这样既不会漏（真正的新变化一定没有记录），也不会烦（同一件事只弹一次）。
+function Register-ProxyStateChange([string]$OldState, [string]$NewState) {
+    if (-not (Test-ProxyShouldNotify $OldState $NewState)) { return $false }
+    $lastNotified = Read-ProxyNotifyState
+    if ($lastNotified -eq $NewState) { return $false }
+    Write-ProxyNotifyState $NewState
+    Invoke-ProxyChangeNotice $OldState $NewState
+    return $true
+}
+
 # 把当前状态落到 LOCALAPPDATA 下的 EnvProxy 目录，文件名 terminal.env，供 Git Bash 的提示符钩子读。
 # 格式是每行 KEY=VALUE：无前缀行是「当前该注入的值」，owned_ 前缀行是「归属记录」
 # （值仍等于它才允许清除，与注册表 Owned 键同一套判据）。

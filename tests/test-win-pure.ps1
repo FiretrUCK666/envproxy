@@ -627,11 +627,26 @@ Assert-Eq '卸载: 工具目录只在空时才删（不碰使用者的东西）'
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
 # switches, so every number must resolve and every switch must exist.
+#
+# The expected key set is DERIVED from $MenuItems, not written out literally.
+# A literal list has to be edited every time a menu item is added, and the way that
+# fails is silent: the assertion just says "the count is wrong" and the next person
+# edits the number without checking that the new item is wired to a real switch.
+# Deriving it means adding an entry needs no test edit, while every entry still gets
+# checked for the two things that actually matter (unique key, resolvable switch).
 $menuKeys = @($MenuItems | ForEach-Object { $_.Key })
-Assert-Eq 'menu has seven entries' 7 $menuKeys.Count
-foreach ($k in @('1', '2', '3', '4', '5', '6', '0')) { Assert-Eq ('menu has key ' + $k) $true ($menuKeys -contains $k) }
+Assert-Eq 'menu has one entry per item' @($MenuItems).Count $menuKeys.Count
+Assert-Eq 'menu keys are unique' $menuKeys.Count (@($menuKeys | Select-Object -Unique).Count)
+foreach ($k in $menuKeys) { Assert-Eq ('menu key is a single char: ' + $k) 1 $k.Length }
+# Every non-quit item must name a switch the entry actually answers.
+$entryTxt = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/envproxy.ps1'))
 $menuSwitches = @($MenuItems | Where-Object { $_.Switch } | ForEach-Object { $_.Switch })
-foreach ($sw in @('Install', 'Status', 'Stop', 'Uninstall', 'Update', 'Help')) { Assert-Eq ('menu covers -' + $sw) $true ($menuSwitches -contains $sw) }
+foreach ($sw in $menuSwitches) {
+    Assert-Eq ('menu switch -' + $sw + ' is declared in the entry param block') $true ($entryTxt -match ('\[switch\]\$' + $sw + '\b'))
+    Assert-Eq ('menu switch -' + $sw + ' is dispatched') $true ($entryTxt -match ('if \(\$' + $sw + '\)'))
+}
+# Quit is the only item without a switch, and it must still carry a key.
+Assert-Eq 'only the quit item has no switch' 1 (@($MenuItems | Where-Object { -not $_.Switch }).Count)
 # Help exists and actually explains the three things a confused user needs.
 # Asserting only "the function exists" is not enough: help text that says nothing
 # still "exists". These keywords are the load-bearing facts.
@@ -768,11 +783,20 @@ foreach ($k in $menuKeys) { Assert-Eq ('menu prints key ' + $k) $true ($menuOut 
 # 于是"加了一项却没写提示"这种疏漏反而检查不到。
 Assert-Eq 'every menu item has a hint' $true (@($MenuItems | Where-Object { -not $_.Hint }).Count -eq 0)
 # Grouping is presentation only: every entry belongs to a declared group, and the
-# groups keep their order so the screen reads 日常 -> 维护 -> 退出.
-foreach ($mi in $MenuItems) { Assert-Eq ('menu item ' + $mi.Key + ' has a group') $true ($mi.Group -in @('日常', '维护', '退出')) }
+# Groups keep their order so the screen reads top to bottom the way the table declares it.
+# Both the allowed group names and the expected order are DERIVED from $MenuItems:
+# a literal list here would need editing every time a group is added, and the symptom
+# of forgetting is a confusing "item has no group" on an item that plainly has one.
+$declaredGroups = @(Get-MenuGroups)
+foreach ($mi in $MenuItems) { Assert-Eq ('menu item ' + $mi.Key + ' has a group') $true ($mi.Group -in $declaredGroups) }
+Assert-Eq 'menu groups are unique' $declaredGroups.Count (@($declaredGroups | Select-Object -Unique).Count)
 $menuTextOrder = @()
-foreach ($g in @('日常', '维护', '退出')) { $menuTextOrder += $menuOut.IndexOf($g) }
-Assert-Eq 'menu groups render in order' $true ($menuTextOrder[0] -lt $menuTextOrder[1] -and $menuTextOrder[1] -lt $menuTextOrder[2])
+foreach ($g in $declaredGroups) { $menuTextOrder += $menuOut.IndexOf($g) }
+$orderOk = $true
+for ($i = 1; $i -lt $menuTextOrder.Count; $i++) {
+    if ($menuTextOrder[$i-1] -ge $menuTextOrder[$i]) { $orderOk = $false }
+}
+Assert-Eq 'menu groups render in declared order' $true $orderOk
 
 
 # Test-CanPrompt guards every interactive screen. It once called itself instead of reading
@@ -1028,6 +1052,57 @@ Assert-Eq 'loopback url: https://api.github.com/repos/o/r' 'false' (Test-Loopbac
 Assert-Eq 'loopback url: http://192.168.1.5:7078/' 'false' (Test-LoopbackUrl 'http://192.168.1.5:7078/')
 Assert-Eq 'loopback url: http://[2001:db8::1]:8080/' 'false' (Test-LoopbackUrl 'http://[2001:db8::1]:8080/')
 Assert-Eq 'loopback url: http://localhost.:7890' 'false' (Test-LoopbackUrl 'http://localhost.:7890')
+
+# 代理地址归一化：启动器要用它把"用户能填出的各种写法"变成一个能放进环境变量的值。
+# 这里钉住的每一条都是真实可能出现的输入：注册表里我们自己写的（规范）、
+# 用户手填的（可能少协议、多空格、带末尾斜杠、带账号密码）。
+Assert-Eq 'proxy url: 规范写法原样保留' 'http://127.0.0.1:7078' (ConvertTo-ProxyUrl 'http://127.0.0.1:7078')
+Assert-Eq 'proxy url: 去首尾空白' 'http://127.0.0.1:7078' (ConvertTo-ProxyUrl '  http://127.0.0.1:7078  ')
+Assert-Eq 'proxy url: 去末尾斜杠' 'http://127.0.0.1:7078' (ConvertTo-ProxyUrl 'http://127.0.0.1:7078/')
+Assert-Eq 'proxy url: 少写协议时补 http' 'http://127.0.0.1:7078' (ConvertTo-ProxyUrl '127.0.0.1:7078')
+Assert-Eq 'proxy url: IPv6 方括号保留' 'http://[::1]:7078' (ConvertTo-ProxyUrl 'http://[::1]:7078')
+Assert-Eq 'proxy url: IPv6 少协议也补' 'http://[::1]:7078' (ConvertTo-ProxyUrl '[::1]:7078')
+Assert-Eq 'proxy url: socks5 保留协议' 'socks5://127.0.0.1:1080' (ConvertTo-ProxyUrl 'socks5://127.0.0.1:1080')
+# 账号密码里出现 ! 和 % 时不能被吞：cmd 的延迟展开会把 ! 吃掉，这里不能重犯。
+Assert-Eq 'proxy url: 密码含 ! 不被吞' 'http://user:pa!ss@127.0.0.1:7078' (ConvertTo-ProxyUrl 'http://user:pa!ss@127.0.0.1:7078')
+Assert-Eq 'proxy url: 密码含 %40 不被吞' 'http://user:p%40ss@127.0.0.1:7078' (ConvertTo-ProxyUrl 'http://user:p%40ss@127.0.0.1:7078')
+Assert-Eq 'proxy url: 空串返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl ''))
+Assert-Eq 'proxy url: 纯空白返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl '   '))
+# 这两条防的是 Uri 的默认端口陷阱：它会替 "http://127.0.0.1" 补出 Port=80，
+# 看起来"有端口"，其实用户没写端口——那种值放进环境变量全是连不上。
+Assert-Eq 'proxy url: 没写端口返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl 'http://127.0.0.1'))
+Assert-Eq 'proxy url: 显式 :80 也算默认端口' 'true' ($null -eq (ConvertTo-ProxyUrl 'http://127.0.0.1:80'))
+Assert-Eq 'proxy url: 非主机名返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl '不是地址'))
+Assert-Eq 'proxy url: 不支持的协议返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl 'ftp://127.0.0.1:21'))
+
+# 候选挑选：去重、保序、过滤。启动器靠它把"环境变量 + 注册表 + 兜底"合成一条试活序列。
+$cand = @(Select-ProxyUrlCandidates @('http://127.0.0.1:7078', '  http://127.0.0.1:7078/  ', '127.0.0.1:7099', 'bad', '', $null))
+Assert-Eq 'proxy candidates: 去重并保序' 'http://127.0.0.1:7078|http://127.0.0.1:7099' ($cand -join '|')
+Assert-Eq 'proxy candidates: 空输入得空数组' '0' (@(Select-ProxyUrlCandidates @()).Count)
+Assert-Eq 'proxy candidates: null 输入得空数组' '0' (@(Select-ProxyUrlCandidates $null).Count)
+
+# 「这个快捷方式是不是我们建的」判据：只认 launchers 目录**里面**的 .vbs。
+#
+# 这一组防的是误删用户文件：判据曾用子串包含，于是 launchers2 / launchersX
+# 这类同级目录里的 .vbs 也被当成我们的，卸载时连同用户的快捷方式一起删掉。
+# 判得宽比判得严危险得多——判严只是留下自己的垃圾，判宽是动别人的东西。
+#
+# 断言直接打在生产函数 Test-ProxyShortcutArgsOurs 上，不在这里另写一份副本：
+# 副本会让这组用例失去意义——生产那份改了、写歪了、退回子串包含了，
+# 测副本的断言照样全绿，测试发现不了被测对象的变化。
+$launcherRoot = [System.IO.Path]::GetFullPath((Get-ProxyLauncherDir)).TrimEnd('\')
+# 必须认成我们的（否则卸载删不掉自己的东西）
+Assert-Eq 'shortcut ours: 目录内的 vbs' 'true' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + '\app_1234abcd.vbs"'))
+Assert-Eq 'shortcut ours: 不带引号也算' 'true' (Test-ProxyShortcutArgsOurs ($launcherRoot + '\app_1234abcd.vbs'))
+Assert-Eq 'shortcut ours: 中文文件名也算' 'true' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + '\中文_aabb.vbs"'))
+# 绝不能认成我们的（否则删掉用户的东西）
+Assert-Eq 'shortcut not ours: launchers2 同级目录' 'false' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + '2\mine.vbs"'))
+Assert-Eq 'shortcut not ours: launchersX 同级目录' 'false' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + 'X\user.vbs"'))
+Assert-Eq 'shortcut not ours: 用 .. 绕出去' 'false' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + '\..\backup\user.vbs"'))
+Assert-Eq 'shortcut not ours: 桌面上的用户脚本' 'false' (Test-ProxyShortcutArgsOurs '"C:\Users\X\Desktop\mine.vbs"')
+Assert-Eq 'shortcut not ours: 不是 vbs' 'false' (Test-ProxyShortcutArgsOurs ('"' + $launcherRoot + '\a.exe"'))
+Assert-Eq 'shortcut not ours: 空参数' 'false' (Test-ProxyShortcutArgsOurs '')
+Assert-Eq 'shortcut not ours: 只有一个引号' 'false' (Test-ProxyShortcutArgsOurs '"')
 
 #
 # 这条防的是一个真实发生过的 bug：挑选函数与它的断言都在，但调用方

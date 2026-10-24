@@ -97,6 +97,8 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **2 Show status** (`查看状态`) | Monitor, proxy, sync, variables, version | Read-only |
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
+| **Advanced** | | |
+| **7 Advanced** (`高级功能`) | Windows only: proxy-aware shortcut | One new icon; old ones untouched |
 | **Upkeep** | | |
 | **5 Stop the monitor** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **6 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -121,6 +123,7 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | 6 | What each menu item does |
 | 7 | Installed but still cannot reach the internet / status looks wrong |
 | 8 | Still not working / I want to remove it |
+| 9 | One program does not go through the proxy |
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
@@ -548,6 +551,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 |---|---|---|
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | locator; the login item uses it to find the program |
 | | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
+| | `launchers\` | startup scripts for the proxy-aware shortcuts (only exists once you use menu 7) |
 | `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
 | `HKCU\Software\EnvProxy` | `ScriptPath` + `Owned`/`Backup` | where it is; what we wrote; yours |
 | `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
@@ -561,6 +565,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
+| | `notify.last` | the state last warned about; keeps the same change from being reported twice |
 
 The items in `win\monitor\` are local runtime state. Deleting them is harmless (the background program recreates them) and does not touch the program files.
 
@@ -691,6 +696,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
+| | `notify.last` | the state last warned about; keeps the same change from being reported twice |
 | | `.lock` | single-instance lock, so two copies never run at once |
 | | `.op.lock` | one install/uninstall/stop/update at a time |
 

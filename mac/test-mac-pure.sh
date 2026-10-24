@@ -1213,7 +1213,9 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
             continue
         fi
         # 菜单表：左侧是 **编号 名称**，收集编号序列再与 MENU_ITEMS 比。
-        _rm_doc_keys=$(grep -oE '^\|\s*\*\*[0-9]+ ' "$_rm_f" | tr -cd '0-9\n' | tr '\n' ',' )
+        # 标注「仅 Windows」的行不算：那一项在这个平台上不存在，README 必须能写出来
+        # （不写就等于隐瞒了一个平台差异），但它不该被当成"文档与代码不一致"。
+        _rm_doc_keys=$(grep -vE '^\|\s*\*\*[0-9]+ .*(（仅 Windows）|Windows only)' "$_rm_f" | grep -oE '^\|\s*\*\*[0-9]+ ' | tr -cd '0-9\n' | tr '\n' ',' )
         _rm_code_keys=$(for _rm_i in "${MENU_ITEMS[@]}"; do printf '%s\n' "${_rm_i%%|*}"; done | tr '\n' ',')
         _selftest_assert_eq "$_rm_pair 菜单表编号与代码一致" "$_rm_code_keys" "$_rm_doc_keys"
         # 帮助目录表：表头「编号 / No.」，取每行第一格。

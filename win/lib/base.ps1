@@ -279,6 +279,56 @@ function Get-ProxyVarTable([string]$Port, [string]$ProxyUrl = "") {
     return $table
 }
 
+# ------------------------------------------------------------------------------
+# 4.5 启动器要用的两件小事（纯函数，好测）
+# ------------------------------------------------------------------------------
+# 为什么这两件事住在 base 而不是 ops：它们都是"给定输入就该算出结果"的判定，
+# 没有副作用，测试能直接喂参数验。放进 ops 会拖上写文件、弹提示的上下文，
+# 那种函数只能靠真跑一遍来验，而真跑一遍会动用户的桌面。
+
+# 代理地址去掉首尾空白、补上协议、去掉末尾斜杠，得到一个能直接放进环境变量的值。
+# 判据宽松是有意的：代理地址可能来自注册表（我们自己写的，规范）、也可能来自
+# 用户手填（可能少写 http://、可能多打一个空格）。宽松解析、严格校验，
+# 比"格式不对就整个失败"对用户友好得多。
+# 返回 $null 表示这串东西不像一个代理地址。
+function ConvertTo-ProxyUrl([string]$Raw) {
+    if (-not $Raw) { return $null }
+    $v = $Raw.Trim()
+    if (-not $v) { return $null }
+    # 没写协议时补 http://：本机代理端口几乎都是混合端口，HTTP 兼容面最大。
+    if ($v -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://') { $v = 'http://' + $v }
+    # 末尾斜杠要去掉：环境变量里的代理地址带斜杠时，部分工具会拼出 //path。
+    $v = $v.TrimEnd('/')
+    # 必须能解析出主机和端口，否则它不是一个可用的代理地址。
+    $u = $null
+    if (-not [System.Uri]::TryCreate($v, [System.UriKind]::Absolute, [ref]$u)) { return $null }
+    if (-not $u.Host) { return $null }
+    # 端口必须**显式写出来**：Uri 对省略端口的值会自动补成协议默认端口（http 补 80），
+    # 于是 "http://127.0.0.1" 与 "http://bad" 都会得到 Port=80 而看起来"有端口"。
+    # IsDefaultPort 才是"端口有没有被写出来"的判据——它一次挡住这两种假地址。
+    if ($u.IsDefaultPort) { return $null }
+    if ($u.Port -le 0) { return $null }
+    # 主机名要像一个主机：Uri 会把纯中文当成合法主机名收下，那种值放进环境变量
+    # 只会让所有请求失败，不如在这里判掉。
+    if ($u.Host -notmatch '^[A-Za-z0-9\.\-_\[\]:]+$') { return $null }
+    $scheme = $u.Scheme.ToLower()
+    if ($scheme -notin @('http', 'https', 'socks5', 'socks5h', 'socks4')) { return $null }
+    return $v
+}
+
+# 从一段文字里挑出"看起来像代理地址"的那些（去重、保序）。
+# 用途：启动器要依次试几个候选地址（环境变量、注册表、常见端口），
+# 挑候选这一步必须是纯函数，否则测试只能靠真连一遍来验。
+function Select-ProxyUrlCandidates([string[]]$RawValues) {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($r in $RawValues) {
+        $v = ConvertTo-ProxyUrl $r
+        if (-not $v) { continue }
+        if (-not $out.Contains($v)) { [void]$out.Add($v) }
+    }
+    return $out.ToArray()
+}
+
 # 文件的 sha256（小写十六进制）。
 # 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
 # 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），

@@ -1423,7 +1423,11 @@ function Run-MonitorLoop {
     # 启动立即对齐：不等去抖，当场校正环境变量。
     # 关键场景：关机前没退出翻墙软件 → 重启后环境变量残留死端口 →
     # 监控一启动就立即清掉残留（恢复直连）或注入正确值，闭环无窗口期。
+    # $prevState 与 $lastState 是一对：$lastState 是"现在是什么"，
+    # $prevState 是"这次翻转之前是什么"。提示逻辑要比较这两个。
+    # 两个都在循环外声明，启动对齐时一起赋值——否则第一次翻转拿不到旧值。
     $lastState    = $null
+    $prevState    = $null
     $pendingState = $null
     $pendingCount = 0
     $repairRound  = 0
@@ -1438,6 +1442,11 @@ function Run-MonitorLoop {
         } else {
             Write-MonitorLog "启动时端口枚举失败 -> 不动环境变量，沿用现状"
         }
+        # 启动对齐时就把"上一状态"定下来，与 $lastState 同步。
+        # 不这么做的话，$prevState 要到第一次状态翻转时才被赋值，
+        # 于是"监控刚起来之后的第一次换端口"拿到的旧状态是空值，
+        # 提示判据认为无从比较而跳过——而那恰好是开机后最常发生的一次变化。
+        $prevState = $lastState
     } catch {
         Write-MonitorLog "启动对齐异常: $($_.Exception.Message)"
     }
@@ -1498,10 +1507,15 @@ function Run-MonitorLoop {
                 # 状态疑似翻转：连续确认 $StateDebounceRounds 轮才动手，杜绝抖动
                 if ($state -eq $pendingState) { $pendingCount++ } else { $pendingState = $state; $pendingCount = 1 }
                 if ($pendingCount -ge $StateDebounceRounds) {
+                    $prevState = $lastState
                     Apply-State $state
                     $lastState = $state
                     $pendingState = $null
                     $pendingCount = 0
+                    # 代理地址换了之后，已经开着的程序还连着旧地址，会连不上。
+                    # 提醒一句（提示跑在独立进程里，不阻塞这一轮探测）。
+                    # 放在 Apply-State 之后：变量已经写好，用户看到提示时去重开程序就是对的。
+                    try { $null = Register-ProxyStateChange $prevState $state } catch {}
                 }
             } else {
                 $pendingState = $null

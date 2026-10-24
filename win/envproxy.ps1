@@ -43,6 +43,7 @@ param(
     [switch]$Update,
     [switch]$Menu,
     [switch]$Help,
+    [switch]$Advanced,
     [switch]$Yes,
     [switch]$Purge,
     [switch]$RepairProfile
@@ -160,6 +161,7 @@ if ($Status)    { $usageCommands += "status" }
 if ($Update)    { $usageCommands += "update" }
 if ($Menu)      { $usageCommands += "menu" }
 if ($Help)      { $usageCommands += "help" }
+if ($Advanced)  { $usageCommands += "advanced" }
 if ($RepairProfile) { $usageCommands += "repair-profile" }
 $usageSwitches = @()
 if ($Purge) { $usageSwitches += "purge" }
@@ -182,7 +184,7 @@ if ($Yes)   { $usageSwitches += "yes" }
 #   `-First` 落在管道之后、不在窗口里，自然不会误报。
 # 这个窗口同时保住了护栏的本职：`-Instal` / `-Un` 就在窗口里，照样被拦下。
 # 宁可不拦缩写，也不能把对的用法拦下来——拦错了用户无法通过重试解决。
-$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Yes','Purge','RepairProfile')
+$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Advanced','Yes','Purge','RepairProfile')
 $rawLine = ""
 try { $rawLine = [string]$MyInvocation.Line } catch {}
 if ([string]::IsNullOrWhiteSpace($rawLine)) {
@@ -215,7 +217,7 @@ $usageError = Get-UsageError -Command $usageCommand -CommandCount $usageCommands
                             -Switches $usageSwitches -Extra @($args)
 if ($usageError) {
     Write-Styled 'warn' $usageError
-    Write-Styled 'warn' "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help} [-Yes] [-Purge]"
+    Write-Styled 'warn' "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help|-Advanced|-RepairProfile} [-Yes] [-Purge]"
     exit 2
 }
 if ($Update) {
@@ -253,6 +255,10 @@ if ($Status) {
 }
 if ($Menu) {
     Show-Menu
+    return
+}
+if ($Advanced) {
+    Show-AdvancedMenu
     return
 }
 if ($Help) {
