@@ -1263,7 +1263,7 @@ function Start-Monitor([bool]$Force = $false) {
     Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -ArgumentList (Get-MonitorLaunchArgs)
     # 启动完必须复查，判据是**监控自己写下的 pid 文件**：抢不到单实例互斥的子进程会安静退出，
     # 而它在退出前同样"命令行里带着本脚本"，只看进程存在就会把这种失败报成"已启动"。
-    # 但也要给它足够时间：PowerShell 5.1 冷启动并加载七个库可能要好几秒，所以轮询而不是固定等。
+    # 但也要给它足够时间：PowerShell 5.1 冷启动并加载全部库可能要好几秒，所以轮询而不是固定等。
     $deadline = (Get-Date).AddSeconds(12)
     while ((Get-Date) -lt $deadline) {
         if (Get-MonitorProcessFromPidFile) { break }
