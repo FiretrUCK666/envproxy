@@ -87,10 +87,16 @@ function Test-ProxyScanExcluded([string]$Name) {
 function Test-ProxyScanExcludedPath([string]$Path) {
     if (-not $Path) { return $true }
     $p = $Path.ToLower()
-    # 系统目录里的东西不是用户装的程序（regedit / cmd / 各种 .cpl）
-    $win = ([string]$env:SystemRoot).ToLower()
-    if ($win -and $p.StartsWith($win + '\system32\')) { return $true }
-    if ($win -and $p.StartsWith($win + '\syswow64\')) { return $true }
+    # 系统目录里的东西不是用户装的程序（regedit / cmd / 各种 .cpl）。
+    #
+    # 判据要**认出任何 Windows 系统目录**，不能只看 $env:SystemRoot：那个变量只在
+    # Windows 上存在，在 CI 的 Linux 上为空——于是同一个路径在本机被判「排除」、在 CI
+    # 被判「保留」，同一条断言两地结论相反。判据写成「路径里有一段是 system32 或
+    # syswow64」就与宿主平台无关了。
+    if ($p -match '(^|\\)(system32|syswow64)\\') { return $true }
+    # 少见的部署：Windows 目录不在默认盘符下，再按本机真实值兜一次
+    $win = ([string]$env:SystemRoot).ToLower().TrimEnd('\')
+    if ($win -and $p.StartsWith($win + '\')) { return $true }
     # 卸载器几乎都叫 unins*.exe / uninstall*.exe
     $file = [System.IO.Path]::GetFileNameWithoutExtension($p)
     if ($file -like 'unins*' -or $file -like 'uninstall*') { return $true }

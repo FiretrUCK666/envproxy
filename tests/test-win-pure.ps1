@@ -1168,9 +1168,24 @@ Assert-Eq 'scan exclude: Visual Studio Code 保留' 'false' (Test-ProxyScanExclu
 Assert-Eq 'scan exclude: 名字带"快捷方式"后缀也能判' 'true' (Test-ProxyScanExcluded '卸载 快捷方式')
 Assert-Eq 'scan exclude: 空名字排除' 'true' (Test-ProxyScanExcluded '')
 
-# 路径级排除：挡住"系统目录里的工具"，名字判据挡不住这些
+# 路径级排除：挡住"系统目录里的工具"，名字判据挡不住这些。
+#
+# 这里有一条**必须与宿主平台无关**：判据不能只看 `$env:SystemRoot`，因为那个变量
+# 只在 Windows 上存在，CI 在 Linux 上跑这条时它是空的——同一条断言本机绿、CI 红，
+# 而这类"换了机器就红"的测试比没有测试更糟：它教人忽略红灯。
+# 所以下面显式把 SystemRoot 抹掉再断言一次。
 Assert-Eq 'scan exclude path: System32 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\System32\regedit.exe')
 Assert-Eq 'scan exclude path: SysWOW64 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\SysWOW64\cmd.exe')
+# 抹掉 SystemRoot 之后仍然要挡得住（这正是 CI 上跑的那种情况）
+$__sr = $env:SystemRoot
+try {
+    $env:SystemRoot = $null
+    Assert-Eq 'scan exclude path: 无 SystemRoot 也挡 System32' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\System32\regedit.exe')
+    Assert-Eq 'scan exclude path: 无 SystemRoot 也挡 SysWOW64' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\SysWOW64\cmd.exe')
+    Assert-Eq 'scan exclude path: 无 SystemRoot 不误伤普通程序' 'false' (Test-ProxyScanExcludedPath 'D:\Doubao\Doubao.exe')
+} finally {
+    $env:SystemRoot = $__sr
+}
 Assert-Eq 'scan exclude path: 卸载器排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\unins000.exe')
 Assert-Eq 'scan exclude path: Uninstall 排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\Uninstall.exe')
 Assert-Eq 'scan exclude path: 普通程序保留' 'false' (Test-ProxyScanExcludedPath 'C:\Users\X\AppData\Local\Programs\antigravity\Antigravity.exe')
