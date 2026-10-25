@@ -708,15 +708,14 @@ function Test-ProxyShouldNotify([string]$OldState, [string]$NewState) {
 
 # 真的弹一句。放在独立进程里，不阻塞调用方。
 #
-# 为什么用 wscript 而不是 powershell 起弹窗：实测启动一次 powershell 要 280-290 ms，
-# 而 wscript 只要 18 ms。这个函数跑在监控主循环里，每多占 300 ms 就少探查一次，
-# 而探查是这工具的唯一职责。wscript 本身没有控制台，也不会闪窗。
+# 做法：起一个 powershell 去弹 WScript.Shell.Popup，弹窗 10 秒后自己关，用户什么都不用点。
 #
-# 为什么弹窗参数用 -EncodedCommand 而不是写 .vbs 文件：中文写进 .vbs 要靠 ANSI 编码，
-# 而实测这条路不可靠——实测 cscript 直接报"无效字符"（写进去的字节 wscript 认不出）。
+# 为什么用 -EncodedCommand 而不写一个 .vbs 让 wscript 执行：中文写进 .vbs 要靠 ANSI 编码，
+# 实测这条路不可靠——cscript 直接报"无效字符"（写进去的字节 wscript 认不出）。
 # 改成把整段脚本 base64 后交给 powershell，编码由 base64 保证，任何语言的字符都不会坏。
-# 代价是启动慢一点（约 290 ms），但提示本身就是低频事件（只在端口真变时发生），
-# 而且它跑在独立进程里，不占主循环的时间。
+#
+# 代价是启动慢一点（实测约 290 ms），但这是低频事件（只在代理地址真变时发生），
+# 而且它跑在独立进程里，不占监控主循环的时间。
 function Invoke-ProxyChangeNotice([string]$OldState, [string]$NewState) {
     $oldTxt = if ($OldState.StartsWith('on:')) { $OldState.Substring(3) } else { '直连' }
     $newTxt = if ($NewState.StartsWith('on:')) { $NewState.Substring(3) } else { '直连' }

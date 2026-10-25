@@ -205,10 +205,66 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     # Git Bash 同步用的状态镜像也在定位器目录里：它由本工具新引入，卸载必须带走。
     # 先删文件再删目录，否则目录非空、Remove-Item 不带 -Recurse 会失败（原来就是这样漏的）。
     Remove-Item -LiteralPath (Join-Path $LauncherDir "terminal.env") -Force -ErrorAction SilentlyContinue
-    # %LOCALAPPDATA%\EnvProxy 是我们**独占**的目录（只有 launcher.ps1 / terminal.env / *.tmp*），
-    # 必须带 -Recurse：5.1 上删非空目录不带它会抛 NullReferenceException 且目录纹丝不动，
-    # 于是"卸载未完成"永远修不好——用户再点一次也删不掉，因为没人去删那些残留。
-    Remove-Item -LiteralPath $LauncherDir -Recurse -Force -ErrorAction SilentlyContinue
+    # 走代理的快捷方式：问过之后再决定 launcher.ps1 与 launchers\ 的去留。
+    # 这一问必须在删目录**之前**——先删了再问，用户答"保留"就来不及了。
+    $keepShortcuts = $false
+    $shortcutRecs = @(Get-ProxyShortcutRecords)
+    $orphanLaunchers = @(Get-OrphanProxyLaunchers)
+    $hasShortcuts = ($shortcutRecs.Count -gt 0) -or ($orphanLaunchers.Count -gt 0)
+    if ($hasShortcuts) {
+        # 默认保留：那是用户自己动手建的东西，删了得重来一遍。
+        # 与"历史日志默认保留"同一个道理——不可逆且有价值的东西，默认不动。
+        $keepShortcuts = $true
+        $names = @($shortcutRecs | ForEach-Object { $_.Name })
+        if ($names.Count -eq 0) { $names = @($orphanLaunchers | ForEach-Object { $_.Name }) }
+        $listText = (($names | Select-Object -Unique) -join '、')
+        Write-Styled 'text' ("你为这些程序建了走代理的快捷方式：" + $listText)
+        Write-Styled 'dim'  "卸载后它们仍然能启动程序，但不再自动带代理（那时按注册表现状走：有代理就用，没有就直连）。"
+        if ($Purge) {
+            # -Purge 的语义是"我知道我在干什么，全部清干净"，与"-Yes 跳过确认"同一条思路。
+            $keepShortcuts = $false
+            Write-Styled 'dim' "已指定 -Purge：走代理的快捷方式一并删除。"
+        } elseif (Test-CanPrompt) {
+            try {
+                $sc = Read-Host "这些快捷方式是否保留？[Y] 保留（默认） / [N] 一起删掉"
+                if ($sc -match '^[Nn]') { $keepShortcuts = $false }
+            } catch {
+                $keepShortcuts = $true
+            }
+        } else {
+            Write-Styled 'dim' "这里没法提问，默认保留（要一并删除请用 -Uninstall -Purge）。"
+        }
+    }
+    if ($keepShortcuts) {
+        # 只删明确属于运行时的那两个文件，跳过 launchers\。
+        # 不能对整个目录 -Recurse：那会把用户选择保留的启动脚本一起带走，
+        # 而任务栏上那些图标正指着它们——图标会全部失效。
+        Get-ChildItem -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne 'launchers' } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+        # 目录只剩空壳时才删；还留着 launchers 就保留目录本身
+        try {
+            if (-not (Test-Item (Join-Path $LauncherDir 'launchers'))) {
+                if (-not (Get-ChildItem -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                    Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch {}
+    } else {
+        # 整个目录带走（含 launchers\）：用户明确说了不要那些快捷方式。
+        # 必须带 -Recurse：5.1 上删非空目录不带它会抛 NullReferenceException 且目录纹丝不动，
+        # 于是"卸载未完成"永远修不好——用户再点一次也删不掉，因为没人去删那些残留。
+        Remove-Item -LiteralPath $LauncherDir -Recurse -Force -ErrorAction SilentlyContinue
+        # 图标也要删，否则桌面上会留下一堆点不开的空壳。判据是内容不是名字（见 Remove-ProxyShortcuts）。
+        $rm = Remove-ProxyShortcuts
+        if ($rm.RemovedLnk -gt 0) {
+            Write-Styled 'ok' ("走代理的快捷方式：已删除 {0} 个" -f $rm.RemovedLnk)
+        }
+        if ($rm.Failed.Count -gt 0) {
+            Write-Styled 'warn' "这些快捷方式没能删掉（可能被占用）："
+            foreach ($f in $rm.Failed) { Write-Styled 'dim' ("  " + $f) }
+        }
+    }
     # Git Bash 的同步脚本副本也要清：它装在 ~/.envproxy 下，不属于安装目录，
     # 单靠删安装夹带不走。与 Mac 侧 uninstall 删 prompt-sync.sh 再 rmdir 同一套动作。
     # 目录只在空的时候才删——里面若有使用者自己放的东西，一个字节都不动。
@@ -286,7 +342,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     try { $null = Get-ItemPropertyValue -Path $RunKeyPath -Name $RunKeyName -ErrorAction Stop
           $dirty += ("开机自启动项仍在：" + $RunKeyPath + " 里的 " + $RunKeyName) } catch {}
     if (Test-Item $LauncherPath) { $dirty += ("定位脚本仍在：" + $LauncherPath) }
-    if (Test-Item $LauncherDir) { $dirty += ("定位脚本所在目录仍在：" + $LauncherDir) }
+    # 目录只在"该删干净"的场合才算脏：用户选择保留快捷方式时，那个目录里
+    # 本来就该留着 launchers\，把它报成残留会让每次保留都显示"卸载未完成"。
+    if ((Test-Item $LauncherDir) -and -not $keepShortcuts) { $dirty += ("定位脚本所在目录仍在：" + $LauncherDir) }
     if (Test-RegKey (Get-ScriptPathRegKeyPath)) { $dirty += ("路径记录仍在：注册表 " + (Get-ScriptPathRegKeyPath)) }
     # 我们装进 ~/.envproxy 的只有 prompt-sync.sh 一个文件。它删不掉才算脏。
     $epHome = Get-ToolHomeDir
@@ -342,6 +400,14 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
             Write-Styled 'dim' "        历史日志保留在 monitor\monitor.log（黑匣子，供日后排查）。"
         }
         Write-Styled 'ok' "        电脑已恢复到安装前的状态。新开终端即直连；已经开着的旧窗口重开一个。"
+        # 保留下来的快捷方式要说清它现在的行为：用户最可能担心的是"图标还能不能用"。
+        # 事实是能用，只是不再自动带代理——它读注册表现状，有代理就用，没有就直连。
+        if ($keepShortcuts -and $hasShortcuts) {
+            Write-Styled 'dim' "        走代理的快捷方式按你的选择保留了："
+            Write-Styled 'dim' ("          " + (Get-ProxyLauncherDir))
+            Write-Styled 'dim' "        那些图标仍然能启动程序；此时它们按注册表现状走（有代理就用，没有就直连）。"
+            Write-Styled 'dim' "        以后想彻底清掉，删掉上面那个文件夹和对应的图标即可。"
+        }
         # 目录里剩下的东西：卸载确实做完了自己那部分，所以放在"完成"之后单独说，
         # 用 dim（背景信息）而不是 warn——它不是警告，是告知。
         # 给绝对路径、不给 ~/.envproxy：Windows 用户没有 ~ 这个概念，而且机器上
@@ -761,6 +827,62 @@ function Format-MenuCell([string]$Text, [int]$Width) {
     $pad = $Width - (Get-DisplayWidth $Text)
     if ($pad -lt 0) { $pad = 0 }
     return $Text + (' ' * $pad)
+}
+
+# 终端宽度。取不到就用 80——这是所有终端的最小公约数，
+# 按它折行最多是"早一点换行"，按更大的值折行会让内容在窄终端上被切掉。
+function Get-ConsoleWidth([int]$Fallback = 80) {
+    try {
+        $w = [Console]::WindowWidth
+        if ($w -ge 40) { return $w }
+    } catch {}
+    return $Fallback
+}
+
+# 把一行长文字折成多行，续行保持缩进。
+#
+# 为什么要这个：管理页要显示快捷方式的完整路径，而任务栏那条路径有 130 多个字符，
+# 在普通终端里必然折行。系统自动折行的续行从第 0 列开始，于是"图标"和它下面那半截
+# 路径看起来是两行无关的东西——而这一屏的全部作用正是"认准要删哪一个"。
+# 自己折行，续行就能对齐到值那一列。
+#
+# 折行点优先选空格与反斜杠（路径在这些位置断开最好读）；一段里找不到合适的位置
+# 就硬切，保证宽度一定不超。
+function Split-DisplayText([string]$Text, [int]$Width, [int]$Indent = 0) {
+    if (-not $Text) { return @() }
+    if ($Width -le 10) { return @((' ' * $Indent) + $Text) }
+    $out = @()
+    $rest = $Text
+    $pad = ' ' * $Indent
+    $first = $true
+    while ($true) {
+        $avail = if ($first) { $Width } else { [Math]::Max(10, $Width - $Indent) }
+        if ((Get-DisplayWidth $rest) -le $avail) {
+            $out += $(if ($first) { $rest } else { $pad + $rest })
+            break
+        }
+        # 逐字符累加到刚好超宽为止，记下最后见到的可断点
+        $acc = 0
+        $cut = -1
+        $break = -1
+        for ($i = 0; $i -lt $rest.Length; $i++) {
+            $cw = Get-CharWidth $rest[$i]
+            if ($acc + $cw -gt $avail) { break }
+            $acc += $cw
+            $cut = $i
+            if ($rest[$i] -eq ' ' -or $rest[$i] -eq '\' -or $rest[$i] -eq '/') { $break = $i }
+        }
+        if ($cut -lt 0) { $cut = 0 }
+        # 断点太靠前就不用它（会切出很短的一段，反而更难读）
+        if ($break -gt 0 -and $break -ge [int]($cut * 0.6)) { $cut = $break }
+        $piece = $rest.Substring(0, $cut + 1).TrimEnd()
+        if (-not $piece) { $piece = $rest.Substring(0, $cut + 1) }
+        $out += $(if ($first) { $piece } else { $pad + $piece })
+        $rest = $rest.Substring($cut + 1).TrimStart()
+        $first = $false
+        if (-not $rest) { break }
+    }
+    return $out
 }
 
 # 菜单只做三件事：打印、读编号、起子进程跑对应开关后回到菜单。
@@ -1502,14 +1624,28 @@ $ProxyScanExcludeWords = @(
 # 这个名字该不该从候选列表里排除。
 function Test-ProxyScanExcluded([string]$Name) {
     if (-not $Name) { return $true }
-    $n = $Name.ToLower()
-    # 去掉常见的后缀再比：用户看到的是 "Antigravity"，快捷方式可能叫 "Antigravity 快捷方式"
-    $n = $n -replace '\s*快捷方式$', ''
+    $n = $Name.ToLower().Trim()
+    if (-not $n) { return $true }
+    # 去掉常见的后缀再比：用户看到的可能是 "Antigravity 快捷方式"
+    $n = $n -replace '\s*(快捷方式|shortcut)$', ''
+    # 判据分两类，混在一起两头都判不准：
+    #
+    #   ① 中文词：用 Contains。中文没有词边界，"卸载工具""帮助文档"里那个词就是它
+    #      的全部含义，出现即算噪音。用边界匹配一个都挡不住——实测
+    #      '卸载工具' / '某某卸载' / '帮助文档' 全部漏过，而这些快捷方式指向的是
+    #      真的 exe，用户（分不清"程序"和"卸载程序"）挑中它就会建一个
+    #      "点一下就卸载某个软件"的图标。这不是体验问题，是数据风险。
+    #
+    #   ② 英文词：必须有边界，否则 'notepad' 会把 'Notepad++' 一起吞掉，
+    #      而 Notepad++ 是用户真会用的编辑器。
     foreach ($w in $ProxyScanExcludeWords) {
-        if ($n -eq $w) { return $true }
-        # 允许"以它开头 + 空格/连字符/下划线"，以及"含它有意义的片段"
-        if ($n -like ($w + ' *') -or $n -like ($w + '-*') -or $n -like ($w + '_*')) { return $true }
-        if ($n -like ('* ' + $w) -or $n -like ('*' + $w + '.exe')) { return $true }
+        if ($w -match '[\u4e00-\u9fff]') {
+            if ($n.Contains($w)) { return $true }
+        } else {
+            if ($n -eq $w) { return $true }
+            if ($n -like ($w + ' *') -or $n -like ($w + '-*') -or $n -like ($w + '_*')) { return $true }
+            if ($n -like ('* ' + $w) -or $n -like ('* ' + $w + ' *')) { return $true }
+        }
     }
     return $false
 }
@@ -1552,8 +1688,13 @@ function Compress-ToBase64([string]$Text) {
 #   base64 只有 A-Za-z0-9+/=，没有引号、没有中文，VBS 不需要任何转义。
 #
 # 运行时做三件事：读注册表拿代理 -> 放进自己的环境 -> 启动目标程序。
-# 不再重复校验代理：校验在创建时做过（ConvertTo-ProxyUrl + 写后回读），
-# 运行时再验一次只会让脚本变长、增加出错面。
+#
+# 运行时**不校验**代理值，只原样取用注册表里的那个。两个原因：
+#   ① 那个值是 EnvProxy 自己校验过才写进去的，运行时再验一遍没有新信息；
+#   ② 校验要多写几十行，而这段脚本的每一行都要占 .vbs 的体积（虽然现在余量很足），
+#      更实际的理由是——运行在裸 powershell 里，验错了也没有人能看到错误。
+# 建快捷方式时会用 ConvertTo-ProxyUrl 看一眼当前值（结果放在 ProxyOk 里给界面用），
+# 那是为了"建完之后告诉用户现在没有可用代理"，不是为了拦住建不成。
 function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
     if (-not $TargetPath) { throw '目标路径为空' }
     if (-not $WorkingDir) { $WorkingDir = Split-Path -Parent $TargetPath }
@@ -1764,19 +1905,34 @@ function New-ProxyShortcut {
 
     # 写后回读：写成功不等于读回来是对的（本项目其它写操作同一条规矩）。
     # 判据只钉三件与实现无关的事实：指向 wscript、参数指向我们刚写的启动脚本、工作目录对。
+    #
+    # 回读失败时必须把刚写的 .lnk 删掉：否则用户看到"[失败] 没能创建"，
+    # 桌面上却多了一个图标；下次再建会撞上"已经有同名快捷方式"，
+    # 于是永远建不成，而屏幕上给的理由（已有同名）也是错的。
+    # COM 释放放 finally：回读任一属性抛异常时也不会漏。
+    $verifyOk = $false
+    $verifyMsg = ''
     try {
         $shell2 = New-Object -ComObject WScript.Shell
-        $chk = $shell2.CreateShortcut($lnkPath)
-        $okTarget = ($chk.TargetPath -ieq $wscript)
-        $okArgs = ([string]$chk.Arguments).Contains($vbsPath)
-        $okDir = ($chk.WorkingDirectory -ieq $WorkingDirectory)
-        [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell2)
-        if (-not ($okTarget -and $okArgs -and $okDir)) {
-            $res.Reason = ("写进去的内容读回来不对（目标={0} 参数={1} 工作目录={2}）" -f $okTarget, $okArgs, $okDir)
-            return $res
+        try {
+            $chk = $shell2.CreateShortcut($lnkPath)
+            $okTarget = ($chk.TargetPath -ieq $wscript)
+            $okArgs = ([string]$chk.Arguments).Contains($vbsPath)
+            $okDir = ($chk.WorkingDirectory -ieq $WorkingDirectory)
+            $verifyOk = ($okTarget -and $okArgs -and $okDir)
+            if (-not $verifyOk) {
+                $verifyMsg = ("写进去的内容读回来不对（目标={0} 参数={1} 工作目录={2}）" -f $okTarget, $okArgs, $okDir)
+            }
+        } finally {
+            [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($shell2)
         }
     } catch {
-        $res.Reason = "回读校验失败：$($_.Exception.Message)"
+        $verifyMsg = "回读校验失败：$($_.Exception.Message)"
+    }
+    if (-not $verifyOk) {
+        # 收干净：半截的快捷方式比没有更糟，它会让下一次尝试也失败。
+        try { Remove-Item -LiteralPath $lnkPath -Force -ErrorAction SilentlyContinue } catch {}
+        $res.Reason = $verifyMsg
         return $res
     }
 
@@ -1854,14 +2010,32 @@ function Get-ProxyShortcutRecords {
                 $vbsPath = $args.Trim().Trim('"')
 
                 $name = $f.BaseName -replace [regex]::Escape($ProxyShortcutSuffix) + '$', ''
+                # 三种状态，都要能判出来：
+                #   no-launcher   —— 启动脚本被删了，点了必定失败
+                #   broken-target —— 脚本在，但它要启动的程序被卸载/搬走了，点了也会失败
+                #   ok            —— 两样都在
+                # 中间那个状态以前只写在注释里没有实现，于是程序卸载之后管理页仍显示"正常"，
+                # 用户点了才发现打不开。程序路径就记在启动脚本的注释行里（Get-ProxyLauncherTarget），
+                # 读一次就知道，不必再单独存一份。
                 $state = 'ok'
-                if (-not (Test-Path -LiteralPath $vbsPath)) { $state = 'no-launcher' }
+                $targetPath = ''
+                if (-not (Test-Path -LiteralPath $vbsPath)) {
+                    $state = 'no-launcher'
+                } else {
+                    $targetPath = Get-ProxyLauncherTarget $vbsPath
+                    # 读不到程序路径（旧版本建的脚本）时不下判断：那种情况"不知道"不等于"坏了"，
+                    # 报成 broken-target 会让旧脚本一律显示成故障。
+                    if ($targetPath -and -not (Test-Path -LiteralPath $targetPath)) {
+                        $state = 'broken-target'
+                    }
+                }
                 $records += [pscustomobject]@{
                     LnkPath      = $f.FullName
                     LauncherPath = $vbsPath
                     Name         = $name
                     State        = $state
                     Where        = $d.Where
+                    ProgramPath  = $targetPath
                     Target       = [string]$lnk.TargetPath
                 }
             }
@@ -2066,10 +2240,14 @@ function Show-ProgramPicker {
         Write-Host ''
         $start = $page * $PageSize
         $end = [Math]::Min($start + $PageSize - 1, $Programs.Count - 1)
-        Write-Styled 'dim' ('  找到 ' + $Programs.Count + ' 个' + $(if($totalPages -gt 1){"（第 $($page+1)/$totalPages 页）"}else{''}) + '：')
+        Write-Styled 'dim' ('  找到 ' + $Programs.Count + ' 个' + $(if($totalPages -gt 1){"（第 $($page+1)/$totalPages 页，编号 $($start+1)-$($end+1)）"}else{''}) + '：')
         Write-Host ''
         for ($i = $start; $i -le $end; $i++) {
-            $n = $i - $start + 1
+            # 编号是**全局连续**的（第 2 页从 13 开始），不是每页重新从 1 数。
+            # 每页重置的话，用户想选第 20 个会输 8（第 2 页第 8 个），
+            # 而屏幕得先告诉"这一页是 13-24"他才知道该输什么——一层不必要的换算，
+            # 换算错了得到的回答是"没有这个编号"，方向完全相反。
+            $n = $i + 1
             Write-Styled 'item' ('    ' + $n.ToString().PadLeft(2) + '  ' + $Programs[$i].Name)
         }
         Write-Host ''
@@ -2100,14 +2278,27 @@ function Show-ProgramPicker {
                 WorkingDirectory = (Split-Path -Parent $p)
             })
         }
-        if ($ans -match '^[Nn]$' -and $page -lt $totalPages - 1) { $page++; continue }
-        if ($ans -match '^[Bb]$' -and $page -gt 0) { $page--; continue }
-        $idx = 0
-        if ([int]::TryParse($ans, [ref]$idx) -and $idx -ge 1 -and $idx -le ($end - $start + 1)) {
-            return $Programs[$start + $idx - 1]
+        if ($ans -match '^[Nn]$') {
+            if ($page -lt $totalPages - 1) { $page++; continue }
+            Write-Styled 'warn' '  已经是最后一页了。'
+            Start-Sleep -Milliseconds 900
+            continue
         }
-        Write-Styled 'warn' '  没有这个编号。'
-        Start-Sleep -Milliseconds 700
+        if ($ans -match '^[Bb]$') {
+            if ($page -gt 0) { $page--; continue }
+            Write-Styled 'warn' '  已经在第一页了。'
+            Start-Sleep -Milliseconds 900
+            continue
+        }
+        $idx = 0
+        # 编号是全局的，所以直接用 $idx 当下标，不必再减 $start。
+        if ([int]::TryParse($ans, [ref]$idx) -and $idx -ge ($start + 1) -and $idx -le ($end + 1)) {
+            return $Programs[$idx - 1]
+        }
+        # 说清这一页有哪些编号，而且**不重画**：重画会让屏幕往下滚，
+        # 连错几次就再也找不到自己在哪（主菜单早就为这个原因定过这条规矩）。
+        Write-Styled 'warn' ('  没有这个编号：' + $ans + '（这一页是 ' + ($start + 1) + '-' + ($end + 1) + '）')
+        Start-Sleep -Milliseconds 1200
     }
 }
 
@@ -2128,18 +2319,35 @@ function Invoke-NewProxyShortcutFlow {
     Write-Styled 'item' '    2  开始菜单'
     Write-Styled 'item' '    3  自己输入一个文件夹'
     Write-Host ''
-    Write-Styled 'dim' '  输编号后回车    直接回车 = 桌面'
+    Write-Styled 'dim' '  输编号后回车    直接回车 = 桌面    0 = 返回'
 
+    # 这一屏也要有出口。原来只有 1/2/3 三条路，选完程序想反悔时
+    # 只能"走完确认页再按回车取消"——多三次按键，而且他不知道自己正在取消。
     $dest = [Environment]::GetFolderPath('Desktop')
-    $ans = ''
-    try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
-    if ($ans -eq '2') {
-        $dest = [Environment]::GetFolderPath('Programs')
-    } elseif ($ans -eq '3') {
-        $manual = ''
-        try { $manual = "$(Read-Host '  文件夹路径')".Trim() } catch { return }
-        $manual = $manual.Trim('"').Trim("'")
-        if ($manual -and (Test-Path -LiteralPath $manual)) { $dest = $manual }
+    while ($true) {
+        $ans = ''
+        try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
+        if ($ans -eq '0' -or $ans -match '^[Qq]$') { return }
+        if (-not $ans -or $ans -eq '1') {
+            $dest = [Environment]::GetFolderPath('Desktop'); break
+        }
+        if ($ans -eq '2') {
+            $dest = [Environment]::GetFolderPath('Programs'); break
+        }
+        if ($ans -eq '3') {
+            # 输错路径要能重试，不能一次失败就取消整条流程：
+            # 用户多半是从资源管理器复制过来的长路径，粘错一个字符很常见。
+            $manual = ''
+            try { $manual = "$(Read-Host '  文件夹路径（可把文件夹拖进来）')".Trim() } catch { return }
+            $manual = $manual.Trim('"').Trim("'")
+            if (-not $manual) { continue }
+            if (Test-Path -LiteralPath $manual) { $dest = $manual; break }
+            Write-Styled 'warn' '  找不到这个文件夹，请重新输入。'
+            Start-Sleep -Milliseconds 900
+            continue
+        }
+        Write-Styled 'warn' '  只有 1、2、3、0 四个键。'
+        Start-Sleep -Milliseconds 900
     }
     if (-not $dest -or -not (Test-Path -LiteralPath $dest)) {
         Write-Styled 'warn' '  这个文件夹用不了，已取消。'
@@ -2148,18 +2356,32 @@ function Invoke-NewProxyShortcutFlow {
     }
 
     # 确认
+    # 三段用同一套"标签 + 值"排版。原来「程序」只有标签、值另起一行，
+    # 而下面两段是同一行，三段格式不一致，最像"界面坏了"的位置恰好是最后确认这屏。
     Clear-Screen
     Write-Styled 'title' '======== 确认 ========'
     Write-Host ''
-    Write-Styled 'key'  ('  程序    ' )
-    Write-Host ''
-    Write-Styled 'text' ('    ' + $chosen.Name)
-    Write-Styled 'dim'  ('    ' + $chosen.TargetPath)
+    Write-Styled 'text' ('  程序    ' + $chosen.Name)
+    Write-Styled 'dim'  ('          ' + $chosen.TargetPath)
     Write-Host ''
     Write-Styled 'text' ('  图标名  ' + [System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath) + $ProxyShortcutSuffix)
     Write-Styled 'text' ('  放在    ' + $dest)
     Write-Host ''
-    Write-Styled 'dim'  '  你原来的图标不会被改动，两个可以同时用。'
+    # 先探一次同名：把"会覆盖"直接写进这一屏，让用户一次 y 就完成。
+    #
+    # 原来要按两次 y（确认建 + 确认覆盖），而第二次按回车会静默"什么都没改"。
+    # 用户重做的原因通常正是"原来那个不对"，他第一屏按完 y 就以为结束了，
+    # 第二屏顺手回车 → 旧图标原样留着 → 他回到桌面点一下还是坏的 →
+    # 得出结论"这个修复功能没用"。两个 y 表达同一个意图，本身就是设计错误。
+    $lnkName = [System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath)
+    $wouldBe = Join-Path $dest ($lnkName + $ProxyShortcutSuffix + '.lnk')
+    $willOverwrite = Test-Path -LiteralPath $wouldBe
+    if ($willOverwrite) {
+        Write-Styled 'warn' '  这个位置已经有同名图标了，确认后会覆盖它。'
+        Write-Styled 'dim'  ('    ' + $wouldBe)
+    } else {
+        Write-Styled 'dim'  '  你原来的图标不会被改动，两个可以同时用。'
+    }
     Write-Host ''
     Write-Styled 'dim'  '  输 y 回车确认，直接回车 = 取消'
     $c = ''
@@ -2170,12 +2392,12 @@ function Invoke-NewProxyShortcutFlow {
         return
     }
 
-    # 建
+    # 建。用户在上一屏已经确认过"要覆盖"，这里直接用 -Force，不再问第二遍。
     $r = New-ProxyShortcut -TargetPath $chosen.TargetPath -WorkingDirectory $chosen.WorkingDirectory `
-                           -DestinationDir $dest -Name ([System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath))
+                           -DestinationDir $dest -Name $lnkName -Force:$willOverwrite
     Clear-Screen
     if ($r.Ok) {
-        Write-Styled 'ok' '  [完成] 已创建：'
+        Write-Styled 'ok' ('  [完成] ' + $(if($willOverwrite){'已覆盖：'}else{'已创建：'}))
         Write-Styled 'dim' ('         ' + $r.Path)
         Write-Host ''
         Write-Styled 'text' '  原来的图标没动，两个可以同时用。'
@@ -2246,6 +2468,7 @@ function Invoke-ManageProxyShortcuts {
                 $stateText = switch ($r.State) {
                     'ok'           { '正常' }
                     'no-launcher'  { '启动脚本被删了，图标点了会失败' }
+                    'broken-target' { '程序已经不在了（被卸载或搬走），图标点了会失败' }
                     default        { $r.State }
                 }
                 $stateRole = if ($r.State -eq 'ok') { 'ok' } else { 'warn' }
@@ -2257,11 +2480,23 @@ function Invoke-ManageProxyShortcuts {
                 Write-Styled $stateRole ('        状态  ' + $stateText)
                 # 完整路径 + 位置都写出来。路径长到折行也照写：
                 # 截短了用户就没法照着去找、也没法复制，而这一屏的作用正是"我要删哪一个"。
-                Write-Styled 'dim'  ('        图标  ' + $r.LnkPath)
+                # 折行自己来（续行对齐到值那一列）：交给终端折的话续行从第 0 列开始，
+                # 那半截路径看起来像另一个条目的内容，反而更容易认错行。
+                # 续行缩进 14 = "        图标  " 的可见宽度（8 空格 + 图标两字 + 2 空格）。
+                $wrapW = (Get-ConsoleWidth) - 16
+                $lnkLines = @(Split-DisplayText $r.LnkPath $wrapW 14)
+                for ($k = 0; $k -lt $lnkLines.Count; $k++) {
+                    if ($k -eq 0) { Write-Styled 'dim' ('        图标  ' + $lnkLines[$k].TrimStart()) }
+                    else { Write-Styled 'dim' $lnkLines[$k] }
+                }
                 # 启动脚本被多个图标共用时说清楚：删掉这条不会弄坏别人。
                 $shareCount = @($recs | Where-Object { $_.LauncherPath -eq $r.LauncherPath }).Count
                 $shareNote = if ($shareCount -gt 1) { ('（' + $shareCount + ' 个图标共用）') } else { '' }
-                Write-Styled 'dim'  ('        脚本  ' + $r.LauncherPath + $shareNote)
+                $vbsLines = @(Split-DisplayText ($r.LauncherPath + $shareNote) $wrapW 14)
+                for ($k = 0; $k -lt $vbsLines.Count; $k++) {
+                    if ($k -eq 0) { Write-Styled 'dim' ('        脚本  ' + $vbsLines[$k].TrimStart()) }
+                    else { Write-Styled 'dim' $vbsLines[$k] }
+                }
             }
         }
         if ($orphans.Count -gt 0) {
@@ -2293,7 +2528,7 @@ function Invoke-ManageProxyShortcuts {
         if (-not $ans -or $ans -eq '0' -or $ans -match '^[Qq]$') { return }
         $n = 0
         if (-not [int]::TryParse($ans, [ref]$n) -or $n -lt 1 -or $n -gt $idx) {
-            Write-Styled 'warn' '  没有这个编号。'
+            Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1-' + $idx + '）')
             Start-Sleep -Milliseconds 700
             continue
         }
@@ -2356,7 +2591,7 @@ function Show-AdvancedMenu {
             '1' { Invoke-NewProxyShortcutFlow }
             '2' { Invoke-ManageProxyShortcuts }
             default {
-                Write-Styled 'warn' '  没有这个编号。'
+                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2，0 = 返回）')
                 Start-Sleep -Milliseconds 700
             }
         }

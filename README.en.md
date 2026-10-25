@@ -358,7 +358,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 
 ### 3.6 Use it without the menu (scripts, remote sessions)
 
-The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first six rows match the six menu items one to one; row 7 (`-Menu`) simply opens the menu itself; the two rows below it (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
+The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first seven rows match the seven menu items one to one; the next row (`-Menu`) simply opens the menu itself; the last two rows (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
 
 | Goal | Windows | Mac |
 |---|---|---|
@@ -366,13 +366,14 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Show status | `-Status` | `status` |
 | Check for updates | `-Update` | `update` |
 | Help | `-Help` | `help` |
+| Advanced (Windows only) | `-Advanced` | — |
 | Stop the monitor | `-Stop` | `stop` |
 | Full restore | `-Uninstall` | `uninstall` |
 | Open the menu | `-Menu` | `menu` |
 | Self-check (troubleshooting) | — | `self-test` |
 | Repair a broken marker in your profile | `-RepairProfile` | `repair-profile` |
 
-The order matches the menu: four everyday items first, then the two upkeep ones. The last two rows are troubleshooting helpers: `self-test` (Mac only) runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables; `-RepairProfile` removes a lone marker line left in a profile file (it backs the file up first).
+The order matches the menu: four everyday items first, then the advanced one, then the two upkeep ones. The last two rows are troubleshooting helpers: `self-test` (Mac only) runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables; `-RepairProfile` removes a lone marker line left in a profile file (it backs the file up first).
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates and full restore: it means stop asking. For restore it is also the only way to uninstall where nothing can ask (scripts, remote sessions), since that command refuses to run without an answer.
 
@@ -696,7 +697,6 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
-| | `notify.last` | the state last warned about; keeps the same change from being reported twice |
 | | `.lock` | single-instance lock, so two copies never run at once |
 | | `.op.lock` | one install/uninstall/stop/update at a time |
 

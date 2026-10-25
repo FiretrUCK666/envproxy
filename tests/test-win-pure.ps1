@@ -1075,11 +1075,6 @@ Assert-Eq 'proxy url: 显式 :80 也算默认端口' 'true' ($null -eq (ConvertT
 Assert-Eq 'proxy url: 非主机名返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl '不是地址'))
 Assert-Eq 'proxy url: 不支持的协议返回 null' 'true' ($null -eq (ConvertTo-ProxyUrl 'ftp://127.0.0.1:21'))
 
-# 候选挑选：去重、保序、过滤。启动器靠它把"环境变量 + 注册表 + 兜底"合成一条试活序列。
-$cand = @(Select-ProxyUrlCandidates @('http://127.0.0.1:7078', '  http://127.0.0.1:7078/  ', '127.0.0.1:7099', 'bad', '', $null))
-Assert-Eq 'proxy candidates: 去重并保序' 'http://127.0.0.1:7078|http://127.0.0.1:7099' ($cand -join '|')
-Assert-Eq 'proxy candidates: 空输入得空数组' '0' (@(Select-ProxyUrlCandidates @()).Count)
-Assert-Eq 'proxy candidates: null 输入得空数组' '0' (@(Select-ProxyUrlCandidates $null).Count)
 
 # 「这个快捷方式是不是我们建的」判据：只认 launchers 目录**里面**的 .vbs。
 #
@@ -1142,6 +1137,39 @@ try {
 } finally {
     Remove-Item -LiteralPath $tgtSbox -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+# 程序候选的排除规则：决定"扫出来那三四十个程序里，哪些不该出现"。
+#
+# 这张表看起来只是文案，其实每条都对应一个真实存在的噪音源：开始菜单里混着
+# 卸载器、帮助文档、Python 自带的开发工具，全列出来用户得在两屏垃圾里找自己要的。
+# 而判错的代价不对称：多排除一个，用户要手动输路径（麻烦）；少排除一个，
+# 他要多读几行（也有代价但小得多）——所以规则宁可稍严，但绝不能误伤真程序。
+# 最典型的一条：'notepad' 要排掉，而 'Notepad++' 必须留下（它是用户真会用的编辑器），
+# 这要求英文词按整词匹配、中文词按包含匹配（中文没有词边界）。
+Assert-Eq 'scan exclude: notepad 排除' 'true' (Test-ProxyScanExcluded 'notepad')
+Assert-Eq 'scan exclude: Notepad++ 保留' 'false' (Test-ProxyScanExcluded 'Notepad++')
+Assert-Eq 'scan exclude: 卸载xxx 排除' 'true' (Test-ProxyScanExcluded '卸载 Antigravity')
+Assert-Eq 'scan exclude: 用户帮助 排除' 'true' (Test-ProxyScanExcluded '用户帮助')
+Assert-Eq 'scan exclude: 使用说明 排除' 'true' (Test-ProxyScanExcluded '使用说明')
+Assert-Eq 'scan exclude: README 排除' 'true' (Test-ProxyScanExcluded 'README')
+Assert-Eq 'scan exclude: unins000 排除' 'true' (Test-ProxyScanExcluded 'unins000')
+Assert-Eq 'scan exclude: cmd 排除' 'true' (Test-ProxyScanExcluded 'cmd')
+Assert-Eq 'scan exclude: 此电脑 排除' 'true' (Test-ProxyScanExcluded '此电脑')
+Assert-Eq 'scan exclude: Antigravity 保留' 'false' (Test-ProxyScanExcluded 'Antigravity')
+Assert-Eq 'scan exclude: 豆包 保留' 'false' (Test-ProxyScanExcluded '豆包')
+Assert-Eq 'scan exclude: Visual Studio Code 保留' 'false' (Test-ProxyScanExcluded 'Visual Studio Code')
+# 「xxx 快捷方式」要剥掉后缀再判：剥掉之后 '卸载 快捷方式' 仍是噪音
+Assert-Eq 'scan exclude: 名字带"快捷方式"后缀也能判' 'true' (Test-ProxyScanExcluded '卸载 快捷方式')
+Assert-Eq 'scan exclude: 空名字排除' 'true' (Test-ProxyScanExcluded '')
+
+# 路径级排除：挡住"系统目录里的工具"，名字判据挡不住这些
+Assert-Eq 'scan exclude path: System32 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\System32\regedit.exe')
+Assert-Eq 'scan exclude path: SysWOW64 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\SysWOW64\cmd.exe')
+Assert-Eq 'scan exclude path: 卸载器排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\unins000.exe')
+Assert-Eq 'scan exclude path: Uninstall 排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\Uninstall.exe')
+Assert-Eq 'scan exclude path: 普通程序保留' 'false' (Test-ProxyScanExcludedPath 'C:\Users\X\AppData\Local\Programs\antigravity\Antigravity.exe')
+Assert-Eq 'scan exclude path: D 盘程序保留' 'false' (Test-ProxyScanExcludedPath 'D:\Doubao\Doubao.exe')
+Assert-Eq 'scan exclude path: 空路径排除' 'true' (Test-ProxyScanExcludedPath '')
 
 #
 # 这条防的是一个真实发生过的 bug：挑选函数与它的断言都在，但调用方

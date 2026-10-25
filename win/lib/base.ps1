@@ -316,19 +316,6 @@ function ConvertTo-ProxyUrl([string]$Raw) {
     return $v
 }
 
-# 从一段文字里挑出"看起来像代理地址"的那些（去重、保序）。
-# 用途：启动器要依次试几个候选地址（环境变量、注册表、常见端口），
-# 挑候选这一步必须是纯函数，否则测试只能靠真连一遍来验。
-function Select-ProxyUrlCandidates([string[]]$RawValues) {
-    $out = New-Object System.Collections.Generic.List[string]
-    foreach ($r in $RawValues) {
-        $v = ConvertTo-ProxyUrl $r
-        if (-not $v) { continue }
-        if (-not $out.Contains($v)) { [void]$out.Add($v) }
-    }
-    return $out.ToArray()
-}
-
 # 文件的 sha256（小写十六进制）。
 # 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
 # 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），
