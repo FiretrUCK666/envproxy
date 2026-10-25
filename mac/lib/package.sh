@@ -143,8 +143,6 @@ install_package() {
     # 所以覆盖前写标记、成功后删掉；状态页发现它就报出来。
     # 与 stopped.intent 同一个手法：用落盘意图区分两类事后长相相同的情况。
     _pmark="$_pdest/mac/monitor/update.inprogress"
-    mkdir -p "$(dirname "$_pmark")" 2>/dev/null || true
-    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_pmark" 2>/dev/null || true
 
     # 生效作用域 = 调用方声明 ∩ 包内实际有的目录（与 Win 侧 Install-Package 同语义）：
     # 分包本来就没有另一平台目录，即使有人传了全量作用域，也绝不碰包外的东西。
@@ -208,6 +206,18 @@ install_package() {
             return 1
         fi
     fi
+
+    # 标记落在这里而不是函数开头：它的语义是「我正在改安装区」。
+    # 前面任何一步中止（最典型是备份没做成）时一个文件都还没改，
+    # 此刻留下标记只会让状态页永久报「上次更新没完成」——
+    # 而用户照屏幕重做一次、覆盖又成功，标记却仍然在，成了死循环。
+    printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$_pmark" 2>/dev/null || true
+
+    # 标记落在这里而不是函数开头：它的语义是「我正在改安装区」。
+    # 前面任何一步中止（最典型是备份没做成）时一个文件都还没改，
+    # 此刻留下标记只会让状态页永久报「上次更新没完成」——
+    # 而用户照屏幕重做一次，覆盖又成功，标记却仍然在，成了死循环。
+    mkdir -p "$(dirname "$_pmark")" 2>/dev/null || true
     # shellcheck disable=SC2086
     for _pd in $_peff; do
         [ -d "$_pdest/$_pd" ] || continue

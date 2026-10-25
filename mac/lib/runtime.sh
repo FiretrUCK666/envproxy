@@ -574,7 +574,10 @@ is_monitor_args() {
     _ima_rest="${1#*envproxy.sh}"
     _ima_arg=$(printf '%s' "$_ima_rest" | sed -E 's/^[[:space:]]+//; s/[[:space:]].*$//')
     case "$_ima_arg" in
-        install|stop|uninstall|status|purge|update|menu|self-test) return 1;;
+        # 必须与入口分派认的子命令**完全一致**：两份清单漂移就会出现
+        # 「带子命令的进程被当成监控」。purge 不是子命令（它是 --purge 开关），
+        # repair-profile 与 help 是——少一个就多认一个，多一个就少认一个。
+        install|stop|uninstall|status|repair-profile|update|menu|help|self-test) return 1;;
     esac
     return 0
 }

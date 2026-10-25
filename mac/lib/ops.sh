@@ -71,7 +71,13 @@ install_envproxy() {
     echo ""
     # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
     # 这里不联网：版本号取自监控写的缓存（状态页只读、永不联网）。见 Windows 侧同句。
-    style_out text "正在看当前状态（版本号取自监控缓存，不联网）……"
+    style_out text "正在看当前状态（版本号取自监控写的缓存，不联网）……"
+    # 安装到了收尾这一步，就说明覆盖已经成功后落过、文件都是新的——
+    # 那条「上次更新没有完成」的警报到此已经不再成立，必须撤掉。
+    # 不撤的后果是死循环：状态页说「选 1 重做一次即可」，用户照做、
+    # 覆盖也真的成功了，可标记还在，屏幕上是同一句警告——
+    # 一条自己都说错了怎么修的指引，比不提示更糟。
+    rm -f "$MONITOR_DIR/update.inprogress" 2>/dev/null || true
     show_status
     echo ""
     # 左边那一列按最长条目补齐，不靠手敲空格：改一个字就整列歪掉，
@@ -105,7 +111,7 @@ install_envproxy() {
             return 0
         fi
         _tr_dim=$(style_color dim)
-        _tr_c = $(style_color cmd)
+        _tr_c=$(style_color cmd)
         printf '\033[%sm   %s   \033[0m%s' "$_tr_dim" "$_tr_left" "$_tr_note"
         if [ -n "$_tr_cmdline" ]; then printf '  \033[%sm%s\033[0m\n' "$_tr_c" "$_tr_cmdline"; else printf '\n'; fi
     }
@@ -232,7 +238,7 @@ uninstall_envproxy() {
 }
 
 # 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
-# 状态页用它判三件事：注入的代理变量指向的端口、系统代理指向的端口。
+# 状态页用它判两件事：注入的代理变量指向的端口、系统代理指向的端口。
 # 与 Windows 侧 Test-TcpAlive 同一判据（那边按地址族建套接字，这边同样只连一次）。
 _port_alive() {
     _pa_addr="$1"; _pa_port="$2"
@@ -301,7 +307,21 @@ get_status_snapshot() {
     #      "慢一点"远比"说谎"便宜。
     _port=""
     _port_unknown=0
-    _port=$(get_in_use_proxy_port) || _port_unknown=1
+    # 三态：找到 / 枚举成功但确实没有 / 枚举失败。
+    # get_in_use_proxy_port 把后两种压成同一个返回码 1，于是"你正常关掉了翻墙软件"
+    # 会被报成"这一轮没读到本机端口，无法判断"——那是 warn，还进问题清单。
+    # 真相是 healthy 的 dim。这里再问一次枚举层把它分开：
+    # find_candidate_ports 在"枚举读不出来"时返回 1，在"枚举成功但没候选"时返回 0。
+    if _p=$(get_in_use_proxy_port); then
+        _port="$_p"
+    else
+        _port=""
+        if find_candidate_ports 1 >/dev/null 2>&1; then
+            _port_unknown=0   # 枚举成功、确实没有代理：dim "未检测到"
+        else
+            _port_unknown=1   # 枚举失败：warn "没读到，无法判断"
+        fi
+    fi
 
     # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
     # 「看起来装好了，实则每次开窗口都不同步」。与 Win 侧 Get-TerminalSyncState 同语义。
@@ -537,6 +557,10 @@ show_status() {
         _status_row "代理变量" "无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" dim
     fi
     case "$_ts_state" in
+        # 正常态什么都不说：它由下面"参考信息"那一段单独打一行绿的。
+        # 这个 case 只管"有问题的几种"，漏掉 ok 会让最正常的状态落进 *、
+        # 于是每个装对了的人都会看到"状态未知（ok）"——比不报还糟。
+        ok) : ;;
         unpaired)
             _status_row "终端同步" "配置文件里的标记不成对，未改动它" warn
             if [ -n "$_ts_badline" ]; then
@@ -642,7 +666,9 @@ show_status() {
                 fi
             fi
         fi
-        style_out "$_role" "版本 : $_local_text（$_state）$_age_text"
+        # 与同屏其余 7 行同一结构：标签固定 key 色、只有内容按状态变色。
+        # 整行套一个角色色会让「版本」这个标签也跟着变色——那正是 _status_row 要解决的毛病。
+        _status_row "版本" "$_local_text（$_state）$_age_text" "$_role"
     fi
 
     style_out title "---------------- 最近日志 ----------------"

@@ -1275,7 +1275,11 @@ EOF
         # 后者在某些 awk 实现里按字节算，一个中文字就顶 3。
         _swide=""
         while IFS= read -r _sline; do
-            _sw=$(printf '%s' "$_sline" | wc -L | tr -d ' ')
+            # 不能用 wc -L：那是 GNU 扩展，macOS 自带的 BSD wc 只支持 -clmw。
+            # 在 macOS 上它会报 illegal option、输出为空，而下面那句 `-z && _sw=0`
+            # 会把空值兜成 0——于是"主题无超宽行"这条断言在 macOS 上永远绿，
+            # 实际什么都没测。用 base 层的 _display_width：纯 shell、零 fork、已处理 CJK 宽度。
+            _sw=$(_display_width "$_sline")
             [ -z "$_sw" ] && _sw=0
             [ "$_sw" -le 80 ] && continue
             # 例外：一整条命令（缩进 + 纯 ASCII），命令是给用户整条复制的。
@@ -1730,6 +1734,70 @@ EOF
     # 只数出现次数的话，把比较改成字面量 1 照样通过。
     _w5=$(_wiring_count "$SCRIPT_DIR/lib/runtime.sh" '-ge "$STATE_DEBOUNCE_ROUNDS"')
     _selftest_assert_eq "接线：去抖比的是常量" 1 "$([ "$_w5" -ge 1 ] && echo 1 || echo 0)"
+
+    # ---- 赋值语句不许有空格 ----
+    # `x = $(cmd)` 在 shell 里不是赋值，是"运行 x 命令、参数是 = 和 $(cmd)"：
+    # 结果是变量没被赋上、还往 stderr 刷一条 command not found。
+    # ops.sh 里真发生过一次（`_tr_c = $(style_color cmd)`），后果是安装结尾那几行
+    # 提示在终端里一行都打不出来、退出码变 1——而 `bash -n` 完全看不出问题，
+    # 因为它在语法上是合法的。所以只能靠扫源码形状来挡。
+    #
+    # 两种写法都要挡：`x =$(...)` 与 `x= $(...)`。只查"="后面跟空格的话，
+    # 前者（"="前面有空格、后面紧贴 $(）会漏过去——而它一样不是赋值。
+    # 判据：名字后面出现空白再跟"="，就一定是错的（真赋值不许有空白）。
+    _sp_assign=$(grep -cE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+=' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null)
+    _selftest_assert_eq "接线：ops.sh 里没有带空格的赋值语句" "0" "$_sp_assign"
+
+    # ---- 状态分支必须覆盖 ok ----
+    # show_status 的 `case "$_ts_state"` 只管"有问题的几种"，正常态由后面单独打一行。
+    # 漏掉 ok 时最正常的状态会落进 `*)`，于是每个装对了的人都看到
+    # 「终端同步 : 状态未知（ok）」——同一屏两行说法相反，比不报还糟。
+    # 这里直接数 case 里有没有 ok) 这一支，缺了就红。
+    _ts_ok_branch=$(sed -n '/case "\$_ts_state" in/,/^    esac$/p' "$SCRIPT_DIR/lib/ops.sh" | grep -cE '^[[:space:]]+ok\)')
+    _selftest_assert_eq "接线：状态 case 覆盖 ok 分支" "1" "$([ "$_ts_ok_branch" -ge 1 ] && echo 1 || echo 0)"
+
+    # ---- 安装收尾必须清掉"更新中断"标记 ----
+    # 那个标记的语义是"我正在改安装区"。它只在覆盖成功路径上被删，
+    # 于是备份失败（一个文件都没改）时标记留在磁盘上，状态页永久报
+    # 「上次更新没有完成」，并让用户「选 1 重做一次」——重做真的成功了，
+    # 标记还在，屏幕上是同一句警告：一条自己都说错了怎么修的指引。
+    # 两处都要：package.sh 里挪到备份成功之后写；install 收尾兜一次。
+    _ip_in_install=$(sed -n '/^install_envproxy()/,/^}/p' "$SCRIPT_DIR/lib/ops.sh" | grep -c 'update\.inprogress')
+    _selftest_assert_eq "接线：安装收尾会清更新中断标记" "1" "$([ "$_ip_in_install" -ge 1 ] && echo 1 || echo 0)"
+
+    # ---- 标记的写入必须在备份成功之后 ----
+    # 数 package.sh 里"备份完整性检查"与"写标记"的先后：写标记的行号必须更大。
+    _ip_mark_ln=$(grep -n 'update\.inprogress' "$SCRIPT_DIR/lib/package.sh" | head -n 1 | cut -d: -f1)
+    _ip_bak_ln=$(grep -n '拒绝更新：覆盖前的备份没有完整做成' "$SCRIPT_DIR/lib/package.sh" | head -n 1 | cut -d: -f1)
+    _ip_marker_write_ln=$(grep -n 'printf .%s.n. .\$(date -u' "$SCRIPT_DIR/lib/package.sh" | head -n 1 | cut -d: -f1)
+    _ip_ok=0
+    if [ -n "$_ip_marker_write_ln" ] && [ -n "$_ip_bak_ln" ] && [ "$_ip_marker_write_ln" -gt "$_ip_bak_ln" ]; then _ip_ok=1; fi
+    _selftest_assert_eq "接线：更新标记在备份成功之后才写" "1" "$_ip_ok"
+
+    # ---- 版本行必须走 _status_row ----
+    # 「标签固定色、内容按状态变色」是状态页的硬契约（与 Win 侧同形）。
+    # 版本行曾用 style_out "$_role" 整行套色，标签也跟着变；而旧的自检正则
+    # 把角色写死成 ok|warn|dim，那个写法它匹配不到，于是假绿。
+    #
+    # 判据要数**两处**（"没查过最新版" 与 "查过"），只数 >=1 的话，
+    # 把其中一处改回整行套色、另一处仍在，断言照样绿——它只管住了"至少一处"，
+    # 没有管住"每一处"。同时直接禁掉整行套色那种写法：只要出现
+    # `style_out ... "版本 : ` 就是错的（"版本 : " 里那个空格是全角冒号前的空格，
+    # 只有整行套色那版才会这么拼）。
+    _ver_row=$(grep -c '_status_row "版本"' "$SCRIPT_DIR/lib/ops.sh")
+    _selftest_assert_eq "接线：版本行两处都走分段渲染" "2" "$_ver_row"
+    _ver_bad=$(grep -cE 'style_out .*"版本 : ' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null)
+    _selftest_assert_eq "接线：版本行没有整行套色写法" "0" "$_ver_bad"
+
+    # ---- 子命令表必须与入口分派一致 ----
+    # is_monitor_args 用来复核 pid 文件里的进程是不是监控。它的子命令清单
+    # 与入口分派是两份手写清单，漂移后会把"带子命令的进程"认成监控。
+    _sub_in_args=$(sed -n '/^is_monitor_args()/,/^}/p' "$SCRIPT_DIR/lib/runtime.sh" | grep -oE 'install\|stop[^)]*' | head -n 1)
+    _sub_missing=""
+    for _sub in install stop uninstall status repair-profile update menu help self-test; do
+        case "$_sub_in_args" in *"$_sub"*) : ;; *) _sub_missing="$_sub_missing $_sub";; esac
+    done
+    _selftest_assert_eq "接线：监控识别覆盖全部入口子命令" "" "$_sub_missing"
 
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
