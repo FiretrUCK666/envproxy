@@ -620,7 +620,26 @@ function Show-StatusSnapshot($st) {
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
         Write-StatusRow '代理变量' ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
-        Write-Styled 'dim' "  监控在跑的话几秒内会自动清掉；想立刻清掉就选 1（安装 / 修复）。"
+        # 这一屏最容易被读成"工具坏了"：翻墙代理明明是开着的，代理变量却说端口不在。
+        # 实情是**它俩指向的不是同一个端口**——换了端口、变量还停在旧的那个上。
+        $oldPort = $null
+        try {
+            $pv = Split-ProxyUrl $st.ProxyValue
+            if ($pv -and $pv.Port) { $oldPort = [int]$pv.Port }
+        } catch {}
+        if ($oldPort -and $st.Port -and $oldPort -ne [int]$st.Port) {
+            # 代理在别的端口上活着：跟着它走就对了
+            Write-Styled 'dim' ("  变量里是旧端口 {0}，翻墙代理现在在 {1}。" -f $oldPort, $st.Port)
+            Write-Styled 'dim' '  监控在跑的话几秒内会自己跟过去；想立刻跟上就选 1（安装 / 修复）。'
+        } elseif (-not $st.Port) {
+            # 代理根本没在跑：没有可跟的目标，那就是该清掉
+            Write-Styled 'dim' '  翻墙代理现在没在跑，所以这个地址已经没用了。'
+            Write-Styled 'dim' '  监控在跑的话几秒内会把它清掉；想立刻清掉就选 1（安装 / 修复）。'
+        } else {
+            # 端口解析不出来（极少见），只给通用说法，不编具体原因
+            Write-Styled 'dim' '  这个地址已经连不上了（多半是刚换过端口）。'
+            Write-Styled 'dim' '  监控在跑的话几秒内会自己跟上；想立刻跟上就选 1（安装 / 修复）。'
+        }
     } elseif ($st.ProxyValue -and -not $m) {
         Write-StatusRow '代理变量' ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
