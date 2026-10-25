@@ -147,7 +147,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 | --- | --- | --- |
 | 两端核心（入口 + 库，同语义；Win 8 库 / Mac 7 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
 | 各库的职责 | `lib\` 下的 `base` `probe` `env` `runtime` `package` `update` `ops`（Win 另有 `shortcut`） | base 契约常量与纯函数；probe 端口发现与状态判定；env 变量读写与快照还原；runtime 日志/进程/自启动/hook/代理变化提醒；package 覆盖安装区与回滚；update 版本检查与确认；ops 安装/卸载/状态编排与菜单帮助，卸载时处理快捷方式去留故依赖 shortcut（停止由入口分派）；shortcut 走代理的快捷方式（Win 独有，见下条） |
-| 库清单与库边界 | 入口里的 `$CoreLibs` / `CORE_LIBS` + 入口发布的 `$ScriptDir`、`$ScriptPath`（Mac 侧 `SCRIPT_DIR`、`SCRIPT_PATH`） | 唯一权威处，门禁核对它与 `lib\` 实际内容一致；**只有入口能回答"这个程序在哪里"**：库不得引用 `$PSCommandPath` / `$PSScriptRoot`（库里的它们指向库文件自己），一律用入口发布的全局；库必须加载期安全（无顶层副作用） |
+| 库清单与库边界 | 入口里的 `$CoreLibs` / `CORE_LIBS` + 入口发布的 `$ScriptDir`、`$ScriptPath`（Mac 侧 `SCRIPT_DIR`、`SCRIPT_PATH`） | 唯一权威处，门禁核对它与 `lib\` 实际内容一致；**只有入口能回答"这个程序在哪里"**：库不得引用 `$PSCommandPath` / `$PSScriptRoot`（库里的它们指向库文件自己），一律用入口发布的全局；库必须加载期安全（无对外副作用：不写文件、不改环境变量、不起外部进程；进程内类型定义与常量初始化可以） |
 | 模板（安装时生成到固定位置的） | `win\locator.ps1`、`mac\locator.sh`、`mac\prompt-sync.sh`；win 的 Git Bash 同步脚本内嵌在 `runtime` 层的 `Get-PromptSyncContent` | 定位器生成到固定位置（win 是 `%LOCALAPPDATA%\EnvProxy\launcher.ps1`，mac 是 `~/.envproxy/`）后按日志活跃度选新位置；同步脚本让每次提示符重读状态（内容比对自愈）。**win 的 `.sh` 不随包发**：包校验器按"不得比最老客户端宽松"取扩展名集合，而只要还有用户停在只认 `.ps1/.cmd/.command` 的旧版，多一个 `.sh` 就会让他们的更新被自己拒收。内嵌的代价是语法检查看不见它，门禁 1 把模板抽出来单独 `bash -n` |
 | 在线更新 | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读，动手只在更新入口（默认 N 确认、非交互不等待）；其余见「关键不变量」 |
 | 菜单入口（壳，无逻辑） | 每端 1 个：`win\打开菜单.cmd` / `mac\打开菜单.command` | 直调入口的菜单开关/子命令；菜单纯分派；根下只放用户直接用的入口，其余进 `lib\` |
@@ -234,7 +234,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   （`SendMessageTimeout`），macOS 写 `~/.envproxy/proxy.env` + `launchctl setenv`；
   自退（文件夹被移动/删除）先清变量再清目录；定位器找不到新位置时同样清残留变量——
   没有活着的组件会再纠正，过期代理不能留给新终端。
-  卸载必须先杀监控再清自启动，否则下个自查周期（每 30 轮）自愈会把自启动重建回来。**快照权限 0600**：可能带账号密码，默认 umask 通常 0644。
+  卸载必须先杀监控再清自启动，否则下个自查周期（每 30 轮）自愈会重建它。**快照权限 0600**（可能带账号密码）。
   **Windows 侧写用户变量只能走 `Write-UserEnvValues` / `Remove-UserEnvNames` 这一条通道**（内部直写注册表，保留原 `REG_EXPAND_SZ` 类型）。不许再用
   `[Environment]::SetEnvironmentVariable(..., "User")`：它每写一个变量就同步等一次
   `WM_SETTINGCHANGE` 广播结束（实测每个约 11 秒），而本项目的契约是整批写完后统一广播一次，前面每次等待都是白等。广播由调用方在整批结束后做一次，不放进写入函数。

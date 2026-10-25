@@ -30,6 +30,10 @@
 # 菜单里一眼分辨：同一个程序的两个图标各自身份明确，用户不会点错。
 $ProxyShortcutSuffix = '（走代理）'
 
+# ------------------------------------------------------------------------------
+# 生成与扫描（无界面：不读输入、不画屏幕，可以脱离终端单独测）
+# ------------------------------------------------------------------------------
+
 # 启动脚本目录。放在 %LOCALAPPDATA%\EnvProxy 之下，而不是 ~/.envproxy：
 #   ~/.envproxy 是给 bash 钩子用的（Windows 与 macOS 共用这个名字），
 #   启动脚本由 wscript 按绝对路径直接调用，与 shell 无关，放那边没有道理。
@@ -44,7 +48,7 @@ function Get-ProxyLauncherDir {
 # 用整词匹配而不是子串：子串会让 "Notepad++" 被 'notepad' 误伤。
 $ProxyScanExcludeWords = @(
     '卸载', 'uninstall', 'unins000', 'unins',
-    'readme', '帮助', '说明', '更新日志', 'changelog', 'license',
+    'readme', '帮助', '说明', '更新日志', 'changelog', 'license', '手册', '文档', '教程', '指南',
     '此电脑', '回收站', '控制面板', '网络连接', 'cmd', 'regedit',
     'notepad', 'idle', 'module docs', 'python'
 )

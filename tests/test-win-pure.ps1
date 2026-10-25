@@ -1152,6 +1152,12 @@ Assert-Eq 'scan exclude: 卸载xxx 排除' 'true' (Test-ProxyScanExcluded '卸�
 Assert-Eq 'scan exclude: 用户帮助 排除' 'true' (Test-ProxyScanExcluded '用户帮助')
 Assert-Eq 'scan exclude: 使用说明 排除' 'true' (Test-ProxyScanExcluded '使用说明')
 Assert-Eq 'scan exclude: README 排除' 'true' (Test-ProxyScanExcluded 'README')
+# 文档类噪音：开始菜单里「用户手册」「新手教程」这类快捷方式指向的是帮助文档，
+# 建一个「走代理启动帮助文档」的图标对谁都没用。中文没有词边界，只能靠包含匹配。
+Assert-Eq 'scan exclude: 用户手册 排除' 'true' (Test-ProxyScanExcluded '用户手册')
+Assert-Eq 'scan exclude: 使用文档 排除' 'true' (Test-ProxyScanExcluded '使用文档')
+Assert-Eq 'scan exclude: 新手教程 排除' 'true' (Test-ProxyScanExcluded '新手教程')
+Assert-Eq 'scan exclude: 配置指南 排除' 'true' (Test-ProxyScanExcluded '配置指南')
 Assert-Eq 'scan exclude: unins000 排除' 'true' (Test-ProxyScanExcluded 'unins000')
 Assert-Eq 'scan exclude: cmd 排除' 'true' (Test-ProxyScanExcluded 'cmd')
 Assert-Eq 'scan exclude: 此电脑 排除' 'true' (Test-ProxyScanExcluded '此电脑')
