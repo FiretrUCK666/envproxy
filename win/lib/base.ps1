@@ -322,6 +322,34 @@ function ConvertTo-ProxyUrl([string]$Raw) {
 # 模块自动加载就会挑中那个二进制模块并加载失败——命令直接"找不到"，
 # 不是报错而是静默缺失：校验值那一步会跟着塌掉。
 # 直接用 .NET 的 SHA256 自己算：任何环境都拿得到，不依赖模块自动加载。
+# 从一个**Windows 路径**里取文件名（不含扩展名）。
+#
+# 为什么不用 [System.IO.Path]::GetFileNameWithoutExtension：那个方法按**宿主平台**
+# 的规则认目录分隔符——Windows 认反斜杠，Linux 只认正斜杠。于是同一个
+# 'C:\App\unins000.exe' 在 Windows 上返回 'unins000'、在 Linux 上返回带整串目录的
+# 'C:\App\unins000'，依赖它的判断在 CI 上恒为假：同一条断言本机绿、CI 红。
+#
+# 这个项目处理的永远是 Windows 路径（探针、快捷方式、开始菜单都在 Windows 上），
+# 所以判据按反斜杠与正斜杠都切，与跑在哪个平台无关。
+function Get-PathBaseName([string]$Path) {
+    if (-not $Path) { return '' }
+    $name = ($Path -split '[\\/]')[-1]
+    if (-not $name) { return '' }
+    $dot = $name.LastIndexOf('.')
+    if ($dot -gt 0) { return $name.Substring(0, $dot) }
+    return $name
+}
+
+# 从一个 Windows 路径里取扩展名（含点，小写）。与 Get-PathBaseName 同一条理由：
+# 不能用 [System.IO.Path]::GetExtension，它按宿主平台认分隔符。
+function Get-PathExtension([string]$Path) {
+    if (-not $Path) { return '' }
+    $name = ($Path -split '[\\/]')[-1]
+    $dot = $name.LastIndexOf('.')
+    if ($dot -ge 0 -and $dot -lt ($name.Length - 1)) { return $name.Substring($dot).ToLower() }
+    return ''
+}
+
 function Get-Sha256Hex([string]$Path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {

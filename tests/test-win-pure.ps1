@@ -1170,10 +1170,13 @@ Assert-Eq 'scan exclude: 空名字排除' 'true' (Test-ProxyScanExcluded '')
 
 # 路径级排除：挡住"系统目录里的工具"，名字判据挡不住这些。
 #
-# 这里有一条**必须与宿主平台无关**：判据不能只看 `$env:SystemRoot`，因为那个变量
-# 只在 Windows 上存在，CI 在 Linux 上跑这条时它是空的——同一条断言本机绿、CI 红，
-# 而这类"换了机器就红"的测试比没有测试更糟：它教人忽略红灯。
-# 所以下面显式把 SystemRoot 抹掉再断言一次。
+# 这一段测的是**与宿主平台无关**：判据不能依赖只在一个平台上才成立的东西。
+# 已经踩过两个坑，都是"本机绿、CI 红"：
+#   ① 只看 `$env:SystemRoot` 判系统目录——那个变量在 Linux 上是空的；
+#   ② 用 `[System.IO.Path]::GetFileNameWithoutExtension` 取文件名——它按宿主平台
+#      的规则认分隔符，Linux 只认正斜杠，于是 `C:\App\unins000.exe` 在 CI 上
+#      被当成"整串文件名"，`unins*` 判断恒为假。
+# 这类断言比没有断言更糟：它教人习惯性忽略红灯。所以下面显式把它们锁住。
 Assert-Eq 'scan exclude path: System32 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\System32\regedit.exe')
 Assert-Eq 'scan exclude path: SysWOW64 里的排除' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\SysWOW64\cmd.exe')
 # 抹掉 SystemRoot 之后仍然要挡得住（这正是 CI 上跑的那种情况）
@@ -1183,9 +1186,15 @@ try {
     Assert-Eq 'scan exclude path: 无 SystemRoot 也挡 System32' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\System32\regedit.exe')
     Assert-Eq 'scan exclude path: 无 SystemRoot 也挡 SysWOW64' 'true' (Test-ProxyScanExcludedPath 'C:\Windows\SysWOW64\cmd.exe')
     Assert-Eq 'scan exclude path: 无 SystemRoot 不误伤普通程序' 'false' (Test-ProxyScanExcludedPath 'D:\Doubao\Doubao.exe')
+    # 反斜杠路径里的卸载器：取文件名不能靠 Path API（Linux 上切不出来）
+    Assert-Eq 'scan exclude path: 无 SystemRoot 也认反斜杠里的 unins' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\unins000.exe')
+    Assert-Eq 'scan exclude path: 无 SystemRoot 也认反斜杠里的 uninstall' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\Uninstall.exe')
 } finally {
     $env:SystemRoot = $__sr
 }
+# 两种分隔符都要认（同一个程序的写法可能来自不同来源）
+Assert-Eq 'scan exclude path: 正斜杠路径也认卸载器' 'true' (Test-ProxyScanExcludedPath 'C:/Program Files/App/unins000.exe')
+Assert-Eq 'scan exclude path: 裸文件名也认卸载器' 'true' (Test-ProxyScanExcludedPath 'unins000.exe')
 Assert-Eq 'scan exclude path: 卸载器排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\unins000.exe')
 Assert-Eq 'scan exclude path: Uninstall 排除' 'true' (Test-ProxyScanExcludedPath 'C:\Program Files\App\Uninstall.exe')
 Assert-Eq 'scan exclude path: 普通程序保留' 'false' (Test-ProxyScanExcludedPath 'C:\Users\X\AppData\Local\Programs\antigravity\Antigravity.exe')

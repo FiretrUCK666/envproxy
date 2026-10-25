@@ -97,8 +97,13 @@ function Test-ProxyScanExcludedPath([string]$Path) {
     # 少见的部署：Windows 目录不在默认盘符下，再按本机真实值兜一次
     $win = ([string]$env:SystemRoot).ToLower().TrimEnd('\')
     if ($win -and $p.StartsWith($win + '\')) { return $true }
-    # 卸载器几乎都叫 unins*.exe / uninstall*.exe
-    $file = [System.IO.Path]::GetFileNameWithoutExtension($p)
+    # 卸载器几乎都叫 unins*.exe / uninstall*.exe。
+    # 取文件名要用「两种分隔符都切」，不能用 [System.IO.Path] 的 API：那个方法按
+    # **宿主平台**的规则认分隔符——Windows 认反斜杠，Linux 只认正斜杠。同一个
+    # 'C:\App\unins000.exe' 在 Linux 上会被当成
+    # 整串没有扩展名的文件名，于是这条判断在 CI 上恒为假、断言两地结论相反。
+    $file = ($p -split '[\\/]')[-1]
+    $file = $file -replace '\.[^.]+$', ''
     if ($file -like 'unins*' -or $file -like 'uninstall*') { return $true }
     return $false
 }
@@ -215,7 +220,7 @@ function New-ProxyLauncherScript([string]$TargetPath, [string]$WorkingDir) {
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
     }
-    $base = [System.IO.Path]::GetFileNameWithoutExtension($TargetPath)
+    $base = Get-PathBaseName $TargetPath
     foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) { $base = $base.Replace([string]$ch, '') }
     if (-not $base) { $base = 'app' }
     # 取路径 sha256 的前 8 位做区分；同一路径永远得到同一个名字
@@ -299,7 +304,7 @@ function New-ProxyShortcut {
         $res.Reason = "目标文件夹不存在：$DestinationDir"
         return $res
     }
-    if (-not $Name) { $Name = [System.IO.Path]::GetFileNameWithoutExtension($TargetPath) }
+    if (-not $Name) { $Name = Get-PathBaseName $TargetPath }
     foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) { $Name = $Name.Replace([string]$ch, '') }
     if (-not $Name) { $Name = '程序' }
     $lnkPath = Join-Path $DestinationDir ($Name + $ProxyShortcutSuffix + '.lnk')
@@ -501,7 +506,7 @@ function Get-OrphanProxyLaunchers {
             # 界面才能显示"这个脚本是给哪个程序的"。读不到就留空，界面另有说法。
             $tgt = Get-ProxyLauncherTarget $f.FullName
             $nm = $f.BaseName
-            if ($tgt) { $nm = [System.IO.Path]::GetFileNameWithoutExtension($tgt) }
+            if ($tgt) { $nm = Get-PathBaseName $tgt }
             $out += [pscustomobject]@{ LauncherPath = $f.FullName; Name = $nm; Target = $tgt }
         }
     }
@@ -564,7 +569,7 @@ function Get-InstalledPrograms {
                 $t = [string]$lnk.TargetPath
                 if (-not $t) { continue }
                 # 只要可执行文件；UWP 应用的 TargetPath 是空的，已经在上面挡掉
-                $ext = [System.IO.Path]::GetExtension($t).ToLower()
+                $ext = Get-PathExtension $t.ToLower()
                 if ($ext -notin @('.exe', '.cmd', '.bat')) { continue }
                 if (-not (Test-Path -LiteralPath $t)) { continue }
                 if (Test-ProxyScanExcludedPath $t) { continue }
@@ -660,7 +665,7 @@ function Show-ProgramPicker {
                     continue
                 }
                 return ([pscustomobject]@{
-                    Name = [System.IO.Path]::GetFileNameWithoutExtension($p)
+                    Name = Get-PathBaseName $p
                     TargetPath = $p
                     WorkingDirectory = (Split-Path -Parent $p)
                 })
@@ -711,7 +716,7 @@ function Show-ProgramPicker {
                 continue
             }
             return ([pscustomobject]@{
-                Name = [System.IO.Path]::GetFileNameWithoutExtension($p)
+                Name = Get-PathBaseName $p
                 TargetPath = $p
                 WorkingDirectory = (Split-Path -Parent $p)
             })
@@ -802,7 +807,7 @@ function Invoke-NewProxyShortcutFlow {
     Write-Styled 'text' ('  程序    ' + $chosen.Name)
     Write-Styled 'dim'  ('          ' + $chosen.TargetPath)
     Write-Host ''
-    Write-Styled 'text' ('  图标名  ' + [System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath) + $ProxyShortcutSuffix)
+    Write-Styled 'text' ('  图标名  ' + (Get-PathBaseName $chosen.TargetPath) + $ProxyShortcutSuffix)
     Write-Styled 'text' ('  放在    ' + $dest)
     Write-Host ''
     # 先探一次同名：把"会覆盖"直接写进这一屏，让用户一次 y 就完成。
@@ -811,7 +816,7 @@ function Invoke-NewProxyShortcutFlow {
     # 用户重做的原因通常正是"原来那个不对"，他第一屏按完 y 就以为结束了，
     # 第二屏顺手回车 → 旧图标原样留着 → 他回到桌面点一下还是坏的 →
     # 得出结论"这个修复功能没用"。两个 y 表达同一个意图，本身就是设计错误。
-    $lnkName = [System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath)
+    $lnkName = Get-PathBaseName $chosen.TargetPath
     $wouldBe = Join-Path $dest ($lnkName + $ProxyShortcutSuffix + '.lnk')
     $willOverwrite = Test-Path -LiteralPath $wouldBe
     if ($willOverwrite) {
@@ -863,7 +868,7 @@ function Invoke-NewProxyShortcutFlow {
         try { $ov = "$(Read-Host '覆盖')".Trim() } catch {}
         if ($ov -match '^(y|yes|是)$') {
             $r2 = New-ProxyShortcut -TargetPath $chosen.TargetPath -WorkingDirectory $chosen.WorkingDirectory `
-                                    -DestinationDir $dest -Name ([System.IO.Path]::GetFileNameWithoutExtension($chosen.TargetPath)) -Force
+                                    -DestinationDir $dest -Name (Get-PathBaseName $chosen.TargetPath) -Force
             Write-Host ''
             if ($r2.Ok) {
                 Write-Styled 'ok' '  [完成] 已覆盖：'
