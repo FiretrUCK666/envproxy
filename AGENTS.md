@@ -145,8 +145,8 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | 职责 | 入口文件 | 说明 |
 | --- | --- | --- |
-| 两端核心（入口 + 7 库，同语义） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
-| 七个库的职责 | `lib\` 下的 `base` `probe` `env` `runtime` `package` `update` `ops` | base 契约常量与纯函数；probe 端口发现与状态判定；env 变量读写与快照还原；runtime 日志/进程/自启动/hook；package 覆盖安装区与回滚；update 版本检查与确认；ops 安装/卸载/状态编排（停止由入口分派） |
+| 两端核心（入口 + 库，同语义；Win 8 库 / Mac 7 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
+| 各库的职责 | `lib\` 下的 `base` `probe` `env` `runtime` `package` `update` `ops`（Win 另有 `shortcut`） | base 契约常量与纯函数；probe 端口发现与状态判定；env 变量读写与快照还原；runtime 日志/进程/自启动/hook/代理变化提醒；package 覆盖安装区与回滚；update 版本检查与确认；ops 安装/卸载/状态编排与菜单帮助（停止由入口分派）；shortcut 走代理的快捷方式（Win 独有，见下条） |
 | 库清单与库边界 | 入口里的 `$CoreLibs` / `CORE_LIBS` + 入口发布的 `$ScriptDir`、`$ScriptPath`（Mac 侧 `SCRIPT_DIR`、`SCRIPT_PATH`） | 唯一权威处，门禁核对它与 `lib\` 实际内容一致；**只有入口能回答"这个程序在哪里"**：库不得引用 `$PSCommandPath` / `$PSScriptRoot`（库里的它们指向库文件自己），一律用入口发布的全局；库必须加载期安全（无顶层副作用） |
 | 模板（安装时生成到固定位置的） | `win\locator.ps1`、`mac\locator.sh`、`mac\prompt-sync.sh`；win 的 Git Bash 同步脚本内嵌在 `runtime` 层的 `Get-PromptSyncContent` | 定位器生成到固定位置（win 是 `%LOCALAPPDATA%\EnvProxy\launcher.ps1`，mac 是 `~/.envproxy/`）后按日志活跃度选新位置；同步脚本让每次提示符重读状态（内容比对自愈）。**win 的 `.sh` 不随包发**：包校验器按"不得比最老客户端宽松"取扩展名集合，而只要还有用户停在只认 `.ps1/.cmd/.command` 的旧版，多一个 `.sh` 就会让他们的更新被自己拒收。内嵌的代价是语法检查看不见它，门禁 1 把模板抽出来单独 `bash -n` |
 | 在线更新 | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读，动手只在更新入口（默认 N 确认、非交互不等待）；其余见「关键不变量」 |
@@ -228,9 +228,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   | 主流程清理 | 形状 + 安装快照 | 唯一能分清"我们写的"与"他手设的同形值" |
   | 登录定位器 | 只看形状 | 运行在安装根已消失时，`env` 库不在身边 |
   | 终端钩子 | 只认归属记录 | 热路径不能读快照，只能比对"值是否仍等于我们写的" |
-  三套的边界**不一样，这是有意的**，不能拿一句话概括：主流程在**没有安装快照**时会把
-  本机回环地址判成"我们写的"（它的判据是形状 + 快照，快照为空就等于没有反证）；
-  登录定位器只按形状判；终端钩子没有归属记录时**一个都不动**。
+  三套的边界**不一样，这是有意的**：主流程没有快照时会把本机回环地址判成我们的（无反证）；终端钩子没有归属记录时**一个都不动**。
   要收紧任何一套，先确认它运行的位置能不能读到快照——读不到的场合收紧只会变成误删。
   门禁 6 不核这里，改任何一套前把这张表读一遍。
   权威来源：`mac/prompt-sync.sh`、`Install-ShellProfile`、`write_off_sentinel`、`Sync-UserEnvVars`。
@@ -241,9 +239,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   卸载必须先杀监控再清自启动，否则下个自查周期（每 30 轮）自愈会把自启动重建回来。**快照权限 0600**：可能带账号密码，默认 umask 通常 0644。
   **Windows 侧写用户变量只能走 `Write-UserEnvValues` / `Remove-UserEnvNames` 这一条通道**（内部直写注册表，保留原 `REG_EXPAND_SZ` 类型）。不许再用
   `[Environment]::SetEnvironmentVariable(..., "User")`：它每写一个变量就同步等一次
-  `WM_SETTINGCHANGE` 广播结束（实测单个约 11 秒，5 个 56 秒、删 6 个 67 秒），
-  而本项目的契约是"整批写完之后统一广播一次"，前面每次等待都是白等——首次安装
-  卡近一分钟就是这么来的。广播由调用方在整批结束后做一次，不放进写入函数。
+  `WM_SETTINGCHANGE` 广播结束（实测每个约 11 秒），而本项目的契约是整批写完后统一广播一次，前面每次等待都是白等。广播由调用方在整批结束后做一次，不放进写入函数。
 - **自启动 = 登录时拉起一次，不保活**：Windows 侧是 Run 键，macOS 侧是 LaunchAgent 的
   `RunAtLoad`——两边都刻意**不用**“常驻保活”语义：若写 `KeepAlive`，监控已由 `nohup`
   启动时还会每 10 秒 fork 一次。
@@ -344,11 +340,9 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 - **不依赖 PowerShell 模块里的命令与隐式语义**：判键存在用 `Test-RegKey`（`Test-Item` 只认文件系统）。
   模块自动加载会挑版本，`PSModulePath` 排着别的版本时 `Get-FileHash` 这类命令**静默缺失**
   （不是报错），依赖它的校验跟着塌掉。算 sha256 用 .NET 的 `SHA256`（`base` 层 `Get-Sha256Hex`）。
-- **配色是两层结构**：角色 -> 颜色名 -> 平台写法。两侧共享颜色名（`cyan`/`green`/…），各自映射
-  成本平台写法（Win 是 `[ConsoleColor]`，Mac 是 ANSI 数字）。没有这一层门禁只能比角色名、
-  一个颜色都比不了：`cmd` 从绿改青、与标题同色、分不清哪行能复制，而门禁全绿。
-  **`cmd` 不许等于 `title`/`heading`**（必然同屏）。**一行的「标签」不随状态变色**：状态页的「代理变量 : …」必须分段——标签固定 `key`，
-  只有内容按 ok/warn/dim 变。整行套一个角色时状态无的行连标签一起变灰，而用户最先看标签。
+- **配色是两层结构**：角色 -> 颜色名 -> 平台写法（Win 是 `[ConsoleColor]`，Mac 是 ANSI 数字）。
+  没有这层门禁只能比角色名、一个颜色都比不了。**`cmd` 不许等于 `title`/`heading`**（必然同屏）。
+  **一行的「标签」不随状态变色**：状态页必须分段，标签固定 `key`，只有内容按 ok/warn/dim 变。
   权威来源：`Write-StatusRow` / `_status_row`。
 - **`mac/envproxy.sh` 只能在 macOS 上执行**：`~/.envproxy/` 下那套运行时文件是 macOS 格式，
   Windows 从不写、也不认识；而它在 Git Bash 里照样能跑，执行一次 `install` 就往使用者家目录

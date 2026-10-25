@@ -417,3 +417,107 @@ function Test-CanPrompt {
         return $false
     }
 }
+
+# ------------------------------------------------------------------------------
+# 终端显示的度量与折行（纯函数：只依赖字符码与控制台尺寸，不碰文件、不碰环境）
+#
+# 为什么住 base 而不是 ops：ops 与 shortcut 都要用它们，放进任何一方都会
+# 让另一方反向依赖过去。它们本身与"操作"无关，只是"这段文字占几格"，
+# 属于契约层的度量工具。
+# ------------------------------------------------------------------------------
+
+# 单个字符占几格：码位 > U+2E80 记两格，其余一格。
+# 这是**唯一**的判据处：Get-DisplayWidth 与日志裁剪都调它。写成两份就会有一天
+# 两份算出两个宽度，症状是同一屏里两列对不齐、日志截得长短不一。
+# 与 Mac 侧 _display_width 同一条判据（门禁核对两端对同一批字符的结论相同）。
+function Get-CharWidth([char]$Ch) {
+    if ([int]$Ch -gt 0x2E80) { return 2 }
+    return 1
+}
+
+# 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
+# 所有需要对齐的地方都走这一处。
+function Get-DisplayWidth([string]$Text) {
+    $w = 0
+    foreach ($ch in $Text.ToCharArray()) { $w += (Get-CharWidth $ch) }
+    return $w
+}
+
+# 把一段文字按终端可见宽度补空格（中文按两格算）。
+function Format-MenuCell([string]$Text, [int]$Width) {
+    $pad = $Width - (Get-DisplayWidth $Text)
+    if ($pad -lt 0) { $pad = 0 }
+    return $Text + (' ' * $pad)
+}
+
+# 终端宽度。取不到就用 80——这是所有终端的最小公约数，
+# 按它折行最多是"早一点换行"，按更大的值折行会让内容在窄终端上被切掉。
+function Get-ConsoleWidth([int]$Fallback = 80) {
+    try {
+        $w = [Console]::WindowWidth
+        if ($w -ge 40) { return $w }
+    } catch {}
+    # 回退值也要合法：调用方可能传个负数进来，而宽度是要拿去做减法与取子串的。
+    # 40 是"最小能看"的宽度，小于它折出来的行每行只剩一两个字符。
+    return [Math]::Max(40, $Fallback)
+}
+
+# 把一行长文字折成多行，续行保持缩进。
+#
+# 为什么要这个：管理页要显示快捷方式的完整路径，而任务栏那条路径有 130 多个字符，
+# 在普通终端里必然折行。系统自动折行的续行从第 0 列开始，于是"图标"和它下面那半截
+# 路径看起来是两行无关的东西——而这一屏的全部作用正是"认准要删哪一个"。
+# 自己折行，续行就能对齐到值那一列。
+#
+# 折行点优先选空格与反斜杠（路径在这些位置断开最好读）；一段里找不到合适的位置
+# 就硬切，保证宽度一定不超。
+function Split-DisplayText([string]$Text, [int]$Width, [int]$Indent = 0) {
+    if (-not $Text) { return @() }
+    # 宽度太小就别折了：硬折成每行一两个字符反而更难读。这是有意的降级，
+    # 不是「折到这个宽度」——调用方要保证宽度够（Get-ConsoleWidth 最小给 40）。
+    if ($Width -lt 8) { return @((' ' * $Indent) + $Text) }
+    $out = @()
+    $rest = $Text
+    $pad = ' ' * $Indent
+    $first = $true
+    while ($true) {
+        # 续行至少留 8 格：缩进接近或超过总宽时，减出来的宽度会小到只剩一两个字符。
+        $avail = if ($first) { $Width } else { [Math]::Max(8, $Width - $Indent) }
+        if ((Get-DisplayWidth $rest) -le $avail) {
+            $out += $(if ($first) { $rest } else { $pad + $rest })
+            break
+        }
+        # 逐字符累加到刚好超宽为止，记下最后见到的可断点
+        $acc = 0
+        $cut = -1
+        $break = -1
+        for ($i = 0; $i -lt $rest.Length; $i++) {
+            $cw = Get-CharWidth $rest[$i]
+            if ($acc + $cw -gt $avail) { break }
+            $acc += $cw
+            $cut = $i
+            if ($rest[$i] -eq ' ' -or $rest[$i] -eq '\' -or $rest[$i] -eq '/') { $break = $i }
+        }
+        if ($cut -lt 0) { $cut = 0 }
+        # 断点太靠前就不用它（会切出很短的一段，反而更难读）
+        if ($break -gt 0 -and $break -ge [int]($cut * 0.6)) { $cut = $break }
+        $piece = $rest.Substring(0, $cut + 1).TrimEnd()
+        if (-not $piece) { $piece = $rest.Substring(0, $cut + 1) }
+        $out += $(if ($first) { $piece } else { $pad + $piece })
+        $rest = $rest.Substring($cut + 1).TrimStart()
+        $first = $false
+        if (-not $rest) { break }
+    }
+    return $out
+}
+
+# 为什么必须带判断：Clear-Host 在输出被重定向时（管道、日志、CI）会抛
+# "设置 CursorPosition 时出现异常：句柄无效"——它依赖真实控制台缓冲区。
+# 那种环境本来也拿不到终端，清屏毫无意义，还会把错误日志刷脏。
+function Clear-Screen {
+    try {
+        if ([Console]::IsOutputRedirected) { return }
+        Clear-Host
+    } catch {}
+}
+

@@ -57,7 +57,8 @@ param(
 #     lib\runtime.ps1  日志、监控进程、主循环、自启动定位器
 #     lib\package.ps1  覆盖安装区、备份与回滚
 #     lib\update.ps1   版本检查、下载校验、确认流程
-#     lib\ops.ps1      安装/停止/卸载/状态编排
+#     lib\ops.ps1      安装/停止/卸载/状态编排、菜单与帮助
+#     lib\shortcut.ps1 走代理的快捷方式（生成启动脚本、读写 .lnk、扫描记录、三屏界面）
 #   库清单的唯一权威处是下面的 $CoreLibs；门禁会核对它与 lib\ 实际内容一致。
 # ------------------------------------------------------------------------------
 # ------------------------------------------------------------------------------
@@ -83,7 +84,7 @@ $ScriptPath = if ($PSCommandPath) { $PSCommandPath }
 $ScriptDir  = Split-Path -Parent $ScriptPath
 $LibDir = Join-Path $ScriptDir "lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib\ 实际内容一致。
-$CoreLibs = @("base", "probe", "env", "runtime", "package", "update", "ops")
+$CoreLibs = @("base", "probe", "env", "runtime", "package", "update", "ops", "shortcut")
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 $missingLib = @()
 foreach ($libName in $CoreLibs) {
