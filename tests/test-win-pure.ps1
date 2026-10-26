@@ -2516,12 +2516,17 @@ $lines = @(Format-StatusLines $goodSt)
 Assert-Eq '渲染路径：正常态首行是标题' $true ($lines[0] -match 'EnvProxy 状态')
 # 帧里每一行都带 ANSI 颜色，直接比字符串会把颜色码也算进去而永远不等。
 # 比"说了什么"必须先剥掉颜色——这正好也验证了 Remove-AnsiColor 能用。
-Assert-Eq '渲染路径：正常态第二行说一切正常' '一切正常，不用做任何事。' (Remove-AnsiColor $lines[1])
+#
+# 断言「结论在标题之后、且是第一条有内容的话」，**不写死行号**：
+# 排版规则会变（标题下要留一行空白、以后还可能加分组），行号一钉死，
+# 每次调排版都得改测试，改到最后就没人当真了。
+$bodyLines = @($lines | Select-Object -Skip 1 | ForEach-Object { Remove-AnsiColor $_ } | Where-Object { $_.Trim() })
+Assert-Eq '渲染路径：正常态说一切正常' '一切正常，不用做任何事。' $bodyLines[0]
 Assert-Eq '渲染路径：帧里带退出提示' $true ([bool](@($lines | Where-Object { $_ -match '按 0 或 Esc' }).Count))
 Assert-Eq '渲染路径：正常态不含「项要注意」' $false ([bool](@($lines | Where-Object { $_ -match '项要注意' }).Count))
 
 $badLines = @(Format-StatusLines $probeSt)
-Assert-Eq '渲染路径：异常态报出注意项' $true ($badLines[1] -match '\d+ 项要注意')
+Assert-Eq '渲染路径：异常态报出注意项' $true ([bool](@($badLines | Where-Object { $_ -match '\d+ 项要注意' }).Count))
 
 # 状态页整段不许写文件、不许改变量（只读契约）
 foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {

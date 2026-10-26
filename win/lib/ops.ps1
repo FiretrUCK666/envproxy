@@ -468,6 +468,9 @@ function Format-StatusLines($st) {
 
     $problems = @(Get-StatusProblems $st)
     & $line '======== EnvProxy 状态（实时刷新）========' 'title'
+    # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
+    # 与帮助页同一套规矩（标题上下各空一行），两版状态页也一样。
+    & $line '' 'text'
     if ($problems.Count -eq 0) {
         & $line '一切正常，不用做任何事。' 'ok'
     } else {
@@ -621,6 +624,9 @@ function Format-StatusLines($st) {
     }
 
     & $line '==================================' 'title'
+    # 底部提示与结束框之间空一行：紧贴着会被读成框里的内容，
+    # 而它是这一屏的操作说明——"按 0 返回"要让人一眼看到，不能被边框糊进去。
+    & $line '' 'text'
     # 提示只能写真正支持的键。写了却没人处理的键，用户按下去毫无反应，
     # 会以为程序卡住了——比不写这句更糟。
     & $line '正在实时刷新 · 按 0 或 Esc 返回' 'cmd'
@@ -1120,6 +1126,8 @@ function Show-StatusSnapshot($st) {
     $problems = @(Get-StatusProblems $st)
 
     Write-Styled 'title' "======== EnvProxy 状态 ========"
+    # 标题下空一行，与实时刷新那版、帮助页同一套规矩。
+    Write-Host ''
     if ($problems.Count -eq 0) {
         Write-Styled 'ok' "一切正常，不用做任何事。"
     } elseif ($st.NeverInstalled) {

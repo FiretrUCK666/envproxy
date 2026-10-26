@@ -723,6 +723,9 @@ show_status() {
     if [ -n "$_pb" ]; then
         _pn=$(printf '%s' "$_pb" | grep -c . || true)
     fi
+    # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
+    # 与帮助页同一套规矩（标题上下各空一行），与 Windows 侧状态页同形。
+    echo ""
     if [ "$_pn" = "0" ]; then
         style_out ok "一切正常，不用做任何事。"
     elif [ "$_never_installed" = "1" ]; then
