@@ -542,21 +542,13 @@ function Format-StatusLines($st) {
         & $row '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
     }
 
-    # 终端同步：话术从 Get-TermSyncText 取，与静态页同源
-    if ($st.TermSync) {
-        $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
-        $role = if ($tt.Bad) { 'warn' } else { 'ok' }
-        & $row '终端同步' $tt.Text $role
-        if ($tt.Hint) {
-            foreach ($h in @($tt.Hint -split "`n")) {
-                if ($h) { & $line ('  ' + $h) 'dim' }
-            }
-        }
-    } else {
-        & $row '终端同步' '状态未知' 'dim'
-    }
-
-    # 代理变量
+    # ---- 第三组：代理变量（紧跟"翻墙代理"，两者是一件事的两端） ----
+    #
+    # 分组与静态页同一套（两版是同一屏的两种刷新方式，改一处必须改另一处）：
+    # 进程与自启（后台在不在）、翻墙代理与代理变量（链路通不通）、终端同步（窗口跟不跟得上）。
+    # 组间留白、组内紧凑——八行紧贴在一起是一坨字，眼睛找不到落点。
+    # 顺序是有意的：代理变量必须紧跟翻墙代理，它们讲的是同一条链路的两端；
+    # 终端同步排在最后，它只关系"已开的窗口跟不跟得上"，与链路本身无关。
     if ($st.ProxyValue -and $st.ProxyAlive) {
         & $row '代理变量' ('已注入 ({0})' -f $st.ProxyValue) 'ok'
     } elseif ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
@@ -575,7 +567,24 @@ function Format-StatusLines($st) {
         & $row '代理变量' '无（直连状态）' 'dim'
     }
 
-    # 版本
+    # ---- 第四组：终端同步 ----
+    # 话术从 Get-TermSyncText 取，与静态页同源
+    & $line '' 'text'
+    if ($st.TermSync) {
+        $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
+        $role = if ($tt.Bad) { 'warn' } else { 'ok' }
+        & $row '终端同步' $tt.Text $role
+        if ($tt.Hint) {
+            foreach ($h in @($tt.Hint -split "`n")) {
+                if ($h) { & $line ('  ' + $h) 'dim' }
+            }
+        }
+    } else {
+        & $row '终端同步' '状态未知' 'dim'
+    }
+
+    # 版本（与上面的状态分组分开：那是当前状态，这是软件版本）
+    & $line '' 'text'
     $verText = if ($st.LocalVersion) { 'v' + $st.LocalVersion } else { '未知' }
     $verRole = 'value'
     if ($st.RemoteCache -and $st.RemoteCache.Version) {
@@ -594,6 +603,7 @@ function Format-StatusLines($st) {
     # 按字符数裁 78 会让中文密集的行实际占 90+ 格，折行——而这一层是按逻辑行
     # 做绝对定位的，折行会让后面每一行都错位。Get-DisplayWidth 就是为此存在的，
     # 静态页的 Show-RecentLog 已经这么做了，这里必须用同一个判据。
+    & $line '' 'text'
     & $line '---------------- 最近日志 ----------------' 'title'
     $tail = ''
     if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') { $tail = [string]$st.Snapshot.LogTail }
@@ -732,23 +742,32 @@ function Show-Status {
 # 不会用 GitHub、不会敲命令的人卡在第一步就放弃了。这里把整件事压成一个按键：
 # 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
 #
-# 边界：只读、不联网、不改任何配置。文件落在 monitor\ 下，卸载时会一起清掉。
-# 反馈时要问的三个问题。顺序即重要性：先定"哪个环节坏了"，作者才知道该看哪一段；
-# 再问"你看到什么"，那是最能定位症状的一条；最后问"你本来想做什么"，
+# 反馈时问的问题。前三条是结构化的（作者能按栏目定位），第四条是自由补充——
+# 有些情况前三条装不下：报错原文、你试过什么、你怀疑哪里不对。留一个开口，
+# 比逼着用户把话塞进三个格子里好。
+# 顺序即重要性：先定"哪个环节坏了"，再问"你看到什么"，最后问"你本来想做什么"，
 # 因为同一现象在不同意图下是完全不同的问题。
 # 问题写成大白话：使用者不是工程师，问"请描述你的复现步骤"只会得到一句"就是不好使"。
 $ReportQuestions = @(
     @{ Key = 'where';  Text = '哪一步出的问题？';       Example = '比如：装完之后终端里还是上不了网 / 换了新的翻墙软件 / 升级之后就这样了' }
     @{ Key = 'what';   Text = '屏幕上显示了什么？';     Example = '比如：状态页说未运行 / 命令报 ECONNREFUSED / 点了没反应' }
     @{ Key = 'expect'; Text = '你本来希望它做什么？';   Example = '比如：希望 git clone 能直接通 / 希望它自己跟着翻墙软件开关' }
+    @{ Key = 'extra';  Text = '还有什么想补充的？';     Example = '想写什么都行：报错原文、你试过什么、你怀疑哪里不对'; Free = $true }
 )
 
 # 问一个问题，回车跳过。跳过时报告里写"（没填）"而不是留白——
 # 留白会被读成"这一项不适用"，而"没填"才是真的信息（作者据此知道还得追问）。
-function Read-ReportAnswer([string]$Prompt, [string]$Example) {
+# $Free 表示这一问是自由补充：提示语换成"想写什么都行"，也不显示"直接回车"以外的引导，
+# 因为自由的题目再给例子反而限制住人。
+function Read-ReportAnswer([string]$Prompt, [string]$Example, [bool]$Free = $false) {
     Write-Host ''
     Write-Styled 'heading' ('  ' + $Prompt)
-    if ($Example) { Write-Styled 'dim' ('    ' + $Example) }
+    Write-Host ''
+    if ($Free) {
+        Write-Styled 'dim' '    想写什么都行，一段话也行。'
+    } elseif ($Example) {
+        Write-Styled 'dim' ('    ' + $Example)
+    }
     Write-Styled 'dim' '    （不想写就直接回车）'
     $text = ''
     try { $text = [string](Read-Host '  > ') } catch { $text = '' }
@@ -783,18 +802,18 @@ function New-ProblemReport {
     Write-Host ''
     Write-Styled 'title' '======== 问题反馈 ========'
     Write-Host ''
-    Write-Styled 'text' '  下面问你三句话，一句话一行，随手写就行。'
+    Write-Styled 'text' '  下面问你四句话，一句话一行，随手写就行。'
     Write-Styled 'dim'  '  写完会自动补上这台机器的情况，生成一份可以贴到网页上的报告。'
     $answers = @{}
     $anyAnswer = $false
     foreach ($q in $ReportQuestions) {
-        $a = Read-ReportAnswer $q.Text $q.Example
+        $a = Read-ReportAnswer $q.Text $q.Example ([bool]$q.Free)
         $answers[$q.Key] = $a
         if ($a) { $anyAnswer = $true }
     }
     if (-not $anyAnswer) {
         Write-Host ''
-        Write-Styled 'warn' '  三句都空着。这样的报告发出去，对方只能反问你要细节。'
+        Write-Styled 'warn' '  四句都空着。这样的报告发出去，对方只能反问你要细节。'
         $go = 'n'
         try { $go = [string](Read-Host '  还是要生成吗？(y/N)') } catch { $go = 'n' }
         if ($go -notmatch '^[Yy]') {
@@ -937,6 +956,7 @@ function New-ProblemReport {
     }
     Write-Host ''
     Write-Styled 'heading' '  接下来怎么发出去'
+    Write-Host ''
     Write-Styled 'text' '    把这个地址打开，新建一个 issue，把报告内容贴进去：'
     Write-Styled 'value' ('      ' + $urls.Issues)
     Write-Styled 'dim' '  这是本项目唯一收问题的地方。'
@@ -1209,23 +1229,25 @@ function Show-StatusSnapshot($st) {
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
         Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
     }
-    # 这里**不再**补空行：问题清单那一段末尾（结论行之后）已经空过一行了。
-    # 再补一次就在同一屏里出现两个连续空行，本来紧凑的"结论—细节"分组被切出一道缝
-    # （实测复现：状态页第 4、5 行都是空行）。
-    # ---- 参考信息：正常项压成最少的行，且统一用灰，不跟"要注意"抢注意力 ----
-    # 全绿时也要能一眼确认"核心链路是通的"，所以正常的那几项各占一行但用 ok 色；
-    # 版本号那三行对普通用户没有行动价值，压成一行。
-    if ($m) { Write-StatusRow '监控进程' ("运行中 (PID {0})" -f $m.ProcessId) 'ok' }
-    if ($st.AutoRunOk) { Write-StatusRow '开机自启' '已启用' 'ok' }
+    # ---- 参考信息：正常项各占一行，用 ok 色方便一眼确认核心链路是通的 ----
+    #
+    # 分组之间空一行：八行数据紧贴在一起，观感是"一坨字"，眼睛找不到落点。
+    # 分三组——进程与自启（后台在不在）、代理与变量（翻墙链路通不通）、
+    # 终端同步（已开的窗口跟不跟得上）。组内紧凑、组间留白。
+    # 空行只在"前一组确实印了东西"时才补，避免连着两个空行。
+    $printedGroup = $false
+    if ($m) { Write-StatusRow '监控进程' ("运行中 (PID {0})" -f $m.ProcessId) 'ok'; $printedGroup = $true }
+    if ($st.AutoRunOk) { Write-StatusRow '开机自启' '已启用' 'ok'; $printedGroup = $true }
+
+    if ($st.Port -or $st.PortUnknown -or $st.ProxyValue) {
+        if ($printedGroup) { Write-Host '' }
+    }
     if ($st.Port) {
         Write-StatusRow '翻墙代理' ("已开启（本地端口 {0} 监听中）" -f $st.Port) 'ok'
     } elseif ($st.PortUnknown) {
         Write-StatusRow '翻墙代理' '这一轮没读到本机端口，无法判断（正常，会自动重试）' 'warn'
     } else {
         Write-StatusRow '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
-    }
-    if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
-        Write-StatusRow '终端同步' '已生效（已开着的窗口敲回车即跟上）' 'ok'
     }
     # 代理变量只有"已注入且活着"这一种情况才进参考区；
     # 指向死端口、没人维护、翻墙在跑但工具停用这三种都已在上面说过，
@@ -1240,6 +1262,11 @@ function Show-StatusSnapshot($st) {
         # 判据必须是**完整**的：有代理在跑就不该说"直连"，那是两件事。
         Write-StatusRow '代理变量' '无（直连状态）' 'dim'
     }
+    if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
+        Write-Host ''
+        Write-StatusRow '终端同步' '已生效（已开着的窗口敲回车即跟上）' 'ok'
+    }
+    Write-Host ''
     Show-VersionLines $st
     Show-RecentLog
 }
@@ -1311,6 +1338,9 @@ function Limit-DisplayText([string]$Text, [int]$Width) {
 
 # 最近日志：读最后 3 行，按窗口宽度裁。纯读+打印，不探测、不写文件。
 function Show-RecentLog {
+    # 日志块与上面的状态分组之间空一行：这是两块不同性质的东西（当前状态 vs 历史记录），
+    # 紧贴着会让"最近日志"看起来像状态的一部分。
+    Write-Host ''
     Write-Styled 'title' "---------------- 最近日志 ----------------"
     if (-not (Test-Item $LogFile)) {
         Write-Styled 'dim' "  （暂无日志）"
@@ -1525,30 +1555,50 @@ function Get-HelpRenderedLines([string[]]$Lines) {
     #
     # 手写空行是"有的地方记得、有的地方忘了"，屏幕上就是一段挤一段松。这种不一致
     # 单看每一行都挑不出错，但整页读起来就是"没排好"——用户说不出来，只觉得别扭。
-    # 所以改由结构决定，谁也不用记。规则两条：
+    # 所以改由结构决定，谁也不用记。规则三条：
     #
-    #   一、标题上下各空一行。下面必须空：标题在给下面的内容起头，挤着就开始读很闷，
-    #       没有呼吸感。上面必须空：每个标题因此成为独立一段，块与块自然分开。
+    #   一、标题上下各空一行。下面必须空：标题在给下面的内容起头，挤着就开始读很闷。
+    #       上面必须空：每个标题因此成为独立一段，块与块自然分开。
     #       （第一个标题的上面不空，它紧接页头。）
     #   二、表格块（连续的 r/rc/m 行）前后各空一行，块内行与行之间不空。
     #       表格是嵌在正文里的另一类东西，两侧不留白会跟正文糊在一起；
     #       而块内逐行空行会把它拆成一格一段，那正是"散"的来源。
+    #   三、**带说明的编号条目之间空一行**。判据是"这一条后面跟了它自己的说明或命令"：
+    #       那种条目是"小标题 + 一段话"的结构，两条挤在一起会让人以为说明属于下一条。
+    #       而**连续的编号条目**（每条只有一行、没有附属内容）之间**不空**——
+    #       它们是一个并列的清单，逐条空行会把三件并列的事读成三件互不相干的事。
     #
-    # 其余一律不空：正文连续读才顺；编号条目之间也不空，它们是一个列表。
     # 于是每个主题的骨架完全一样：标题、空行、内容、空行、标题……
     $isTable = { param($c) $c -and ($c.Code -eq 'r' -or $c.Code -eq 'rc' -or $c.Code -eq 'm') }
+    # 条目（i）的"从属行"：它自己的说明（t2）、命令（c/rc/r）、警告（w）。
+    # 这些都是"属于上一条"的内容，不该与条目平级。
+    $isItemChild = { param($c) $c -and ($c.Code -eq 't2' -or $c.Code -eq 'c' -or $c.Code -eq 'rc' -or $c.Code -eq 'r' -or $c.Code -eq 'w') }
+    # 一条目是否"带说明"：看它后面紧跟的那一行是不是从属行。
+    $itemHasChild = {
+        param($idx)
+        if ($idx -ge $n - 1) { return $false }
+        $nx = $parsed[$idx + 1]
+        return (& $isItemChild $nx)
+    }
     $spaced = @()
     $n = $parsed.Count
     for ($i = 0; $i -lt $n; $i++) {
         $cur = $parsed[$i]
         $next = if ($i -lt $n - 1) { $parsed[$i + 1] } else { $null }
-        # 标题前 / 表格块开始前
+        # 标题前 / 表格块开始前 / 带说明的条目之前要空
         if ($i -gt 0) {
-            $prevTbl = & $isTable $parsed[$i - 1]
+            $prev = $parsed[$i - 1]
+            $prevTbl = & $isTable $prev
             $curTbl = & $isTable $cur
-            if (($cur.Code -eq 'h') -or ($curTbl -and -not $prevTbl)) {
-                $spaced += (Split-HelpLine 'b ')
-            }
+            $needBlank = $false
+            if ($cur.Code -eq 'h') { $needBlank = $true }
+            elseif ($curTbl -and -not $prevTbl) { $needBlank = $true }
+            # 编号条目之间：上一条带自己的说明（t2）或非表格命令（c）时，说明那一段结束了，
+            # 新条目要另起一段。判据看**上一行是不是从属行**，而不是看上一行是不是 i——
+            # 「2.」后面跟的是它的 t2，到「3.」时上一行是 t2 不是 i，按代码值比会漏掉，
+            # 表现就是两条说明挤在一起、让人以为下面那句属于上一条。
+            elseif ($cur.Code -eq 'i' -and (& $isItemChild $prev)) { $needBlank = $true }
+            if ($needBlank) { $spaced += (Split-HelpLine 'b ') }
         }
         $spaced += $cur
         # 标题后 / 表格块结束后

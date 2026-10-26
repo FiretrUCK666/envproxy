@@ -444,15 +444,24 @@ REPORT_Q2="屏幕上显示了什么？"
 REPORT_Q2_EG="比如：状态页说未运行 / 命令报 ECONNREFUSED 127.0.0.1:7890 / 没反应"
 REPORT_Q3="你本来希望它做什么？"
 REPORT_Q3_EG="比如：希望 git clone 能直接通 / 希望它自己跟着翻墙软件开关"
+REPORT_Q4="还有什么想补充的？"
 
 # 问一个问题，回车跳过。跳过时报告里写"（没填）"而不是留白——
 # 留白会被读成"这一项不适用"，而"没填"才是真的信息（作者据此知道还得追问）。
+# 第三参数非空表示这一问是自由补充：提示语换成"想写什么都行"，
+# 因为自由的题目再给例子反而限制住人。
 read_report_answer() {
     _rra_prompt="$1"
     _rra_eg="$2"
+    _rra_free="${3:-}"
     echo "" >&2
     printf "  %s\n" "$_rra_prompt" >&2
-    [ -n "$_rra_eg" ] && printf "    %s\n" "$_rra_eg" >&2
+    echo "" >&2
+    if [ -n "$_rra_free" ]; then
+        printf "    想写什么都行，一段话也行。\n" >&2
+    elif [ -n "$_rra_eg" ]; then
+        printf "    %s\n" "$_rra_eg" >&2
+    fi
     printf "    （不想写就直接回车）\n" >&2
     printf "  > " >&2
     _rra_ans=""
@@ -473,14 +482,15 @@ new_problem_report() {
     echo ""
     printf "======== 问题反馈 ========\n"
     echo ""
-    printf "  下面问你三句话，一句话一行，随手写就行。\n"
+    printf "  下面问你四句话，一句话一行，随手写就行。\n"
     printf "  写完会自动补上这台机器的情况，然后生成一份可以贴到网页上的报告。\n"
     _npr_a1=$(read_report_answer "$REPORT_Q1" "$REPORT_Q1_EG")
     _npr_a2=$(read_report_answer "$REPORT_Q2" "$REPORT_Q2_EG")
     _npr_a3=$(read_report_answer "$REPORT_Q3" "$REPORT_Q3_EG")
-    if [ -z "$_npr_a1" ] && [ -z "$_npr_a2" ] && [ -z "$_npr_a3" ]; then
+    _npr_a4=$(read_report_answer "$REPORT_Q4" "" "free")
+    if [ -z "$_npr_a1" ] && [ -z "$_npr_a2" ] && [ -z "$_npr_a3" ] && [ -z "$_npr_a4" ]; then
         echo ""
-        printf "  三句都空着。这样的报告发出去，对方只能反问你要细节。\n"
+        printf "  四句都空着。这样的报告发出去，对方只能反问你要细节。\n"
         printf "  还是要生成吗？(y/N) "
         _npr_go=""
         IFS= read -r _npr_go || true
@@ -513,6 +523,9 @@ new_problem_report() {
         echo ""
         printf "  %s\n" "$REPORT_Q3"
         if [ -n "$_npr_a3" ]; then printf "    %s\n" "$_npr_a3"; else printf "    （没填）\n"; fi
+        echo ""
+        printf "  %s\n" "$REPORT_Q4"
+        if [ -n "$_npr_a4" ]; then printf "    %s\n" "$_npr_a4"; else printf "    （没填）\n"; fi
         echo ""
         echo "---------------- 当前状态 ----------------"
         # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
@@ -833,8 +846,16 @@ show_status() {
     [ "$_pn" != "0" ] && echo ""
 
     # ---- 参考信息：正常项 ----
+    # 分组之间空一行（与 Windows 侧同一套）：八行数据紧贴在一起的观感是"一坨字"，
+    # 眼睛找不到落点。分三组——进程与自启（后台在不在）、代理与变量（链路通不通）、
+    # 终端同步（已开的窗口跟不跟得上）。组内紧凑、组间留白。
     [ -n "$_m" ] && _status_row "监控进程" "运行中 (PID $_m)" ok
     [ "$_autorun_ok" = "1" ] && _status_row "开机自启" "已启用" ok
+    if [ -n "$_m" ] || [ "$_autorun_ok" = "1" ]; then
+        if [ -n "$_port" ] || [ "$_port_unknown" = "1" ] || [ -n "$_cur" ]; then
+            echo ""
+        fi
+    fi
     if [ -n "$_port" ]; then
         _status_row "翻墙代理" "已开启（本地端口 $_port 监听中）" ok
     elif [ "$_port_unknown" = "1" ]; then
@@ -842,7 +863,6 @@ show_status() {
     else
         _status_row "翻墙代理" "未检测到（当前无翻墙代理在运行）" dim
     fi
-    [ "$_ts_state" = "ok" ] && _status_row "终端同步" "已生效（已开着的窗口敲回车即跟上）" ok
     # 代理变量只有"已注入且活着且监控在跑"才进参考区；其余分支上半段已经说过，
     # 这里再打一遍就是同一件事说两次。
     if [ -n "$_cur" ] && [ "$_cur_alive" = "1" ] && [ -n "$_m" ]; then
@@ -853,6 +873,11 @@ show_status() {
         # 同时命中：同一屏里"代理变量"出现两次、说法还相反。
         _status_row "代理变量" "无（直连状态）" dim
     fi
+    if [ "$_ts_state" = "ok" ]; then
+        echo ""
+        _status_row "终端同步" "已生效（已开着的窗口敲回车即跟上）" ok
+    fi
+    echo ""
 
     # 版本那三行：正常时压成一行。原来"本地版本/最新版本/更新状态"各占一行、
     # 与"监控未运行"平级，等于把对普通用户没有行动价值的信息和要靠它行动的信息摆成一样重。

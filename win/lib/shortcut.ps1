@@ -620,20 +620,27 @@ function Get-InstalledPrograms {
 
 # 高级功能主页面。第一次进来的人什么都不知道，所以先讲"为什么需要"，
 # 再讲"能做什么"，最后讲"要注意什么"。解释压在 3 行以内。
+#
+# 空行排列与帮助页同一套规矩：标题**上下各空一行**，内容块之间分开。
+# 这里也遵守"不要手写不一致"——每一节都是"空行、标题、空行、内容"，
+# 四节结构一模一样，加一节照抄一段即可。
 function Get-AdvancedPageLines {
     return @(
         @{ Role='title';   Text='======== 高级功能 ========' },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  为什么需要它' },
+        @{ Role='blank';   Text='' },
         @{ Role='text';    Text='    有些程序只认启动那一刻的环境变量，不会自己去找代理。' },
         @{ Role='text';    Text='    而资源管理器的环境可能在开机时就固定了，之后代理怎么变它都收不到。' },
         @{ Role='text';    Text='    这里的快捷方式会在启动前先读一次代理，直接交给程序，绕开那一环。' },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  能做什么' },
+        @{ Role='blank';   Text='' },
         @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
         @{ Role='item';    Text='    2  管理已建的                 看状态、删掉不要的' },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  要注意' },
+        @{ Role='blank';   Text='' },
         @{ Role='dim';     Text='    程序已经开着的，点了不会换代理，必须先关掉再点。' },
         @{ Role='dim';     Text='    微软商店装的应用（UWP）不支持，它们没有独立的 exe 路径。' },
         @{ Role='blank';   Text='' },
@@ -863,7 +870,7 @@ function Invoke-NewProxyShortcutFlow {
     Clear-Screen
     if ($r.Ok) {
         Write-Styled 'ok' ('  [完成] ' + $(if($willOverwrite){'已覆盖：'}else{'已创建：'}))
-        Write-Styled 'dim' ('         ' + $r.Path)
+        Write-Styled 'dim' ('    ' + $r.Path)
         Write-Host ''
         Write-Styled 'text' '  原来的图标没动，两个可以同时用。'
         Write-Styled 'dim'  ('  启动脚本在：' + $r.LauncherPath)
@@ -894,7 +901,7 @@ function Invoke-NewProxyShortcutFlow {
             Write-Host ''
             if ($r2.Ok) {
                 Write-Styled 'ok' '  [完成] 已覆盖：'
-                Write-Styled 'dim' ('         ' + $r2.Path)
+                Write-Styled 'dim' ('    ' + $r2.Path)
             } else {
                 Write-Styled 'warn' ('  [失败] 没能覆盖：' + $r2.Reason)
             }
@@ -941,25 +948,28 @@ function Invoke-ManageProxyShortcuts {
                 # （固定到任务栏时 Windows 会复制一份），不带位置的话两行内容一模一样。
                 # 名字本身可能已经带括号（''Antigravity（走代理）''），后面再接一个''（桌面）''
                 # 连成三个括号读着别扭。中间加分隔点，两段身份各自清楚。
-                Write-Styled 'item' ('    ' + $idx.ToString().PadLeft(2) + '  ' + $r.Name + '  ·  ' + $r.Where)
-                Write-Styled $stateRole ('        状态  ' + $stateText)
+                # 缩进与帮助页同一套：条目 2 格、明细 4 格。
+                # 原来是 4/8 格，加上"状态  "这种两字标签后，值被推到屏幕中段偏右，
+                # 长路径一折行就贴到右边框——观感上整块内容都在飘。左对齐才稳。
+                Write-Styled 'item' ('  ' + $idx.ToString().PadLeft(2) + '  ' + $r.Name + '  ·  ' + $r.Where)
+                Write-Styled $stateRole ('    状态  ' + $stateText)
                 # 完整路径 + 位置都写出来。路径长到折行也照写：
                 # 截短了用户就没法照着去找、也没法复制，而这一屏的作用正是"我要删哪一个"。
                 # 折行自己来（续行对齐到值那一列）：交给终端折的话续行从第 0 列开始，
                 # 那半截路径看起来像另一个条目的内容，反而更容易认错行。
-                # 续行缩进 14 = "        图标  " 的可见宽度（8 空格 + 图标两字 + 2 空格）。
-                $wrapW = (Get-ConsoleWidth) - 16
-                $lnkLines = @(Split-DisplayText $r.LnkPath $wrapW 14)
+                # 续行缩进 10 = "    图标  " 的可见宽度（4 空格 + 图标两字 + 2 空格）。
+                $wrapW = (Get-ConsoleWidth) - 12
+                $lnkLines = @(Split-DisplayText $r.LnkPath $wrapW 10)
                 for ($k = 0; $k -lt $lnkLines.Count; $k++) {
-                    if ($k -eq 0) { Write-Styled 'dim' ('        图标  ' + $lnkLines[$k].TrimStart()) }
+                    if ($k -eq 0) { Write-Styled 'dim' ('    图标  ' + $lnkLines[$k].TrimStart()) }
                     else { Write-Styled 'dim' $lnkLines[$k] }
                 }
                 # 启动脚本被多个图标共用时说清楚：删掉这条不会弄坏别人。
                 $shareCount = @($recs | Where-Object { $_.LauncherPath -eq $r.LauncherPath }).Count
                 $shareNote = if ($shareCount -gt 1) { ('（' + $shareCount + ' 个图标共用）') } else { '' }
-                $vbsLines = @(Split-DisplayText ($r.LauncherPath + $shareNote) $wrapW 14)
+                $vbsLines = @(Split-DisplayText ($r.LauncherPath + $shareNote) $wrapW 10)
                 for ($k = 0; $k -lt $vbsLines.Count; $k++) {
-                    if ($k -eq 0) { Write-Styled 'dim' ('        脚本  ' + $vbsLines[$k].TrimStart()) }
+                    if ($k -eq 0) { Write-Styled 'dim' ('    脚本  ' + $vbsLines[$k].TrimStart()) }
                     else { Write-Styled 'dim' $vbsLines[$k] }
                 }
             }
@@ -970,16 +980,17 @@ function Invoke-ManageProxyShortcuts {
             # 用户完全可能把图标挪到别处（自己建的文件夹、移动硬盘），那不算错，
             # 所以措辞不能写成"图标已经被删了"——那会让他以为自己弄坏了什么。
             Write-Styled 'heading' '  这些启动脚本没有对应的图标'
+            Write-Host ''
             Write-Styled 'dim' '  （图标可能被你挪到别处了，也可能删掉了）'
             foreach ($o in $orphans) {
                 $idx++
-                Write-Styled 'item' ('    ' + $idx.ToString().PadLeft(2) + '  ' + $o.Name)
+                Write-Styled 'item' ('  ' + $idx.ToString().PadLeft(2) + '  ' + $o.Name)
                 if ($o.Target) {
-                    Write-Styled 'dim' ('        程序  ' + $o.Target)
+                    Write-Styled 'dim' ('    程序  ' + $o.Target)
                 } else {
-                    Write-Styled 'dim' '        程序  （这个脚本没记下是哪个程序，可能是旧版本建的）'
+                    Write-Styled 'dim' '    程序  （这个脚本没记下是哪个程序，可能是旧版本建的）'
                 }
-                Write-Styled 'dim'  ('        脚本  ' + $o.LauncherPath)
+                Write-Styled 'dim'  ('    脚本  ' + $o.LauncherPath)
             }
         }
         Write-Host ''
