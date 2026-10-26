@@ -148,7 +148,7 @@ uninstall_envproxy() {
         # 没有可交互的终端：不能问，也不能替使用者答应。
         # "问不到人就直接做"等于没有确认（Windows 侧实测过一次：管道里跑直接把工具卸干净了）。
         style_out warn "这里没法问你要不要卸载（没有可交互的终端），所以什么都不会做。"
-        style_out dim "  真的要卸载，请双击 打开菜单.command 选 6；"
+        style_out dim "  真的要卸载，请双击 打开菜单.command 选 7（一键恢复）；"
         style_out dim "  或者确认无误后加 --yes：bash envproxy.sh uninstall --yes"
         return 0
     fi
@@ -440,7 +440,10 @@ new_problem_report() {
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     _npr_target="$MONITOR_DIR/$_npr_name"
 
-    {
+    # 报告正文先拼进一个变量，再**原样**写到落点。
+    # 不写成"两处各 echo 一遍"：那样两处内容必然漂移，兜底那份会缺版本号与路径——
+    # 而那两个正是排查最需要的。Windows 侧也是"同一份文本写两次"。
+    _npr_body=$(
         echo "======== EnvProxy 问题报告 ========"
         echo "生成时间：$(date '+%Y-%m-%d %H:%M:%S')"
         _npr_ver=$(get_local_version 2>/dev/null)
@@ -449,12 +452,10 @@ new_problem_report() {
         echo "系统：$(uname -srm 2>/dev/null)"
         echo "Shell：${SHELL:-未知}    bash：${BASH_VERSION:-未知}"
         echo ""
-
         echo "---------------- 当前状态 ----------------"
         # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
         show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
         echo ""
-
         echo "---------------- 运行日志（最后 30 行） ----------------"
         if [ -f "$LOG_FILE" ]; then
             tail -n 30 "$LOG_FILE" 2>/dev/null | sed 's/^/  /'
@@ -462,17 +463,29 @@ new_problem_report() {
             echo "  （还没有日志：这个工具可能从未运行过）"
         fi
         echo ""
-
         echo "---------------- 位置 ----------------"
         echo "  程序目录：$SCRIPT_DIR"
         echo "  运行状态目录：$MONITOR_DIR"
         echo ""
         echo "=================================="
-        echo "这份报告含本机路径与端口，不含密码或账号。"
+        echo "这份报告含本机路径与端口。代理地址里的账号密码已经隐去。"
         echo "发给别人前可以先自己打开看一眼。"
-    } > "$_npr_target" 2>/dev/null
+    )
+
+    # 脱敏在**唯一汇聚点**：状态页必须如实显示代理地址（那是它的职责），
+    # 而报告是准备发给别人的。带认证的代理（http://user:pass@host:port）
+    # 原样落盘就是把明文密码写进一个"准备发出去"的文件。
+    _npr_body=$(printf '%s\n' "$_npr_body" | sed 's#://[^/@[:space:]]*@#://***@#g')
+
+    printf '%s\n' "$_npr_body" > "$_npr_target" 2>/dev/null
 
     # monitor/ 写不进去时退到临时目录：报告不能因为路径问题就生成不出来。
+    # 内容与上面完全一致，只是换个落点。
+    if [ ! -s "$_npr_target" ]; then
+        _npr_target="${TMPDIR:-/tmp}/$_npr_name"
+        printf '%s\n' "$_npr_body" > "$_npr_target" 2>/dev/null
+    fi
+
     if [ ! -s "$_npr_target" ]; then
         _npr_target="${TMPDIR:-/tmp}/$_npr_name"
         {
@@ -703,7 +716,7 @@ show_status() {
     elif [ -n "$_cur" ] && [ -z "$_m" ]; then
         _status_row "代理变量" "已注入（$_cur），但没人维护" warn
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
-        style_out dim "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
+        style_out dim "  打开菜单选 1 恢复监控；或选 7 一键恢复，把这批变量一并清掉。"
     elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是使用者自己停的）。补一句桥接，否则会被判定"坏了"。
@@ -1435,15 +1448,16 @@ _help_key_valid() {
 }
 
 # 菜单表：编号 | 名称 | 说明 | 分组 | 子命令。打印与分派共用它，加一项就一定会显示出来。
-# 分组只影响打印顺序；编号按使用频率从上往下连续排（1-4 日常、5-6 维护、0 退出）。
+# 分组只影响打印顺序；编号按使用频率从上往下连续排（1-4 日常、5 进阶、6-7 维护、8 支持、0 退出）。
 # 子命令为空表示"不跑任何东西"（退出项）。分派直接读这一列，
 # 不许再另写一份 case——两份清单必然漂移，症状是"表里加了、点了没反应"。
 # 格式固定为五个字段、四条竖线；少一条竖线字段会静默错位（菜单照常打印、不报错，
 # 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
-# 编号 5 在 Mac 上空缺：那边没有「高级功能」（DIVERGE(Mac): 从 Dock 启动的程序
-# 本来就拿得到 launchctl 设的变量，不需要额外做启动器，所以没有这一项）。
-# 留空而不是把后面的编号往前挤：两侧的编号是同一套（用户可能在两台机器上都用），
-# 挤动会让"选 6"在两边指不同的事。菜单渲染按表顺序打印，跳号不影响显示。
+#
+# 两侧共用同一套编号：同名项在两台机器上必须是同一个数字（用户可能两台都用）。
+# Mac 侧编号 5 空缺——那边没有「高级功能」（DIVERGE(Mac): 从 Dock 启动的程序
+# 本来就拿得到 launchctl 设的变量，不需要额外做启动器）。留空而不是把后面的
+# 编号往前挤：挤动会让「选 7」在两边指不同的事。跳号不影响显示，渲染按表顺序打印。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'

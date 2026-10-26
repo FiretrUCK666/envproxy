@@ -2440,6 +2440,13 @@ try {
 
     # 三个陈旧阈值必须递增，且最旧的等于心跳上限（同一个语义只能有一个数）
     Assert-Eq '快照：阈值递增' $true (($SnapshotFreshSec -lt $SnapshotUsableSec) -and ($SnapshotUsableSec -lt $SnapshotStaleSec))
+    # 报告会发给别人，代理地址里的账号密码必须在这一处隐去。
+    # 断言的正是"状态页如实显示、报告里脱敏"这条边界：只测脱敏函数，不测整条报告链——
+    # 报告还依赖实时状态与日志，测它会让这条断言变成环境测试。
+    Assert-Eq '报告脱敏：带密码的地址被隐去' 'http://***@127.0.0.1:7890' (Hide-ProxyCredential 'http://user:MySecretPwd@127.0.0.1:7890')
+    Assert-Eq '报告脱敏：socks5 同样隐去' 'socks5://***@127.0.0.1:1080' (Hide-ProxyCredential 'socks5://u:p@127.0.0.1:1080')
+    Assert-Eq '报告脱敏：无凭据的地址原样保留' 'http://127.0.0.1:7890' (Hide-ProxyCredential 'http://127.0.0.1:7890')
+    Assert-Eq '报告脱敏：只动 userinfo，不动主机端口' $true ((Hide-ProxyCredential '代理变量 : 已注入 (http://u:p@h:1)') -eq '代理变量 : 已注入 (http://***@h:1)')
     Assert-Eq '快照：最旧阈值等于心跳上限' $HeartbeatMaxSec $SnapshotStaleSec
 } finally {
     $StateSnapshotFile = $realSnapFile

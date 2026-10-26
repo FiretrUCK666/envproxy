@@ -380,6 +380,18 @@ function ConvertTo-ProxyUrl([string]$Raw) {
     return $v
 }
 
+# 把代理地址里的账号密码隐去，别的部分原样保留：http://user:pass@host:port -> http://***@host:port
+#
+# 为什么必须有这一处：状态页要把"代理变量现在是什么"如实地打出来（那是它的职责），
+# 而问题报告复用状态页的输出去发给别人。带认证的代理（公司代理、本地 mitmproxy）写的正是
+# http://user:pass@host:port 这种形式，原样落盘就是把用户的明文密码写进一个"准备发出去"的文件。
+# 所以：屏幕上如实显示，落进报告的走这一步——**报告里有一处没脱敏就是事故**。
+# 只认 URL 里 userinfo 的写法（:// 之后、@ 之前的冒号），不碰地址的其余任何部分。
+function Hide-ProxyCredential([string]$Text) {
+    if (-not $Text) { return $Text }
+    return [regex]::Replace($Text, '(?<=://)[^/@\s]+(?=@)', '***')
+}
+
 # 文件的 sha256（小写十六进制）。
 # 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
 # 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），

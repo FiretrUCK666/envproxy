@@ -545,7 +545,7 @@ EnvProxy\
 |---|---|---|
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | 定位脚本，登录时用它找到程序 |
 | | `terminal.env` | 给 Git Bash 看的镜像文件：当前状态和代理地址 |
-| | `launchers\` | 走代理的快捷方式用的启动脚本（菜单选 7 建了才会有） |
+| | `launchers\` | 走代理的快捷方式用的启动脚本（菜单选 5 建了才会有） |
 | `HKCU\Environment` | 那 5 个代理变量 | 真正让终端走代理的地方 |
 | `HKCU\Software\EnvProxy` | `ScriptPath` 值 + `Owned`、`Backup` 两键 | 程序在哪；我们写过什么；你的原值 |
 | `HKCU\...\Run` | 一条启动项 | 登录时自动把后台程序拉起来 |

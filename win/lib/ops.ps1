@@ -169,7 +169,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     } else {
         # 没有可交互的控制台：不能问，也不能替用户答应。
         Write-Styled 'warn' "这里没法问你要不要卸载（没有可交互的控制台），所以什么都不会做。"
-        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 6；"
+        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 7（一键恢复）；"
         Write-Styled 'dim' "  或者确认无误后加 -Yes：envproxy.ps1 -Uninstall -Yes"
         return
     }
@@ -430,7 +430,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     } else {
         Write-Styled 'warn' "[未完成] 这几处没清干净："
         foreach ($d in $dirty) { Write-Styled 'warn' ("        - " + $d) }
-        Write-Styled 'warn' "        再打开菜单选 6（一键恢复）试一次；还不行就照上面列出的位置手动删。"
+        Write-Styled 'warn' "        再打开菜单选 7（一键恢复）试一次；还不行就照上面列出的位置手动删。"
     }
 }
 
@@ -510,7 +510,13 @@ function Format-StatusLines($st) {
         $pending = ''
         if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') {
             if ($null -ne $st.Snapshot.AgeSec -and $st.Snapshot.AgeSec -gt $SnapshotFreshSec) {
-                $ageNote = ('（{0} 秒前的判断）' -f $st.Snapshot.AgeSec)
+                # 两档措辞：刚过新鲜线只是"稍旧"；过了可用线要明说这可能不代表现在——
+                # 同一句话会让 30 秒和 200 秒看起来一样，而后者离"监控可能已经死了"很近。
+                $ageNote = if ($st.Snapshot.AgeSec -gt $SnapshotUsableSec) {
+                    ('（{0} 秒前的判断，可能已不是现在的情况）' -f $st.Snapshot.AgeSec)
+                } else {
+                    ('（{0} 秒前的判断）' -f $st.Snapshot.AgeSec)
+                }
             }
             # 正在去抖：状态已经疑似变了，但还没确认够轮数
             $ps = ''
@@ -731,7 +737,11 @@ function New-ProblemReport {
     if (-not (Test-Path -LiteralPath $MonitorDir)) { $null = New-Item -ItemType Directory -Path $MonitorDir -Force -ErrorAction SilentlyContinue }
 
     $L = New-Object System.Collections.ArrayList
-    $add = { param($s) [void]$L.Add([string]$s) }
+    # 报告里的每一行都从这里过，所以脱敏放在这里——**唯一汇聚点**。
+    # 状态页必须如实显示代理地址（那是它的职责），而报告是准备发给别人的，
+    # 带认证的代理（http://user:pass@host:port）原样落盘就是把明文密码写进文件。
+    # 放在这而不是逐个调用点改：漏一处就是事故，而这里没有第二处可漏。
+    $add = { param($s) [void]$L.Add((Hide-ProxyCredential ([string]$s))) }
     $rule = { param($title) [void]$L.Add('---------------- ' + $title + ' ----------------') }
 
     & $add '======== EnvProxy 问题报告 ========'
@@ -804,7 +814,7 @@ function New-ProblemReport {
     & $add ''
 
     & $add '=================================='
-    & $add '这份报告含本机路径与端口，不含密码或账号。'
+    & $add '这份报告含本机路径与端口。代理地址里的账号密码已经隐去。'
     & $add '发给别人前可以先自己打开看一眼。'
 
     $text = ($L -join "`r`n")
@@ -1093,7 +1103,7 @@ function Show-StatusSnapshot($st) {
     } elseif ($st.ProxyValue -and -not $m) {
         Write-StatusRow '代理变量' ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
-        Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
+        Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 7 一键恢复，把这批变量一并清掉。"
     }
     if ($st.TermSync) {
         # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。

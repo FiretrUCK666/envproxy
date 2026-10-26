@@ -1023,7 +1023,7 @@ function Invoke-ManageProxyShortcuts {
     }
 }
 
-# 高级功能的总入口：菜单选 7 进来就是这里。
+# 高级功能的总入口：菜单选 5 进来就是这里。
 function Show-AdvancedMenu {
     while ($true) {
         Show-AdvancedPage

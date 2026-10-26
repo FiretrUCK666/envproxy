@@ -552,7 +552,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 |---|---|---|
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | locator; the login item uses it to find the program |
 | | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
-| | `launchers\` | startup scripts for the proxy-aware shortcuts (only exists once you use menu 7) |
+| | `launchers\` | startup scripts for the proxy-aware shortcuts (only exists once you use menu 5) |
 | `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
 | `HKCU\Software\EnvProxy` | `ScriptPath` + `Owned`/`Backup` | where it is; what we wrote; yours |
 | `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
