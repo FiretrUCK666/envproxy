@@ -1,39 +1,39 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="blockersTitle blockersDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="448.4" viewBox="0 0 1200 448" role="img" aria-labelledby="blockersTitle blockersDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="blockersTitle">Mac 首次安装三道坎</title>
   <desc id="blockersDesc">三个并列的拦路虎。双击被系统拦下去系统设置点仍要打开，终端命令永远有效；丢了执行位就跑一次 chmod 加回来，从 Windows 拷过来常见；首次登录弹窗要访问文稿桌面点好就行，点了不允许也能装回来。</desc>
 
-  <rect width="1200" height="380" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="378.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="448.4" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.89" width="1198.5" height="446.63" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Mac 首次安装三道坎</text>
+    <text x="56" y="82.6" font-size="32" font-weight="700" fill="#E9EFF8">Mac 首次安装三道坎</text>
   </g>
 
   <g id="boxes" fill="none" stroke="#2A3B58" stroke-width="1.5">
-    <rect x="56" y="100" width="320" height="190" rx="12"/>
-    <rect x="440" y="100" width="320" height="190" rx="12"/>
-    <rect x="824" y="100" width="320" height="190" rx="12"/>
+    <rect x="56" y="118" width="320" height="224.2" rx="12"/>
+    <rect x="440" y="118" width="320" height="224.2" rx="12"/>
+    <rect x="824" y="118" width="320" height="224.2" rx="12"/>
   </g>
 
   <g id="numbers" font-size="22" font-weight="700" fill="#33486B" text-anchor="middle">
-    <text x="216" y="140">1</text>
-    <text x="600" y="140">2</text>
-    <text x="984" y="140">3</text>
+    <text x="216" y="165.2">1</text>
+    <text x="600" y="165.2">2</text>
+    <text x="984" y="165.2">3</text>
   </g>
 
   <g id="labels">
-    <text x="216" y="176" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">双击被拦</text>
-    <text x="216" y="214" font-size="20" fill="#C7D3E3" text-anchor="middle">去设置点「仍要打开」</text>
-    <text x="216" y="248" font-size="18" fill="#94A6BE" text-anchor="middle">终端命令永远有效</text>
-    <text x="600" y="176" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">丢了执行位</text>
-    <text x="600" y="214" font-size="20" fill="#C7D3E3" text-anchor="middle">跑一次 chmod 加回来</text>
-    <text x="600" y="248" font-size="18" fill="#94A6BE" text-anchor="middle">从 Windows 拷来常见</text>
-    <text x="984" y="176" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">问能不能访问文稿</text>
-    <text x="984" y="214" font-size="20" fill="#C7D3E3" text-anchor="middle">点「好」就行</text>
-    <text x="984" y="248" font-size="18" fill="#94A6BE" text-anchor="middle">点了不允许也能装回来</text>
+    <text x="216" y="207.68" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">双击被拦</text>
+    <text x="216" y="252.52" font-size="20" fill="#C7D3E3" text-anchor="middle">去设置点「仍要打开」</text>
+    <text x="216" y="292.64" font-size="18" fill="#94A6BE" text-anchor="middle">终端命令永远有效</text>
+    <text x="600" y="207.68" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">丢了执行位</text>
+    <text x="600" y="252.52" font-size="20" fill="#C7D3E3" text-anchor="middle">跑一次 chmod 加回来</text>
+    <text x="600" y="292.64" font-size="18" fill="#94A6BE" text-anchor="middle">从 Windows 拷来常见</text>
+    <text x="984" y="207.68" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">问能不能访问文稿</text>
+    <text x="984" y="252.52" font-size="20" fill="#C7D3E3" text-anchor="middle">点「好」就行</text>
+    <text x="984" y="292.64" font-size="18" fill="#94A6BE" text-anchor="middle">点了不允许也能装回来</text>
   </g>
 
   <g id="footer">
-    <text x="56" y="336" font-size="20" fill="#C7D3E3">三道都有退路：都不用重装这个工具，也不用关掉系统保护。</text>
+    <text x="56" y="396.48" font-size="20" fill="#C7D3E3">三道都有退路：都不用重装这个工具，也不用关掉系统保护。</text>
   </g>
 </svg>

@@ -1,55 +1,55 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="416" viewBox="0 0 1200 416" role="img" aria-labelledby="macTitle macDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="482.56" viewBox="0 0 1200 483" role="img" aria-labelledby="macTitle macDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Noto Sans CJK SC', sans-serif">
   <title id="macTitle">Why macOS writes through two paths</title>
   <desc id="macDesc">macOS has no registry, so the Mac build writes through two paths at the same time. The upper one: a terminal reads the shell hook on startup (written into ~/.zshenv and ~/.zshrc), the hook loads ~/.envproxy/proxy.env, and the variables take effect. The lower one: an app launched from the Dock is covered by launchctl setenv, which hands the variables to the whole session. Both paths write the same 9 variables and move together; 5 of them are the standard spellings and 4 are lowercase, because macOS is case sensitive and the two spellings are separate variables.</desc>
 
-  <rect width="1200" height="416" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="414.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="482.56" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.87" width="1198.5" height="480.82" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">Why macOS writes through two paths</text>
-    <text x="56" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">no registry, so terminals and Dock apps each get a path</text>
+    <text x="56" y="85.84" font-size="32" font-weight="700" fill="#E9EFF8">Why macOS writes through two paths</text>
+    <text x="56" y="122.96" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">no registry, so terminals and Dock apps each get a path</text>
   </g>
 
-  <g id="terminal-path">
-    <rect x="56" y="140" width="210" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="165.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Terminal</text>
-    <text x="76" y="189.5" dominant-baseline="central" font-size="18" fill="#94A6BE">a window you open</text>
+  <g id="terminalpath">
+    <rect x="56" y="162.4" width="210" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="191.98" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Terminal</text>
+    <text x="76" y="219.82" dominant-baseline="central" font-size="18" fill="#94A6BE">a window you open</text>
 
-    <rect x="290" y="140" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="310" y="164.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
-    <text x="310" y="188.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
+    <rect x="290" y="162.4" width="250" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="310" y="190.53" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
+    <text x="310" y="218.37" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
 
-    <rect x="564" y="140" width="294" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="584" y="163.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
-    <text x="584" y="187.5" dominant-baseline="central" font-size="18" fill="#94A6BE">new terminals load this file</text>
+    <rect x="564" y="162.4" width="294" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="584" y="189.66" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
+    <text x="584" y="217.5" dominant-baseline="central" font-size="18" fill="#94A6BE">new terminals load this file</text>
   </g>
 
-  <g id="dock-path">
-    <rect x="56" y="248" width="270" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="273.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">App from the Dock</text>
-    <text x="76" y="297.5" dominant-baseline="central" font-size="18" fill="#94A6BE">started from the icon</text>
+  <g id="dockpath">
+    <rect x="56" y="287.68" width="270" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="317.26" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">App from the Dock</text>
+    <text x="76" y="345.1" dominant-baseline="central" font-size="18" fill="#94A6BE">started from the icon</text>
 
-    <rect x="352" y="248" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="372" y="271.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
-    <text x="372" y="295.75" dominant-baseline="central" font-size="18" fill="#94A6BE">for the whole session</text>
+    <rect x="352" y="287.68" width="250" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="372" y="315.23" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
+    <text x="372" y="343.07" dominant-baseline="central" font-size="18" fill="#94A6BE">for the whole session</text>
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M272 176H284M278 170L284 176L278 182"/>
-    <path d="M546 176H558M552 170L558 176L552 182"/>
-    <path d="M864 176H874M868 170L874 176L868 182"/>
-    <path d="M332 284H346M340 278L346 284L340 290"/>
-    <path d="M608 284H874M868 278L874 284L868 290"/>
+    <path d="M272 204.16H284M278 197.2L284 204.16L278 211.12"/>
+    <path d="M546 204.16H558M552 197.2L558 204.16L552 211.12"/>
+    <path d="M864 204.16H874M868 197.2L874 204.16L868 211.12"/>
+    <path d="M332 329.44H346M340 322.48L346 329.44L340 336.4"/>
+    <path d="M608 329.44H874M868 322.48L874 329.44L868 336.4"/>
   </g>
 
   <g id="variables">
-    <rect x="880" y="140" width="264" height="180" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
-    <text x="912" y="169.75" dominant-baseline="central" font-size="26" font-weight="700" fill="#E9EFF8">Variables</text>
-    <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 of them</text>
-    <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 standard spellings</text>
-    <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 lowercase</text>
-      <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">both move together</text>
+    <rect x="880" y="162.4" width="264" height="208.8" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
+    <text x="912" y="196.91" dominant-baseline="central" font-size="26" font-weight="700" fill="#E9EFF8">Variables</text>
+    <text x="912" y="240.99" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 of them</text>
+    <text x="912" y="275.79" dominant-baseline="central" font-size="18" fill="#94A6BE">5 standard spellings</text>
+    <text x="912" y="301.31" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 lowercase</text>
+      <text x="912" y="343.07" dominant-baseline="central" font-size="18" fill="#34D399">both move together</text>
   </g>
 
-  <text x="56" y="372" font-size="20" fill="#C7D3E3">Windows writes the registry and broadcasts once; Mac has no registry, so both paths are written.</text>
+  <text x="56" y="431.52" font-size="20" fill="#C7D3E3">Windows writes the registry and broadcasts once; Mac has no registry, so both paths are written.</text>
 </svg>

@@ -1,43 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="statesTitle statesDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="448.4" viewBox="0 0 1200 448" role="img" aria-labelledby="statesTitle statesDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="statesTitle">日常三态：都不用管</title>
   <desc id="statesDesc">三个并列的状态格。连上翻墙软件就写入整套代理变量，6 到 10 秒；断开或退出就删掉变量恢复直连，退出约 8 秒，只断开约 15 到 50 秒，连回来约 10 到 25 秒；换端口、换软件、反复抖动都自动跟上，代理变量里的端口号也跟着改写成新的。重启电脑、搬家、双开也都不用管。</desc>
 
-  <rect width="1200" height="380" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="378.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="448.4" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.89" width="1198.5" height="446.63" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">日常三态：都不用管</text>
+    <text x="56" y="82.6" font-size="32" font-weight="700" fill="#E9EFF8">日常三态：都不用管</text>
   </g>
 
   <g id="boxes" fill="none" stroke="#2A3B58" stroke-width="1.5">
-    <rect x="56" y="100" width="320" height="190" rx="12"/>
-    <rect x="440" y="100" width="320" height="190" rx="12"/>
-    <rect x="824" y="100" width="320" height="190" rx="12"/>
+    <rect x="56" y="118" width="320" height="224.2" rx="12"/>
+    <rect x="440" y="118" width="320" height="224.2" rx="12"/>
+    <rect x="824" y="118" width="320" height="224.2" rx="12"/>
   </g>
 
   <g id="arrows" stroke="#33486B" stroke-width="2" fill="none">
-    <path d="M384 195H432"/>
-    <path d="M420 187L432 195L420 203"/>
-    <path d="M768 195H816"/>
-    <path d="M804 187L816 195L804 203"/>
+    <path d="M384 230.1H432"/>
+    <path d="M420 220.66L432 230.1L420 239.54"/>
+    <path d="M768 230.1H816"/>
+    <path d="M804 220.66L816 230.1L804 239.54"/>
   </g>
 
   <g id="labels">
-    <text x="216" y="152" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">连上翻墙软件</text>
-    <text x="216" y="192" font-size="20" fill="#C7D3E3" text-anchor="middle">写入整套代理变量</text>
-    <text x="216" y="232" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">6–10 秒</text>
-    <text x="216" y="260" font-size="18" fill="#94A6BE" text-anchor="middle">从打开到环境变量写好</text>
-    <text x="600" y="152" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">断开或退出</text>
-    <text x="600" y="192" font-size="20" fill="#C7D3E3" text-anchor="middle">删掉变量恢复直连</text>
-    <text x="600" y="232" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">退出约 8 秒</text>
-    <text x="600" y="260" font-size="18" fill="#94A6BE" text-anchor="middle">仅断开约 15–50 秒</text>
-    <text x="984" y="152" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">换端口 · 抖动</text>
-    <text x="984" y="192" font-size="20" fill="#C7D3E3" text-anchor="middle">自动跟上新端口</text>
-    <text x="984" y="232" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">变量改成新端口</text>
-    <text x="984" y="260" font-size="18" fill="#94A6BE" text-anchor="middle">换软件也一样</text>
+    <text x="216" y="179.36" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">连上翻墙软件</text>
+    <text x="216" y="226.56" font-size="20" fill="#C7D3E3" text-anchor="middle">写入整套代理变量</text>
+    <text x="216" y="273.76" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">6–10 秒</text>
+    <text x="216" y="306.8" font-size="18" fill="#94A6BE" text-anchor="middle">从打开到环境变量写好</text>
+    <text x="600" y="179.36" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">断开或退出</text>
+    <text x="600" y="226.56" font-size="20" fill="#C7D3E3" text-anchor="middle">删掉变量恢复直连</text>
+    <text x="600" y="273.76" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">退出约 8 秒</text>
+    <text x="600" y="306.8" font-size="18" fill="#94A6BE" text-anchor="middle">仅断开约 15–50 秒</text>
+    <text x="984" y="179.36" font-size="24" font-weight="700" fill="#E9EFF8" text-anchor="middle">换端口 · 抖动</text>
+    <text x="984" y="226.56" font-size="20" fill="#C7D3E3" text-anchor="middle">自动跟上新端口</text>
+    <text x="984" y="273.76" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">变量改成新端口</text>
+    <text x="984" y="306.8" font-size="18" fill="#94A6BE" text-anchor="middle">换软件也一样</text>
   </g>
 
   <g id="footer">
-    <text x="56" y="336" font-size="20" fill="#C7D3E3">重启电脑、搬家、同时开两个：都不用管，它自己会回来。</text>
+    <text x="56" y="396.48" font-size="20" fill="#C7D3E3">重启电脑、搬家、同时开两个：都不用管，它自己会回来。</text>
   </g>
 </svg>

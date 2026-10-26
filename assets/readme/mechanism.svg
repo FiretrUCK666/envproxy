@@ -1,75 +1,75 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="580" viewBox="0 0 1200 580" role="img" aria-labelledby="mechTitle mechDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="649.6" viewBox="0 0 1200 650" role="img" aria-labelledby="mechTitle mechDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="mechTitle">EnvProxy 的三层验证流程</title>
   <desc id="mechDesc">流程说明：每 2–3 秒轮询一次，依次过三道门——本机端口在监听、端口会回答 CONNECT 握手、通过它访问外网真实可达。三层都通过就写入整套代理变量；连续失败满 10 秒且至少 3 次才删除整套变量、恢复直连（单次失败不算）。</desc>
 
-  <rect width="1200" height="580" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="578.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="649.6" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.84" width="1198.5" height="647.92" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="76" font-size="32" font-weight="700" fill="#E9EFF8">三层验证：缺一层都不算翻墙</text>
-    <text x="56" y="110" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">每 2–3 秒轮询一次 · 只认流量真相，不认软件品牌</text>
+    <text x="56" y="85.12" font-size="32" font-weight="700" fill="#E9EFF8">三层验证：缺一层都不算翻墙</text>
+    <text x="56" y="123.2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">每 2–3 秒轮询一次 · 只认流量真相，不认软件品牌</text>
   </g>
 
   <g id="gates">
     <g id="gate-1">
-      <rect x="56" y="140" width="340" height="216" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="80" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 1 层</text>
-      <text x="80" y="222" font-size="26" font-weight="700" fill="#E9EFF8">端口在监听</text>
-      <text x="80" y="256" font-size="19" fill="#94A6BE">本机有没有端口在监听</text>
-      <text x="80" y="282" font-size="19" fill="#94A6BE">（全端口兜底扫描）</text>
-      <rect x="80" y="298" width="155" height="34" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="98" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">7078 LISTEN</text>
+      <rect x="56" y="156.8" width="340" height="241.92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+      <text x="80" y="201.6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 1 层</text>
+      <text x="80" y="248.64" font-size="26" font-weight="700" fill="#E9EFF8">端口在监听</text>
+      <text x="80" y="286.72" font-size="19" fill="#94A6BE">本机有没有端口在监听</text>
+      <text x="80" y="315.84" font-size="19" fill="#94A6BE">（全端口兜底扫描）</text>
+      <rect x="80" y="333.76" width="155" height="38.08" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="98" y="359.52" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">7078 LISTEN</text>
     </g>
 
     <g id="gate-2">
-      <rect x="424" y="140" width="340" height="216" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="448" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 2 层</text>
-      <text x="448" y="222" font-size="26" font-weight="700" fill="#E9EFF8">CONNECT 握手</text>
-      <text x="448" y="256" font-size="19" fill="#94A6BE">这个端口会回答代理握手吗？</text>
-      <text x="448" y="282" font-size="19" fill="#94A6BE">（本机零流量，不出网）</text>
-      <rect x="448" y="298" width="166" height="34" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="466" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">HTTP/1.x 200</text>
+      <rect x="424" y="156.8" width="340" height="241.92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+      <text x="448" y="201.6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 2 层</text>
+      <text x="448" y="248.64" font-size="26" font-weight="700" fill="#E9EFF8">CONNECT 握手</text>
+      <text x="448" y="286.72" font-size="19" fill="#94A6BE">这个端口会回答代理握手吗？</text>
+      <text x="448" y="315.84" font-size="19" fill="#94A6BE">（本机零流量，不出网）</text>
+      <rect x="448" y="333.76" width="166" height="38.08" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="466" y="359.52" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">HTTP/1.x 200</text>
     </g>
 
     <g id="gate-3">
-      <rect x="792" y="140" width="340" height="216" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="816" y="180" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 3 层</text>
-      <text x="816" y="222" font-size="26" font-weight="700" fill="#E9EFF8">真实节点连通</text>
-      <text x="816" y="256" font-size="19" fill="#94A6BE">通过它访问一次外网</text>
-      <text x="816" y="282" font-size="19" fill="#94A6BE">（只等响应头，不读正文）</text>
-      <rect x="816" y="298" width="224" height="34" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="834" y="321" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">6 个端点 · 快路优先</text>
+      <rect x="792" y="156.8" width="340" height="241.92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+      <text x="816" y="201.6" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8" letter-spacing="1">第 3 层</text>
+      <text x="816" y="248.64" font-size="26" font-weight="700" fill="#E9EFF8">真实节点连通</text>
+      <text x="816" y="286.72" font-size="19" fill="#94A6BE">通过它访问一次外网</text>
+      <text x="816" y="315.84" font-size="19" fill="#94A6BE">（只等响应头，不读正文）</text>
+      <rect x="816" y="333.76" width="224" height="38.08" rx="8" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="834" y="359.52" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">6 个端点 · 快路优先</text>
     </g>
   </g>
 
-  <g id="flow-arrows" fill="none" stroke="#7A8CA6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M402 240 L418 248 L402 256"/>
-    <path d="M770 240 L786 248 L770 256"/>
+  <g id="flowarrows" fill="none" stroke="#7A8CA6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M402 268.8L418 277.76L402 286.72"/>
+    <path d="M770 268.8L786 277.76L770 286.72"/>
   </g>
 
   <g id="branch" fill="none" stroke="#33486B" stroke-width="2" stroke-linecap="round">
-    <path d="M962 356 L962 374"/>
-    <path d="M316 374 L962 374"/>
-    <path d="M316 374 L316 392"/>
-    <path d="M884 374 L884 392"/>
+    <path d="M962 398.72L962 418.88"/>
+    <path d="M316 418.88L962 418.88"/>
+    <path d="M316 418.88L316 439.04"/>
+    <path d="M884 418.88L884 439.04"/>
   </g>
-  <text x="976" y="380" font-size="18" fill="#94A6BE">外网通不通？</text>
+  <text x="976" y="425.6" font-size="18" fill="#94A6BE">外网通不通？</text>
 
   <g id="outcome">
-    <g id="outcome-on">
-      <rect x="56" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="80" y="422.5" dominant-baseline="central" font-size="24" font-weight="700" fill="#34D399">通 → 写入整套代理变量</text>
-      <text x="80" y="452.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">HTTP_PROXY  HTTPS_PROXY  ALL_PROXY</text>
-      <text x="80" y="478.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">NO_PROXY  NODE_USE_ENV_PROXY</text>
+    <g id="outcomeon">
+      <rect x="56" y="439.04" width="520" height="125.44" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+      <text x="80" y="473.2" dominant-baseline="central" font-size="24" font-weight="700" fill="#34D399">通 → 写入整套代理变量</text>
+      <text x="80" y="506.8" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">HTTP_PROXY  HTTPS_PROXY  ALL_PROXY</text>
+      <text x="80" y="535.92" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#C7D3E3">NO_PROXY  NODE_USE_ENV_PROXY</text>
     </g>
 
-    <g id="outcome-off">
-      <rect x="624" y="392" width="520" height="112" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-      <text x="648" y="422" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">连续失败满 10 秒 → 删除整套变量</text>
-      <text x="648" y="452" dominant-baseline="central" font-size="18" fill="#94A6BE">「断开连接但软件内核还活着」</text>
-      <text x="648" y="478" dominant-baseline="central" font-size="18" fill="#94A6BE">至少 3 次都不通才判定，单次失败不算</text>
+    <g id="outcomeoff">
+      <rect x="624" y="439.04" width="520" height="125.44" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+      <text x="648" y="472.64" dominant-baseline="central" font-size="24" font-weight="700" fill="#94A6BE">连续失败满 10 秒 → 删除整套变量</text>
+      <text x="648" y="506.24" dominant-baseline="central" font-size="18" fill="#94A6BE">「断开连接但软件内核还活着」</text>
+      <text x="648" y="535.36" dominant-baseline="central" font-size="18" fill="#94A6BE">至少 3 次都不通才判定，单次失败不算</text>
     </g>
   </g>
 
-  <text x="56" y="534" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">同一套判据决定「写」还是「删」——换端口、换软件、双开，都不需要你操作。</text>
+  <text x="56" y="598.08" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">同一套判据决定「写」还是「删」——换端口、换软件、双开，都不需要你操作。</text>
 </svg>

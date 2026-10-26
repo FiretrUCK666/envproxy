@@ -1,48 +1,48 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="517" viewBox="0 0 1200 517" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="limitsTitle">Five technical limits</title>
   <desc id="limitsDesc">Five numbered technical limits, describing five things it does not do. First, pure TUN mode is not handled: it listens on no local port, so there is no port to judge, and all traffic already goes through it in that mode. Second, system proxy settings are not modified, because that would affect browsers and other programs; only user-level environment variables are written. Third, already-running programs are not changed, because a program reads the environment variables once at startup, so windows already open need one Enter press. Fourth, tools that need their own proxy configuration are out of scope, because they do not read these variables. Fifth, no interface is provided, because zero dependencies is the install premise.</desc>
 
-  <rect width="1200" height="470" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="468.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="517" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.83" width="1198.5" height="515.35" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">Five technical limits: what it does not do</text>
+    <text x="56" y="77" font-size="32" font-weight="700" fill="#E9EFF8">Five technical limits: what it does not do</text>
   </g>
 
   <g id="rules" stroke="#2A3B58" stroke-width="1.5">
-    <path d="M56 112H1144M56 182H1144M56 252H1144M56 322H1144M56 392H1144"/>
+    <path d="M56 123.2H1144M56 200.2H1144M56 277.2H1144M56 354.2H1144M56 431.2H1144"/>
   </g>
 
   <g id="badges" fill="none" stroke="#34D399" stroke-width="2">
-    <circle cx="86" cy="147" r="16"/>
-    <circle cx="86" cy="217" r="16"/>
-    <circle cx="86" cy="287" r="16"/>
-    <circle cx="86" cy="357" r="16"/>
-    <circle cx="86" cy="427" r="16"/>
+    <circle cx="86" cy="161.7" r="16"/>
+    <circle cx="86" cy="238.7" r="16"/>
+    <circle cx="86" cy="315.7" r="16"/>
+    <circle cx="86" cy="392.7" r="16"/>
+    <circle cx="86" cy="469.7" r="16"/>
   </g>
 
   <g id="numbers" font-size="20" font-weight="700" fill="#34D399" text-anchor="middle">
-    <text x="86" y="147" dy="0.35em">1</text>
-    <text x="86" y="217" dy="0.35em">2</text>
-    <text x="86" y="287" dy="0.35em">3</text>
-    <text x="86" y="357" dy="0.35em">4</text>
-    <text x="86" y="427" dy="0.35em">5</text>
+    <text x="86" y="161.7" dy="0.35em">1</text>
+    <text x="86" y="238.7" dy="0.35em">2</text>
+    <text x="86" y="315.7" dy="0.35em">3</text>
+    <text x="86" y="392.7" dy="0.35em">4</text>
+    <text x="86" y="469.7" dy="0.35em">5</text>
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
-    <text x="120" y="140">Pure TUN mode is not handled</text>
-    <text x="120" y="166" font-size="16" fill="#94A6BE">It listens on no local port, so there is no port to judge; all traffic already goes through it.</text>
+    <text x="120" y="154">Pure TUN mode is not handled</text>
+    <text x="120" y="182.6" font-size="16" fill="#94A6BE">It listens on no local port, so there is no port to judge; all traffic already goes through it.</text>
 
-    <text x="120" y="210">System proxy settings are not modified</text>
-    <text x="120" y="236" font-size="16" fill="#94A6BE">That would affect browsers and other programs. Only user-level variables are written.</text>
+    <text x="120" y="231">System proxy settings are not modified</text>
+    <text x="120" y="259.6" font-size="16" fill="#94A6BE">That would affect browsers and other programs. Only user-level variables are written.</text>
 
-    <text x="120" y="280">Already-running programs are not changed</text>
-    <text x="120" y="306" font-size="16" fill="#94A6BE">Variables are read once at startup, so windows already open need one Enter press.</text>
+    <text x="120" y="308">Already-running programs are not changed</text>
+    <text x="120" y="336.6" font-size="16" fill="#94A6BE">Variables are read once at startup, so windows already open need one Enter press.</text>
 
-    <text x="120" y="350">Tools needing their own proxy config are out of scope</text>
-    <text x="120" y="376" font-size="16" fill="#94A6BE">They do not read these variables. Maven, Gradle and Docker need separate setup.</text>
+    <text x="120" y="385">Tools needing their own proxy config are out of scope</text>
+    <text x="120" y="413.6" font-size="16" fill="#94A6BE">They do not read these variables. Maven, Gradle and Docker need separate setup.</text>
 
-    <text x="120" y="420">No interface is provided</text>
-    <text x="120" y="446" font-size="16" fill="#94A6BE">Zero dependencies is the install premise. Only a menu: no tray icon.</text>
+    <text x="120" y="462">No interface is provided</text>
+    <text x="120" y="490.6" font-size="16" fill="#94A6BE">Zero dependencies is the install premise. Only a menu: no tray icon.</text>
   </g>
 </svg>

@@ -1821,11 +1821,20 @@ jobs:
             }
             $lines = @($lines | Sort-Object -Unique)
             if ($lines.Count -lt 2) { continue }
+            # 行高不写死：表头那条带比数据行更高，而数据行的间距本身是设计自由度
+            # （卡片可以做得更高、行距更松）。原来的「30-50 才算一行」把行距钉死，
+            # 一旦有人把行距调宽，判据就把表头带当成唯一一行，报出一堆假缺陷。
+            # 改成从数据本身取众数间距：出现次数最多的那个差值就是标准行高，
+            # 只有等于它的那些带才算「行」。这样改行距不需要再动门禁。
+            $gaps = @()
+            for ($i = 0; $i -lt $lines.Count - 1; $i++) { $gaps += ($lines[$i + 1] - $lines[$i]) }
+            if ($gaps.Count -eq 0) { continue }
+            $rowH = ($gaps | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name -as [int]
+            if (-not $rowH -or $rowH -le 0) { continue }
             $bands = @()
             for ($i = 0; $i -lt $lines.Count - 1; $i++) {
-              # 行高约 40，表头那条带更高；只把像「行」的带当候选
               $h = $lines[$i + 1] - $lines[$i]
-              if ($h -ge 30 -and $h -le 50) { $bands += ($lines[$i] + $h / 2) }
+              if ($h -eq $rowH) { $bands += ($lines[$i] + $h / 2) }
             }
             if ($bands.Count -eq 0) { continue }
             # 只量 #marks 的直接子元素：一个标记 = 一个元素，或者一个图标组。

@@ -1,46 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="387" viewBox="0 0 1200 387" role="img" aria-labelledby="heroTitle heroDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="heroTitle heroDesc">
   <title id="heroTitle">EnvProxy — 终端自动翻墙（环境变量代理）</title>
   <desc id="heroDesc">左侧是项目名与一句话价值：翻墙软件开着，终端就自动翻墙；关掉，终端自动恢复直连。右侧是菜单「查看状态」的真实输出节选：监控进程运行中、开机自启已启用、翻墙代理已开启、代理变量已注入。</desc>
 
-  <rect width="1200" height="387" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="385.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="500" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="498.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
-  <g id="title-block" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
-    <text x="56" y="86" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">WINDOWS 10/11 · macOS 12+ · 零依赖</text>
+  <g id="titleblock" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+    <text x="56" y="104" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">WINDOWS 10/11 · macOS 12+ · 零依赖</text>
 
-    <text x="56" y="164" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="62" font-weight="700" fill="#E9EFF8"><tspan fill="#38BDF8">&gt; </tspan>EnvProxy</text>
+    <text x="56" y="202" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="62" font-weight="700" fill="#E9EFF8"><tspan fill="#38BDF8">&gt; </tspan>EnvProxy</text>
 
-    <text x="56" y="222" font-size="27" fill="#E9EFF8">翻墙软件开着，终端就自动翻墙；</text>
-    <text x="56" y="258" font-size="27" fill="#E9EFF8">关掉，终端自动恢复直连。</text>
+    <text x="56" y="278" font-size="27" fill="#E9EFF8">翻墙软件开着，终端就自动翻墙；</text>
+    <text x="56" y="322" font-size="27" fill="#E9EFF8">关掉，终端自动恢复直连。</text>
 
     <g id="chips" font-size="18" fill="#C7D3E3">
-      <rect x="56" y="288" width="86" height="38" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="99" y="313" text-anchor="middle">零操作</text>
-      <rect x="156" y="288" width="86" height="38" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="199" y="313" text-anchor="middle">零残留</text>
-      <rect x="256" y="288" width="140" height="38" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
-      <text x="326" y="313" text-anchor="middle">零管理员权限</text>
+      <rect x="56" y="368" width="86" height="42" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="99" y="396" text-anchor="middle">零操作</text>
+      <rect x="156" y="368" width="86" height="42" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="199" y="396" text-anchor="middle">零残留</text>
+      <rect x="256" y="368" width="140" height="42" rx="9" fill="#16243A" stroke="#33486B" stroke-width="1.5"/>
+      <text x="326" y="396" text-anchor="middle">零管理员权限</text>
     </g>
   </g>
 
-  <g id="project-proof">
-    <rect x="600" y="80" width="544" height="256" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+  <g id="projectproof">
+    <rect x="600" y="86" width="544" height="346" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
 
-    <g id="card-header" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace">
-      <circle cx="628" cy="114.5" r="5" fill="#33486B"/>
-      <circle cx="646" cy="114.5" r="5" fill="#33486B"/>
-      <circle cx="664" cy="114.5" r="5" fill="#33486B"/>
-      <text x="677" y="120.5" font-size="19" fill="#C7D3E3">查看状态</text>
-      <text x="1120" y="120.5" font-size="18" fill="#94A6BE" text-anchor="end">真实输出节选</text>
+    <g id="cardheader" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace">
+      <circle cx="628" cy="128" r="5" fill="#33486B"/>
+      <circle cx="646" cy="128" r="5" fill="#33486B"/>
+      <circle cx="664" cy="128" r="5" fill="#33486B"/>
+      <text x="677" y="135" font-size="19" fill="#C7D3E3">查看状态</text>
+      <text x="1120" y="135" font-size="18" fill="#94A6BE" text-anchor="end">真实输出节选</text>
     </g>
 
-    <line x1="600" y1="143.5" x2="1144" y2="143.5" stroke="#2A3B58" stroke-width="1.5"/>
+    <line x1="600" y1="164" x2="1144" y2="164" stroke="#2A3B58" stroke-width="1.5"/>
 
-    <g id="card-body" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">
-      <text x="628" y="187.5">监控进程 : <tspan fill="#C7D3E3">运行中 (PID 8268)</tspan></text>
-      <text x="628" y="227.5">开机自启 : <tspan fill="#C7D3E3">已启用</tspan></text>
-      <text x="628" y="267.5">翻墙代理 : <tspan fill="#34D399">已开启（本地端口 7078 监听中）</tspan></text>
-      <text x="628" y="307.5">代理变量 : <tspan fill="#34D399">已注入 (http://127.0.0.1:7078)</tspan></text>
+    <g id="cardbody" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#94A6BE">
+      <text x="628" y="222">监控进程 : <tspan fill="#C7D3E3">运行中 (PID 8268)</tspan></text>
+      <text x="628" y="278">开机自启 : <tspan fill="#C7D3E3">已启用</tspan></text>
+      <text x="628" y="334">翻墙代理 : <tspan fill="#34D399">已开启（本地端口 7078 监听中）</tspan></text>
+      <text x="628" y="390">代理变量 : <tspan fill="#34D399">已注入 (http://127.0.0.1:7078)</tspan></text>
     </g>
   </g>
 </svg>

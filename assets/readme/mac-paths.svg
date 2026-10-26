@@ -1,55 +1,55 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="416" viewBox="0 0 1200 416" role="img" aria-labelledby="macTitle macDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="482.56" viewBox="0 0 1200 483" role="img" aria-labelledby="macTitle macDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="macTitle">macOS 为什么写两条路</title>
   <desc id="macDesc">macOS 没有注册表，所以 Mac 版同时写两条路。上面一条：终端启动时读 shell hook（写在 ~/.zshenv 与 ~/.zshrc 里），hook 加载 ~/.envproxy/proxy.env，变量因此生效。下面一条：从 Dock 启动的应用走 launchctl setenv，把变量交给整个会话。两条路写的是同一份 9 个变量，同进同退；9 个里 5 个是规范拼写，另外 4 个是小写拼写，因为 macOS 大小写敏感，两种拼写各算一个变量。</desc>
 
-  <rect width="1200" height="416" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="414.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="482.56" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.87" width="1198.5" height="480.82" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="74" font-size="32" font-weight="700" fill="#E9EFF8">macOS 为什么写两条路</text>
-    <text x="56" y="106" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">没有注册表，终端和 Dock 启动的 App 各走一条</text>
+    <text x="56" y="85.84" font-size="32" font-weight="700" fill="#E9EFF8">macOS 为什么写两条路</text>
+    <text x="56" y="122.96" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">没有注册表，终端和 Dock 启动的 App 各走一条</text>
   </g>
 
-  <g id="terminal-path">
-    <rect x="56" y="140" width="170" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="165.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">终端</text>
-    <text x="76" y="189.5" dominant-baseline="central" font-size="18" fill="#94A6BE">你打开的窗口</text>
+  <g id="terminalpath">
+    <rect x="56" y="162.4" width="170" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="191.98" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">终端</text>
+    <text x="76" y="219.82" dominant-baseline="central" font-size="18" fill="#94A6BE">你打开的窗口</text>
 
-    <rect x="252" y="140" width="280" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="272" y="164.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
-    <text x="272" y="188.25" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
+    <rect x="252" y="162.4" width="280" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="272" y="190.53" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">shell hook</text>
+    <text x="272" y="218.37" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#94A6BE">~/.zshenv  ~/.zshrc</text>
 
-    <rect x="558" y="140" width="300" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="578" y="163.5" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
-    <text x="578" y="187.5" dominant-baseline="central" font-size="18" fill="#94A6BE">新终端加载这个文件</text>
+    <rect x="558" y="162.4" width="300" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="578" y="189.66" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="19" fill="#E9EFF8">~/.envproxy/proxy.env</text>
+    <text x="578" y="217.5" dominant-baseline="central" font-size="18" fill="#94A6BE">新终端加载这个文件</text>
   </g>
 
-  <g id="dock-path">
-    <rect x="56" y="248" width="270" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="76" y="273.5" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Dock 启动的 App</text>
-    <text x="76" y="297.5" dominant-baseline="central" font-size="18" fill="#94A6BE">点图标打开的程序</text>
+  <g id="dockpath">
+    <rect x="56" y="287.68" width="270" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="76" y="317.26" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">Dock 启动的 App</text>
+    <text x="76" y="345.1" dominant-baseline="central" font-size="18" fill="#94A6BE">点图标打开的程序</text>
 
-    <rect x="352" y="248" width="250" height="72" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="372" y="271.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
-    <text x="372" y="295.75" dominant-baseline="central" font-size="18" fill="#94A6BE">写给整个会话</text>
+    <rect x="352" y="287.68" width="250" height="83.52" rx="12" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="372" y="315.23" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#E9EFF8">launchctl setenv</text>
+    <text x="372" y="343.07" dominant-baseline="central" font-size="18" fill="#94A6BE">写给整个会话</text>
   </g>
 
   <g id="arrows" fill="none" stroke="#7A8CA6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M232 176H246M240 170L246 176L240 182"/>
-    <path d="M538 176H552M546 170L552 176L546 182"/>
-    <path d="M864 176H874M868 170L874 176L868 182"/>
-    <path d="M332 284H346M340 278L346 284L340 290"/>
-    <path d="M608 284H874M868 278L874 284L868 290"/>
+    <path d="M232 204.16H246M240 197.2L246 204.16L240 211.12"/>
+    <path d="M538 204.16H552M546 197.2L552 204.16L546 211.12"/>
+    <path d="M864 204.16H874M868 197.2L874 204.16L868 211.12"/>
+    <path d="M332 329.44H346M340 322.48L346 329.44L340 336.4"/>
+    <path d="M608 329.44H874M868 322.48L874 329.44L868 336.4"/>
   </g>
 
   <g id="variables">
-    <rect x="880" y="140" width="264" height="180" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
-    <text x="912" y="169.75" dominant-baseline="central" font-size="26" font-weight="700" fill="#E9EFF8">环境变量</text>
-    <text x="912" y="207.75" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
-    <text x="912" y="237.75" dominant-baseline="central" font-size="18" fill="#94A6BE">5 个规范拼写</text>
-    <text x="912" y="259.75" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
-      <text x="912" y="295.75" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
+    <rect x="880" y="162.4" width="264" height="208.8" rx="16" fill="#0B1220" stroke="#38BDF8" stroke-width="1.5"/>
+    <text x="912" y="196.91" dominant-baseline="central" font-size="26" font-weight="700" fill="#E9EFF8">环境变量</text>
+    <text x="912" y="240.99" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="22" fill="#38BDF8">9 个</text>
+    <text x="912" y="275.79" dominant-baseline="central" font-size="18" fill="#94A6BE">5 个规范拼写</text>
+    <text x="912" y="301.31" dominant-baseline="central" font-size="18" fill="#94A6BE">+ 4 个小写拼写</text>
+      <text x="912" y="343.07" dominant-baseline="central" font-size="18" fill="#34D399">两路同进同退</text>
   </g>
 
-  <text x="56" y="372" font-size="20" fill="#C7D3E3">Windows 是注册表 + 广播一次；Mac 没有注册表，所以两条路一起写。</text>
+  <text x="56" y="431.52" font-size="20" fill="#C7D3E3">Windows 是注册表 + 广播一次；Mac 没有注册表，所以两条路一起写。</text>
 </svg>

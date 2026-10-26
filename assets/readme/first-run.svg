@@ -1,47 +1,47 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="358" viewBox="0 0 1200 358" role="img" aria-labelledby="firstTitle firstDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="firstTitle firstDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="firstTitle">装完会发生什么</title>
   <desc id="firstDesc">安装三步：下载对应平台的安装包，进 win 文件夹双击打开菜单、选 1「安装 / 修复」，看到「监控进程：已启动」就装好了。下面并排两个终端窗口：装完之后新开的窗口立即生效；装之前就开着的窗口，重开一次（或在里面执行一次加载命令）之后也会跟上。安装本身会注册开机自启、写一段终端同步钩子、立刻启动监控、当场校正一次环境变量。</desc>
 
-  <rect width="1200" height="358" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="356.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="440" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="438.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
-    <text x="56" y="70" font-size="32" font-weight="700" fill="#E9EFF8">装完会发生什么</text>
-    <text x="56" y="100" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">三步装完，接着它自己启动</text>
+    <text x="56" y="84" font-size="32" font-weight="700" fill="#E9EFF8">装完会发生什么</text>
+    <text x="56" y="122" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="20" fill="#94A6BE">三步装完，接着它自己启动</text>
   </g>
 
   <g id="steps">
-    <rect x="56" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="80" y="140" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 1 步</text>
-    <text x="80" y="170" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">下载对应平台的安装包</text>
+    <rect x="56" y="150" width="340" height="92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="80" y="184" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 1 步</text>
+    <text x="80" y="218" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">下载对应平台的安装包</text>
 
-    <rect x="430" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="454" y="140" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 2 步</text>
-    <text x="454" y="170" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">菜单选 1：「安装 / 修复」</text>
+    <rect x="430" y="150" width="340" height="92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="454" y="184" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 2 步</text>
+    <text x="454" y="218" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">菜单选 1：「安装 / 修复」</text>
 
-    <rect x="804" y="120" width="340" height="74" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="828" y="140" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 3 步</text>
-    <text x="828" y="170" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">看到「监控进程：已启动」</text>
+    <rect x="804" y="150" width="340" height="92" rx="14" fill="#0B1220" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="828" y="184" dominant-baseline="central" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18" fill="#38BDF8">第 3 步</text>
+    <text x="828" y="218" dominant-baseline="central" font-size="22" font-weight="700" fill="#E9EFF8">看到「监控进程：已启动」</text>
   </g>
 
-  <g id="step-arrows" font-size="26" fill="#7A8CA6" text-anchor="middle">
-    <text x="413" y="164">→</text>
-    <text x="787" y="164">→</text>
+  <g id="steparrows" font-size="26" fill="#7A8CA6" text-anchor="middle">
+    <text x="413" y="204">→</text>
+    <text x="787" y="204">→</text>
   </g>
 
   <g id="windows">
-    <rect x="56" y="210" width="540" height="78" rx="12" fill="#0B1220" stroke="#33486B" stroke-width="1.5"/>
-    <text x="80" y="240" font-size="20" fill="#C7D3E3">已经开着的窗口</text>
-    <path d="M80 252H572" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="80" y="276" font-size="22" fill="#34D399">✓</text>
-    <text x="118" y="276" font-size="20" fill="#C7D3E3">重开一次就生效</text>
+    <rect x="56" y="272" width="540" height="104" rx="12" fill="#0B1220" stroke="#33486B" stroke-width="1.5"/>
+    <text x="80" y="308" font-size="20" fill="#C7D3E3">已经开着的窗口</text>
+    <path d="M80 326H572" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="80" y="356" font-size="22" fill="#34D399">✓</text>
+    <text x="118" y="356" font-size="20" fill="#C7D3E3">重开一次就生效</text>
 
-    <rect x="604" y="210" width="540" height="78" rx="12" fill="#0B1220" stroke="#34D399" stroke-width="1.5"/>
-    <text x="628" y="240" font-size="20" fill="#C7D3E3">新开的窗口</text>
-    <path d="M628 252H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
-    <text x="628" y="276" font-size="22" fill="#34D399">✓</text>
-    <text x="666" y="276" font-size="20" fill="#34D399">立即生效</text>
+    <rect x="604" y="272" width="540" height="104" rx="12" fill="#0B1220" stroke="#34D399" stroke-width="1.5"/>
+    <text x="628" y="308" font-size="20" fill="#C7D3E3">新开的窗口</text>
+    <path d="M628 326H1120" fill="none" stroke="#2A3B58" stroke-width="1.5"/>
+    <text x="628" y="356" font-size="22" fill="#34D399">✓</text>
+    <text x="666" y="356" font-size="20" fill="#34D399">立即生效</text>
   </g>
 
-  <text x="56" y="318" font-size="20" fill="#C7D3E3">装完它注册开机自启、启动监控、当场校正一次变量。</text>
+  <text x="56" y="412" font-size="20" fill="#C7D3E3">装完它注册开机自启、启动监控、当场校正一次变量。</text>
 </svg>
