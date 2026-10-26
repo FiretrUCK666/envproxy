@@ -733,12 +733,75 @@ function Show-Status {
 # 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
 #
 # 边界：只读、不联网、不改任何配置。文件落在 monitor\ 下，卸载时会一起清掉。
+# 反馈时要问的三个问题。顺序即重要性：先定"哪个环节坏了"，作者才知道该看哪一段；
+# 再问"你看到什么"，那是最能定位症状的一条；最后问"你本来想做什么"，
+# 因为同一现象在不同意图下是完全不同的问题。
+# 问题写成大白话：使用者不是工程师，问"请描述你的复现步骤"只会得到一句"就是不好使"。
+$ReportQuestions = @(
+    @{ Key = 'where';  Text = '哪一步出的问题？';       Example = '比如：装完之后终端里还是上不了网 / 换了新的翻墙软件 / 升级之后就这样了' }
+    @{ Key = 'what';   Text = '屏幕上显示了什么？';     Example = '比如：状态页说未运行 / 命令报 ECONNREFUSED / 点了没反应' }
+    @{ Key = 'expect'; Text = '你本来希望它做什么？';   Example = '比如：希望 git clone 能直接通 / 希望它自己跟着翻墙软件开关' }
+)
+
+# 问一个问题，回车跳过。跳过时报告里写"（没填）"而不是留白——
+# 留白会被读成"这一项不适用"，而"没填"才是真的信息（作者据此知道还得追问）。
+function Read-ReportAnswer([string]$Prompt, [string]$Example) {
+    Write-Host ''
+    Write-Styled 'heading' ('  ' + $Prompt)
+    if ($Example) { Write-Styled 'dim' ('    ' + $Example) }
+    Write-Styled 'dim' '    （不想写就直接回车）'
+    $text = ''
+    try { $text = [string](Read-Host '  > ') } catch { $text = '' }
+    return $text.Trim()
+}
+
+# 把使用者写的那几段拼成报告里的一节。
+function Format-ReportAnswers($Answers) {
+    $out = New-Object System.Collections.ArrayList
+    foreach ($q in $ReportQuestions) {
+        $v = [string]$Answers[$q.Key]
+        if (-not $v) { $v = '（没填）' }
+        [void]$out.Add('  ' + $q.Text)
+        foreach ($ln in @($v -split "`r?`n")) {
+            if ($ln) { [void]$out.Add('    ' + $ln) } else { [void]$out.Add('') }
+        }
+        [void]$out.Add('')
+    }
+    return $out
+}
+
 function New-ProblemReport {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $fileName = 'report-' + $stamp + '.txt'
     $target = Join-Path $MonitorDir $fileName
     # monitor\ 不可写时退到临时目录：报告不能因为路径问题就生成不出来。
     if (-not (Test-Path -LiteralPath $MonitorDir)) { $null = New-Item -ItemType Directory -Path $MonitorDir -Force -ErrorAction SilentlyContinue }
+
+    # 先问清楚"你遇到的是什么问题"，再收集环境。
+    # 顺序不能反：只把环境收齐、却不问症状，作者拿到的是一份"这台机器当时长什么样"，
+    # 而不是"哪里坏了"——三十行状态值一条也用不上，还得反问用户，一来一回一天。
+    Write-Host ''
+    Write-Styled 'title' '======== 问题反馈 ========'
+    Write-Host ''
+    Write-Styled 'text' '  下面问你三句话，一句话一行，随手写就行。'
+    Write-Styled 'dim'  '  写完会自动补上这台机器的情况，生成一份可以贴到网页上的报告。'
+    $answers = @{}
+    $anyAnswer = $false
+    foreach ($q in $ReportQuestions) {
+        $a = Read-ReportAnswer $q.Text $q.Example
+        $answers[$q.Key] = $a
+        if ($a) { $anyAnswer = $true }
+    }
+    if (-not $anyAnswer) {
+        Write-Host ''
+        Write-Styled 'warn' '  三句都空着。这样的报告发出去，对方只能反问你要细节。'
+        $go = 'n'
+        try { $go = [string](Read-Host '  还是要生成吗？(y/N)') } catch { $go = 'n' }
+        if ($go -notmatch '^[Yy]') {
+            Write-Styled 'dim' '  已取消，什么都没做。'
+            return
+        }
+    }
 
     $L = New-Object System.Collections.ArrayList
     # 报告里的每一行都从这里过，所以脱敏放在这里——**唯一汇聚点**。
@@ -750,6 +813,13 @@ function New-ProblemReport {
 
     & $add '======== EnvProxy 问题报告 ========'
     & $add ('生成时间：' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+
+    # 使用者自己写的那一段放在最前面：报告是给人读的，作者第一眼该看到"哪里坏了"，
+    # 而不是先读三十行环境值才在末尾找到一句"不好使"。
+    & $add ''
+    & $rule '你遇到的问题'
+    foreach ($ln in (Format-ReportAnswers $answers)) { & $add $ln }
+
     $ver = ''
     try { $ver = Get-LocalVersion } catch { $ver = '' }
     if (-not $ver) { $ver = '未知' }
@@ -817,9 +887,16 @@ function New-ProblemReport {
     & $add ('  运行状态目录：' + $MonitorDir)
     & $add ''
 
+    # 项目地址跟着正文一起写进去：报告可能隔几天才发，那时不一定还记得地址在哪。
+    # 地址只有一处来源（见 Get-ProjectUrls），不许在这里手写第二份。
+    $urls = Get-ProjectUrls
+    & $rule '发到哪里'
+    & $add ('  提问题：' + $urls.Issues)
+    & $add ('  项目主页：' + $urls.Home)
+    & $add ''
     & $add '=================================='
     & $add '这份报告含本机路径与端口。代理地址里的账号密码已经隐去。'
-    & $add '发给别人前可以先自己打开看一眼。'
+    & $add '发出去之前可以先自己打开看一眼。'
 
     $text = ($L -join "`r`n")
     $saved = ''
@@ -860,9 +937,9 @@ function New-ProblemReport {
     }
     Write-Host ''
     Write-Styled 'heading' '  接下来怎么发出去'
-    Write-Styled 'text' '    会开网页的话：打开项目页面，点 Issues，新建一个，把报告拖进去。'
-    Write-Styled 'text' '    不会也没关系：把报告文件直接发给帮你的人（微信、网盘都行）。'
-    Write-Styled 'dim' '  对方看到报告就知道是什么情况了，你不用自己解释。'
+    Write-Styled 'text' '    把这个地址打开，新建一个 issue，把报告内容贴进去：'
+    Write-Styled 'value' ('      ' + $urls.Issues)
+    Write-Styled 'dim' '  这是本项目唯一收问题的地方。'
     Write-Host ''
     Write-Styled 'dim' '  按回车回到菜单'
     try { $null = Read-Host } catch { }
@@ -1444,20 +1521,55 @@ function Split-HelpLine([string]$Line) {
 function Get-HelpRenderedLines([string[]]$Lines) {
     $parsed = @()
     foreach ($l in $Lines) { $parsed += (Split-HelpLine $l) }
-    # 块之间的空行由这里统一补：正文里只在需要「多一空行」时才手写 b。
-    # 手写空行的老做法是"有的地方记得、有的地方忘了"，屏幕上就是一段挤、一段松——
-    # 这种不一致单看每一行都挑不出错，但整页读起来就是"没排好"。
-    # 规则只有一条：**除第一行外，每个标题前自动空一行**。标题即分块边界，
-    # 正文里再怎么加删内容都不影响块间距。
+    # ---- 空行由这里统一补，正文里不写 b ----
+    #
+    # 手写空行是"有的地方记得、有的地方忘了"，屏幕上就是一段挤一段松。这种不一致
+    # 单看每一行都挑不出错，但整页读起来就是"没排好"——用户说不出来，只觉得别扭。
+    # 所以改由结构决定，谁也不用记。规则两条：
+    #
+    #   一、标题上下各空一行。下面必须空：标题在给下面的内容起头，挤着就开始读很闷，
+    #       没有呼吸感。上面必须空：每个标题因此成为独立一段，块与块自然分开。
+    #       （第一个标题的上面不空，它紧接页头。）
+    #   二、表格块（连续的 r/rc/m 行）前后各空一行，块内行与行之间不空。
+    #       表格是嵌在正文里的另一类东西，两侧不留白会跟正文糊在一起；
+    #       而块内逐行空行会把它拆成一格一段，那正是"散"的来源。
+    #
+    # 其余一律不空：正文连续读才顺；编号条目之间也不空，它们是一个列表。
+    # 于是每个主题的骨架完全一样：标题、空行、内容、空行、标题……
+    $isTable = { param($c) $c -and ($c.Code -eq 'r' -or $c.Code -eq 'rc' -or $c.Code -eq 'm') }
     $spaced = @()
-    for ($i = 0; $i -lt $parsed.Count; $i++) {
+    $n = $parsed.Count
+    for ($i = 0; $i -lt $n; $i++) {
         $cur = $parsed[$i]
-        if ($i -gt 0 -and $cur.Code -eq 'h' -and $parsed[$i - 1].Code -ne 'b') {
-            $spaced += (Split-HelpLine 'b ')
+        $next = if ($i -lt $n - 1) { $parsed[$i + 1] } else { $null }
+        # 标题前 / 表格块开始前
+        if ($i -gt 0) {
+            $prevTbl = & $isTable $parsed[$i - 1]
+            $curTbl = & $isTable $cur
+            if (($cur.Code -eq 'h') -or ($curTbl -and -not $prevTbl)) {
+                $spaced += (Split-HelpLine 'b ')
+            }
         }
         $spaced += $cur
+        # 标题后 / 表格块结束后
+        if ($cur.Code -eq 'h') {
+            $spaced += (Split-HelpLine 'b ')
+        } elseif ((& $isTable $cur) -and $next -and -not (& $isTable $next)) {
+            $spaced += (Split-HelpLine 'b ')
+        }
     }
-    $parsed = $spaced
+    # 去掉连续空行与首尾空行：上面几条规则会在边界各补一次，重了就是两三个空行。
+    $parsed = @()
+    foreach ($r in $spaced) {
+        if ($r.Code -eq 'b') {
+            if ($parsed.Count -eq 0) { continue }
+            if ($parsed[$parsed.Count - 1].Code -eq 'b') { continue }
+        }
+        $parsed += $r
+    }
+    while ($parsed.Count -gt 0 -and $parsed[$parsed.Count - 1].Code -eq 'b') {
+        $parsed = @($parsed | Select-Object -First ($parsed.Count - 1))
+    }
     $keyW = 0
     $nameW = 0
     foreach ($r in $parsed) {
@@ -1505,6 +1617,11 @@ function Get-HelpRenderedLines([string[]]$Lines) {
 # 按"我此刻想解决什么"分主题，再配一个固定的返回行，用户随时能退回来换一段看。
 # 每条格式：键 / 标题（目录里显示）/ 正文行数组（带角色标记，见上面 Split-HelpLine）。
 function Get-HelpTopics {
+    # 项目地址在帮助里出现三处（关于、求助、反馈），只在这里取一次。
+    # 唯一来源是 Get-ProjectUrls（从官网源的 Base 派生），换远端只改那一处。
+    $proj = Get-ProjectUrls
+    $HelpProjHome = $proj.Home
+    $HelpProjIssue = $proj.Issues
     return @(
         @{
             Key = '1'; Title = '这是干什么用的'; Short = '用处'
@@ -1520,7 +1637,10 @@ function Get-HelpTopics {
                 'i 2. 那个口子确实是个翻墙代理，会按规矩回应；',
                 'i 3. 它确实连得到外面，试 6 个端点（几个常用的检测网址）任意一个通就算。',
                 't 三条全过才动手。所以你本机开着网页服务、开发服务器都不会被误认。',
-                't 它不认品牌、不认程序名、不认端口号——那些只用来加快查找。'
+                't 它不认品牌、不认程序名、不认端口号——那些只用来加快查找。',
+                'h 它是谁做的、在哪',
+                't 这是开源项目。代码、新版、问题反馈都在这一个地址：',
+                ('i ' + $HelpProjHome)
             )
         },
         @{
@@ -1565,22 +1685,19 @@ function Get-HelpTopics {
                 'w 别用 unset HTTP_PROXY：Git Bash 里我们写的是小写，',
                 't 大写清不掉小写，curl 照样用代理，下个提示符还会写回来。',
                 'b ',
-                'h 二、改回自动跟随',
-                'rc PowerShell|Remove-Item Env:ENVPROXY_TERM',
-                'rc Git Bash|unset ENVPROXY_TERM',
-                'r cmd|重开一个窗口',
-                'b ',
-                'h 三、让这个窗口用公司的代理',
+                'h 二、让这个窗口用公司的代理',
                 't 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：',
                 'rc PowerShell|$env:HTTPS_PROXY = ''http://你的地址:端口''',
                 'rc Git Bash|export HTTPS_PROXY=http://你的地址:端口',
                 'rc cmd|set HTTPS_PROXY=http://你的地址:端口',
-                't 想确认现在用不用代理，敲这个（有值 = 用，空的 = 不用）：',
-                'rc PowerShell|$env:HTTPS_PROXY',
-                'rc Git Bash|echo $HTTPS_PROXY',
-                'rc cmd|set HTTPS_PROXY',
                 'b ',
-                't 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。'
+                't 想确认现在用不用代理，看状态页的「代理变量」那一行就够。',
+                't 地址和端口问公司 IT 要。这不是翻墙软件那个端口，别去那儿找。',
+                'h 三、改回自动跟随',
+                't 把上面那个 ENVPROXY_TERM 清掉即可（第一、二节的反操作）：',
+                'rc PowerShell|Remove-Item Env:ENVPROXY_TERM',
+                'rc Git Bash|unset ENVPROXY_TERM',
+                'r cmd|重开一个窗口'
             )
         },
         @{
@@ -1652,17 +1769,16 @@ function Get-HelpTopics {
                 'i 3. 三个常见误会',
                 't2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
                 't2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、这个工具被停了，不是坏了。',
-                'h 还是不行：让它自己生成一份报告',
-                't 菜单选 8（问题反馈）。它会自己收齐信息、存成一个文件，并把路径复制好。',
-                't 你不用去找日志，也不用敲命令。发出去有两种方式：',
-                't 会开网页：打开项目页面点 Issues。不会也没关系：直接发给帮你的人。',
+                'h 还是不行：把问题报上去',
+                't 菜单选 8（问题反馈）。它先问你三句话，再自动补上这台机器的情况，',
+                't 存成一个文件、把路径复制好。你不用找日志，也不用敲命令。',
+                't 然后把文件内容贴到这里（本项目只在这里收问题）：',
+                ('i ' + $HelpProjIssue),
                 'h 想彻底删掉它',
                 't 菜单选 7（一键恢复）。会问你要不要留日志。',
-                'b ',
                 'h 不开菜单也能用（写脚本、远程连过来的时候）',
                 'r 开关|-Install -Status -Stop -Uninstall -Update -Help -Menu -Report',
-                'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记',
-                'c powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status'
+                'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记'
             )
         }
     )

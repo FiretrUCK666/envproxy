@@ -1,36 +1,37 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="880" viewBox="0 0 1200 880" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="915" viewBox="0 0 1200 915" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">菜单每个选项影响什么</title>
   <desc id="buttonsDesc">九行五列的对照表。行是菜单里的九个选项：安装修复、查看状态、检查更新、帮助、高级功能、停止监控、一键恢复、问题反馈、退出。列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定。安装会校正环境变量；查看状态、帮助、退出什么都不改；高级功能只建启动脚本目录；停止清掉监控与环境变量、留下自启与定位器；一键恢复全部清除、只留日志；问题反馈只读不写。</desc>
 
-  <rect width="1200" height="880" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="878.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="915" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="913.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="92" font-size="36" font-weight="700" fill="#E9EFF8">菜单每个选项影响什么</text>
   </g>
 
   <g id="legend">
-    <path d="M62 152L68 158L80 144" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="100" y="162" font-size="22" fill="#94A6BE">保留</text>
-    <path d="M183 155H203" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <text x="222" y="162" font-size="22" fill="#94A6BE">清掉</text>
-    <circle cx="315" cy="155" r="5.5" fill="#7A8CA6"/>
-    <text x="344" y="162" font-size="22" fill="#94A6BE">只读不动</text>
-    <path d="M471 151H491M481 146V160M471 164H491" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
-    <text x="510" y="162" font-size="22" fill="#94A6BE">看当前有没有在翻墙</text>
+    <g data-cx="69"><path d="M62 156 L66.2 160 L76 150" fill="none" stroke="#34D399" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="96" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">保留</text>
+    <g data-cx="181"><path d="M174 155H188" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/></g>
+    <text x="208" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">清掉</text>
+    <g data-cx="293"><circle cx="293" cy="155" r="7" fill="#7A8CA6"/></g>
+    <text x="320" y="162" font-size="22" fill="#94A6BE" textLength="88" lengthAdjust="spacing">只读不动</text>
+    <g data-cx="449"><path d="M442 152 H456 M449 148 V162 M442 158 H456" fill="none" stroke="#C7D3E3" stroke-width="2.6" stroke-linecap="round"/></g>
+    <text x="476" y="162" font-size="22" fill="#94A6BE" textLength="198" lengthAdjust="spacing">看当前有没有在翻墙</text>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">
-    <text x="379" y="250">开机自启</text>
-    <text x="553" y="250">监控进程</text>
+    <text x="380" y="250">开机自启</text>
+    <text x="554" y="250">监控进程</text>
     <text x="724" y="250">环境变量</text>
-    <text x="864" y="250">日志</text>
-    <text x="1024" y="250">定位器与路径记录</text>
+    <text x="872" y="250">日志</text>
+    <text x="1020" y="250">定位器与路径记录</text>
   </g>
 
   <g id="table-frame" stroke="#2A3B58">
-    <path d="M56 216H1144M56 846H1144"/>
-    <path d="M56 266H1144" stroke="#33486B"/>
+    <path d="M56 216H1144"/>
+    <path d="M56 324H1144" stroke="#33486B"/>
+    <path d="M56 846H1144"/>
   </g>
 
   <g id="row-labels" font-size="23" fill="#E9EFF8">
@@ -46,14 +47,14 @@
   </g>
 
   <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
-    <path d="M56 324H1144M56 382H1144M56 440H1144M56 498H1144M56 556H1144M56 614H1144M56 672H1144M56 730H1144M56 788H1144M56 846H1144"/>
+    <path d="M56 324H1144M56 382H1144M56 440H1144M56 498H1144M56 556H1144M56 614H1144M56 672H1144M56 730H1144M56 788H1144M56 846H1144M56 904H1144"/>
   </g>
 
   <g id="marks">
     <path d="M370 354L376 360L388 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
     <path d="M544 349H564M554 344V356M544 359H564" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
     <path d="M714 354L720 360L732 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M855 875" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M855 353H875" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <path d="M1015 354L1021 360L1033 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="379" cy="411" r="5.5" fill="#7A8CA6"/>
     <circle cx="553" cy="411" r="5.5" fill="#7A8CA6"/>
@@ -71,20 +72,20 @@
     <circle cx="864" cy="527" r="5.5" fill="#7A8CA6"/>
     <circle cx="1024" cy="527" r="5.5" fill="#7A8CA6"/>
     <circle cx="379" cy="585" r="5.5" fill="#7A8CA6"/>
-    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M544 585H564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 585H734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <circle cx="864" cy="585" r="5.5" fill="#7A8CA6"/>
     <circle cx="1024" cy="585" r="5.5" fill="#7A8CA6"/>
-    <path d="M370 390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M370 643H390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M544 643H564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 643H734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <circle cx="864" cy="643" r="5.5" fill="#7A8CA6"/>
     <circle cx="1024" cy="643" r="5.5" fill="#7A8CA6"/>
-    <path d="M370 390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M370 701H390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M544 701H564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 701H734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <path d="M855 702L861 708L873 694" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1015 1035" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M1015 701H1035" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <circle cx="379" cy="759" r="5.5" fill="#7A8CA6"/>
     <circle cx="553" cy="759" r="5.5" fill="#7A8CA6"/>
     <circle cx="723" cy="759" r="5.5" fill="#7A8CA6"/>

@@ -240,6 +240,28 @@ function Get-UpdateRepo {
     return $UpdateRepoDefault
 }
 
+# 项目对外地址的唯一来源：主页、提问题的地方、看新版本的地方。
+#
+# 为什么从官网源的 Base 派生，而不是各写一份：地址换了只改 $UpdateSourceTable 那一行，
+# 帮助、报告、关于页全都跟着变。各写一份的结果是"帮助里还指着旧仓库"——
+# 用户点了打不开，也没有任何报错告诉他为什么。
+# 取不到仓库标识时返回空串，调用方据此不显示地址（宁可不说，也不能给个错地址）。
+function Get-ProjectUrls {
+    $repo = Get-UpdateRepo
+    if (-not $repo) { return [pscustomobject]@{ Repo = ''; Home = ''; Issues = ''; Releases = '' } }
+    $src = $UpdateSourceTable[0]
+    # Base 形如 https://github.com/@@，@@ 是仓库标识的占位符。
+    # 变量名不能叫 $home：$HOME 是 PowerShell 的自动变量，而变量名不区分大小写，
+    # 赋值会被它吃掉，"主页"于是变成用户的家目录（实测过一次）。
+    $baseUrl = ([string]$src.Base).Replace('@@', $repo)
+    return [pscustomobject]@{
+        Repo     = $repo
+        Home     = $baseUrl
+        Issues   = ($baseUrl + '/issues/new')
+        Releases = ($baseUrl + '/releases')
+    }
+}
+
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
 

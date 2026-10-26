@@ -434,11 +434,61 @@ _status_row() {
 # 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
 #
 # 边界：只读、不联网、不改任何配置。文件落在 monitor/ 下，卸载时会一起清掉。
+# 反馈时要问的三个问题。顺序即重要性：先定"哪个环节坏了"，作者才知道该看哪一段；
+# 再问"你看到什么"，那是最能定位症状的一条；最后问"你本来想做什么"，
+# 因为同一现象在不同意图下是完全不同的问题。
+# 问题写成大白话：使用者不是工程师，问"请描述复现步骤"只会得到一句"就是不好使"。
+REPORT_Q1="哪一步出的问题？"
+REPORT_Q1_EG="比如：装完之后终端里还是上不了网 / 换了个新的翻墙软件 / 升级之后就这样了"
+REPORT_Q2="屏幕上显示了什么？"
+REPORT_Q2_EG="比如：状态页说未运行 / 命令报 ECONNREFUSED 127.0.0.1:7890 / 没反应"
+REPORT_Q3="你本来希望它做什么？"
+REPORT_Q3_EG="比如：希望 git clone 能直接通 / 希望它自己跟着翻墙软件开关"
+
+# 问一个问题，回车跳过。跳过时报告里写"（没填）"而不是留白——
+# 留白会被读成"这一项不适用"，而"没填"才是真的信息（作者据此知道还得追问）。
+read_report_answer() {
+    _rra_prompt="$1"
+    _rra_eg="$2"
+    echo "" >&2
+    printf "  %s\n" "$_rra_prompt" >&2
+    [ -n "$_rra_eg" ] && printf "    %s\n" "$_rra_eg" >&2
+    printf "    （不想写就直接回车）\n" >&2
+    printf "  > " >&2
+    _rra_ans=""
+    IFS= read -r _rra_ans || true
+    printf "%s" "$_rra_ans"
+}
+
+
 new_problem_report() {
     _npr_stamp=$(date '+%Y%m%d-%H%M%S')
     _npr_name="report-$_npr_stamp.txt"
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     _npr_target="$MONITOR_DIR/$_npr_name"
+
+    # 先问清楚"你遇到的是什么问题"，再收集环境。
+    # 顺序不能反：只把环境收齐、却不问症状，作者拿到的是一份"这台机器当时长什么样"，
+    # 而不是"哪里坏了"——三十行状态值一条也用不上，还得反问用户。
+    echo ""
+    printf "======== 问题反馈 ========\n"
+    echo ""
+    printf "  下面问你三句话，一句话一行，随手写就行。\n"
+    printf "  写完会自动补上这台机器的情况，然后生成一份可以贴到网页上的报告。\n"
+    _npr_a1=$(read_report_answer "$REPORT_Q1" "$REPORT_Q1_EG")
+    _npr_a2=$(read_report_answer "$REPORT_Q2" "$REPORT_Q2_EG")
+    _npr_a3=$(read_report_answer "$REPORT_Q3" "$REPORT_Q3_EG")
+    if [ -z "$_npr_a1" ] && [ -z "$_npr_a2" ] && [ -z "$_npr_a3" ]; then
+        echo ""
+        printf "  三句都空着。这样的报告发出去，对方只能反问你要细节。\n"
+        printf "  还是要生成吗？(y/N) "
+        _npr_go=""
+        IFS= read -r _npr_go || true
+        case "$_npr_go" in
+            [Yy]*) : ;;
+            *) printf "  已取消，什么都没做。\n"; return 0 ;;
+        esac
+    fi
 
     # 报告正文先拼进一个变量，再**原样**写到落点。
     # 不写成"两处各 echo 一遍"：那样两处内容必然漂移，兜底那份会缺版本号与路径——
@@ -451,6 +501,18 @@ new_problem_report() {
         echo "程序版本：v$_npr_ver"
         echo "系统：$(uname -srm 2>/dev/null)"
         echo "Shell：${SHELL:-未知}    bash：${BASH_VERSION:-未知}"
+        # 使用者自己写的那一段放在最前面：报告是给人读的，作者第一眼该看到"哪里坏了"，
+        # 而不是先读三十行环境值才在末尾找到一句"不好使"。
+        echo ""
+        echo "---------------- 你遇到的问题 ----------------"
+        printf "  %s\n" "$REPORT_Q1"
+        if [ -n "$_npr_a1" ]; then printf "    %s\n" "$_npr_a1"; else printf "    （没填）\n"; fi
+        echo ""
+        printf "  %s\n" "$REPORT_Q2"
+        if [ -n "$_npr_a2" ]; then printf "    %s\n" "$_npr_a2"; else printf "    （没填）\n"; fi
+        echo ""
+        printf "  %s\n" "$REPORT_Q3"
+        if [ -n "$_npr_a3" ]; then printf "    %s\n" "$_npr_a3"; else printf "    （没填）\n"; fi
         echo ""
         echo "---------------- 当前状态 ----------------"
         # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
@@ -466,6 +528,12 @@ new_problem_report() {
         echo "---------------- 位置 ----------------"
         echo "  程序目录：$SCRIPT_DIR"
         echo "  运行状态目录：$MONITOR_DIR"
+        echo ""
+        # 项目地址跟着正文一起写进去：报告可能隔几天才发，那时不一定还记得地址在哪。
+        # 地址只有一处来源（get_project_home / get_project_issues），不许在这里手写第二份。
+        echo "---------------- 发到哪里 ----------------"
+        echo "  提问题：$(get_project_issues 2>/dev/null || true)"
+        echo "  项目主页：$(get_project_home 2>/dev/null || true)"
         echo ""
         echo "=================================="
         echo "这份报告含本机路径与端口。代理地址里的账号密码已经隐去。"
@@ -518,9 +586,9 @@ new_problem_report() {
     fi
     echo ""
     style_out heading "  接下来怎么发出去"
-    echo "    会开网页的话：打开项目页面，点 Issues，新建一个，把报告拖进去。"
-    echo "    不会也没关系：把报告文件直接发给帮你的人（微信、网盘都行）。"
-    echo "  对方看到报告就知道是什么情况了，你不用自己解释。"
+    echo "    把这个地址打开，新建一个 issue，把报告内容贴进去："
+    echo "      $(get_project_issues 2>/dev/null || true)"
+    echo "  这是本项目唯一收问题的地方。"
     echo ""
     echo "  按回车回到菜单"
     read -r _npr_pause 2>/dev/null || true
@@ -1053,7 +1121,7 @@ _help_menu_lines() {
 # 列宽由渲染器按整块自动算，不手敲空格——手敲与写死列宽是同一类毛病。
 _help_indent() {
     case "$1" in
-        h) echo 0 ;;
+        h) echo 2 ;;
         t) echo 2 ;;
         t2) echo 6 ;;
         i) echo 4 ;;
@@ -1146,6 +1214,16 @@ _help_block_name_width() {
 }
 
 # 单个主题的正文。用 cat 输出，与 Windows 侧 Get-HelpTopics 的 Lines 一一对应。
+# 帮助里要印的项目地址。取不到就返回空串——宁可少一句，也不能印一个打不开的链接。
+_proj_home_url() {
+    get_project_home 2>/dev/null || true
+}
+
+_proj_issue_url() {
+    get_project_issues 2>/dev/null || true
+}
+
+
 _help_topic_body() {
     case "$1" in
     1) cat <<'TOPIC'
@@ -1153,7 +1231,6 @@ h 它做什么
 t 你的翻墙软件只管浏览器，不管终端里的 git、npm、curl。
 t 这个工具补上这一段：翻墙软件一开，它们跟着能翻；一关，自动恢复。
 t 你什么都不用记，也不用每次敲开关。
-b 
 h 它怎么知道你现在在翻墙
 t 每 2 到 3 秒看一次，要同时满足三条才算：
 i 1. 你电脑上确实有程序开着一个口子（端口）在等连接；
@@ -1161,24 +1238,23 @@ i 2. 那个口子确实是个翻墙代理，会按规矩回应；
 i 3. 它确实连得到外面，试 6 个端点（几个常用的检测网址）任意一个通就算。
 t 三条全过才动手。所以你本机开着网页服务、开发服务器都不会被误认。
 t 它不认品牌、不认程序名、不认端口号——那些只用来加快查找。
+h 它是谁做的、在哪
+t 这是开源项目。代码、新版、问题反馈都在这一个地址：
+TOPIC
+    printf 'c %s\n' "$(_proj_home_url)"
+    cat <<'TOPIC'
 TOPIC
     ;;
     2) cat <<'TOPIC'
 h 装完之后，按窗口分三种情况
-b 
 i 1. 装完之后新开的窗口
 t2 启动时读到的就是当前状态，什么都不用做。
-b 
 i 2. 装完之后开的窗口，后来翻墙软件又开了或关了
 t2 按一次回车即可。
-b 
 i 3. 装之前就已经开着的窗口
 t2 同步代码还没装进去。在那个窗口里敲下面这一条，或者重开窗口：
-b 
 rc zsh / bash|. ~/.envproxy/prompt-sync.sh
-b 
 t 开头的点号和后面的空格都不能少；fish 不支持。
-b 
 h 为什么要按一次回车
 t 每个程序只在启动那一刻读一次「该走哪个代理」，读完就固定了。
 t 之后系统再改，已经在跑的窗口不会跟着变。
@@ -1190,41 +1266,31 @@ TOPIC
 h 一、让这个窗口一直不翻墙
 rc zsh / bash|export ENVPROXY_TERM=off
 t 下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
-b 
 w 别只 unset 一个拼写：mac 上大写和小写是两个变量，各写一份。
 t 只清大写的话，小写那份还在，curl 照样用代理——两个都要清。
-b 
 h 二、改回自动跟随
 rc zsh / bash|unset ENVPROXY_TERM
-b 
 h 三、让这个窗口用公司的代理
 t 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：
-b 
 rc zsh / bash|export HTTPS_PROXY=http://你的地址:端口
-b 
 t 想确认现在用不用代理，敲这个（有值 = 用，空的 = 不用）：
 rc zsh / bash|echo $HTTPS_PROXY
-b 
 t 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。
 t fish 不支持这些配置文件，上面的开关对它无效。
 TOPIC
     ;;
     4) cat <<'TOPIC'
 h 不同工具写法不一样，没有通用的一条命令
-b 
 h curl
 c curl --noproxy "*" https://example.com
-b 
 h git
 c git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
 t 等号后留空，这条就不用代理；写别的值，就改用那个代理。
-b 
 h npm
 c npm --noproxy=registry.npmjs.org install typescript
 w 注意：只认具体网址，写 * 没用，而且不报错，请求照常翻墙。
 t 写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
 t 另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
-b 
 h docker
 t 没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
 TOPIC
@@ -1233,12 +1299,10 @@ TOPIC
 h 这个平台基本不会遇到
 t 从 Dock 或访达启动的程序，读的是 launchctl 设的变量，本工具一直在设。
 t 所以它们开起来就能拿到代理，不需要额外做一个启动器。
-b 
 h 如果你确实遇到某个程序还是翻不了墙
 t 先在终端里用同一条命令试：够说明问题的是那个程序自己，不是这个工具。
 c HTTPS_PROXY=$HTTPS_PROXY open -a "程序名"
 t 它自己带代理设置项的，直接填本工具的地址（菜单选 2 能看到）。
-b 
 h Windows 版才有「高级功能」
 t 那边的资源管理器拿不到登录之后才注入的值，必须给软件配一个启动器。
 t 这是平台差异，不是功能有没有做全。
@@ -1246,23 +1310,27 @@ TOPIC
     ;;
     6) cat <<'TOPIC'
 h 先按这个顺序查，多数问题到第二步就好了
-b 
 i 1. 在出问题的窗口里敲下面这一条，看有没有地址
 t2 有地址 = 设好了；空的 = 没设上，重开一个窗口试试。
 rc zsh / bash|echo $HTTPS_PROXY
-b 
 i 2. 看菜单最上面那行写的什么
 t2 写「未运行」就选 1（安装 / 修复）。
 i 3. 两个常见误会
 t2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
 t2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、本工具被停了，不是坏了。
-h 还是不行：让它自己生成一份报告
-t 菜单选 8（问题反馈）。它自己收齐信息、存成一个文件，并把路径复制好。
-t 你不用去找日志，也不用敲命令。发出去有两种方式：
-t 会开网页就点 Issues 附上；不会就发给帮你的人。
+h 还是不行：把问题报上去
+t 菜单选 8（问题反馈）。它先问你三句话，再自动补上这台机器的情况，
+t 存成一个文件、把路径复制好。你不用找日志，也不用敲命令。
+t 然后把文件内容贴到下面这个地址（本项目只在这里收问题）：
+TOPIC
+    printf 'c %s\n' "$(_proj_issue_url)"
+    cat <<'TOPIC'
+t 打不开就把网址手动敲进浏览器：
+TOPIC
+    printf '  %s\n' "$(_proj_home_url)"
+    cat <<'TOPIC'
 h 想彻底删掉它
 t 菜单选 7（一键恢复）。会问你要不要留日志。
-b 
 h 不开菜单也能用（写脚本、远程连过来的时候）
 r 开关|install status stop uninstall update help report
 r 补充|--yes 跳过确认   --purge 连日志删   repair-profile 摘标记
@@ -1317,6 +1385,79 @@ format_help_index() {
 }
 
 # 单个主题：正文前后各留一行，底部固定给返回方式。
+# 空行由结构决定，正文里不写 b（与 Windows 侧同一套规则）。
+#
+# 规则两条：
+#   一、标题上下各空一行（第一个标题的上面不空，它紧接页头）
+#   二、表格块（连续的 r/rc/m 行）前后各空一行
+# 其余一律不空：正文连续读才顺；编号条目之间也不空，它们是一个列表。
+#
+# 手写空行的老做法是"有的地方记得、有的地方忘了"，屏幕上就是一段挤一段松。
+# 空行由结构决定，正文里不写 b（与 Windows 侧同一套规则）。
+#
+# 规则两条：
+#   一、标题上下各空一行（第一个标题的上面不空，它紧接页头）
+#   二、表格块（连续的 r/rc/m 行）**前后**各空一行，块内行与行之间不空
+# 其余一律不空：正文连续读才顺；编号条目之间也不空，它们是一个列表。
+#
+# 为什么要把整段读进来再处理：判断"表格块结束了没有"必须能看见下一行。
+# 边读边吐的写法只能看上一行，于是每一行后面都补了空行——表格被拆成一格一段，
+# 屏幕上就是「开关」「空行」「补充」「空行」这种散开的样子。
+_help_apply_spacing() {
+    _hs_all=$(cat)
+    # 先拆成数组（macOS 自带 bash 3.2 没有 mapfile，用 while read 累加）
+    _hs_i=0
+    _hs_code=""
+    while IFS= read -r _hs_l; do
+        _hs_c=${_hs_l%% *}
+        if ! _help_code_valid "$_hs_c"; then _hs_c="t"; fi
+        # 手写的空行一律丢掉，空行只由下面按结构补
+        [ "$_hs_c" = "b" ] && continue
+        _hs_code="$_hs_code $_hs_c"
+        _hs_i=$((_hs_i + 1))
+        eval "_hs_line$_hs_i=\$_hs_l"
+    done <<EOF
+$_hs_all
+EOF
+    _hs_n=$_hs_i
+    _hs_k=1
+    _hs_prev_tbl=0
+    _hs_last_blank=0
+    while [ "$_hs_k" -le "$_hs_n" ]; do
+        eval "_hs_cur=\$_hs_line$_hs_k"
+        _hs_c=${_hs_cur%% *}
+        if ! _help_code_valid "$_hs_c"; then _hs_c="t"; fi
+        _hs_tbl=0
+        case "$_hs_c" in r|rc|m) _hs_tbl=1 ;; esac
+        # 下一行的类型（用来判断块是否结束）
+        _hs_nxt_tbl=0
+        _hs_nxt_c=""
+        if [ "$_hs_k" -lt "$_hs_n" ]; then
+            eval "_hs_nxt=\$_hs_line$((_hs_k + 1))"
+            _hs_nxt_c=${_hs_nxt%% *}
+            if ! _help_code_valid "$_hs_nxt_c"; then _hs_nxt_c="t"; fi
+            case "$_hs_nxt_c" in r|rc|m) _hs_nxt_tbl=1 ;; esac
+        fi
+        # 标题前 / 表格块开始前：空一行（上一行已经是空行就不补，否则会连出两行）
+        if [ "$_hs_k" -gt 1 ] && [ "$_hs_last_blank" = "0" ]; then
+            if [ "$_hs_c" = "h" ] || { [ "$_hs_tbl" = "1" ] && [ "$_hs_prev_tbl" = "0" ]; }; then
+                echo "b "
+                _hs_last_blank=1
+            fi
+        fi
+        echo "$_hs_cur"
+        _hs_last_blank=0
+        # 标题后 / 表格块结束后：空一行
+        if [ "$_hs_c" = "h" ] || { [ "$_hs_tbl" = "1" ] && [ "$_hs_nxt_tbl" = "0" ] && [ "$_hs_k" -lt "$_hs_n" ]; }; then
+            echo "b "
+            _hs_last_blank=1
+        fi
+        _hs_prev_tbl=$_hs_tbl
+        _hs_k=$((_hs_k + 1))
+    done
+    return 0
+}
+
 format_help_topic() {
     _ht_title=$(_help_topic_title "$1")
     [ -z "$_ht_title" ] && return 1
@@ -1324,7 +1465,7 @@ format_help_topic() {
     _SEG_LINE=""
     echo "================ 帮助 $1 · $_ht_title ================"
     echo ""
-    _HELP_BLOCK=$(_help_topic_body "$1")
+    _HELP_BLOCK=$(_help_topic_body "$1" | _help_apply_spacing)
     while IFS= read -r _ht_l; do
         _help_render_line "$_ht_l"
     done <<EOF

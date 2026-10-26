@@ -120,6 +120,22 @@ get_update_repo() {
     printf '%s' "$UPDATE_REPO_DEFAULT"
 }
 
+# 项目对外地址：主页、提问题的地方。与 Windows 侧 Get-ProjectUrls 同形。
+#
+# 从官网源的 Base 派生而不是各写一份：地址换了只改 UPDATE_SOURCE_TABLE 那一行，
+# 帮助、报告全跟着变。各写一份的结果是"帮助里还指着旧仓库"，用户点了打不开，
+# 也没有任何报错告诉他为什么。
+get_project_home() {
+    _gph_repo=$(get_update_repo)
+    [ -n "$_gph_repo" ] || return 1
+    printf "https://github.com/%s" "$_gph_repo"
+}
+
+get_project_issues() {
+    _gpi_home=$(get_project_home) || return 1
+    printf "%s/issues/new" "$_gpi_home"
+}
+
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
 

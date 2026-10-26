@@ -904,6 +904,15 @@ run_monitor_loop() {
     _round_no=0
 
     while [ ! -f "$STOP_FLAG" ]; do
+        # ---- 运行时目录自愈（每轮，与 Windows 侧同一机制）----
+        # 目录只在启动时建过一次。被外部删掉（清理工具、误删、同步软件）之后，
+        # 日志与 pid 文件就再也写不出来：进程还在正常干活，状态页却因为读不到 pid
+        # 而报"未运行"——用户看到"明明在跑却说没跑"，于是又点安装，起第二份被
+        # 单实例锁挡掉，彻底卡死。
+        # 每轮先确认目录在，是这件事的唯一收敛点（mkdir -p 幂等、不产生 IO）。
+        [ -d "$MONITOR_DIR" ] || mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+        # pid 文件同理：它一旦丢失，对外就"查不到自己在跑"。重新写一份，代价是一次小文件写。
+        [ -f "$PID_FILE" ] || printf '%s\n' "$$" > "$PID_FILE" 2>/dev/null || true
         if [ ! -f "$SCRIPT_PATH" ]; then _self=1; break; fi
         if ! get_current_state; then
             log_msg "检测异常：状态探测失败，沿用上一状态"
