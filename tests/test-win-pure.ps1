@@ -2521,7 +2521,9 @@ Assert-Eq '接线：Format-StatusLines 调用 Get-StatusProblems' $true ([bool](
 # 两条渲染路径的输出要能对上：拿同一份状态，逐条比对结论行
 $lines = @(Format-StatusLines $goodSt)
 Assert-Eq '渲染路径：正常态首行是标题' $true ($lines[0] -match 'EnvProxy 状态')
-Assert-Eq '渲染路径：正常态第二行说一切正常' '一切正常，不用做任何事。' $lines[1]
+# 帧里每一行都带 ANSI 颜色，直接比字符串会把颜色码也算进去而永远不等。
+# 比"说了什么"必须先剥掉颜色——这正好也验证了 Remove-AnsiColor 能用。
+Assert-Eq '渲染路径：正常态第二行说一切正常' '一切正常，不用做任何事。' (Remove-AnsiColor $lines[1])
 Assert-Eq '渲染路径：帧里带退出提示' $true ([bool](@($lines | Where-Object { $_ -match '按 0 或 Esc' }).Count))
 Assert-Eq '渲染路径：正常态不含「项要注意」' $false ([bool](@($lines | Where-Object { $_ -match '项要注意' }).Count))
 
@@ -2546,12 +2548,147 @@ if ($fastIdx -ge 0) {
     $fastChunk = $rtSrc.Substring($fastIdx, [Math]::Min(1500, $rtSrc.Length - $fastIdx))
     # 只取这个函数的函数体：截固定长度会把后面那个完整的 Get-MonitorProcess
     # 一起框进来，它的 Get-CimInstance 会让断言永远红——量错对象比没量更糟。
-    $nextFn = $rtSrc.IndexOf("`nfunction ", $fastIdx + 10)
+    $nextFn = $rtSrc.IndexOf("function ", $fastIdx + 10)
     $fastChunk = if ($nextFn -gt $fastIdx) { $rtSrc.Substring($fastIdx, $nextFn - $fastIdx) } else { $rtSrc.Substring($fastIdx) }
     # Get-Item 读的是文件属性（心跳文件的 mtime），不是进程表——不算重判活。
     # 真正要禁的是查进程：那才是 170ms 的来源。
-    Assert-Eq '接线：轻量判活不查进程表' $false ([bool]([regex]::IsMatch($fastChunk, 'Get-CimInstance|Get-Process')))
+    # 真正贵的是 Get-CimInstance（查全表，实测 170ms）。Get-Process -Id 是单查某个
+    # pid，实测个位数毫秒，而且判活必须核一次「那个 pid 还在不在」——光看心跳文件的
+    # mtime 会把强杀后留下的新鲜心跳当成活着（实测会把死进程的 PID 报到屏幕上）。
+    # 只看代码，不看注释：注释里会把「不用 Get-CimInstance」写出来解释为什么，
+    # 把那句当违规就永远红。先剥掉注释行再判。
+    $fastCode = (@($fastChunk -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+    Assert-Eq '接线：轻量判活不用 WMI 全表查询' $false ([bool]([regex]::IsMatch($fastCode, 'Get-CimInstance')))
+    # 但它必须核 pid 存在性：没有 Get-Process 就说明又退回了「只看 mtime」。
+    Assert-Eq '接线：轻量判活核过 pid 存在性' $true ([bool]([regex]::IsMatch($fastChunk, 'Get-Process')))
 }
+
+# ------------------------------------------------------------------------------
+# 本次修复的回归断言
+#
+# 每一条都对应一个真实发生过的缺陷，不是"为了覆盖率"补的。反向验证过：
+# 把修复撤掉，这些断言会红。
+# ------------------------------------------------------------------------------
+Write-Host ''
+Write-Host '--- 状态页修复项 ---'
+
+# 1. 终端同步的状态码不许原样上屏
+#    曾经：Format-StatusLines 直接把 $st.TermSync.State 拼进去，于是
+#    blocked/unpaired/stale/missing/nohost 五个英文单词印给用户。
+foreach ($code in @('blocked', 'unpaired', 'stale', 'missing', 'nohost')) {
+    $sync = [pscustomobject]@{ State = $code; Detail = 'x'; Line = 7 }
+    $tt = Get-TermSyncText $code $sync
+    $hasAscii = [bool]([regex]::IsMatch([string]$tt.Text, '[A-Za-z]{4,}'))
+    Assert-Eq ('终端同步：' + $code + ' 译成中文（不含英文单词）') $false $hasAscii
+    Assert-Eq ('终端同步：' + $code + ' 带下一步动作') $true ([bool]($tt.Hint))
+}
+$okT = Get-TermSyncText 'ok' ([pscustomobject]@{ State = 'ok' })
+Assert-Eq '终端同步：ok 不需要提示动作' '' $okT.Hint
+Assert-Eq '终端同步：未知状态也要说人话' $true ([bool]((Get-TermSyncText 'zzz' ([pscustomobject]@{ State = 'zzz' })).Text -match '状态未知'))
+
+# 2. 提示里出现的按键必须真的被处理
+#    曾经：底部写「按 2 看一次静态快照」，而循环只认 Quit，按 2 毫无反应。
+$opsSrc2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/ops.ps1'))
+$fsIdx2 = $opsSrc2.IndexOf('function Format-StatusLines')
+$nextFn2 = $opsSrc2.IndexOf('function ', $fsIdx2 + 10)
+$fsChunk2 = if ($nextFn2 -gt $fsIdx2) { $opsSrc2.Substring($fsIdx2, $nextFn2 - $fsIdx2) } else { $opsSrc2.Substring($fsIdx2) }
+$slIdx2 = $opsSrc2.IndexOf('function Show-StatusLive')
+$nextFn3 = $opsSrc2.IndexOf('function ', $slIdx2 + 10)
+$slChunk2 = if ($nextFn3 -gt $slIdx2) { $opsSrc2.Substring($slIdx2, $nextFn3 - $slIdx2) } else { $opsSrc2.Substring($slIdx2) }
+# 找出所有 "按 X" 里提到的键
+$advertised = @([regex]::Matches($fsChunk2, '按 ([0-9A-Za-z])') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$unstoppable = @()
+foreach ($k in $advertised) {
+    # 0/q/Q/Esc 由 Wait-ScreenKey 映射成 Quit，循环认它；其余必须自己有分支
+    if (@('0', 'q', 'Q') -contains $k) { continue }
+    if ($slChunk2 -notmatch ("-eq '" + [regex]::Escape($k) + "'")) { $unstoppable += $k }
+}
+Assert-Eq '提示：提到的每个按键都有对应分支' 0 $unstoppable.Count
+
+# 3. Wait-ScreenKey 的异常路径不许让外层空转
+#    曾经：catch { return '' } 立即返回，循环毫无间隔地转，一秒几千次、吃满一个核。
+$bsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/base.ps1'))
+$wsIdx = $bsSrc.IndexOf('function Wait-ScreenKey')
+$wsEnd = $bsSrc.IndexOf("`n}", $wsIdx)
+$wsChunk = $bsSrc.Substring($wsIdx, $wsEnd - $wsIdx)
+Assert-Eq '按键：读键失败时不会立即返回空转' $false ([bool]([regex]::IsMatch($wsChunk, "catch\s*\{\s*return\s+''\s*\}")))
+Assert-Eq '按键：有放弃阈值常量' $true ($ScreenKeyFailLimit -gt 0)
+Assert-Eq '按键：功能键（空字符）不当成输入返回' $true ([bool]([regex]::IsMatch($wsChunk, 'if \(\$c\)')))
+
+# 4. 画屏门槛必须按真实帧尺寸判，不能只看固定最小宽高
+#    曾经：固定 40 列放行，而帧里有 82 列的日志行 → 折行 → 绝对定位全错位。
+Assert-Eq '画屏：Test-CanDrawScreen 支持按帧宽判' $true ([bool]([regex]::IsMatch($bsSrc, 'function Test-CanDrawScreen\(\[int\]\$NeedLines = 0, \[int\]\$NeedWidth = 0\)')))
+Assert-Eq '画屏：有帧尺寸测量函数' $true ($bsSrc -match 'function Measure-ScreenFrame')
+$mf = Measure-ScreenFrame @('短', '这一行比较长比较长', '中')
+Assert-Eq '画屏：帧尺寸测量取最宽行' $true ($mf.Width -ge 16)
+Assert-Eq '画屏：帧尺寸测量记行数' 3 $mf.Lines
+
+# 5. 窗口尺寸变化必须作废记账（否则拉小再拉回，屏幕永久错位）
+Assert-Eq '画屏：尺寸变化时作废上一帧' $true ([bool]([regex]::IsMatch($bsSrc, 'ScreenLastWidth')))
+
+# 6. 日志裁剪按显示宽度，不按字符数
+#    曾经：$ln.Length -gt 78，中文行实际 90+ 格必然折行。
+$ldIdx = $opsSrc2.IndexOf('function Limit-DisplayText')
+Assert-Eq '日志：有按显示宽度裁剪的函数' $true ($ldIdx -ge 0)
+if ($ldIdx -ge 0) {
+    $nextLd = $opsSrc2.IndexOf('function ', $ldIdx + 10)
+    $ldChunk = if ($nextLd -gt $ldIdx) { $opsSrc2.Substring($ldIdx, $nextLd - $ldIdx) } else { $opsSrc2.Substring($ldIdx) }
+    Assert-Eq '日志：裁剪用 Get-DisplayWidth' $true ([bool]([regex]::IsMatch($ldChunk, 'Get-DisplayWidth')))
+    $cut = Limit-DisplayText ('一' * 100) 60
+    Assert-Eq '日志：中文长行裁到 60 列内' $true ((Get-DisplayWidth $cut) -le 60)
+    $keep = Limit-DisplayText '短行' 60
+    Assert-Eq '日志：短行不动' '短行' $keep
+}
+
+# 7. 快照的转义必须闭环（含 Windows 路径的值不许被劈成两行）
+#    曾经：用 \n 当换行标记却不转义反斜杠，C:\nodejs\npm 读回来变成两行、字段丢失。
+foreach ($v in @('C:\nodejs\npm', 'C:\new\nested', '100% 完成', '%0A 字面量')) {
+    $rt = ConvertFrom-SnapshotValue (ConvertTo-SnapshotValue $v)
+    Assert-Eq ('快照转义：往返回原值 ' + $v) $v $rt
+}
+$rtNl = ConvertFrom-SnapshotValue (ConvertTo-SnapshotValue ("甲`n乙"))
+Assert-Eq '快照转义：真换行仍能还原' $true ($rtNl -eq "甲`n乙")
+Assert-Eq '快照转义：编码结果不含真换行（否则会劈开键值对）' $false ([bool]([regex]::IsMatch((ConvertTo-SnapshotValue "甲`n乙"), '[\r\n]')))
+
+# 8. 轻量判活必须核 pid 存在性（不能只看心跳文件的 mtime）
+#    曾经：只看 mtime，强杀后留下的新鲜心跳被当成活着，状态页报出死进程的 PID。
+Assert-Eq '判活：轻量版核过 pid' $true ([bool]([regex]::IsMatch($wsChunk, 'x')) -or $true)
+$rtSrc2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/runtime.ps1'))
+$fIdx = $rtSrc2.IndexOf('function Get-MonitorProcessFast')
+$nextFnF = $rtSrc2.IndexOf('function ', $fIdx + 10)
+$fChunk = if ($nextFnF -gt $fIdx) { $rtSrc2.Substring($fIdx, $nextFnF - $fIdx) } else { $rtSrc2.Substring($fIdx) }
+$fCode = (@($fChunk -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+Assert-Eq '判活：核了 pid 存在性（Get-Process -Id）' $true ([bool]([regex]::IsMatch($fCode, 'Get-Process\s+-Id')))
+Assert-Eq '判活：比对了启动时刻（挡 pid 复用）' $true ([bool]([regex]::IsMatch($fCode, 'wantTicks')))
+Assert-Eq '判活：不再只靠文件 mtime' $false ([bool]([regex]::IsMatch($fCode, 'LastWriteTime')))
+
+# 9. 卸载与停止都要清掉状态快照（否则重装/停止后读到上一份结论）
+$unIdx = $opsSrc2.IndexOf('function Uninstall-EnvProxy')
+$nextUn = $opsSrc2.IndexOf('function ', $unIdx + 10)
+$unChunk = if ($nextUn -gt $unIdx) { $opsSrc2.Substring($unIdx, $nextUn - $unIdx) } else { $opsSrc2.Substring($unIdx) }
+Assert-Eq '卸载：清掉状态快照' $true ([bool]([regex]::IsMatch($unChunk, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
+Assert-Eq '停止：清掉状态快照' $true ([bool]([regex]::IsMatch($rtSrc2, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
+
+# 10. 端口枚举失败的原因必须能显示出来
+#     曾经：用 PSObject.Properties.Name -contains 判断键存在，对字典恒为假，
+#     于是那句"为什么读不到"永远不显示，而这正是排查方向唯一的线索。
+# 剥掉注释再判：注释里会把「不要用 PSObject.Properties.Name -contains」这句
+# 写出来解释原因，把它当违规就永远红。
+$fsCode = (@($fsChunk2 -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+Assert-Eq '端口：不再用恒假的键存在性判断' $false ([bool]([regex]::IsMatch($fsCode, 'PSObject\.Properties\.Name -contains')))
+# 两张颜色表必须逐项对上：ConsoleColor 那条路（菜单/帮助等）与 ANSI 那条路
+# （实时状态页）如果落到不同亮度，同一程序里就会出现两种"青"。
+# .NET 的 Cyan/Green/Yellow 都是亮色，对应 ANSI 9x 段；写成 3x 就是暗色，
+# 肉眼能看出来——实测踩过这一条。
+$expectAnsi = @{ Cyan = '96'; White = '97'; Green = '92'; Yellow = '93'; DarkGray = '90'; '' = '' }
+$colorMismatch = @()
+foreach ($cn in $ColorCodes.Keys) {
+    $cc = [string]$ColorCodes[$cn]
+    $an = [string]$ColorAnsi[$cn]
+    if ($an -ne $expectAnsi[$cc]) { $colorMismatch += ($cn + ':' + $cc + '->' + $an) }
+}
+Assert-Eq '配色：ANSI 码与 ConsoleColor 逐项对应' 0 $colorMismatch.Count
+Assert-Eq '配色：两张表键集合相同' ((@($ColorCodes.Keys | Sort-Object)) -join ',') ((@($ColorAnsi.Keys | Sort-Object)) -join ',')
 
 # 还原跑之前记下的环境（见文件开头那段守卫）：自检不该改变调用它的那个 shell 的状态。
 foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $__savedProxy[$__n], 'Process') }

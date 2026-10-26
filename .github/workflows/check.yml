@@ -1413,14 +1413,22 @@ jobs:
           # 症状只会是"变慢"，没有任何断言会红，所以必须在这里挡住。
           # 状态页的**每一层**都要查，不能只查渲染那一层。
           #
-          # 状态页现在是两段：采集（Get-StatusSnapshot / get_status_snapshot）+ 渲染
-          # （Show-StatusSnapshot / show_status）。原来只截渲染函数，采集段整个在视野外——
-          # 往采集里插一行联网调用，门禁全绿放行，而它恰恰是最容易被插进去的地方
-          # （「顺手在这里查一下版本号」）。判据要跟着结构走，否则拆分层本身就成了漏洞。
+          # 状态页现在分三层：采集（Get-StatusSnapshot）+ 判读（Get-StatusProblems）
+          # + 渲染（Show-StatusSnapshot 静态 / Format-StatusLines 实时帧 / Show-StatusLive 循环）。
+          # 原来只截渲染函数，采集段整个在视野外——往采集里插一行联网调用，门禁全绿
+          # 放行，而它恰恰是最容易被插进去的地方（「顺手在这里查一下版本号」）。
+          # 判据要跟着结构走，否则拆分层本身就成了漏洞。
+          #
+          # 函数名要锚定到花括号，不能用 function (\w+) 这种前缀匹配：
+          # Show-Status 与 Show-StatusLive 同前缀，宽松正则会抓到后者，
+          # 前者反而漏检——这是加新函数时真踩过的。
           $statusLayersWin = @(
-            @('Get-StatusSnapshot',  '(?s)function Get-StatusSnapshot(.*?)(?=\nfunction )'),
-            @('Show-StatusSnapshot', '(?s)function Show-StatusSnapshot(.*?)(?=\nfunction )'),
-            @('Show-Status',         '(?s)function Show-Status(.*?)(?=\nfunction )')
+            @('Get-StatusSnapshot',  '(?s)function Get-StatusSnapshot\s*[\{\(](.*?)(?=\nfunction )'),
+            @('Get-StatusProblems',  '(?s)function Get-StatusProblems\s*[\{\(](.*?)(?=\nfunction )'),
+            @('Show-StatusSnapshot', '(?s)function Show-StatusSnapshot\s*[\{\(](.*?)(?=\nfunction )'),
+            @('Format-StatusLines',  '(?s)function Format-StatusLines\s*[\{\(](.*?)(?=\nfunction )'),
+            @('Show-StatusLive',     '(?s)function Show-StatusLive\s*[\{\(](.*?)(?=\nfunction )'),
+            @('Show-Status',         '(?s)function Show-Status\s*[\{\(](.*?)(?=\nfunction )')
           )
           $statusLayersMac = @(
             @('get_status_snapshot', '(?s)get_status_snapshot\(\) \{(.*?)\n\}'),

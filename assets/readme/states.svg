@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="448.4" viewBox="0 0 1200 448" role="img" aria-labelledby="statesTitle statesDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="448" viewBox="0 0 1200 448" role="img" aria-labelledby="statesTitle statesDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="statesTitle">日常三态：都不用管</title>
   <desc id="statesDesc">三个并列的状态格。连上翻墙软件就写入整套代理变量，6 到 10 秒；断开或退出就删掉变量恢复直连，退出约 8 秒，只断开约 15 到 50 秒，连回来约 10 到 25 秒；换端口、换软件、反复抖动都自动跟上，代理变量里的端口号也跟着改写成新的。重启电脑、搬家、双开也都不用管。</desc>
 
-  <rect width="1200" height="448.4" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.89" width="1198.5" height="446.63" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="448" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.89" width="1198.5" height="446.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="82.6" font-size="32" font-weight="700" fill="#E9EFF8">日常三态：都不用管</text>

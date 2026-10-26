@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="498.8" viewBox="0 0 1200 499" role="img" aria-labelledby="qsTitle qsDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="499" viewBox="0 0 1200 499" role="img" aria-labelledby="qsTitle qsDesc">
   <title id="qsTitle">三件事：装完之后要做的事</title>
   <desc id="qsDesc">三张并排卡片，说明装完之后会遇到的情况。第一张：装完之后打开的窗口，启动时读到的就是当前状态，什么都不用做。第二张：装完之后打开、后来代理又变了的窗口，按一次回车或随便运行一条命令就会重新读取。第三张：装之前就打开的窗口，安装时同步脚本没有加载进去，需要重新打开一次或手动加载。</desc>
 
-  <rect width="1200" height="498.8" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.87" width="1198.5" height="497.06" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="499" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.87" width="1198.5" height="497.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="83.52" font-size="32" font-weight="700" fill="#E9EFF8">装完之后要做的事，只有这三条</text>

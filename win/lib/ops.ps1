@@ -319,6 +319,9 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         Remove-ItemSafe $VersionCacheFile
         Remove-ItemSafe $UpdateInProgressFile
         Remove-ItemSafe $HeartbeatFile
+        # 状态快照。不删的后果与 version.cache 一字不差：重装后状态页会读到上一份
+        # 安装留下的结论（"已开启端口 7078"），而那是已经不存在的状态。
+        Remove-ItemSafe $StateSnapshotFile
         # 「上次提示过的代理状态」。不删的后果具体：重装后的监控会读到上一份安装留下的值，
         # 于是重装后第一次真实变化被当成「已经提示过了」而静默跳过——用户换了端口却什么提示都没有。
         Remove-ItemSafe (Get-ProxyNotifyStatePath)
@@ -447,111 +450,160 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
 # 内容一旦不一致，自检里有断言比对两者的行数。
 function Format-StatusLines($st) {
     $out = New-Object System.Collections.ArrayList
+    # 一行的标准形态：标签固定用 key 色，内容按状态取角色。
+    # 与 Write-StatusRow（静态页）同一条契约，只是这里产出字符串而不是直接打印。
+    $row = {
+        param([string]$Label, [string]$Value, [string]$Role = 'text', [string]$Suffix = '')
+        [void]$out.Add((Format-Styled 'key' ($Label + ' : ')) + (Format-Styled $Role ($Value + $Suffix)))
+    }
+    # 纯文本行（无标签的说明、标题、分隔线）按角色整行上色
+    $line = {
+        param([string]$Text, [string]$Role = 'text')
+        [void]$out.Add((Format-Styled $Role $Text))
+    }
 
     $problems = @(Get-StatusProblems $st)
-    [void]$out.Add('======== EnvProxy 状态（实时刷新）========')
+    & $line '======== EnvProxy 状态（实时刷新）========' 'title'
     if ($problems.Count -eq 0) {
-        [void]$out.Add('一切正常，不用做任何事。')
+        & $line '一切正常，不用做任何事。' 'ok'
     } else {
-        [void]$out.Add(('有 {0} 项要注意：' -f $problems.Count))
-        foreach ($p in $problems) { [void]$out.Add('  - ' + $p) }
+        & $line ('有 {0} 项要注意：' -f $problems.Count) 'warn'
+        foreach ($p in $problems) { & $line ('  - ' + $p) 'warn' }
     }
-    [void]$out.Add('')
+    & $line '' 'text'
 
     # 监控
     if ($st.Monitor) {
         $mpid = 0
         try { $mpid = [int]$st.Monitor.ProcessId } catch { $mpid = 0 }
         if ($mpid -gt 0) {
-            [void]$out.Add(('监控进程 : 运行中 (PID {0})' -f $mpid))
+            & $row '监控进程' ('运行中 (PID {0})' -f $mpid) 'ok'
         } else {
             # 心跳判活拿不到 PID：如实说"在写心跳"，不编一个号
-            [void]$out.Add('监控进程 : 运行中（心跳正常）')
+            & $row '监控进程' '运行中（心跳正常）' 'ok'
         }
     } elseif ($st.StopIntent) {
-        [void]$out.Add('监控进程 : 按你的选择停着')
+        & $row '监控进程' '按你的选择停着' 'dim'
     } elseif ($st.NeverInstalled) {
-        [void]$out.Add('监控进程 : 还没安装')
+        & $row '监控进程' '还没安装' 'dim'
     } else {
-        [void]$out.Add('监控进程 : 不在了（可能被结束任务关掉或崩溃）')
+        & $row '监控进程' '不在了（可能被结束任务关掉或崩溃）' 'warn'
     }
 
     # 自启
-    [void]$out.Add('开机自启 : ' + $(if ($st.AutoRunOk) { '已启用' } else { '没生效' }))
+    if ($st.AutoRunOk) { & $row '开机自启' '已启用' 'ok' }
+    else { & $row '开机自启' '没生效' 'warn' }
 
     # 翻墙代理
+    #
+    # 这一行与下面「代理变量」那一行必须交代清楚各自是什么时候的结论——
+    # 前者来自监控写的快照（2-3 秒一轮，且状态翻转要去抖两轮），后者是当场的试连。
+    # 实时页每 2 秒重算一次，如果不说清，用户会看到「已开启」和「端口已不在」同屏，
+    # 以为工具在抽风。快照里本来就有 pending_state（正在确认、尚未落定），
+    # 用它把「矛盾」说成「进行中」。
     if ($st.Port) {
         $ageNote = ''
-        if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok' -and $null -ne $st.Snapshot.AgeSec -and $st.Snapshot.AgeSec -gt $SnapshotFreshSec) {
-            $ageNote = ('（{0} 秒前的判断）' -f $st.Snapshot.AgeSec)
+        $pending = ''
+        if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') {
+            if ($null -ne $st.Snapshot.AgeSec -and $st.Snapshot.AgeSec -gt $SnapshotFreshSec) {
+                $ageNote = ('（{0} 秒前的判断）' -f $st.Snapshot.AgeSec)
+            }
+            # 正在去抖：状态已经疑似变了，但还没确认够轮数
+            $ps = ''
+            try { $ps = [string]$st.Snapshot.PendingState } catch { $ps = '' }
+            if ($ps) {
+                $what = if ($ps -match '^on:(\d+)$') { ('刚发现端口 {0}' -f $Matches[1]) }
+                        elseif ($ps -eq 'off') { '刚发现代理不在了' }
+                        else { $ps }
+                $pending = ('  · 正在确认：{0}' -f $what)
+            }
         }
-        [void]$out.Add(('翻墙代理 : 已开启（本地端口 {0} 监听中）{1}' -f $st.Port, $ageNote))
+        & $row '翻墙代理' ('已开启（本地端口 {0} 监听中）' -f $st.Port) 'ok' ($ageNote + $pending)
     } elseif ($st.PortUnknown) {
+        # 直接取值：$st 是 [ordered] 字典，缺键时取值是 $null、不会抛。
+        # 不要用 PSObject.Properties.Name -contains 判断键存在——对字典它返回的是
+        # 字典对象自身的属性（Count/Keys/Values），"-contains 某个键" 恒为假，
+        # 于是失败原因永远显示不出来，而这正是排查「是 netstat 形状变了还是权限问题」
+        # 唯一的线索。
         $why = ''
-        if ($st.PSObject.Properties.Name -contains 'PortEnumerationReason' -and $st.PortEnumerationReason) {
-            $why = '：' + $st.PortEnumerationReason
-        }
-        [void]$out.Add('翻墙代理 : 这一轮没读到端口，无法判断' + $why)
+        if ($st.PortEnumerationReason) { $why = '：' + $st.PortEnumerationReason }
+        & $row '翻墙代理' ('这一轮没读到端口，无法判断' + $why) 'warn'
     } else {
-        [void]$out.Add('翻墙代理 : 未检测到（当前无翻墙代理在运行）')
+        & $row '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
     }
 
-    # 终端同步
-    if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
-        [void]$out.Add('终端同步 : 已生效（已开着的窗口敲回车即跟上）')
-    } elseif ($st.TermSync) {
-        [void]$out.Add('终端同步 : ' + $st.TermSync.State)
+    # 终端同步：话术从 Get-TermSyncText 取，与静态页同源
+    if ($st.TermSync) {
+        $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
+        $role = if ($tt.Bad) { 'warn' } else { 'ok' }
+        & $row '终端同步' $tt.Text $role
+        if ($tt.Hint) {
+            foreach ($h in @($tt.Hint -split "`n")) {
+                if ($h) { & $line ('  ' + $h) 'dim' }
+            }
+        }
     } else {
-        [void]$out.Add('终端同步 : 状态未知')
+        & $row '终端同步' '状态未知' 'dim'
     }
 
     # 代理变量
     if ($st.ProxyValue -and $st.ProxyAlive) {
-        [void]$out.Add(('代理变量 : 已注入 ({0})' -f $st.ProxyValue))
+        & $row '代理变量' ('已注入 ({0})' -f $st.ProxyValue) 'ok'
     } elseif ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
-        [void]$out.Add(('代理变量 : 指向的端口已不在（{0}）' -f $st.ProxyValue))
+        & $row '代理变量' ('指向的端口已不在（{0}）' -f $st.ProxyValue) 'warn'
         $op = 0
         if ($st.ProxyPort) { $op = [int]$st.ProxyPort }
         if ($op -gt 0 -and $st.Port -and $op -ne [int]$st.Port) {
-            [void]$out.Add(('  变量里是旧端口 {0}，翻墙代理现在在 {1}。' -f $op, $st.Port))
-            [void]$out.Add('  监控在跑的话几秒内会自己跟过去。')
+            & $line ('  变量里是旧端口 {0}，翻墙代理现在在 {1}。' -f $op, $st.Port) 'dim'
+            & $line '  监控在跑的话几秒内会自己跟过去。' 'dim'
         } elseif (-not $st.Port) {
-            [void]$out.Add('  翻墙代理现在没在跑，所以这个地址已经没用了。')
+            & $line '  翻墙代理现在没在跑，所以这个地址已经没用了。' 'dim'
         }
     } elseif ($st.ProxyValue) {
-        [void]$out.Add(('代理变量 : 值不是合法地址（{0}）' -f $st.ProxyValue))
+        & $row '代理变量' ('值不是合法地址（{0}）' -f $st.ProxyValue) 'warn'
     } else {
-        [void]$out.Add('代理变量 : 无（直连状态）')
+        & $row '代理变量' '无（直连状态）' 'dim'
     }
 
     # 版本
     $verText = if ($st.LocalVersion) { 'v' + $st.LocalVersion } else { '未知' }
+    $verRole = 'value'
     if ($st.RemoteCache -and $st.RemoteCache.Version) {
         if ($st.LocalVersion -and ($st.RemoteCache.Version -eq $st.LocalVersion)) {
             $verText += '（已是最新）'
         } else {
             $verText += ('（新版 ' + $st.RemoteCache.Version + ' 可用，选 3 升级）')
+            $verRole = 'warn'
         }
     }
-    [void]$out.Add('版本 : ' + $verText)
+    & $row '版本' $verText $verRole
 
     # 日志尾
-    [void]$out.Add('---------------- 最近日志 ----------------')
+    #
+    # 裁到「窗口宽 - 2」，按**显示宽度**算而不是字符数：中文一字两格，
+    # 按字符数裁 78 会让中文密集的行实际占 90+ 格，折行——而这一层是按逻辑行
+    # 做绝对定位的，折行会让后面每一行都错位。Get-DisplayWidth 就是为此存在的，
+    # 静态页的 Show-RecentLog 已经这么做了，这里必须用同一个判据。
+    & $line '---------------- 最近日志 ----------------' 'title'
     $tail = ''
     if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') { $tail = [string]$st.Snapshot.LogTail }
     if (-not $tail) { try { $tail = [string](Get-LogTailText 3) } catch { $tail = '' } }
+    $logW = 0
+    try { $logW = (Get-ConsoleWidth) - 2 } catch { $logW = 78 }
+    if ($logW -lt 20) { $logW = 20 }
     if ($tail) {
         foreach ($ln in @($tail -split "`n")) {
             if (-not $ln) { continue }
-            if ($ln.Length -gt 78) { $ln = $ln.Substring(0, 77) + '…' }
-            [void]$out.Add('  ' + $ln)
+            & $line ('  ' + (Limit-DisplayText $ln $logW)) 'dim'
         }
     } else {
-        [void]$out.Add('  （暂无日志）')
+        & $line '  （暂无日志）' 'dim'
     }
 
-    [void]$out.Add('==================================')
-    [void]$out.Add('正在实时刷新 · 按 0 或 Esc 返回，按 2 看一次静态快照')
+    & $line '==================================' 'title'
+    # 提示只能写真正支持的键。写了却没人处理的键，用户按下去毫无反应，
+    # 会以为程序卡住了——比不写这句更糟。
+    & $line '正在实时刷新 · 按 0 或 Esc 返回' 'cmd'
     return $out.ToArray()
 }
 
@@ -560,11 +612,54 @@ function Format-StatusLines($st) {
 # 退出条件：按 0 / q / Esc。
 # 降级：不能画屏（重定向、无控制台、窗口太小）时直接打一次静态输出就走——
 #       与今天的行为逐字节相同，绝不往文件里塞控制字符。
+# 终端同步那两行的话术：状态码 -> 「一句结论 + 一句怎么办」。
+#
+# 为什么抽成数据而不是留在渲染里：状态码（ok/unpaired/blocked/stale/missing/nohost）
+# 是内部词汇，只有这张表知道怎么把它翻译给使用者。两条渲染路径各自 switch 一遍，
+# 结果就是实时页直接把 unpaired 印给用户、静态页给出中文——同一份数据两种说法。
+# 表在这里，两个渲染器都从它取，加新状态只改一处。
+function Get-TermSyncText([string]$State, $Sync) {
+    switch ($State) {
+        'ok'       { return @{ Text = '已生效（已开着的窗口敲回车即跟上）'; Hint = ''; Bad = $false } }
+        'blocked'  {
+            $detail = ''
+            try { $detail = [string]$Sync.Detail } catch { $detail = '' }
+            return @{ Text = '装了但跑不起来'; Hint = ($detail + "`n  按提示改一次，改完重开一个窗口。").Trim(); Bad = $true }
+        }
+        'unpaired' {
+            # 不能说"重跑一次安装可修复"——重跑同样会被这条护栏拒绝。
+            $line = 0
+            try { $line = [int]$Sync.Line } catch { $line = 0 }
+            $hint = if ($line -gt 0) {
+                ('删掉配置文件里孤立的那行标记（第 {0} 行）再选 1。' -f $line)
+            } else {
+                '在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。'
+            }
+            return @{ Text = '配置文件里的标记不成对，未改动它'; Hint = $hint; Bad = $true }
+        }
+        'stale'    {
+            # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
+            return @{ Text = '同步块是旧版本的'; Hint = '这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。'; Bad = $true }
+        }
+        'missing'  { return @{ Text = '配置文件里没有同步块'; Hint = '打开菜单选 1 可以写入。'; Bad = $true } }
+        'nohost'   { return @{ Text = '这一轮读不到配置文件路径，无法判断'; Hint = '过几秒再看一次；一直在就选 1。'; Bad = $true } }
+        default    {
+            # 走到这里说明 Get-TerminalSyncState 又加了新状态而这张表没跟上。
+            # 必须打印出来：问题清单会说"终端同步没生效"，而整屏找不到那四个字，
+            # 用户被指向一个不存在的提示（真发生过：State 叫 nohost、switch 处理 unknown）。
+            return @{ Text = ('状态未知（' + $State + '）'); Hint = '打开菜单选 1（安装 / 修复）重写一次。'; Bad = $true }
+        }
+    }
+}
+
+# 实时状态页：进屏幕、自己刷新、按 0/Esc 退出。
+# 画不了屏（重定向 / 无控制台 / 窗口太小）时退回一次性静态输出。
 function Show-StatusLive {
     $st = Get-StatusSnapshot
     $frame = @(Format-StatusLines $st)
 
-    if (-not (Test-CanDrawScreen -NeedLines $frame.Count)) {
+    $need = Measure-ScreenFrame $frame
+    if (-not (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width)) {
         # 降级：退回今天的一次性输出
         Show-StatusSnapshot $st
         return
@@ -584,9 +679,14 @@ function Show-StatusLive {
             if ($sw.ElapsedMilliseconds -ge $nextPaint) {
                 try { $st = Get-StatusSnapshot } catch { }
                 $frame = @(Format-StatusLines $st)
-                if (Test-CanDrawScreen -NeedLines $frame.Count) {
+                $need = Measure-ScreenFrame $frame
+                if (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width) {
                     $null = Write-ScreenFrame -Old $prev -New $frame
                     $prev = $frame
+                } else {
+                    # 画不了（窗口太小）。作废记账：等窗口恢复时必然整帧重画，
+                    # 否则屏幕上会停着半截旧帧，而"变化的行"永远补不齐它。
+                    $prev = @()
                 }
                 # 固定 2 秒刷新：与监控的探测节奏（2-3 秒）对齐。
                 # 比监控更快没有意义——数据本身就是监控写的，它 2 秒才更新一次。
@@ -594,6 +694,9 @@ function Show-StatusLive {
             }
             $k = Wait-ScreenKey -Milliseconds $ScreenPollMs
             if ($k -eq 'Quit') { break }
+            # 'Error' = 读键通道没了（控制台句柄失效之类）。继续转下去只会空转，
+            # 而且永远等不到 Quit —— 交回屏幕退出，别让用户面对一台变卡的机器。
+            if ($k -eq 'Error') { break }
         }
     } finally {
         # 任何退出路径都要恢复：Ctrl+C 走 finally，光标不会永久消失。
@@ -851,38 +954,14 @@ function Show-StatusSnapshot($st) {
         Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 5 把这批变量一并清掉。"
     }
     if ($st.TermSync) {
-        # 注意正常的 'ok' 不在这张表里：它在下面"参考信息"那一段单独打印
-        # （正常项与异常项分区显示，不是一个 switch 能表达的）。
-        # 这个 switch 只管"有问题的那几种"，default 负责兜住将来新增而这里没跟上的状态。
-        switch ($st.TermSync.State) {
-            'ok'       { }
-            'blocked'  { Write-StatusRow '终端同步' '装了但跑不起来' 'warn'
-                         Write-Styled 'dim' ("  " + $st.TermSync.Detail)
-                         Write-Styled 'dim' "  按提示改一次，改完重开一个窗口。" }
-            'unpaired' { Write-StatusRow '终端同步' '配置文件里的标记不成对，未改动它' 'warn'
-                         # 这里不能说"重跑一次安装可修复"——重跑同样会被这条护栏拒绝，
-                         # 用户会反复重跑、每次都被"安全起见一个字节都没动"回绝。
-                         # 必须给一条真的能做成的动作。
-                         if ($st.TermSync.Line) {
-                             Write-Styled 'dim' ("  删掉配置文件里孤立的那行标记（第 " + $st.TermSync.Line + " 行）再选 1。")
-                         } else {
-                             Write-Styled 'dim' "  在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。"
-                         } }
-            'stale'    { Write-StatusRow '终端同步' '同步块是旧版本的' 'warn'
-                         # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
-                         Write-Styled 'dim' "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" }
-            'missing'  { Write-StatusRow '终端同步' '配置文件里没有同步块' 'warn'
-                         Write-Styled 'dim' "  打开菜单选 1 可以写入。" }
-            'nohost'   { Write-StatusRow '终端同步' '这一轮读不到配置文件路径，无法判断' 'warn'
-                         Write-Styled 'dim' "  过几秒再看一次；一直在就选 1。" }
-            default    {
-                # 走到这里说明 Get-TerminalSyncState 又加了新状态而这里没跟上。
-                # 静默跳过不行：上面的问题清单会说"终端同步没生效"，而往下整屏
-                # 找不到"终端同步"四个字——用户被指向一个不存在的提示。
-                # 这是真发生过的一次（State 叫 nohost，switch 处理的是 unknown，
-                # 两者恰好错位，于是这一项永远不打印）。
-                Write-StatusRow '终端同步' ("状态未知（" + $st.TermSync.State + "）") 'warn'
-                Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重写一次。"
+        # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。
+        $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
+        if ($tt.Text -ne '已生效（已开着的窗口敲回车即跟上）') {
+            Write-StatusRow '终端同步' $tt.Text 'warn'
+            if ($tt.Hint) {
+                foreach ($h in @($tt.Hint -split "`n")) {
+                    if ($h) { Write-Styled 'dim' ('  ' + $h) }
+                }
             }
         }
     }
@@ -977,6 +1056,26 @@ function Show-VersionLines($st) {
     }
 }
 
+# 把一段文本裁到指定**显示宽度**，超出时末尾补省略号。
+#
+# 为什么不用 .Length：中文一字两格。按字符数裁 78 会让中文密集的行实际占 90+ 格，
+# 在 80 列窗口里折行——而状态页是按逻辑行做绝对定位的，折行会让后面每行都错位。
+# 这是唯一实现：静态页的最近日志与实时页的日志段都调它，不许各写一份。
+function Limit-DisplayText([string]$Text, [int]$Width) {
+    if (-not $Text) { return '' }
+    if ($Width -le 1) { return '' }
+    if ((Get-DisplayWidth $Text) -le $Width) { return $Text }
+    $acc = ''
+    $accW = 0
+    foreach ($ch in $Text.ToCharArray()) {
+        $cw = Get-CharWidth $ch
+        if ($accW + $cw -gt ($Width - 1)) { break }
+        $acc += $ch
+        $accW += $cw
+    }
+    return $acc + '…'
+}
+
 # 最近日志：读最后 3 行，按窗口宽度裁。纯读+打印，不探测、不写文件。
 function Show-RecentLog {
     Write-Styled 'title' "---------------- 最近日志 ----------------"
@@ -999,17 +1098,7 @@ function Show-RecentLog {
     if ($logW -lt 40) { $logW = 40 }
     foreach ($logLine in ([System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3)) {
         $shown = $logLine
-        if ((Get-DisplayWidth $shown) -gt $logW) {
-            $acc = ''
-            $accW = 0
-            foreach ($ch in $shown.ToCharArray()) {
-                $cw = Get-CharWidth $ch
-                if ($accW + $cw -gt ($logW - 1)) { break }
-                $acc += $ch
-                $accW += $cw
-            }
-            $shown = $acc + '…'
-        }
+        $shown = Limit-DisplayText $shown $logW
         Write-Styled 'dim' "  $shown"
     }
     Write-Styled 'title' "=================================="
@@ -1709,7 +1798,9 @@ function Show-Menu {
         # 与 Mac 侧对 help 的处理同一理由——那边也是"要回菜单的留在本进程"。
         if ($item[0].Switch -eq "Status") {
             Show-StatusLive
-            Clear-Screen
+            # 不清屏：Exit-Screen 已经把光标放到内容下方，菜单会自然接在后面画。
+            # 清一次屏等于用户按完 0 屏幕先白一下——那正是"不要闪"要避免的事，
+            # 只是从刷新中挪到了退出瞬间。
             $mode = "menu"
             continue
         }

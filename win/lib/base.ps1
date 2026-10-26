@@ -128,26 +128,34 @@ $DefaultNoProxy = "localhost,127.0.0.1,::1"
 # 门禁 6 核对。改这里就是改「帮助一屏能放多少」，不是调样式。
 $HelpMaxLines = 30
 
-# ---- 屏幕渲染层的常量（一处定义，两侧同值，门禁 6 核对）----
+# ---- 屏幕渲染层的常量（仅 Windows 侧有实现；Mac 侧状态页仍是一次性输出）----
 # 最小可用终端：宽度不够时一折行就认不出「标签 : 内容」的结构，宁可不刷新。
 # 40 与 Get-ConsoleWidth 的下限同一个数：那里也认为 40 是能正常阅读的底线。
 $ScreenMinWidth = 40
-# 最小可用高度：低于这个数，状态页（正常态约 23 屏行）连正文都放不下。
-# 20 的依据：标题 1 + 结论 1 + 空行 1 + 六项状态 6 + 版本 1 + 分隔 1 + 提示 1 = 12，
-# 再留 8 行给「出问题时多出来的说明」，低于 20 就只能靠裁剪硬塞，不如退回静态。
+# 最小可用高度：低于这个数，状态页（正常约 15 屏行、出问题时约 23 屏行）连正文都放不下。
+# 20 的依据：标题 1 + 结论 1 + 空行 1 + 六项状态 6 + 版本 1 + 日志段 5 + 提示 1 = 16，
+# 再留 4 行给多出来的问题说明；低于 20 就只能靠裁剪硬塞，不如退回静态。
 $ScreenMinHeight = 20
 # 内容区下方要留的行数：一行给「按 0 返回」的提示，一行给光标。
 $ScreenBottomMargin = 2
 # 「等一小会儿看有没有按键」的轮询间隔（毫秒）。
 # 150 的来源：比一次屏幕重画（实测 0.06–3 毫秒）大两个数量级，
 # 不会空转烧 CPU；又足够小到按键感觉得到即时。
-# Mac 侧对应 STATUS_POLL_MS，但那边受 bash 3.2 的 read -t 只认整数秒限制，
-# 值不同（DIVERGE(mac): bash 3.2 没有亚秒超时），门禁 6 只核对「两侧都有这个常量」。
+# Mac 侧若补实时刷新，对应的常量受 bash 3.2 的 read -t 只认整数秒限制，
+# 值必然不同（DIVERGE(Mac): bash 3.2 没有亚秒超时）。
 $ScreenPollMs = 150
+# 读键连续失败多少次就放弃等键。用于「控制台句柄中途失效」这种没法恢复的情况：
+# 继续空转只会把一个核吃满，不如交回 Error 让调用方退出循环。
+$ScreenKeyFailLimit = 3
 # 实时刷新间隔（毫秒）。固定 2000，不做智能变速：
 # 监控本身 2-3 秒才更新一次状态快照，刷得比它快没有意义；
 # 而固定值让「多久能看到变化」这件事可预期，不会时快时慢。
 $StatusRefreshIntervalMs = 2000
+# 上一帧画完时的窗口尺寸。用它判断「终端有没有被改过大小」：
+# 尺寸一变，屏幕上第几行是什么就全变了，必须整帧重画（见 Write-ScreenFrame）。
+# 初值故意留空（$null）：第一次画必然与它不等，于是第一帧天然是整帧重画。
+$script:ScreenLastWidth = $null
+$script:ScreenLastHeight = $null
 
 # 日志体积上限与截断后保留的行数。写成具名常量而不是散在代码里的 200KB / 200：
 # 文档里印着这两个数，两侧也各写了一遍，散着放就一定会有一天改一处漏一处。
@@ -169,6 +177,24 @@ $ColorCodes = @{
     yellow      = 'Yellow'    # 要留意
     darkgray    = 'DarkGray'  # 次要说明
     none        = ''          # 终端自己的默认前景色，不与使用者的配色方案打架
+}
+
+# 颜色名 -> ANSI 前景码。与 $ColorCodes 是同一套颜色名的两种写法：
+#   Write-Styled 那条路走 [ConsoleColor]（逐段 Write-Host，带 NoNewline）；
+#   屏幕渲染层那条路走 ANSI（整帧拼一个字符串一次写出，实测快 39 倍）。
+#
+# 码值必须与 [ConsoleColor] 的语义**逐项对上**，否则同一个程序里会出现两种"青"：
+# .NET 的 Cyan/Green/Yellow 都是亮色（控制台调色板里亮的那一档），对应 ANSI 的 9x 段；
+# 写成 3x 段就是暗青/暗绿/暗黄，肉眼一眼能看出差别——实测踩过这一条，
+# cyan 写成 36，实时页的标题比菜单/帮助的标题暗一档。
+# White 在 .NET 里本来就是亮白（97），DarkGray 对应 90。
+$ColorAnsi = @{
+    cyan        = '96'   # 亮青，等同 [ConsoleColor]::Cyan
+    brightwhite = '97'   # 亮白，等同 [ConsoleColor]::White
+    green       = '92'   # 亮绿，等同 [ConsoleColor]::Green
+    yellow      = '93'   # 亮黄，等同 [ConsoleColor]::Yellow
+    darkgray    = '90'   # 灰，等同 [ConsoleColor]::DarkGray
+    none        = ''
 }
 
 # 角色 -> 颜色名。顺序即声明顺序，$StyleRoles 从它派生，不另抄一份。
@@ -207,6 +233,23 @@ function Write-Styled([string]$Role, [string]$Text, [switch]$NoNewline) {
     $c = Get-StyleColor $Role
     if ($c) { Write-Host $Text -ForegroundColor $c -NoNewline:$NoNewline }
     else { Write-Host $Text -NoNewline:$NoNewline }
+}
+
+# 角色 -> ANSI 前景码。屏幕渲染层那条路用它（整帧拼一个字符串），
+# 与 Write-Styled 共用 $StyleMap / $ColorAnsi，颜色名是同一个。
+function Get-StyleAnsi([string]$Role) {
+    $name = Get-StyleColorName $Role
+    if ($ColorAnsi.ContainsKey($name)) { return [string]$ColorAnsi[$name] }
+    return ''
+}
+
+# 把一段文字按角色包上 ANSI 颜色。给屏幕渲染层用——那一层只认字符串，
+# 而"一行的标签固定色、内容按状态变色"这条契约要求一行里有多个颜色段。
+# 于是分段上色在**调用方**拼字符串时完成，渲染层只管画。
+function Format-Styled([string]$Role, [string]$Text) {
+    $code = Get-StyleAnsi $Role
+    if (-not $code) { return $Text }
+    return ([char]27 + '[' + $code + 'm' + $Text + [char]27 + '[0m')
 }
 
 # 是否跑在提权身份下：提权后 HKCU 指向管理员的配置，装/停/卸动的都是"另一个人"的状态。
@@ -487,9 +530,22 @@ function Get-CharWidth([char]$Ch) {
 # 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
 # 所有需要对齐的地方都走这一处。
 function Get-DisplayWidth([string]$Text) {
+    if (-not $Text) { return 0 }
+    # ANSI 颜色序列不占格子——终端把它当控制指令执行，屏幕上不留宽度。
+    # 不剥掉就会把 ESC[36m 这类序列也算进去：实测一行 34 格的标题被算成 51 格，
+    # 于是 Measure-ScreenFrame 误判"这帧太宽、画不下"而白白降级，日志裁剪也会截短。
+    # 渲染层的着色与度量必须在这一点上对齐。
+    $clean = [regex]::Replace($Text, [string][char]27 + '\[[0-9;]*[A-Za-z]', '')
     $w = 0
-    foreach ($ch in $Text.ToCharArray()) { $w += (Get-CharWidth $ch) }
+    foreach ($ch in $clean.ToCharArray()) { $w += (Get-CharWidth $ch) }
     return $w
+}
+
+# 去掉一行里的 ANSI 颜色序列，只留可见文字。
+# 需要按"可见字符位置"切分的场合用它；纯算宽度用 Get-DisplayWidth 即可。
+function Remove-AnsiColor([string]$Text) {
+    if (-not $Text) { return '' }
+    return [regex]::Replace($Text, [string][char]27 + '\[[0-9;]*[A-Za-z]', '')
 }
 
 # 把一段文字按终端可见宽度补空格（中文按两格算）。
@@ -591,7 +647,7 @@ function Clear-Screen {
 #
 # 判据要**一次问清**，不许各页面自己再判一遍：项目里 "IsOutputRedirected" 这个
 # 判断已经有四处，散着判必然漂移。
-function Test-CanDrawScreen([int]$NeedLines = 0) {
+function Test-CanDrawScreen([int]$NeedLines = 0, [int]$NeedWidth = 0) {
     try {
         if ([Console]::IsOutputRedirected) { return $false }
         if ([Console]::IsInputRedirected) { return $false }
@@ -603,12 +659,31 @@ function Test-CanDrawScreen([int]$NeedLines = 0) {
         if ($h -lt $ScreenMinHeight) { return $false }
         # 留 ScreenBottomMargin 行给「按 0 返回」那行提示 + 光标所在行
         if ($NeedLines -gt 0 -and ($NeedLines + $ScreenBottomMargin) -gt $h) { return $false }
+        # 宽度也要按**这一帧的实际最宽行**判：固定 40 只是「能读」的底线，
+        # 而帧里有 82 列的日志行。80 列窗口放着 82 列的行，终端会折行——
+        # 折出来的物理行不在这一层的记账里，后面每一行的绝对定位就全错位了。
+        if ($NeedWidth -gt 0 -and $NeedWidth -gt $w) { return $false }
         # 光标定位能力本身要能拿到：拿不到就说明没有真控制台
         $null = [Console]::CursorTop
         return $true
     } catch {
         return $false
     }
+}
+
+# 一帧要占多少屏：行数 + 最宽行的显示宽度。
+# 判「画不画得下」必须用这两个真实值，不能拿固定的最小宽高去猜——
+# 最小宽高只是"能读"的底线，而真实帧里可能有 80+ 列的行、23 行的最坏情况。
+function Measure-ScreenFrame([string[]]$Lines = @()) {
+    $n = @($Lines).Count
+    $w = 0
+    foreach ($ln in $Lines) {
+        $s = [string]$ln
+        $dw = 0
+        try { $dw = Get-DisplayWidth $s } catch { $dw = $s.Length }
+        if ($dw -gt $w) { $w = $dw }
+    }
+    return @{ Lines = $n; Width = $w }
 }
 
 # 把一帧内容画到屏幕起点，返回这一帧实际占了多少屏幕行。
@@ -620,13 +695,26 @@ function Test-CanDrawScreen([int]$NeedLines = 0) {
 function Write-ScreenFrame {
     param(
         [string[]]$Old = @(),
-        [string[]]$New = @(),
-        [ConsoleColor]$DefaultColor = [ConsoleColor]::Gray
+        [string[]]$New = @()
     )
     if (-not (Test-CanDrawScreen)) { return 0 }
     $n = @($New).Count
     $o = @($Old).Count
     if ($n -eq 0 -and $o -eq 0) { return 0 }
+
+    # 窗口尺寸一变，终端会把已有内容重新折行，屏幕上"第几行是什么"整个失效——
+    # 而这一层的记账（$Old）是按逻辑行算的。此时如果继续只重画"变化的行"，
+    # 没变化的行会永远停在错位状态（实测：窗口拉小再拉回，11 轮刷新都修不好）。
+    # 所以尺寸一有变化就作废记账、整帧重画。这是唯一能一次覆盖
+    # "缩小时/拉大时/中途变/恢复时"的判据，不用逐个场景处理。
+    $w = 0; $h = 0
+    try { $w = [Console]::WindowWidth; $h = [Console]::WindowHeight } catch { }
+    if ($w -ne $script:ScreenLastWidth -or $h -ne $script:ScreenLastHeight) {
+        $script:ScreenLastWidth = $w
+        $script:ScreenLastHeight = $h
+        $Old = @()
+        $o = 0
+    }
 
     # 先把整帧拼成一个字符串再一次写出。
     # 为什么不是逐行 Write-Host：实测 12 行逐行写要 9.28 毫秒，一次拼接写出
@@ -693,16 +781,30 @@ function Exit-Screen {
 # 只能自己用 KeyAvailable 轮询。
 function Wait-ScreenKey([int]$Milliseconds = 150) {
     $elapsed = 0
+    $fails = 0
     while ($elapsed -lt $Milliseconds) {
+        $got = $null
         try {
             if ([Console]::KeyAvailable) {
                 $k = [Console]::ReadKey($true)
                 if ($k.Key -eq 'Escape') { return 'Quit' }
                 $c = [string]$k.KeyChar
                 if ($c -eq '0' -or $c -eq 'q' -or $c -eq 'Q') { return 'Quit' }
-                return $c
+                # 空字符 = 功能键（方向键、F1 之类，KeyChar 是 \0）。
+                # 它不是一个"输入"，不该结束这一轮等待：直接返回会让连按方向键的人
+                # 把刷新节奏打乱（每次按键都提前结束等待）。当作没按，继续等。
+                if ($c) { $got = $c }
             }
-        } catch { return '' }
+        } catch {
+            # 读键失败（stdin 被夺走、控制台句柄失效）不等于"没按键就立刻返回"。
+            # 立刻返回会让调用方的 while 循环毫无间隔地空转——实测那样一秒能转
+            # 几千次、把一个核吃满，而且永远退不出去（拿不到 Quit）。
+            # 这里必须照常歇一个轮询周期；连续失败太多次说明输入通道真的没了，
+            # 交回一个 Error 让调用方退出循环，而不是陪着它空转。
+            $fails++
+            if ($fails -ge $ScreenKeyFailLimit) { return 'Error' }
+        }
+        if ($got) { return $got }
         Start-Sleep -Milliseconds $ScreenPollMs
         $elapsed += $ScreenPollMs
     }

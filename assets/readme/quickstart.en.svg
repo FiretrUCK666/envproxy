@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="498.8" viewBox="0 0 1200 499" role="img" aria-labelledby="qsTitle qsDesc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="499" viewBox="0 0 1200 499" role="img" aria-labelledby="qsTitle qsDesc">
   <title id="qsTitle">Three things: what to do after installing</title>
   <desc id="qsDesc">Three side-by-side cards explaining what you will run into after installing. Card one: a window opened after installing reads the current state when it starts, so nothing is needed. Card two: a window opened after installing where the proxy changed later, press Enter once or run any command and it reads again. Card three: a window opened before installing never had the sync script loaded into it, so reopen it or load the script by hand.</desc>
 
-  <rect width="1200" height="498.8" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.87" width="1198.5" height="497.06" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="499" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.87" width="1198.5" height="497.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="83.52" font-size="32" font-weight="700" fill="#E9EFF8">Only three things to do after installing</text>

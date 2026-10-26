@@ -3,7 +3,7 @@
   <desc id="firstDesc">Three steps: download the package for your platform, open the win folder, double-click the menu and pick 1 "Install / Repair", and you are done when you see the monitor started message. Below are two terminal windows side by side: a window opened after the install takes effect right away, while a window that was already open before it also catches up once you reopen it or load the hook by hand. Installing itself registers start at login, writes a terminal sync hook, starts the monitor, and corrects the environment variables once.</desc>
 
   <rect width="1200" height="468" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="468" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="466.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="84" font-size="32" font-weight="700" fill="#E9EFF8">What happens when you install</text>

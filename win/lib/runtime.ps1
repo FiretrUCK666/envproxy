@@ -172,22 +172,34 @@ $SnapshotUsableSec = 60
 #   同一个语义「超过这么久就认为监控不在了」，两处必须同值。
 $SnapshotStaleSec = 240
 
-# 把值里的换行与等号转义掉，保证一行一个键值对、且切分点唯一。
+# 把值里的换行转义掉，保证一行一个键值对、且切分点唯一。
 function ConvertTo-SnapshotValue([string]$Text) {
     if ($null -eq $Text) { return '' }
     $s = [string]$Text
-    $s = $s -replace "`r`n", '\n'
-    $s = $s -replace "`n", '\n'
-    $s = $s -replace "`r", '\n'
-    # 键值对以第一个 = 切分，所以值里的 = 其实无害；但控制器字符会破坏显示，一并去掉
+    # 换行编成 %0A（URL 风格百分号转义），百分号本身编成 %25 —— 先编百分号再编换行。
+    # 为什么不用反斜杠：Windows 路径里全是反斜杠（C:\nodejs\npm），拿 \n 当换行标记
+    # 就必须同时转义反斜杠本身，而两层转义在 PowerShell 字符串里极易写错——实测
+    # 那样写往返不闭环，含 \n 的路径会被劈成两行，字段随之静默丢失。
+    # 百分号转义只有一层，也不与路径里的字符冲突。
+    $s = $s.Replace('%', '%25')
+    $s = $s -replace "`r`n", '%0A'
+    $s = $s -replace "`n", '%0A'
+    $s = $s -replace "`r", '%0A'
+    # 键值对以第一个 = 切分，所以值里的 = 无害；控制字符会破坏显示，一并去掉
     $s = $s -replace "[\x00-\x08\x0B\x0C\x0E-\x1F]", ''
     return $s
 }
 
-# 把转义过的值还原成原样。
+# 把转义过的值还原成原样。顺序与 ConvertTo 相反：先还原换行，再还原百分号。
+#
+# 不做"老格式（字面 \n）"的兼容：那需要把 \n 也当换行，而 Windows 路径里全是反斜杠，
+# C:\nodejs\npm 会被劈成两行——这比它想解决的问题更糟。升级瞬间旧监控写下的那几份
+# 快照会被判成"一行超长日志"，最多持续到监控重启（用户重跑一次安装即结束），
+# 而状态页对读不懂的数据本来就会退回实时探测，不会说错话。
 function ConvertFrom-SnapshotValue([string]$Text) {
     if (-not $Text) { return '' }
-    return ([string]$Text).Replace('\n', "`n")
+    $s = ([string]$Text).Replace('%0A', "`n")
+    return $s.Replace('%25', '%')
 }
 
 # 写一份快照。所有字段由调用方算好传进来——这里不做任何判断，只负责落盘。
@@ -1431,18 +1443,30 @@ function Test-MonitorAlive {
 # 它**不**用于"停止/卸载"这类会动别人进程的动作：那些必须走完整身份校验
 # （命令行 + 启动时刻），认错进程的代价不对称。
 function Get-MonitorProcessFast {
+    # 心跳文件只证明「某个监控进程在 240 秒内写过它」，不证明**那个 pid 现在还活着**：
+    # 强杀、崩溃、断电都留下一个新鲜的心跳。所以拿到 pid 之后必须核一次存在性。
+    # 这里用 Get-Process -Id（单查，个位数毫秒），不是要 170 毫秒的 Get-CimInstance。
     try {
-        if (Test-Item $HeartbeatFile) {
-            $age = ((Get-Date) - (Get-Item -LiteralPath $HeartbeatFile -ErrorAction Stop).LastWriteTime).TotalSeconds
-            if ($age -ge 0 -and $age -le $HeartbeatMaxSec) {
-                $beatPid = 0
-                try {
-                    $parts = @((Read-Text $HeartbeatFile).Trim() -split '\s+')
-                    if ($parts.Count -ge 1) { [void][int]::TryParse($parts[0], [ref]$beatPid) }
-                } catch {}
-                return [pscustomobject]@{ ProcessId = $beatPid; CommandLine = ""; Alive = $true }
-            }
+        if (-not (Test-Item $HeartbeatFile)) { return $null }
+        $beatPid = 0
+        $wantTicks = 0
+        try {
+            $parts = @((Read-Text $HeartbeatFile).Trim() -split '\s+')
+            if ($parts.Count -ge 1) { [void][int]::TryParse($parts[0], [ref]$beatPid) }
+            if ($parts.Count -ge 2) { [void][long]::TryParse($parts[1], [ref]$wantTicks) }
+        } catch { return $null }
+        if ($beatPid -le 0) { return $null }
+
+        # pid 对得上还不够：系统回收 pid 后新进程会顶替它。
+        # 心跳里记着写它的那个进程的启动时刻，两者都对上才认。
+        $proc = Get-Process -Id $beatPid -ErrorAction SilentlyContinue
+        if (-not $proc) { return $null }
+        if ($wantTicks -gt 0) {
+            $actualTicks = 0
+            try { $actualTicks = [long]$proc.StartTime.Ticks } catch { return $null }
+            if ($actualTicks -ne $wantTicks) { return $null }
         }
+        return [pscustomobject]@{ ProcessId = $beatPid; CommandLine = ""; Alive = $true }
     } catch {}
     return $null
 }
@@ -1862,6 +1886,9 @@ function Run-MonitorLoop {
         # 停止流程就打印"监控进程未能停止（请检查是否有别的窗口正在运行它）"——
         # 而监控其实已经退干净了。测试里真出现过这句，用户会以为出了问题。
         try { Remove-ItemSafe $HeartbeatFile } catch {}
+        # 快照与心跳同理：留着它，停止之后状态页会在 SnapshotStaleSec 的窗口内
+        # 继续把上一轮结论当成"当前状态"，报出"翻墙代理已开启"而变量已经删光。
+        try { Remove-ItemSafe $StateSnapshotFile } catch {}
         try { Remove-ItemSafe $StopFlag } catch {}
     }
     $mutex.ReleaseMutex()

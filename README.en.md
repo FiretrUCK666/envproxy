@@ -695,7 +695,6 @@ Installing writes files to three places. **None of them is the folder you downlo
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
-| | `state.snapshot` | state snapshot written by the background program; the status page only reads it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
