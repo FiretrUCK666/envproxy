@@ -563,7 +563,10 @@ EOF
     while :; do
         _ssl_now=$(date +%s)
         if [ "$_ssl_now" -ge "$_ssl_next" ]; then
-            _ssl_frame=$(format_status_lines)
+            # 渲染失败就保留上一帧：状态页是"看一眼"用的，不该被一帧失败踢出去。
+            # 与 Windows 侧同一处理（那边两个调用各包一层 try）。
+            _ssl_new=$(format_status_lines 2>/dev/null)
+            [ -n "$_ssl_new" ] && _ssl_frame="$_ssl_new"
             _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
             _ssl_width=0
             while IFS= read -r _ssl_l; do

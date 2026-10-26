@@ -687,8 +687,12 @@ function Show-StatusLive {
         while ($true) {
             # 到点就重新算一帧。算之前先判能不能画——用户可能刚把窗口拉小。
             if ($sw.ElapsedMilliseconds -ge $nextPaint) {
-                try { $st = Get-StatusSnapshot } catch { }
-                $frame = @(Format-StatusLines $st)
+                # 两个调用都要保护：取数失败留下一堆 $null 会顺着渲染冒泡，
+                # 而渲染里几十处属性访问全靠输入恰好齐全——加一个可能为空的字段就抛。
+                # 抛出去会让整个状态页退出（用户只是看一眼，不该被一帧失败踢出来），
+                # 所以渲染失败就保留上一帧，下一轮再试。
+                try { $st = Get-StatusSnapshot } catch { $st = $null }
+                try { $frame = @(Format-StatusLines $st) } catch { $frame = $prev }
                 $need = Measure-ScreenFrame $frame
                 if (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width) {
                     $null = Write-ScreenFrame -Old $prev -New $frame
