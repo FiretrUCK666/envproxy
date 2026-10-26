@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="806" viewBox="0 0 1200 806" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="880" viewBox="0 0 1200 880" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">菜单每个选项影响什么</title>
-  <desc id="buttonsDesc">八行五列的对照表。行是菜单里的八个选项：安装修复、查看状态、检查更新、帮助、高级功能、停止监控、一键恢复、退出。列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定，回转箭头表示装新版时会重建或重启。安装会校正环境变量；查看状态、帮助、退出什么都不改；高级功能只新建启动脚本目录，不动这五样；停止清掉监控与环境变量、留下自启与定位器；一键恢复全部清除、只留日志。</desc>
+  <desc id="buttonsDesc">九行五列的对照表。行是菜单里的九个选项：安装修复、查看状态、检查更新、帮助、高级功能、停止监控、一键恢复、问题反馈、退出。列是开机自启、监控进程、环境变量、日志、定位器与路径记录。对勾表示保留，横线表示清掉，圆点表示只读不动，正负号表示按当前有没有在翻墙来定。安装会校正环境变量；查看状态、帮助、退出什么都不改；高级功能只建启动脚本目录；停止清掉监控与环境变量、留下自启与定位器；一键恢复全部清除、只留日志；问题反馈只读不写。</desc>
 
-  <rect width="1200" height="806" rx="20" fill="#17263E"/>
-  <rect x="0.75" y="0.75" width="1198.5" height="804.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
+  <rect width="1200" height="880" rx="20" fill="#17263E"/>
+  <rect x="0.75" y="0.75" width="1198.5" height="878.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
 
   <g id="heading">
     <text x="56" y="92" font-size="36" font-weight="700" fill="#E9EFF8">菜单每个选项影响什么</text>
   </g>
 
   <g id="legend">
-    <path d="M62 155L68 161L80 148" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M62 152L68 158L80 144" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
     <text x="100" y="162" font-size="22" fill="#94A6BE">保留</text>
     <path d="M183 155H203" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
     <text x="222" y="162" font-size="22" fill="#94A6BE">清掉</text>
@@ -18,14 +18,6 @@
     <text x="344" y="162" font-size="22" fill="#94A6BE">只读不动</text>
     <path d="M471 151H491M481 146V160M471 164H491" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
     <text x="510" y="162" font-size="22" fill="#94A6BE">看当前有没有在翻墙</text>
-    <path d="M757 147A8.5 8.5 0 1 1 757 163M753.5 163L757 163L759.5 158.5" fill="none" stroke="#60A5FA" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="786" y="162" font-size="22" fill="#94A6BE">装新版时重建</text>
-  </g>
-
-  <g id="grid" fill="none" stroke-width="1.5">
-    <path d="M276 216V730M483 216V730M624 216V730M824 216V730M905 216V730M1144 216V730" stroke="#2A3B58"/>
-    <path d="M56 216H1144M56 730H1144" stroke="#2A3B58"/>
-    <path d="M56 266H1144" stroke="#33486B"/>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">
@@ -36,61 +28,72 @@
     <text x="1024" y="250">定位器与路径记录</text>
   </g>
 
+  <g id="table-frame" stroke="#2A3B58">
+    <path d="M56 216H1144M56 846H1144"/>
+    <path d="M56 266H1144" stroke="#33486B"/>
+  </g>
+
   <g id="row-labels" font-size="23" fill="#E9EFF8">
-    <text x="56" y="303">1 安装 / 修复</text>
-    <text x="56" y="361">2 查看状态</text>
-    <text x="56" y="419">3 检查更新</text>
-    <text x="56" y="477">4 帮助</text>
-    <text x="56" y="535">7 高级功能</text>
-    <text x="56" y="593">5 停止监控</text>
-    <text x="56" y="651">6 一键恢复</text>
-    <text x="56" y="709">0 退出</text>
+    <text x="56" y="361">1 安装 / 修复</text>
+    <text x="56" y="419">2 查看状态</text>
+    <text x="56" y="477">3 检查更新</text>
+    <text x="56" y="535">4 帮助</text>
+    <text x="56" y="593">5 高级功能</text>
+    <text x="56" y="651">6 停止监控</text>
+    <text x="56" y="709">7 一键恢复</text>
+    <text x="56" y="767">8 问题反馈</text>
+    <text x="56" y="825">0 退出</text>
   </g>
 
   <g id="row-lines" stroke="#2A3B58" stroke-width="1.5">
-    <path d="M56 324H1144M56 382H1144M56 440H1144M56 498H1144M56 556H1144M56 614H1144M56 672H1144"/>
+    <path d="M56 324H1144M56 382H1144M56 440H1144M56 498H1144M56 556H1144M56 614H1144M56 672H1144M56 730H1144M56 788H1144M56 846H1144"/>
   </g>
 
   <g id="marks">
-    <path d="M370 295L376 301L388 288" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M544 295L550 301L562 288" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M714 291H734M724 286V300M714 304H734" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
-    <path d="M855 295L861 301L873 288" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1015 295L1021 301L1033 288" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <circle cx="379" cy="353" r="5.5" fill="#7A8CA6"/>
-    <circle cx="553" cy="353" r="5.5" fill="#7A8CA6"/>
-    <circle cx="724" cy="353" r="5.5" fill="#7A8CA6"/>
-    <circle cx="864" cy="353" r="5.5" fill="#7A8CA6"/>
-    <circle cx="1024" cy="353" r="5.5" fill="#7A8CA6"/>
-    <path d="M379 403A8.5 8.5 0 1 1 379 419M375.5 419L379 419L381.5 414.5" fill="none" stroke="#60A5FA" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M553 403A8.5 8.5 0 1 1 553 419M549.5 419L553 419L555.5 414.5" fill="none" stroke="#60A5FA" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M714 406H734M724 403V416M714 419H734" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
-    <path d="M855 411L861 417.5L873 404.5" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1024 403A8.5 8.5 0 1 1 1024 419M1020.5 419L1024 419L1026.5 414.5" fill="none" stroke="#60A5FA" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M370 354L376 360L388 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M544 349H564M554 344V356M544 359H564" fill="none" stroke="#C7D3E3" stroke-width="2.8" stroke-linecap="round"/>
+    <path d="M714 354L720 360L732 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M855 875" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M1015 354L1021 360L1033 346" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="379" cy="411" r="5.5" fill="#7A8CA6"/>
+    <circle cx="553" cy="411" r="5.5" fill="#7A8CA6"/>
+    <circle cx="723" cy="411" r="5.5" fill="#7A8CA6"/>
+    <circle cx="864" cy="411" r="5.5" fill="#7A8CA6"/>
+    <circle cx="1024" cy="411" r="5.5" fill="#7A8CA6"/>
     <circle cx="379" cy="469" r="5.5" fill="#7A8CA6"/>
     <circle cx="553" cy="469" r="5.5" fill="#7A8CA6"/>
-    <circle cx="724" cy="469" r="5.5" fill="#7A8CA6"/>
+    <circle cx="723" cy="469" r="5.5" fill="#7A8CA6"/>
     <circle cx="864" cy="469" r="5.5" fill="#7A8CA6"/>
-    <circle cx="1024" cy="469" r="5.5" fill="#7A8CA6"/>
+    <path d="M1015 470L1021 476L1033 462" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
     <circle cx="379" cy="527" r="5.5" fill="#7A8CA6"/>
     <circle cx="553" cy="527" r="5.5" fill="#7A8CA6"/>
-    <circle cx="724" cy="527" r="5.5" fill="#7A8CA6"/>
+    <circle cx="723" cy="527" r="5.5" fill="#7A8CA6"/>
     <circle cx="864" cy="527" r="5.5" fill="#7A8CA6"/>
     <circle cx="1024" cy="527" r="5.5" fill="#7A8CA6"/>
-    <path d="M370 585L376 591L388 578" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M543 585H563" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M714 585H734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M855 585L861 591L873 578" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1015 585L1021 591L1033 578" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M369 643H389" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M543 643H563" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M714 643H734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <path d="M855 643L861 649L873 636" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M1014 643H1034" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
-    <circle cx="379" cy="701" r="5.5" fill="#7A8CA6"/>
-    <circle cx="553" cy="701" r="5.5" fill="#7A8CA6"/>
-    <circle cx="724" cy="701" r="5.5" fill="#7A8CA6"/>
-    <circle cx="864" cy="701" r="5.5" fill="#7A8CA6"/>
-    <circle cx="1024" cy="701" r="5.5" fill="#7A8CA6"/>
+    <circle cx="379" cy="585" r="5.5" fill="#7A8CA6"/>
+    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="864" cy="585" r="5.5" fill="#7A8CA6"/>
+    <circle cx="1024" cy="585" r="5.5" fill="#7A8CA6"/>
+    <path d="M370 390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="864" cy="643" r="5.5" fill="#7A8CA6"/>
+    <circle cx="1024" cy="643" r="5.5" fill="#7A8CA6"/>
+    <path d="M370 390" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M544 564" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M714 734" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <path d="M855 702L861 708L873 694" fill="none" stroke="#34D399" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M1015 1035" fill="none" stroke="#94A6BE" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="379" cy="759" r="5.5" fill="#7A8CA6"/>
+    <circle cx="553" cy="759" r="5.5" fill="#7A8CA6"/>
+    <circle cx="723" cy="759" r="5.5" fill="#7A8CA6"/>
+    <circle cx="864" cy="759" r="5.5" fill="#7A8CA6"/>
+    <circle cx="1024" cy="759" r="5.5" fill="#7A8CA6"/>
+    <circle cx="379" cy="817" r="5.5" fill="#7A8CA6"/>
+    <circle cx="553" cy="817" r="5.5" fill="#7A8CA6"/>
+    <circle cx="723" cy="817" r="5.5" fill="#7A8CA6"/>
+    <circle cx="864" cy="817" r="5.5" fill="#7A8CA6"/>
+    <circle cx="1024" cy="817" r="5.5" fill="#7A8CA6"/>
   </g>
 </svg>
