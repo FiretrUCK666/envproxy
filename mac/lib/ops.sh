@@ -1389,9 +1389,20 @@ _render_help_index() {
     _line_blank
     _seg text "  按你遇到的问题挑一条："
     _line_flush
+    # 引导语与清单之间空一行：不然它会被读成清单的第一条。
+    # 与帮助正文、状态页同一套规矩——引导语负责起头，内容另起一段。
+    _line_blank
+    # 编号列宽按最大编号算，让标题那一列永远对齐（与 Windows 侧同一算法）：
+    # 写死两个空格时，编号超过 9 会把那一行整体右推一格，清单就从整齐变成参差。
+    _rhi_w=1
     for _rhi_k in "${HELP_TOPIC_KEYS[@]}"; do
-        _seg cmd "    $_rhi_k"
-        _seg value "  $(_help_topic_title "$_rhi_k")"
+        if [ "${#_rhi_k}" -gt "$_rhi_w" ]; then _rhi_w=${#_rhi_k}; fi
+    done
+    for _rhi_k in "${HELP_TOPIC_KEYS[@]}"; do
+        _rhi_pad="$_rhi_k"
+        while [ "${#_rhi_pad}" -lt "$_rhi_w" ]; do _rhi_pad=" $_rhi_pad"; done
+        _seg cmd "  $_rhi_pad"
+        _seg value "   $(_help_topic_title "$_rhi_k")"
         _line_flush
     done
     _line_blank

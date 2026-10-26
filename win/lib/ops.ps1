@@ -1854,12 +1854,22 @@ function Get-HelpIndexRenderedLines {
     $out += [pscustomobject]@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================'
                                Segments = @(@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================' }) }
     $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
+    # 引导语与下面的清单之间空一行：不然"按你遇到的问题挑一条"会被读成清单的第一条。
+    # 与帮助正文同一套规矩——标题/引导语负责起头，内容另起一段。
     $out += [pscustomobject]@{ Role = 'text'; Text = '  按你遇到的问题挑一条：'
                                Segments = @(@{ Role = 'text'; Text = '  按你遇到的问题挑一条：' }) }
+    $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
+    # 编号列宽按最大编号算，让标题那一列永远对齐：
+    # 直接写两个空格时，编号 1 到 6 宽度相同看不出问题，但主题一多（10 以上）
+    # 两位数编号会把那一行整体右推一格，清单就从"整齐一列"变成"参差的"。
+    $keys = @(foreach ($t in (Get-HelpTopics)) { [string]$t.Key })
+    $keyW = 1
+    foreach ($k in $keys) { if ($k.Length -gt $keyW) { $keyW = $k.Length } }
     foreach ($t in (Get-HelpTopics)) {
+        $num = ([string]$t.Key).PadLeft($keyW)
         $segs = @(
-            @{ Role = 'cmd';   Text = ('    ' + $t.Key) },
-            @{ Role = 'value'; Text = ('  ' + $t.Title) }
+            @{ Role = 'cmd';   Text = ('  ' + $num) },
+            @{ Role = 'value'; Text = ('   ' + $t.Title) }
         )
         $joined = ''
         foreach ($sg in $segs) { $joined += $sg.Text }
