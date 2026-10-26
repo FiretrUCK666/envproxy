@@ -131,6 +131,201 @@ function Read-VersionCache {
     } catch { return $null }
 }
 
+
+# ==============================================================================
+#  状态快照：监控每轮把自己的结论写下来，状态页只读它。
+#
+#  为什么要这一层：状态页现在每次都要自己重新探测一遍，最坏情况（代理刚换端口、
+#  变量指向的旧端口已死）要 2.7 秒——因为那时必须走全端口扫描。而监控每 2-3 秒
+#  就在做同一件事，结论它早就有了，只是只写成了给人看的文本日志。
+#
+#  让监控把结论写成结构化的一份，状态页读它：一次 3 毫秒，而且两边永远同源
+#  （不会出现"状态页说没代理、监控还在用 7078"这种自相矛盾）。
+#
+#  这与版本缓存是同一个手法，不违反「状态显示只读」：写的人还是监控，
+#  状态页一个字节都不写。
+# ==============================================================================
+
+# 快照的字段表——唯一权威处。门禁 6 会拿它与 Mac 侧的 SNAPSHOT_KEYS 比对。
+# 顺序即写入顺序；读的时候不依赖顺序（按 key 找），但缺任何一个键都算文件损坏。
+$SnapshotKeys = @(
+    'written'           # 本轮探测完成的时刻（UTC，秒精度，两侧都能解析的格式）
+    'round'             # 探测层轮次计数，单调递增。判「这份数据有没有在推进」靠它，不靠时间
+    'pid'               # 写它的监控进程
+    'state'             # 当前确认状态：on:<端口> / off / 空（从未确认过）
+    'prev_state'        # 上次翻转前的状态
+    'pending_state'     # 正在去抖、尚未落定的候选状态
+    'pending_count'     # 该候选已被连续确认的轮数
+    'port_enumeration'  # ok / failed —— 本轮端口枚举成没成
+    'port_reason'       # 枚举失败的原因（成功时为空）
+    'vars_match'        # yes / no / unknown —— 变量是否与状态该有的样子一致
+    'apply_result'      # ok / failed / unknown —— 本轮有没有动变量、动成功没
+    'log_tail'          # 最近几条日志，用 \n 转义成字面量；状态页不必再读日志文件
+)
+
+# 快照判"新不新"的阈值（秒）。三档，各自有明确含义，不是随手拍的数。
+#   ≤ 10 秒：新鲜，直接用；一轮 2-3 秒，容得下三次心跳缺失。
+$SnapshotFreshSec = 10
+#   ≤ 60 秒：可用，但要在屏幕上说"这是 N 秒前的判断"。
+$SnapshotUsableSec = 60
+#   > 240 秒（与 $HeartbeatMaxSec 同值）：不再当"当前状态"，退回实时探测。
+#   同一个语义「超过这么久就认为监控不在了」，两处必须同值。
+$SnapshotStaleSec = 240
+
+# 把值里的换行与等号转义掉，保证一行一个键值对、且切分点唯一。
+function ConvertTo-SnapshotValue([string]$Text) {
+    if ($null -eq $Text) { return '' }
+    $s = [string]$Text
+    $s = $s -replace "`r`n", '\n'
+    $s = $s -replace "`n", '\n'
+    $s = $s -replace "`r", '\n'
+    # 键值对以第一个 = 切分，所以值里的 = 其实无害；但控制器字符会破坏显示，一并去掉
+    $s = $s -replace "[\x00-\x08\x0B\x0C\x0E-\x1F]", ''
+    return $s
+}
+
+# 把转义过的值还原成原样。
+function ConvertFrom-SnapshotValue([string]$Text) {
+    if (-not $Text) { return '' }
+    return ([string]$Text).Replace('\n', "`n")
+}
+
+# 写一份快照。所有字段由调用方算好传进来——这里不做任何判断，只负责落盘。
+#
+# 失败一律吞掉：监控的职责是管代理，写快照是附带。写不出来不能让监控停摆。
+function Write-StateSnapshot {
+    param(
+        [string]$State,
+        [string]$PrevState,
+        [string]$PendingState,
+        [int]$PendingCount,
+        [string]$PortEnumeration,
+        [string]$PortReason,
+        [string]$VarsMatch,
+        [string]$ApplyResult
+    )
+    $lines = @()
+    $lines += '# envproxy-snapshot 1'
+    # 用 DateTimeOffset 而不是 DateTime：DateTime 在 ParseExact 带 AssumeUniversal 时
+    # 仍可能给出 Kind=Local，于是同一个时刻被当成本地时间、年龄差出整整一个时区。
+    # DateTimeOffset 明确带 Offset，写读两侧不会有歧义。
+    $lines += 'written=' + ([DateTimeOffset]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
+    $round = 0
+    try { if ($null -ne $script:Round) { $round = [int]$script:Round } } catch { $round = 0 }
+    $lines += 'round=' + $round
+    # 用 24340（PowerShell 自动变量，当前进程）；本地同名变量会遮蔽它，所以显式取一次
+    $myPid = 0; try { $myPid = [int]$PID } catch { $myPid = 0 }
+    $lines += 'pid=' + $myPid
+    $lines += 'state=' + (ConvertTo-SnapshotValue $State)
+    $lines += 'prev_state=' + (ConvertTo-SnapshotValue $PrevState)
+    $lines += 'pending_state=' + (ConvertTo-SnapshotValue $PendingState)
+    $lines += 'pending_count=' + $PendingCount
+    $lines += 'port_enumeration=' + (ConvertTo-SnapshotValue $PortEnumeration)
+    $lines += 'port_reason=' + (ConvertTo-SnapshotValue $PortReason)
+    $lines += 'vars_match=' + (ConvertTo-SnapshotValue $VarsMatch)
+    $lines += 'apply_result=' + (ConvertTo-SnapshotValue $ApplyResult)
+    # 日志尾由这里自己取，调用方不必再读一遍文件
+    $tail = ''
+    try { $tail = [string](Get-LogTailText 4) } catch { $tail = '' }
+    $lines += 'log_tail=' + (ConvertTo-SnapshotValue $tail)
+    $text = ($lines -join "`n") + "`n"
+    # 走 Write-Text：它做「同目录临时文件 + 整体替换」，是项目里唯一的原子写法。
+    # 临时名是 "$Path.tmp$PID"，命中 package.ps1 的 *.tmp[0-9]* 清扫规则。
+    try { Write-Text -Path $StateSnapshotFile -Text $text } catch {}
+}
+
+# 读快照。返回一个哈希表：
+#   Status = 'ok' / 'none'（没有文件）/ 'unreadable'（读失败）/ 'damaged'（格式不对）
+#   AgeSec = 距今秒数（拿不到为 $null）
+#   Round / Pid / State / PrevState / PendingState / PendingCount /
+#   PortEnumeration / PortReason / VarsMatch / ApplyResult / LogTail
+#
+# 关键：读失败、格式不对、缺键——一律判"读不出来"，绝不把空值当成"没有代理"。
+# 这条与探测层「读不出来 ≠ 没有端口」是同一个判据。
+function Read-StateSnapshot {
+    $r = @{
+        Status = 'none'; AgeSec = $null; Round = 0; Pid = 0
+        State = ''; PrevState = ''; PendingState = ''; PendingCount = 0
+        PortEnumeration = ''; PortReason = ''; VarsMatch = ''; ApplyResult = ''
+        LogTail = ''; Reason = ''
+    }
+    if (-not (Test-Item $StateSnapshotFile)) { return $r }
+    $text = ''
+    try {
+        # 用 FileShare.ReadWrite 打开：监控可能正在改名替换，不能因此读失败
+        $fs = New-Object System.IO.FileStream($StateSnapshotFile, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try {
+            $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8)
+            $text = $sr.ReadToEnd()
+            $sr.Close()
+        } finally { $fs.Close() }
+    } catch {
+        $r.Status = 'unreadable'
+        $r.Reason = $_.Exception.Message
+        return $r
+    }
+    $lines = @($text -split "`n")
+    if ($lines.Count -lt 2 -or $lines[0].Trim() -ne '# envproxy-snapshot 1') {
+        $r.Status = 'damaged'; $r.Reason = '首行格式标记不对'; return $r
+    }
+    $map = @{}
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        $ln = $lines[$i]
+        if (-not $ln) { continue }
+        $eq = $ln.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $k = $ln.Substring(0, $eq)
+        $v = $ln.Substring($eq + 1)
+        $map[$k] = $v
+    }
+    # 缺任何一个键 = 这份文件不完整（写到一半被杀）。整份不用，绝不用半份。
+    foreach ($k in $SnapshotKeys) {
+        if (-not $map.ContainsKey($k)) {
+            $r.Status = 'damaged'; $r.Reason = ('缺字段 ' + $k); return $r
+        }
+    }
+    $r.Status = 'ok'
+    $r.Round = 0
+    $tmpInt = 0
+    [void][int]::TryParse($map['round'], [ref]$tmpInt)
+    $r.Round = $tmpInt
+    $r.Pid = 0
+    $tmpInt = 0
+    [void][int]::TryParse($map['pid'], [ref]$tmpInt)
+    $r.Pid = $tmpInt
+    $r.State = ConvertFrom-SnapshotValue $map['state']
+    $r.PrevState = ConvertFrom-SnapshotValue $map['prev_state']
+    $r.PendingState = ConvertFrom-SnapshotValue $map['pending_state']
+    $r.PendingCount = 0
+    $tmpInt = 0
+    [void][int]::TryParse($map['pending_count'], [ref]$tmpInt)
+    $r.PendingCount = $tmpInt
+    $r.PortEnumeration = ConvertFrom-SnapshotValue $map['port_enumeration']
+    $r.PortReason = ConvertFrom-SnapshotValue $map['port_reason']
+    $r.VarsMatch = ConvertFrom-SnapshotValue $map['vars_match']
+    $r.ApplyResult = ConvertFrom-SnapshotValue $map['apply_result']
+    $r.LogTail = ConvertFrom-SnapshotValue $map['log_tail']
+    # 年龄：用墙上时钟（快照里的时刻本来就是墙上时钟）。为负说明系统时间被调过，
+    # 那时不许当"刚写的"，判成过旧、让调用方退回实时探测。
+    try {
+        $t = [DateTimeOffset]::ParseExact($map['written'], 'yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::AssumeUniversal)
+        $r.AgeSec = [int](([DateTimeOffset]::UtcNow - $t).TotalSeconds)
+    } catch {
+        $r.Status = 'damaged'; $r.Reason = 'written 时间戳解析失败'; $r.AgeSec = $null
+    }
+    return $r
+}
+
+# 取日志最后 N 行（给快照用）。读不出来返回空串，不抛。
+function Get-LogTailText([int]$Count = 4) {
+    try {
+        if (-not (Test-Item $LogFile)) { return '' }
+        $all = @(Get-Content -LiteralPath $LogFile -Tail $Count -Encoding UTF8 -ErrorAction Stop)
+        return ($all -join "`n")
+    } catch { return '' }
+}
+
+
 function Repair-AutoRun {
     try {
         $expected = Get-LauncherCommand
@@ -1115,6 +1310,10 @@ $PidFile    = Join-Path $MonitorDir "monitor.pid"
 $StopIntentFile = Join-Path $MonitorDir "stopped.intent"
 # 版本号缓存：由监控刷新、状态页只读。状态页不许联网（见 Write-VersionCache 的注释）。
 $VersionCacheFile = Join-Path $MonitorDir "version.cache"
+# 状态快照：监控每轮把自己的结论写在这里，状态页只读。
+# 有了它，状态页不必自己重新探测（最坏情况那要 2.7 秒的全端口扫描），
+# 而且两边结论同源，不会出现"状态页说没代理、监控还在用 7078"。
+$StateSnapshotFile = Join-Path $MonitorDir "state.snapshot"
 # 覆盖安装区时的"进行中"标记。正常结束（成功或回滚）都会删掉它；
 # 断电/被杀才会留下——那种情况下安装区可能是新旧混合的，而没有任何自检看得出来。
 $UpdateInProgressFile = Join-Path $MonitorDir "update.inprogress"
@@ -1218,6 +1417,34 @@ function Test-MonitorAlive {
         } catch {}
     }
     return $false
+}
+
+# 「监控在不在、PID 多少」的**轻量**判据：只读 pid/心跳文件，绝不查进程表。
+#
+# 为什么需要单独一份：Get-MonitorProcess 为了拿"命令行"要调 Get-CimInstance，
+# 实测 185 毫秒——而状态页每次刷新都要问"监控在不在"，2 秒一次就白烧约 9% 的 CPU。
+# 状态页要的只是"在不在、PID 多少"，不需要命令行。
+#
+# 判据强度说清（这是它与 Get-MonitorProcess 的差别）：
+#   心跳在 $HeartbeatMaxSec 内写过 -> 监控一定活着（它定期写，写不动就不会新）
+#   心跳过期                   -> 说不清（可能真死了，也可能休眠刚醒）-> 返回 $null
+# 它**不**用于"停止/卸载"这类会动别人进程的动作：那些必须走完整身份校验
+# （命令行 + 启动时刻），认错进程的代价不对称。
+function Get-MonitorProcessFast {
+    try {
+        if (Test-Item $HeartbeatFile) {
+            $age = ((Get-Date) - (Get-Item -LiteralPath $HeartbeatFile -ErrorAction Stop).LastWriteTime).TotalSeconds
+            if ($age -ge 0 -and $age -le $HeartbeatMaxSec) {
+                $beatPid = 0
+                try {
+                    $parts = @((Read-Text $HeartbeatFile).Trim() -split '\s+')
+                    if ($parts.Count -ge 1) { [void][int]::TryParse($parts[0], [ref]$beatPid) }
+                } catch {}
+                return [pscustomobject]@{ ProcessId = $beatPid; CommandLine = ""; Alive = $true }
+            }
+        }
+    } catch {}
+    return $null
 }
 
 function Get-MonitorProcess {
@@ -1432,6 +1659,11 @@ function Run-MonitorLoop {
     $pendingState = $null
     $pendingCount = 0
     $repairRound  = 0
+    # 快照用的两个量：变量是否与状态一致、本轮写变量成没成。
+    # 两者都只在特定轮次才算得出来，其余轮次必须是 $null（= 不知道），
+    # 不许拿上一次的结论顶替——那会把"没算"说成"一致"。
+    $lastVarsMatch   = $null
+    $lastApplyResult = "unknown"
     $selfExit     = $false
     try {
         $bootState = Get-CurrentState
@@ -1523,6 +1755,33 @@ function Run-MonitorLoop {
                 $pendingCount = 0
             }
 
+            # 把本轮的结论写成快照，供状态页只读。
+            #
+            # 每轮都写，不只在变化时写：只在变化时写会让文件在稳态下永远停在上次
+            # 变化那一刻，于是"一直稳定在 off"和"十分钟前死在 off"长得一模一样。
+            # 每轮写把"文件新不新"和"监控活着吗"合成一个问题：written 是几秒前，
+            # 就说明监控活着、且结论就是此刻的结论。
+            #
+            # 写失败一律吞掉（Write-StateSnapshot 内部 try/catch）：监控的职责是管代理，
+            # 写快照是附带。写不出来最多让状态页退回实时探测，不能让监控停摆。
+            try {
+                $snapState = if ($lastState) { [string]$lastState } else { "" }
+                $snapPrev = if ($prevState) { [string]$prevState } else { "" }
+                $snapPending = if ($pendingState) { [string]$pendingState } else { "" }
+                $snapEnum = if ($script:PortEnumerationFailed) { "failed" } else { "ok" }
+                $snapReason = ""
+                if ($script:PortEnumerationFailed) { try { $snapReason = [string]$script:PortEnumerationReason } catch { $snapReason = "" } }
+                # vars_match 只在自愈那一轮才算过；其余轮如实写 unknown，
+                # 不许把"没算"写成"一致"。
+                $snapVars = "unknown"
+                if ($lastVarsMatch -ne $null) {
+                    $snapVars = if ($lastVarsMatch) { "yes" } else { "no" }
+                }
+                Write-StateSnapshot -State $snapState -PrevState $snapPrev -PendingState $snapPending `
+                    -PendingCount $pendingCount -PortEnumeration $snapEnum -PortReason $snapReason `
+                    -VarsMatch $snapVars -ApplyResult $lastApplyResult
+            } catch {}
+
             # 每 30 轮自愈一次（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
             # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
             $repairRound++
@@ -1557,6 +1816,10 @@ function Run-MonitorLoop {
                         "检测到代理变量残留 -> 已回收，恢复直连" `
                         "变量被人改坏了 -> 已按当前代理端口重新写回"
                     if ($healOk -ne 0) { Write-MonitorLog "变量自检没能写回（下一轮再试）" }
+                    # 把自愈的结论记下来给快照用：0 = 写成功或本来就齐。
+                    # 这是唯一能算出"变量与状态是否一致"的地方，别处算不了。
+                    $lastVarsMatch = ($healOk -eq 0)
+                    $lastApplyResult = if ($healOk -eq 0) { "ok" } else { "failed" }
                 }
             }
 

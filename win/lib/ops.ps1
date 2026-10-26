@@ -433,6 +433,173 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
 # 缓存没有就说清"没法确认"并指向更新入口——状态页不替用户做请求。
 # 这条不只是为了快：离线、限流、走白名单网络的人，联网检查只会让他每次查看状态
 # 都等一个注定失败的请求，而归因通常是"这工具很慢"。门禁 6 的 e1 段守着它。
+
+
+# 把状态页渲染成**纯文本行**（不带颜色），供刷新循环使用。
+#
+# 为什么要有这一份而不是复用 Show-StatusSnapshot：那一份是给「看一眼就走」的
+# 场景用的，它直接往屏幕上写、带颜色、带 NoNewline 分段。刷新循环需要的是
+# 「一帧 = 一组字符串」，才能与上一帧逐行比较、只重画变化的行。
+#
+# 两边会不会分叉？会，所以这个函数的输出必须由 Show-StatusSnapshot 的同源数据算出：
+#   - 结论行、问题清单、参考项：同一份 $st
+#   - 判断逻辑：调同一个 Get-StatusProblems（下面抽出来的）
+# 内容一旦不一致，自检里有断言比对两者的行数。
+function Format-StatusLines($st) {
+    $out = New-Object System.Collections.ArrayList
+
+    $problems = @(Get-StatusProblems $st)
+    [void]$out.Add('======== EnvProxy 状态（实时刷新）========')
+    if ($problems.Count -eq 0) {
+        [void]$out.Add('一切正常，不用做任何事。')
+    } else {
+        [void]$out.Add(('有 {0} 项要注意：' -f $problems.Count))
+        foreach ($p in $problems) { [void]$out.Add('  - ' + $p) }
+    }
+    [void]$out.Add('')
+
+    # 监控
+    if ($st.Monitor) {
+        $mpid = 0
+        try { $mpid = [int]$st.Monitor.ProcessId } catch { $mpid = 0 }
+        if ($mpid -gt 0) {
+            [void]$out.Add(('监控进程 : 运行中 (PID {0})' -f $mpid))
+        } else {
+            # 心跳判活拿不到 PID：如实说"在写心跳"，不编一个号
+            [void]$out.Add('监控进程 : 运行中（心跳正常）')
+        }
+    } elseif ($st.StopIntent) {
+        [void]$out.Add('监控进程 : 按你的选择停着')
+    } elseif ($st.NeverInstalled) {
+        [void]$out.Add('监控进程 : 还没安装')
+    } else {
+        [void]$out.Add('监控进程 : 不在了（可能被结束任务关掉或崩溃）')
+    }
+
+    # 自启
+    [void]$out.Add('开机自启 : ' + $(if ($st.AutoRunOk) { '已启用' } else { '没生效' }))
+
+    # 翻墙代理
+    if ($st.Port) {
+        $ageNote = ''
+        if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok' -and $null -ne $st.Snapshot.AgeSec -and $st.Snapshot.AgeSec -gt $SnapshotFreshSec) {
+            $ageNote = ('（{0} 秒前的判断）' -f $st.Snapshot.AgeSec)
+        }
+        [void]$out.Add(('翻墙代理 : 已开启（本地端口 {0} 监听中）{1}' -f $st.Port, $ageNote))
+    } elseif ($st.PortUnknown) {
+        $why = ''
+        if ($st.PSObject.Properties.Name -contains 'PortEnumerationReason' -and $st.PortEnumerationReason) {
+            $why = '：' + $st.PortEnumerationReason
+        }
+        [void]$out.Add('翻墙代理 : 这一轮没读到端口，无法判断' + $why)
+    } else {
+        [void]$out.Add('翻墙代理 : 未检测到（当前无翻墙代理在运行）')
+    }
+
+    # 终端同步
+    if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
+        [void]$out.Add('终端同步 : 已生效（已开着的窗口敲回车即跟上）')
+    } elseif ($st.TermSync) {
+        [void]$out.Add('终端同步 : ' + $st.TermSync.State)
+    } else {
+        [void]$out.Add('终端同步 : 状态未知')
+    }
+
+    # 代理变量
+    if ($st.ProxyValue -and $st.ProxyAlive) {
+        [void]$out.Add(('代理变量 : 已注入 ({0})' -f $st.ProxyValue))
+    } elseif ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
+        [void]$out.Add(('代理变量 : 指向的端口已不在（{0}）' -f $st.ProxyValue))
+        $op = 0
+        if ($st.ProxyPort) { $op = [int]$st.ProxyPort }
+        if ($op -gt 0 -and $st.Port -and $op -ne [int]$st.Port) {
+            [void]$out.Add(('  变量里是旧端口 {0}，翻墙代理现在在 {1}。' -f $op, $st.Port))
+            [void]$out.Add('  监控在跑的话几秒内会自己跟过去。')
+        } elseif (-not $st.Port) {
+            [void]$out.Add('  翻墙代理现在没在跑，所以这个地址已经没用了。')
+        }
+    } elseif ($st.ProxyValue) {
+        [void]$out.Add(('代理变量 : 值不是合法地址（{0}）' -f $st.ProxyValue))
+    } else {
+        [void]$out.Add('代理变量 : 无（直连状态）')
+    }
+
+    # 版本
+    $verText = if ($st.LocalVersion) { 'v' + $st.LocalVersion } else { '未知' }
+    if ($st.RemoteCache -and $st.RemoteCache.Version) {
+        if ($st.LocalVersion -and ($st.RemoteCache.Version -eq $st.LocalVersion)) {
+            $verText += '（已是最新）'
+        } else {
+            $verText += ('（新版 ' + $st.RemoteCache.Version + ' 可用，选 3 升级）')
+        }
+    }
+    [void]$out.Add('版本 : ' + $verText)
+
+    # 日志尾
+    [void]$out.Add('---------------- 最近日志 ----------------')
+    $tail = ''
+    if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') { $tail = [string]$st.Snapshot.LogTail }
+    if (-not $tail) { try { $tail = [string](Get-LogTailText 3) } catch { $tail = '' } }
+    if ($tail) {
+        foreach ($ln in @($tail -split "`n")) {
+            if (-not $ln) { continue }
+            if ($ln.Length -gt 78) { $ln = $ln.Substring(0, 77) + '…' }
+            [void]$out.Add('  ' + $ln)
+        }
+    } else {
+        [void]$out.Add('  （暂无日志）')
+    }
+
+    [void]$out.Add('==================================')
+    [void]$out.Add('正在实时刷新 · 按 0 或 Esc 返回，按 2 看一次静态快照')
+    return $out.ToArray()
+}
+
+# 实时状态页：自己刷新，不用按键。
+#
+# 退出条件：按 0 / q / Esc。
+# 降级：不能画屏（重定向、无控制台、窗口太小）时直接打一次静态输出就走——
+#       与今天的行为逐字节相同，绝不往文件里塞控制字符。
+function Show-StatusLive {
+    $st = Get-StatusSnapshot
+    $frame = @(Format-StatusLines $st)
+
+    if (-not (Test-CanDrawScreen -NeedLines $frame.Count)) {
+        # 降级：退回今天的一次性输出
+        Show-StatusSnapshot $st
+        return
+    }
+
+    if (-not (Enter-Screen)) {
+        Show-StatusSnapshot $st
+        return
+    }
+
+    $prev = @()
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $nextPaint = 0
+    try {
+        while ($true) {
+            # 到点就重新算一帧。算之前先判能不能画——用户可能刚把窗口拉小。
+            if ($sw.ElapsedMilliseconds -ge $nextPaint) {
+                try { $st = Get-StatusSnapshot } catch { }
+                $frame = @(Format-StatusLines $st)
+                if (Test-CanDrawScreen -NeedLines $frame.Count) {
+                    $null = Write-ScreenFrame -Old $prev -New $frame
+                    $prev = $frame
+                }
+                # 固定 2 秒刷新：与监控的探测节奏（2-3 秒）对齐。
+                # 比监控更快没有意义——数据本身就是监控写的，它 2 秒才更新一次。
+                $nextPaint = $sw.ElapsedMilliseconds + $StatusRefreshIntervalMs
+            }
+            $k = Wait-ScreenKey -Milliseconds $ScreenPollMs
+            if ($k -eq 'Quit') { break }
+        }
+    } finally {
+        # 任何退出路径都要恢复：Ctrl+C 走 finally，光标不会永久消失。
+        Exit-Screen
+    }
+}
 function Show-Status {
     # 状态对象先在内存里算完，再统一渲染。
     # 为什么不能边算边打印：结论行("一切正常" / "有 N 项要注意")必须出现在最上面，
@@ -445,7 +612,12 @@ function Show-Status {
 # 采集状态：只读、不写文件、不提问、不猜。所有值都来自现成函数。
 function Get-StatusSnapshot {
     $st = [ordered]@{}
-    $st.Monitor = Get-MonitorProcess
+    # 判"监控在不在"走轻量路径：只读心跳，实测 3.8 毫秒；
+    # 而 Get-MonitorProcess 为了拿命令行要查进程表，实测 170 毫秒。
+    # 状态页每次刷新都要问一次，用重的那条等于每 2 秒白烧一次 CPU。
+    # 心跳过期（说不清）时才退回复用完整判据——那种情况本来就少见。
+    $st.Monitor = Get-MonitorProcessFast
+    if (-not $st.Monitor) { $st.Monitor = Get-MonitorProcess }
     $run = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
     $launcher = ""
     if ($run -match '-File\s+"?([^"]+\.ps1)"?') { $launcher = $Matches[1] }
@@ -467,8 +639,35 @@ function Get-StatusSnapshot {
     # 且那里的 FullScan 用 $true——状态页一天点不了几次，"慢 1 秒"远比"说谎"便宜。
     # 探测层本身不写日志：成败与原因放在 $script:PortEnumerationFailed / Reason 里，
     # 记不记由调用方决定（监控每轮记，状态页一次都不记）。
-    $st.Port = Get-InUseProxyPort -FullScan:$true
-    $st.PortUnknown = [bool]$script:PortEnumerationFailed
+    # ---- 端口与状态：优先读监控写下的快照，读不到/太旧才自己探测 ----
+    #
+    # 为什么不再一律自己探测：最坏情况（代理刚换端口、变量指向的旧端口已死）
+    # 那要 2.7 秒——因为必须走全端口 CONNECT 扫描。而监控每 2-3 秒就在做同一件事，
+    # 结论它早就有了。读快照约 2 毫秒，且两边结论同源（不会出现"状态页说没代理、
+    # 监控还在用 7078"这种自相矛盾）。
+    #
+    # 降级由 Read-StateSnapshot 的 Status 表达：ok 用快照；none/unreadable/damaged
+    # 退回实时探测。任何情况下都不许把"读不出来"当成"没有代理"。
+    $st.Snapshot = Read-StateSnapshot
+    $snapOk = ($st.Snapshot.Status -eq 'ok')
+    if ($snapOk -and ($null -ne $st.Snapshot.AgeSec)) {
+        # 时间戳比现在晚 60 秒以上 = 系统时间被调过，不许当"刚写的"
+        if ($st.Snapshot.AgeSec -lt -60) { $snapOk = $false; $st.Snapshot.Status = 'skewed' }
+        elseif ($st.Snapshot.AgeSec -gt $SnapshotStaleSec) { $snapOk = $false; $st.Snapshot.Status = 'stale' }
+    } else { $snapOk = $false }
+
+    if ($snapOk) {
+        # 快照里的 state 形如 'on:7078' / 'off' / ''
+        $snapPort = 0
+        if ($st.Snapshot.State -match '^on:(\d+)$') { $snapPort = [int]$Matches[1] }
+        $st.Port = if ($snapPort -gt 0) { $snapPort } else { $null }
+        $st.PortUnknown = ($st.Snapshot.PortEnumeration -eq 'failed')
+        $st.PortEnumerationReason = [string]$st.Snapshot.PortReason
+    } else {
+        $st.Port = Get-InUseProxyPort -FullScan:$true
+        $st.PortUnknown = [bool]$script:PortEnumerationFailed
+        try { $st.PortEnumerationReason = [string]$script:PortEnumerationReason } catch { $st.PortEnumerationReason = '' }
+    }
     try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
     $st.ProxyValue = Get-EnvProxyValue
     # 注入值指向的端口还在不在：解析真实值（可能是 IPv4 也可能是 [::1]），按地址族试连。
@@ -536,10 +735,12 @@ function Write-StatusRow([string]$Label, [string]$Value, [string]$Role = 'text')
 
 # 把状态对象渲染成屏幕。纯渲染：不再做任何探测，也不再写任何东西。
 
-function Show-StatusSnapshot($st) {
-    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
-    # 读者（尤其是注意力容易被打断的那种）读完 8 行再自己合成判断，是这屏最大的问题。
-    # 所以结论放最上面一行，细节在下面；正常项与异常项不再同构平铺。
+# 问题清单：这一屏只回答一个问题"我现在正常吗"。
+#
+# 抽成独立函数（不写在渲染里）有两个理由：
+#   ① 实时刷新那一版和静态快照那一版必须用**同一套判断**，否则两边会说出不同的话；
+#   ② 判断与渲染混在一起时，加一条问题要同时改两个地方，必有一处漏。
+function Get-StatusProblems($st) {
     $problems = @()
     if (-not $st.Monitor) {
         if ($st.StopIntent) { $problems += "监控按你的选择停着" }
@@ -552,11 +753,15 @@ function Show-StatusSnapshot($st) {
     if ($st.ProxyValue -and $null -eq $st.ProxyAlive) { $problems += "代理变量里不是合法地址" }
     # 「没人维护」不是一个独立问题，它是「监控没在跑」的后果。
     # 两个都计进"有 N 项要注意"，用户会以为有两件事要修，而实际只有一件。
-    # 所以它只在**监控还在跑、变量却指向死端口**时才需要单独说；
-    # 监控没在跑那一支里已经用补充说明讲过了。
     if ($st.TermSync -and $st.TermSync.State -ne 'ok') { $problems += "终端同步没生效" }
     if ($st.SysProxy) { $problems += "系统代理可能残留（不是本工具写的）" }
     if ($st.UpdateInProgress) { $problems += "上次更新没有完成，程序文件可能新旧混合" }
+    return $problems
+}
+
+function Show-StatusSnapshot($st) {
+    # ---- 先把结论算出来（判断在 Get-StatusProblems 里，与实时刷新那版共用）----
+    $problems = @(Get-StatusProblems $st)
 
     Write-Styled 'title' "======== EnvProxy 状态 ========"
     if ($problems.Count -eq 0) {
@@ -1499,7 +1704,16 @@ function Show-Menu {
             continue
         }
         if (-not $item[0].Switch) { return }
-        # 子进程跑完整开关：与入口开关走的是同一条路（含锁、确认、复检）。
+        # 「查看状态」留在本进程里跑：它是实时刷新的，要能回到菜单；
+        # 起子进程就回不来了（子进程退出后屏幕就停在最后一帧）。
+        # 与 Mac 侧对 help 的处理同一理由——那边也是"要回菜单的留在本进程"。
+        if ($item[0].Switch -eq "Status") {
+            Show-StatusLive
+            Clear-Screen
+            $mode = "menu"
+            continue
+        }
+        # 其余子进程跑完整开关：与入口开关走的是同一条路（含锁、确认、复检）。
         # 本进程只等它结束，不解释它的退出码（退出码在 5.1 里读不到，判据只看复读）。
         try {
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $ScriptPath ("-" + $item[0].Switch)

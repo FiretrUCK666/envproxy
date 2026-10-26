@@ -251,7 +251,10 @@ if ($Stop) {
     return
 }
 if ($Status) {
-    Show-Status
+    # 交互终端里走实时刷新（自己动、不用按键）；
+    # 输出被重定向 / 无控制台 / 窗口太小时 Show-StatusLive 会自动降级成
+    # 今天那份一次性静态输出（逐字节相同，零控制字符），所以两种情况都能走这里。
+    Show-StatusLive
     return
 }
 if ($Menu) {

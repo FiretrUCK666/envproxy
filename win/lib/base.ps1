@@ -128,6 +128,27 @@ $DefaultNoProxy = "localhost,127.0.0.1,::1"
 # 门禁 6 核对。改这里就是改「帮助一屏能放多少」，不是调样式。
 $HelpMaxLines = 30
 
+# ---- 屏幕渲染层的常量（一处定义，两侧同值，门禁 6 核对）----
+# 最小可用终端：宽度不够时一折行就认不出「标签 : 内容」的结构，宁可不刷新。
+# 40 与 Get-ConsoleWidth 的下限同一个数：那里也认为 40 是能正常阅读的底线。
+$ScreenMinWidth = 40
+# 最小可用高度：低于这个数，状态页（正常态约 23 屏行）连正文都放不下。
+# 20 的依据：标题 1 + 结论 1 + 空行 1 + 六项状态 6 + 版本 1 + 分隔 1 + 提示 1 = 12，
+# 再留 8 行给「出问题时多出来的说明」，低于 20 就只能靠裁剪硬塞，不如退回静态。
+$ScreenMinHeight = 20
+# 内容区下方要留的行数：一行给「按 0 返回」的提示，一行给光标。
+$ScreenBottomMargin = 2
+# 「等一小会儿看有没有按键」的轮询间隔（毫秒）。
+# 150 的来源：比一次屏幕重画（实测 0.06–3 毫秒）大两个数量级，
+# 不会空转烧 CPU；又足够小到按键感觉得到即时。
+# Mac 侧对应 STATUS_POLL_MS，但那边受 bash 3.2 的 read -t 只认整数秒限制，
+# 值不同（DIVERGE(mac): bash 3.2 没有亚秒超时），门禁 6 只核对「两侧都有这个常量」。
+$ScreenPollMs = 150
+# 实时刷新间隔（毫秒）。固定 2000，不做智能变速：
+# 监控本身 2-3 秒才更新一次状态快照，刷得比它快没有意义；
+# 而固定值让「多久能看到变化」这件事可预期，不会时快时慢。
+$StatusRefreshIntervalMs = 2000
+
 # 日志体积上限与截断后保留的行数。写成具名常量而不是散在代码里的 200KB / 200：
 # 文档里印着这两个数，两侧也各写了一遍，散着放就一定会有一天改一处漏一处。
 # 与 Mac 侧 LOG_MAX_BYTES / LOG_TAIL_LINES 同口径，门禁 6 核对。
@@ -549,3 +570,141 @@ function Clear-Screen {
     } catch {}
 }
 
+# ------------------------------------------------------------------------------
+#  屏幕渲染层：把「一帧内容」画到屏幕上，只重画变化的行。
+#
+#  这一层是唯一实现：菜单、帮助、状态页、管理页全都走它，没有页面特例。
+#  它不认识颜色、不认识业务——输入只有两个字符串数组（上一帧、这一帧）。
+#  颜色在**调用方**把内容拼成字符串之前就已经决定了，这一层只管画。
+#
+#  为什么单独一层：现在每个页面各自 Clear-Host + 逐行 Write-Host，于是
+#  ① 清屏那一瞬屏幕全空 = 闪；② 没有「只重画变化行」的能力 = 每帧整屏重写。
+#  把这两件事收敛到一处，改一次就对所有页面生效。
+# ------------------------------------------------------------------------------
+
+# 能不能做「就地重画」。这是所有刷新逻辑的前置判据，只有这一个实现。
+#
+# 三种情况不能画：
+#   输出被重定向（管道/文件）—— 控制字符会原样写进文件，污染输出；
+#   没有真实控制台 —— SetCursorPosition 会抛异常；
+#   窗口太矮 —— 内容放不下，重画必然滚屏，滚屏后绝对坐标全部错位。
+#
+# 判据要**一次问清**，不许各页面自己再判一遍：项目里 "IsOutputRedirected" 这个
+# 判断已经有四处，散着判必然漂移。
+function Test-CanDrawScreen([int]$NeedLines = 0) {
+    try {
+        if ([Console]::IsOutputRedirected) { return $false }
+        if ([Console]::IsInputRedirected) { return $false }
+        $w = 0
+        try { $w = [Console]::WindowWidth } catch { $w = 0 }
+        $h = 0
+        try { $h = [Console]::WindowHeight } catch { $h = 0 }
+        if ($w -lt $ScreenMinWidth) { return $false }
+        if ($h -lt $ScreenMinHeight) { return $false }
+        # 留 ScreenBottomMargin 行给「按 0 返回」那行提示 + 光标所在行
+        if ($NeedLines -gt 0 -and ($NeedLines + $ScreenBottomMargin) -gt $h) { return $false }
+        # 光标定位能力本身要能拿到：拿不到就说明没有真控制台
+        $null = [Console]::CursorTop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# 把一帧内容画到屏幕起点，返回这一帧实际占了多少屏幕行。
+#
+# $Old 与 $New 都是字符串数组，一个元素 = 一个逻辑行。行数可以不同：
+# 变少时多出来的行会被擦掉（写空格），变多时新行追加。
+#
+# 返回实际占用的行数，调用方拿它当下一次的 $Old 行数。
+function Write-ScreenFrame {
+    param(
+        [string[]]$Old = @(),
+        [string[]]$New = @(),
+        [ConsoleColor]$DefaultColor = [ConsoleColor]::Gray
+    )
+    if (-not (Test-CanDrawScreen)) { return 0 }
+    $n = @($New).Count
+    $o = @($Old).Count
+    if ($n -eq 0 -and $o -eq 0) { return 0 }
+
+    # 先把整帧拼成一个字符串再一次写出。
+    # 为什么不是逐行 Write-Host：实测 12 行逐行写要 9.28 毫秒，一次拼接写出
+    # 只要 0.24 毫秒（快 39 倍），而且中间没有「画到一半」的可见状态。
+    $sb = New-Object System.Text.StringBuilder
+    $max = [Math]::Max($o, $n)
+    for ($i = 0; $i -lt $max; $i++) {
+        $text = if ($i -lt $n) { [string]$New[$i] } else { '' }
+        $prev = if ($i -lt $o) { [string]$Old[$i] } else { '' }
+        # 内容没变就跳过这一行（这是「不闪」的本质：无变化时一个字节都不发）
+        if ($i -lt $n -and $text -ceq $prev) { continue }
+        [void]$sb.Append([char]27 + '[' + ($i + 1) + ';1H')     # 定位到该行
+        [void]$sb.Append($text)
+        [void]$sb.Append([char]27 + '[K')                        # 清到行尾，擦掉上一帧的尾巴
+    }
+    # 行数变少时，把多出来的行擦空
+    if ($o -gt $n) {
+        for ($i = $n; $i -lt $o; $i++) {
+            [void]$sb.Append([char]27 + '[' + ($i + 1) + ';1H')
+            [void]$sb.Append([char]27 + '[K')
+        }
+    }
+    if ($sb.Length -eq 0) { return $n }   # 完全没有变化：不发任何字节
+
+    try {
+        [Console]::Out.Write(([char]27 + '[?25l'))   # 藏光标，避免看到它跳
+        [Console]::Out.Write($sb.ToString())
+        [Console]::Out.Write(([char]27 + '[?25h'))   # 恢复光标
+        [Console]::Out.Flush()
+    } catch {}
+    return $n
+}
+
+# 进入/退出「屏幕已接管」状态：进入前清一次屏（只这一次），退出后把光标放回底部。
+# 只有这两个函数会清屏。刷新循环里一次都不许清——清屏就是闪的根源。
+function Enter-Screen {
+    if (-not (Test-CanDrawScreen)) { return $false }
+    try {
+        Clear-Screen
+        [Console]::Out.Write(([char]27 + '[H'))   # 光标回左上角
+        [Console]::Out.Flush()
+    } catch { return $false }
+    return $true
+}
+
+function Exit-Screen {
+    try {
+        # 光标从「内容区」移到最下面一行，之后正常输出不会盖住刚画的内容
+        $h = 0
+        try { $h = [Console]::WindowHeight } catch { $h = 0 }
+        if ($h -gt 0) {
+            [Console]::SetCursorPosition(0, [Math]::Min($h - 1, [Console]::BufferHeight - 1))
+        }
+        [Console]::Out.Write([char]27 + '[?25h')   # 确保光标可见（Ctrl+C 后也要恢复）
+        [Console]::Out.Flush()
+    } catch {}
+}
+
+# 等一小段时间，顺便看有没有按键。返回：'' = 没按；其余 = 按下的那个字符。
+# 返回 'Quit' 表示用户按了 0 / Esc / q，调用方据此退出刷新循环。
+#
+# 为什么不用 Read-Host：PS 5.1 是单线程宿主，Read-Host 阻塞在 ReadConsole 上时
+# 整个事件循环停摆——实测那 3 秒内定时器回调一次都不触发。要「边刷新边等输入」
+# 只能自己用 KeyAvailable 轮询。
+function Wait-ScreenKey([int]$Milliseconds = 150) {
+    $elapsed = 0
+    while ($elapsed -lt $Milliseconds) {
+        try {
+            if ([Console]::KeyAvailable) {
+                $k = [Console]::ReadKey($true)
+                if ($k.Key -eq 'Escape') { return 'Quit' }
+                $c = [string]$k.KeyChar
+                if ($c -eq '0' -or $c -eq 'q' -or $c -eq 'Q') { return 'Quit' }
+                return $c
+            }
+        } catch { return '' }
+        Start-Sleep -Milliseconds $ScreenPollMs
+        $elapsed += $ScreenPollMs
+    }
+    return ''
+}
