@@ -1,0 +1,15 @@
+﻿PSVersion=5.1.26100.9711
+IsOutputRedirected=True
+IsInputRedirected=True
+IsErrorRedirected=True
+WindowSize ERR: The handle is invalid.
+
+BufferSize ERR: The handle is invalid.
+
+CursorVisible ERR: The handle is invalid.
+
+STD_OUTPUT_HANDLE=2116
+GetConsoleMode ok=False mode=0x0
+ENABLE_VIRTUAL_TERMINAL_PROCESSING(0x4) set = False
+ENABLE_PROCESSED_OUTPUT(0x1) set = False
+DISABLE_NEWLINE_AUTO_RETURN(0x8) = False

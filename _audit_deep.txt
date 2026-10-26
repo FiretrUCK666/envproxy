@@ -1,0 +1,41 @@
+﻿===== E. Wrap math: does Test-CanDrawScreen account for line WIDTH? =====
+  logical lines in frame            = 15
+  Test-CanDrawScreen -NeedLines N   = N + ScreenBottomMargin(2) <= WindowHeight(20 min)
+  ScreenMinWidth = 40
+    width= 40  logical=15  physical rows= 26  gate says drawable at h=20? True  overflow=8
+    width= 45  logical=15  physical rows= 19  gate says drawable at h=20? True  overflow=1
+    width= 50  logical=15  physical rows= 19  gate says drawable at h=20? True  overflow=1
+    width= 60  logical=15  physical rows= 18  gate says drawable at h=20? True  overflow=0
+    width= 80  logical=15  physical rows= 17  gate says drawable at h=20? True  overflow=0
+    width=120  logical=15  physical rows= 15  gate says drawable at h=20? True  overflow=0
+
+===== F. Write-Text atomic path while a reader holds FileShare.ReadWrite =====
+  write while reader open: content now = written=second-payload-\n
+  temp file left behind? False
+  after reader closed, content = written=second-payload-\n
+
+===== G. File.Replace vs File.Copy fallback: is the fallback atomic? =====
+  (fallback is File.Copy overwrite + Delete -> truncate-then-write, NOT atomic)
+
+===== H. Negative AgeSec handling =====
+  AgeSec=-30 -> snapOk stays True (runtime comment says negative must be treated as too-old)
+  AgeSec=-3600 -> snapOk = False
+
+===== I. Does Show-StatusLive handle key "2"? =====
+  contains '2' handling? False
+  only acts on: Quit
+  Format-StatusLines advertises: 
+
+===== J. Snapshot fields actually consumed by the status page =====
+  written            -> ops.ps1 references .Written = 0
+  round              -> ops.ps1 references .Round = 0
+  pid                -> ops.ps1 references .Pid = 0
+  state              -> ops.ps1 references .State = 7
+  prev_state         -> ops.ps1 references .PrevState = 0
+  pending_state      -> ops.ps1 references .PendingState = 0
+  pending_count      -> ops.ps1 references .PendingCount = 0
+  port_enumeration   -> ops.ps1 references .PortEnumeration = 1
+  port_reason        -> ops.ps1 references .PortReason = 1
+  vars_match         -> ops.ps1 references .VarsMatch = 0
+  apply_result       -> ops.ps1 references .ApplyResult = 0
+  log_tail           -> ops.ps1 references .LogTail = 1

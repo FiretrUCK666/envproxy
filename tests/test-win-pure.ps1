@@ -2364,6 +2364,195 @@ foreach ($fn in @('Show-Status')) {
     }
 }
 
+# ------------------------------------------------------------------------------
+# 状态快照（监控写、状态页只读）
+#
+# 这一层的判据是「读不出来 ≠ 没有」。坏文件、缺字段、时间戳解析失败，都必须
+# 判成读不出来，绝不能让调用方当成「值为空 = 没有代理」——那是这个项目最怕的
+# 反向倒挂：状态页说没代理、监控还在用着 7078。
+# ------------------------------------------------------------------------------
+Write-Host ''
+Write-Host '--- 状态快照 ---'
+
+$snapDir = New-TempDir 'ep-snap-'
+$snapFile = Join-Path $snapDir 'state.snapshot'
+$realSnapFile = $StateSnapshotFile
+try {
+    $StateSnapshotFile = $snapFile
+
+    # 没有文件 = none（不是 damaged，也不是「空快照」）
+    Assert-Eq '快照：没有文件判 none' 'none' (Read-StateSnapshot).Status
+
+    # 完整往返：写进去的每个字段都要原样读回来
+    Write-StateSnapshot -State 'on:7078' -PrevState 'on:7100' -PendingState 'off' -PendingCount 2 `
+        -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok'
+    $r = Read-StateSnapshot
+    Assert-Eq '快照：写完能读回 ok' 'ok' $r.Status
+    Assert-Eq '快照：state 原样' 'on:7078' $r.State
+    Assert-Eq '快照：prev_state 原样' 'on:7100' $r.PrevState
+    Assert-Eq '快照：pending_state 原样' 'off' $r.PendingState
+    Assert-Eq '快照：pending_count 是数字' 2 $r.PendingCount
+    Assert-Eq '快照：vars_match 原样' 'yes' $r.VarsMatch
+    Assert-Eq '快照：apply_result 原样' 'ok' $r.ApplyResult
+    Assert-Eq '快照：pid 不是 0' $true ($r.Pid -gt 0)
+    Assert-Eq '快照：年龄接近 0' $true ([Math]::Abs($r.AgeSec) -le 5)
+
+    # 三态：空值 / 有值 / 不知道，三者不许互相冒充
+    Write-StateSnapshot -State '' -PrevState '' -PendingState '' -PendingCount 0 `
+        -PortEnumeration 'failed' -PortReason 'netstat 没有输出' -VarsMatch 'unknown' -ApplyResult 'unknown'
+    $r = Read-StateSnapshot
+    Assert-Eq '快照：空 state 读作空（明确的空）' '' $r.State
+    Assert-Eq '快照：枚举失败读作 failed' 'failed' $r.PortEnumeration
+    Assert-Eq '快照：失败原因原样带回' 'netstat 没有输出' $r.PortReason
+    Assert-Eq '快照：unknown 不等于空' 'unknown' $r.VarsMatch
+
+    # 值里带等号、反斜杠、换行：都不得破坏解析
+    Write-StateSnapshot -State 'off' -PrevState '' -PendingState '' -PendingCount 0 `
+        -PortEnumeration 'failed' -PortReason 'C:\Windows\System32 a=b 以及换行' -VarsMatch 'no' -ApplyResult 'failed'
+    $r = Read-StateSnapshot
+    Assert-Eq '快照：值里的等号与反斜杠完整保留' 'C:\Windows\System32 a=b 以及换行' $r.PortReason
+
+    # 缺任何一个字段 = 整份不用。半截文件最危险：它看着像有效数据。
+    $good = [System.IO.File]::ReadAllLines($snapFile)
+    foreach ($drop in @('round=', 'state=', 'log_tail=')) {
+        $kept = @($good | Where-Object { $_ -notlike ($drop + '*') })
+        [System.IO.File]::WriteAllLines($snapFile, $kept, (New-Object System.Text.UTF8Encoding($false)))
+        $d = Read-StateSnapshot
+        Assert-Eq ('快照：缺 ' + $drop.TrimEnd('=') + ' 判 damaged') 'damaged' $d.Status
+        Assert-Eq ('快照：缺字段时一个字段都不返回（' + $drop.TrimEnd('=') + '）') '' $d.State
+    }
+
+    # 首行标记不对 = 不是我们的文件
+    [System.IO.File]::WriteAllLines($snapFile, @('随便什么', 'round=1'), (New-Object System.Text.UTF8Encoding($false)))
+    Assert-Eq '快照：首行标记不对判 damaged' 'damaged' (Read-StateSnapshot).Status
+
+    # 时间戳解析不出来也得判 damaged，不许当成「刚写的」
+    Write-StateSnapshot -State 'off' -PrevState '' -PendingState '' -PendingCount 0 `
+        -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok'
+    $txt = [System.IO.File]::ReadAllText($snapFile) -replace 'written=[^\n]*', 'written=不是时间'
+    [System.IO.File]::WriteAllText($snapFile, $txt, (New-Object System.Text.UTF8Encoding($false)))
+    Assert-Eq '快照：时间戳坏了判 damaged' 'damaged' (Read-StateSnapshot).Status
+
+    # 字段表本身：门禁 6 拿它与 Mac 侧比对，两侧必须同名同数量
+    Assert-Eq '快照：字段表 12 个' 12 $SnapshotKeys.Count
+    Assert-Eq '快照：字段表含 written' $true ($SnapshotKeys -contains 'written')
+    Assert-Eq '快照：字段表含 vars_match' $true ($SnapshotKeys -contains 'vars_match')
+
+    # 三个陈旧阈值必须递增，且最旧的等于心跳上限（同一个语义只能有一个数）
+    Assert-Eq '快照：阈值递增' $true (($SnapshotFreshSec -lt $SnapshotUsableSec) -and ($SnapshotUsableSec -lt $SnapshotStaleSec))
+    Assert-Eq '快照：最旧阈值等于心跳上限' $HeartbeatMaxSec $SnapshotStaleSec
+} finally {
+    $StateSnapshotFile = $realSnapFile
+    Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# ------------------------------------------------------------------------------
+# 屏幕渲染层
+#
+# 这一层决定「闪不闪」。判据是字节数：内容不变时必须零字节输出，
+# 只改一行时只发一行。不含控制台的纯计算部分可以直接断言。
+# ------------------------------------------------------------------------------
+Write-Host ''
+Write-Host '--- 屏幕渲染层 ---'
+
+# 能不能画屏：重定向/无控制台时必须判 false。自检本身就跑在重定向环境里，
+# 所以这里断言 false——这正好验证了「重定向不发控制字符」这条降级。
+Assert-Eq '渲染：重定向环境判不可画屏' $false (Test-CanDrawScreen)
+
+# 窗口太矮时拒绝画屏：要求 40 行而最小高度是 20 行，必然放不下
+Assert-Eq '渲染：要求超出窗口高度时判不可画屏' $false (Test-CanDrawScreen 9999)
+
+# 常量必须有值且自洽（散着写死会在改一处时漏掉另一处）
+Assert-Eq '渲染：最小宽高已定义' $true (($ScreenMinWidth -gt 0) -and ($ScreenMinHeight -gt 0))
+Assert-Eq '渲染：刷新间隔是 2000ms' 2000 $StatusRefreshIntervalMs
+Assert-Eq '渲染：轮询粒度小于刷新间隔' $true ($ScreenPollMs -lt $StatusRefreshIntervalMs)
+
+# Write-ScreenFrame 在不可画屏时必须安静返回 0，且一个字节都不发
+$frameOut = Write-ScreenFrame -Old @('a') -New @('b')
+Assert-Eq '渲染：不可画屏时不画且返回 0' 0 $frameOut
+
+# ------------------------------------------------------------------------------
+# 状态页的两条渲染路径必须同源
+#
+# Format-StatusLines（纯文本行，给刷新循环）与 Show-StatusSnapshot（带颜色分段）
+# 是两份输出逻辑，最容易漂移。这里断言两者的「话」一致：
+#   同一份状态，结论行与问题条目必须逐条相同。
+# ------------------------------------------------------------------------------
+Write-Host ''
+Write-Host '--- 状态页两条渲染路径 ---'
+
+$probeSt = [ordered]@{
+    Monitor = $null; StopIntent = $false; NeverInstalled = $true
+    AutoRunOk = $false; Port = $null; PortUnknown = $false; PortEnumerationReason = ''
+    TermSync = $null; ProxyValue = ''; ProxyAlive = $null; ProxyPort = 0; ProxyHost = $null
+    SysProxy = $false; UpdateInProgress = $false; LocalVersion = '9.9.9'
+    RemoteCache = $null; Snapshot = $null; DevCopy = $false
+}
+$probs = @(Get-StatusProblems $probeSt)
+# 从没装过时报两条：还没安装 + 开机自启没生效。两条都是真的（都没做成），
+# 而 Show-StatusSnapshot 里另有分支把这种情况说成一句话，避免让人以为机器有三处毛病。
+Assert-Eq '问题清单：从没装过时报两条' 2 $probs.Count
+Assert-Eq '问题清单：那一条是还没安装' '还没安装' $probs[0]
+
+# 正例：一切正常时一条都不报
+$goodSt = [ordered]@{
+    Monitor = [pscustomobject]@{ ProcessId = 1234 }; StopIntent = $false; NeverInstalled = $false
+    AutoRunOk = $true; Port = 7078; PortUnknown = $false; PortEnumerationReason = ''
+    TermSync = [pscustomobject]@{ State = 'ok' }; ProxyValue = 'http://127.0.0.1:7078'; ProxyAlive = $true
+    ProxyPort = 7078; ProxyHost = '127.0.0.1'
+    SysProxy = $false; UpdateInProgress = $false; LocalVersion = '9.9.9'
+    RemoteCache = $null; Snapshot = $null; DevCopy = $false
+}
+Assert-Eq '问题清单：全正常时零条' 0 (@(Get-StatusProblems $goodSt)).Count
+
+# 判断只有一处实现：Show-StatusSnapshot 必须调 Get-StatusProblems，
+# 不许自己再算一遍（两处各写一套必然分叉）
+$opsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/ops.ps1'))
+$ssIdx = $opsSrc.IndexOf('function Show-StatusSnapshot')
+$ssChunk = $opsSrc.Substring($ssIdx, [Math]::Min(2500, $opsSrc.Length - $ssIdx))
+Assert-Eq '接线：Show-StatusSnapshot 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($ssChunk, 'Get-StatusProblems')))
+Assert-Eq '接线：Show-StatusSnapshot 不自己累加问题' $false ([bool]([regex]::IsMatch($ssChunk, '\$problems \+= ')))
+
+# Format-StatusLines 也必须走同一个判断
+$fsIdx = $opsSrc.IndexOf('function Format-StatusLines')
+$fsChunk = $opsSrc.Substring($fsIdx, [Math]::Min(2500, $opsSrc.Length - $fsIdx))
+Assert-Eq '接线：Format-StatusLines 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($fsChunk, 'Get-StatusProblems')))
+
+# 两条渲染路径的输出要能对上：拿同一份状态，逐条比对结论行
+$lines = @(Format-StatusLines $goodSt)
+Assert-Eq '渲染路径：正常态首行是标题' $true ($lines[0] -match 'EnvProxy 状态')
+Assert-Eq '渲染路径：正常态第二行说一切正常' '一切正常，不用做任何事。' $lines[1]
+Assert-Eq '渲染路径：帧里带退出提示' $true ([bool](@($lines | Where-Object { $_ -match '按 0 或 Esc' }).Count))
+Assert-Eq '渲染路径：正常态不含「项要注意」' $false ([bool](@($lines | Where-Object { $_ -match '项要注意' }).Count))
+
+$badLines = @(Format-StatusLines $probeSt)
+Assert-Eq '渲染路径：异常态报出注意项' $true ($badLines[1] -match '\d+ 项要注意')
+
+# 状态页整段不许写文件、不许改变量（只读契约）
+foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {
+    $i = $opsSrc.IndexOf('function ' + $fn)
+    if ($i -ge 0) {
+        $chunk = $opsSrc.Substring($i, [Math]::Min(6000, $opsSrc.Length - $i))
+        Assert-Eq ('接线：' + $fn + ' 不写文件') $false ([bool]([regex]::IsMatch($chunk, 'Write-Text|Set-Content|New-Item|Remove-ItemSafe')))
+        Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable|Write-UserEnv')))
+    }
+}
+
+# 轻量判活与完整判活：前者只读心跳，不许碰进程表
+$rtSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/runtime.ps1'))
+$fastIdx = $rtSrc.IndexOf('function Get-MonitorProcessFast')
+Assert-Eq '接线：Get-MonitorProcessFast 存在' $true ($fastIdx -ge 0)
+if ($fastIdx -ge 0) {
+    $fastChunk = $rtSrc.Substring($fastIdx, [Math]::Min(1500, $rtSrc.Length - $fastIdx))
+    # 只取这个函数的函数体：截固定长度会把后面那个完整的 Get-MonitorProcess
+    # 一起框进来，它的 Get-CimInstance 会让断言永远红——量错对象比没量更糟。
+    $nextFn = $rtSrc.IndexOf("`nfunction ", $fastIdx + 10)
+    $fastChunk = if ($nextFn -gt $fastIdx) { $rtSrc.Substring($fastIdx, $nextFn - $fastIdx) } else { $rtSrc.Substring($fastIdx) }
+    # Get-Item 读的是文件属性（心跳文件的 mtime），不是进程表——不算重判活。
+    # 真正要禁的是查进程：那才是 170ms 的来源。
+    Assert-Eq '接线：轻量判活不查进程表' $false ([bool]([regex]::IsMatch($fastChunk, 'Get-CimInstance|Get-Process')))
+}
+
 # 还原跑之前记下的环境（见文件开头那段守卫）：自检不该改变调用它的那个 shell 的状态。
 foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $__savedProxy[$__n], 'Process') }
 if ($null -ne $__savedTerm) { $env:ENVPROXY_TERM = $__savedTerm } else { Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue }
