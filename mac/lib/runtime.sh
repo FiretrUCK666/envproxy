@@ -11,11 +11,18 @@ STOP_FLAG="$MONITOR_DIR/stop.flag"
 # 之前 mac 侧靠"自启动注册在不在"去猜，而"注册在、监控没跑"恰恰是被强杀的典型现场——
 # 于是把崩溃说成"已按你的选择停止"，用户会以为自己点错了。
 STOP_INTENT="$MONITOR_DIR/stopped.intent"
-# 心跳：监控每几轮刷新一次，记录「pid + 该进程启动时刻」。
-# 用途与 Windows 侧同一件事（见那边的 Test-MonitorAlive）：在没有可靠进程查询的
-# 环境下也能判断监控还活着，并且挡得住 pid 复用。
 # 版本号缓存：由监控刷新、状态页只读。状态页不许联网（理由见 write_version_cache）。
 VERSION_CACHE="$MONITOR_DIR/version.cache"
+# 状态快照：监控每轮把结论写这里，状态页只读——打开即见，不必重新探测。
+# 与 Windows 侧同名同字段同顺序（SNAPSHOT_KEYS 两边必须一致，门禁核对）。
+SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
+SNAPSHOT_KEYS="written round pid state prev_state pending_state pending_count port_enumeration port_reason vars_match apply_result log_tail"
+# 三档阈值，与 Windows 侧同值同语义：
+#   <= 10 秒：新鲜，当作当前状态直接说；
+#   <= 240 秒：仍然是最近的判断，但屏幕上要说清是几秒前的；
+#   > 240 秒：不再当"当前状态"，退回实时探测。
+SNAPSHOT_FRESH_SEC=10
+SNAPSHOT_STALE_SEC=240
 LOG_FILE="$MONITOR_DIR/monitor.log"
 PATH_CONF="$ENVPROXY_HOME/path.conf"
 LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
@@ -40,6 +47,102 @@ STATE_DEBOUNCE_ROUNDS=2
 # ------------------------------------------------------------------------------
 # 1. 日志（只记状态翻转；超过 LOG_MAX_BYTES 截断为最近 LOG_TAIL_LINES 行）
 # ------------------------------------------------------------------------------
+# 把值里的换行转义掉，保证一行一个键值对。
+# 用 %0A 而不是字面 \n：mac 路径里也有反斜杠少见但 Windows 侧全是，
+# 两侧共用同一套编码才能互读，所以这里跟 Windows 侧一致。
+_snapshot_escape() {
+    printf '%s' "$1" | sed -e 's/%/%25/g' | awk 'BEGIN{ORS=""} {if (NR>1) printf "%%0A"; printf "%s", $0}'
+}
+
+# 反过来：先还原换行，再还原百分号。
+_snapshot_unescape() {
+    printf '%s' "$1" | sed -e 's/%0A/\
+/g' -e 's/%25/%/g'
+}
+
+# 写一份快照。所有字段由调用方算好传进来——这里不做判断，只负责落盘。
+# 失败一律吞掉：监控的职责是管代理，写快照是附带，写不出来不能让监控停摆。
+write_state_snapshot() {
+    _wss_state="$1"; _wss_prev="$2"; _wss_pending="$3"; _wss_pending_n="$4"
+    _wss_enum="$5"; _wss_reason="$6"; _wss_vars="$7"; _wss_apply="$8"
+    _wss_round="${9:-0}"; _wss_pid="${10:-0}"
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    _wss_tmp="$SNAPSHOT_FILE.tmp$$"
+    {
+        printf '# envproxy-snapshot 1\n'
+        # UTC 秒精度，与 Windows 侧的格式一致（两侧能互相解析）
+        printf 'written=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'round=%s\n' "$_wss_round"
+        printf 'pid=%s\n' "$_wss_pid"
+        printf 'state=%s\n' "$(_snapshot_escape "$_wss_state")"
+        printf 'prev_state=%s\n' "$(_snapshot_escape "$_wss_prev")"
+        printf 'pending_state=%s\n' "$(_snapshot_escape "$_wss_pending")"
+        printf 'pending_count=%s\n' "$_wss_pending_n"
+        printf 'port_enumeration=%s\n' "$_wss_enum"
+        printf 'port_reason=%s\n' "$(_snapshot_escape "$_wss_reason")"
+        printf 'vars_match=%s\n' "$_wss_vars"
+        printf 'apply_result=%s\n' "$_wss_apply"
+        printf 'log_tail=%s\n' "$(_snapshot_escape "$(tail -n 4 "$LOG_FILE" 2>/dev/null)")"
+    } > "$_wss_tmp" 2>/dev/null && mv "$_wss_tmp" "$SNAPSHOT_FILE" 2>/dev/null || rm -f "$_wss_tmp" 2>/dev/null
+    return 0
+}
+
+# 读快照。设三个全局给调用方：
+#   SNAP_STATUS  ok / none / unreadable / damaged
+#   SNAP_AGE     写完到现在多少秒（负值表示系统时间被调过）
+#   SNAP_<字段>  各字段原值（已反转义）
+#
+# 三态与 Windows 侧一致：读不出来 ≠ 没有。缺任何一个字段就整份判 damaged——
+# 半份数据比没有更危险，它会让人以为"某一项确实没有"。
+read_state_snapshot() {
+    SNAP_STATUS="none"
+    SNAP_AGE=0
+    SNAP_STATE=""; SNAP_PORT_ENUMERATION=""; SNAP_PORT_REASON=""; SNAP_LOG_TAIL=""
+    SNAP_ROUND=0; SNAP_PID=0; SNAP_PREV_STATE=""; SNAP_PENDING_STATE=""
+    SNAP_PENDING_COUNT=0; SNAP_VARS_MATCH=""; SNAP_APPLY_RESULT=""
+    [ -f "$SNAPSHOT_FILE" ] || return 0
+    if [ ! -r "$SNAPSHOT_FILE" ]; then SNAP_STATUS="unreadable"; return 0; fi
+
+    _rss_first=$(sed -n '1p' "$SNAPSHOT_FILE" 2>/dev/null)
+    case "$_rss_first" in
+        '# envproxy-snapshot 1') ;;
+        *) SNAP_STATUS="damaged"; return 0 ;;
+    esac
+
+    # 缺字段就整份不用：逐项确认每个键都在
+    for _rss_k in $SNAPSHOT_KEYS; do
+        if ! grep -q "^$_rss_k=" "$SNAPSHOT_FILE" 2>/dev/null; then
+            SNAP_STATUS="damaged"
+            return 0
+        fi
+    done
+
+    _rss_get() { sed -n "s/^$1=//p" "$SNAPSHOT_FILE" 2>/dev/null | head -1; }
+    _rss_written=$(_rss_get written)
+    SNAP_STATE=$(_snapshot_unescape "$(_rss_get state)")
+    SNAP_PREV_STATE=$(_snapshot_unescape "$(_rss_get prev_state)")
+    SNAP_PENDING_STATE=$(_snapshot_unescape "$(_rss_get pending_state)")
+    SNAP_PORT_ENUMERATION=$(_rss_get port_enumeration)
+    SNAP_PORT_REASON=$(_snapshot_unescape "$(_rss_get port_reason)")
+    SNAP_LOG_TAIL=$(_snapshot_unescape "$(_rss_get log_tail)")
+    SNAP_VARS_MATCH=$(_rss_get vars_match)
+    SNAP_APPLY_RESULT=$(_rss_get apply_result)
+    SNAP_ROUND=$(_rss_get round); case "$SNAP_ROUND" in ''|*[!0-9]*) SNAP_ROUND=0;; esac
+    SNAP_PID=$(_rss_get pid); case "$SNAP_PID" in ''|*[!0-9]*) SNAP_PID=0;; esac
+    SNAP_PENDING_COUNT=$(_rss_get pending_count); case "$SNAP_PENDING_COUNT" in ''|*[!0-9]*) SNAP_PENDING_COUNT=0;; esac
+
+    # 时刻：BSD date 与 GNU date 的 -j/-d 语法不同，逐条试。
+    # 判据只用它算年龄，解析不出来就按"过旧"处理（保守方向）。
+    _rss_epoch=$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$_rss_written" '+%s' 2>/dev/null \
+                 || date -u -d "$_rss_written" '+%s' 2>/dev/null || echo '')
+    case "$_rss_epoch" in
+        ''|*[!0-9]*) SNAP_STATUS="damaged"; return 0 ;;
+    esac
+    SNAP_AGE=$(( $(date -u '+%s') - _rss_epoch ))
+    SNAP_STATUS="ok"
+    return 0
+}
+
 log_msg() {
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE" 2>/dev/null || return 0
@@ -798,6 +901,7 @@ run_monitor_loop() {
     _pending_n=0
     _repair=0
     _self=0
+    _round_no=0
 
     while [ ! -f "$STOP_FLAG" ]; do
         if [ ! -f "$SCRIPT_PATH" ]; then _self=1; break; fi
@@ -852,6 +956,12 @@ run_monitor_loop() {
                     ;;
             esac
         fi
+        # 把本轮的结论写成快照，供状态页只读。
+        # 每轮都写、不只在变化时写：只在变化时写会让文件在稳态下永远停在上次翻转的时刻，
+        # 状态页据此判"这是很久以前的判断"而退回现场探测——正好把它的价值抵消掉。
+        # 失败一律吞掉：写快照是附带，写不出来不能让监控停摆。
+        write_state_snapshot "$_last" "$_last" "$_pending" "$_pending_n" "ok" "" "yes" "ok" "$_round_no" "$$" || true
+        _round_no=$((_round_no + 1))
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
     done
 
@@ -865,7 +975,9 @@ run_monitor_loop() {
         fi
     else
         log_msg "==== 监控退出（收到停止信号）===="
-        rm -f "$PID_FILE" "$STOP_FLAG" 2>/dev/null || true
+        # 快照要和 pid 一起删：留着它，停止之后状态页会在 SNAPSHOT_STALE_SEC 的窗口内
+        # 继续把上一轮结论当成"当前状态"，报出"翻墙代理已开启"而变量已经清光了。
+        rm -f "$PID_FILE" "$STOP_FLAG" "$SNAPSHOT_FILE" 2>/dev/null || true
     fi
     rmdir "$_lockdir" 2>/dev/null || true
     trap - EXIT

@@ -54,6 +54,23 @@ rc_bash_files() {
 # 用户会以为帮助卡死，其实只是没画出来。与 Windows 侧 $HelpMaxLines 必须一致。
 HELP_MAX_LINES=30
 
+# ESC 字符：所有 ANSI 序列都从它开始。写成变量而不是每个地方敲一次，读起来才看得懂。
+_ESC=$(printf '\033')
+# ---- 屏幕渲染层的常量（Windows 侧同名同义，值可不同）----
+# 最小可用终端：宽度不够时一折行就认不出「标签 : 内容」的结构，宁可不刷新。
+SCREEN_MIN_WIDTH=40
+# 最小可用高度：低于这个数，状态页连正文都放不下，只能靠裁剪硬塞，不如退回静态。
+SCREEN_MIN_HEIGHT=20
+# 内容区下方要留的行数：一行给「按 0 返回」的提示，一行给光标。
+SCREEN_BOTTOM_MARGIN=2
+# 「等一小会儿看有没有按键」的轮询粒度（秒）。
+# DIVERGE(Mac): bash 3.2 的 read -t 只认整数秒（Apple 的 read.def 里走 alarm()），
+#   没有亚秒超时，所以这里是 1 秒；Windows 侧是 150 毫秒。差异只在按键手感，
+#   行为语义（按 0/q/Esc 退出、其余忽略）完全相同。
+SCREEN_POLL_SEC=1
+# 状态页自己刷新的间隔（秒）。与监控的探测节奏（2-3 秒）对齐，不做智能变速。
+STATUS_REFRESH_SEC=2
+
 # 日志体积上限与截断后保留的行数。写成具名常量而不是散在代码里的 204800 / 200：
 # 文档里印着这两个数，两侧也各写了一遍，散着放就一定会有一天改一处漏一处。
 # 与 Windows 侧 $LogMaxBytes / $LogTailLines 同口径，门禁 6 核对。
@@ -475,4 +492,137 @@ compare_versions() {
         for(i=1;i<=n;i++){ xa=(i<=na?pa[i]+0:0); xb=(i<=nb?pb[i]+0:0);
             if(xa>xb){print 1; exit} if(xa<xb){print -1; exit} }
         print 0 }'
+}
+
+# ------------------------------------------------------------------------------
+# 屏幕渲染层：能不能就地重画、怎么画一帧、怎么进出、怎么等一个键。
+#
+# 为什么单独一层：一次性输出（打印完就结束）不需要这些；一旦要"自己动"，
+# 就必须解决三件事——不能清屏（清屏就是闪）、只画变化的行、光标别乱跳。
+# 放进 base 是因为 ops 与 future 的页面都要用，放进 ops 会让别的层反向依赖。
+# ------------------------------------------------------------------------------
+
+# 能不能做「就地重画」。这是所有刷新逻辑的前置判据，只有这一个实现。
+# 四种情况不能画：
+#   输出被重定向（管道/文件）—— 控制字符会原样写进文件，污染输出；
+#   没有真实终端 —— 光标定位会失效；
+#   窗口太窄/太矮 —— 内容放不下，重画必然滚屏，滚屏后绝对定位全部错位。
+# 参数：$1 = 这一帧要占几行；$2 = 这一帧最宽行多少列（0 表示不检查宽度）
+test_can_draw_screen() {
+    _tcd_lines="${1:-0}"
+    _tcd_width="${2:-0}"
+    [ -t 1 ] || return 1
+    [ -t 0 ] || return 1
+    _tcd_w=$(tput cols 2>/dev/null || echo 80)
+    _tcd_h=$(tput lines 2>/dev/null || echo 24)
+    case "$_tcd_w" in ''|*[!0-9]*) _tcd_w=80;; esac
+    case "$_tcd_h" in ''|*[!0-9]*) _tcd_h=24;; esac
+    [ "$_tcd_w" -ge "$SCREEN_MIN_WIDTH" ] || return 1
+    [ "$_tcd_h" -ge "$SCREEN_MIN_HEIGHT" ] || return 1
+    if [ "$_tcd_lines" -gt 0 ] && [ $((_tcd_lines + SCREEN_BOTTOM_MARGIN)) -gt "$_tcd_h" ]; then
+        return 1
+    fi
+    # 宽度也要按这一帧的实际最宽行判：折行会让后面每一行的绝对定位错位。
+    if [ "$_tcd_width" -gt 0 ] && [ "$_tcd_width" -gt "$_tcd_w" ]; then
+        return 1
+    fi
+    return 0
+}
+
+# 把一帧画到屏幕上，返回这一帧占了几行。
+# 参数：$1 = 上一帧的内容（换行分隔，空表示没有上一帧）；$2 = 这一帧的内容。
+#
+# 关键点：内容没变的行一个字节都不发 —— 这是「不闪」的本质。
+# 窗口尺寸一变就整帧重画：尺寸变化后终端会把已有内容重新折行，
+# 屏幕上"第几行是什么"整个失效，而这一层的记账是按逻辑行算的。
+write_screen_frame() {
+    _wsf_old="$1"
+    _wsf_new="$2"
+    [ -t 1 ] || return 0
+    _wsf_n=$(printf '%s\n' "$_wsf_new" | grep -c '' || echo 0)
+    [ "$_wsf_n" -gt 0 ] || return 0
+
+    # 尺寸变化检测
+    _wsf_w=$(tput cols 2>/dev/null || echo 0)
+    _wsf_h=$(tput lines 2>/dev/null || echo 0)
+    if [ "$_wsf_w" != "${_SCREEN_LAST_W:-}" ] || [ "$_wsf_h" != "${_SCREEN_LAST_H:-}" ]; then
+        _SCREEN_LAST_W="$_wsf_w"
+        _SCREEN_LAST_H="$_wsf_h"
+        _wsf_old=""
+    fi
+
+    # 逐行比较：只输出变化的行。用纯 bash 比较，不起子进程（热路径）。
+    _wsf_buf=""
+    _wsf_i=0
+    _wsf_old_rest="$_wsf_old"
+    while IFS= read -r _wsf_line; do
+        _wsf_i=$((_wsf_i + 1))
+        if [ -n "$_wsf_old_rest" ]; then
+            _wsf_prev="${_wsf_old_rest%%$'\n'*}"
+            case "$_wsf_old_rest" in
+                *$'\n'*) _wsf_old_rest="${_wsf_old_rest#*$'\n'}" ;;
+                *) _wsf_old_rest="" ;;
+            esac
+        else
+            _wsf_prev=""
+        fi
+        [ "$_wsf_line" = "$_wsf_prev" ] && continue
+        _wsf_buf="$_wsf_buf${_ESC}[${_wsf_i};1H${_wsf_line}${_ESC}[K"
+    done <<EOF
+$_wsf_new
+EOF
+
+    [ -n "$_wsf_buf" ] || return "$_wsf_n"
+    # 藏光标 → 一次写出 → 恢复光标。整帧拼成一个字符串再写，快且没有"画到一半"的中间态。
+    printf '%s' "${_ESC}[?25l${_wsf_buf}${_ESC}[?25h"
+    return "$_wsf_n"
+}
+
+# 进/出「屏幕已接管」状态。只有进入时清一次屏；刷新循环里一次都不许清——清屏就是闪的根源。
+enter_screen() {
+    test_can_draw_screen || return 1
+    printf '%s' "${_ESC}[2J${_ESC}[H"
+    return 0
+}
+
+exit_screen() {
+    # 光标放到底部并恢复可见：任何退出路径都要能到这里（Ctrl+C 走 trap）。
+    _es_bottom=$(tput lines 2>/dev/null || echo 24)
+    printf '%s' "${_ESC}[${_es_bottom};1H${_ESC}[?25h"
+    return 0
+}
+
+# 等一个键，最多 $1 秒。返回：
+#   Quit  —— 0 / q / Q
+#   其它  —— 按下的字符（调用方自己决定怎么处理）
+#   空    —— 超时没按键，或按的是功能键（方向键之类）
+#
+# DIVERGE(Mac): bash 3.2 的 read -t 只认整数秒，超时与 EOF 都返回 1，
+#   所以要用"返回值 > 128 还是 == 1 且变量为空"两个信号来区分"超时"和"读不到"。
+#   这一点与 Windows 侧不同（那边用 Console.KeyAvailable 轮询）。
+wait_screen_key() {
+    _wsk_sec="${1:-1}"
+    _wsk_c=""
+    _wsk_v=""
+    _wsk_start=$(date +%s)
+    if IFS= read -r -s -n 1 -t "$_wsk_sec" _wsk_v 2>/dev/null; then
+        _wsk_c="$_wsk_v"
+    else
+        _wsk_c=""
+        # read -t 超时会立即返回（rc>128）。如果 stdin 根本不可读（EOF、无 tty），
+        # read 会立刻返回 rc=1 而**不是**等满超时——那样调用方的 while 会毫无间隔地
+        # 空转，把一个核吃满且永远退不出去（实测一秒能转几千次）。
+        # 所以这里必须自己把时间补足，保住"每一轮至少歇 _wsk_sec 秒"这条不变量。
+        _wsk_now=$(date +%s)
+        _wsk_waited=$((_wsk_now - _wsk_start))
+        if [ "$_wsk_waited" -lt "$_wsk_sec" ]; then
+            sleep "$((_wsk_sec - _wsk_waited))" 2>/dev/null || true
+        fi
+    fi
+    case "$_wsk_c" in
+        ''|$'\r'|$'\n') return 0 ;;
+        '0'|'q'|'Q') printf '%s' 'Quit'; return 0 ;;
+    esac
+    printf '%s' "$_wsk_c"
+    return 0
 }

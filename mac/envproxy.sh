@@ -207,7 +207,9 @@ case "$_CMD_NORM" in
           # 与其让人以为"工具坏了"，不如说清楚。
           echo "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。";;
     uninstall) uninstall_envproxy "$_PURGE" "$_YES";;
-    status) show_status;;
+    # 交互终端里走实时刷新（自己动、不用按键）；重定向/无终端/窗口太小时
+    # show_status_live 会自动退回一次性静态输出，两种情况都能走这里。
+    status) show_status_live;;
     # 显式修复"配置文件里标记不成对"。安装/卸载遇到它会一个字节都不改（猜必错），
     # 所以那个状态本来是死路：照文档重跑安装，每次都被拒绝。人明确说"我同意修"时要能修。
     repair-profile) repair_hook_markers; exit $?;;
@@ -215,6 +217,7 @@ case "$_CMD_NORM" in
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     help) show_help;;
+    report) new_problem_report;;
     # DIVERGE(Mac): self-test 只有 mac 有，Windows 侧没有对应子命令。
     #   为什么：这份自检跑在临时沙箱里（重定向 HOME、不碰真实配置），靠的是 shell 的
     #   变量替换与子进程隔离，用 bash 实现是自然的。Windows 侧的同等回归住在

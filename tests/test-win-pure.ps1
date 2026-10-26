@@ -2075,7 +2075,7 @@ if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
 }
 
 # 文档里每条命令的「形状」也要对：只有 PowerShell 才用 $env:，只有 bash 才用 export。
-$docText = (Format-HelpTopic '3')
+$docText = (Format-HelpTopic '4')
 Assert-Eq 'help gives a cmd form for pinning' $true ($docText -match 'set HTTP_PROXY=')
 Assert-Eq 'help gives a bash form for pinning' $true ($docText -match 'unset HTTP_PROXY')
 Assert-Eq 'help gives a PowerShell form for pinning' $true ($docText -match '\$env:ENVPROXY_TERM')
@@ -2188,7 +2188,7 @@ Assert-Eq 'the shared group order is the only place groups are ordered' 1 (([reg
 # number it names, and gets a DIFFERENT action (wants check-for-updates, uninstalls).
 # So it must be generated from $MenuItems, and this assertion proves it is: a fake
 # menu entry must show up in the help screen with no other edit.
-$helpMenuText = (Format-HelpTopic '6')
+$helpMenuText = (Format-HelpTopic '2')
 foreach ($mi in $MenuItems) {
     Assert-Eq ('help menu screen shows menu key ' + $mi.Key) $true ($helpMenuText -match ('(?m)^\s+' + [regex]::Escape($mi.Key) + '\s{2}'))
     Assert-Eq ('help menu screen names menu key ' + $mi.Key) $true ($helpMenuText -match [regex]::Escape($mi.Name))
@@ -2196,7 +2196,7 @@ foreach ($mi in $MenuItems) {
 # Mutation test: append a row to the table and confirm it appears on the help screen.
 $fakeRow = @{ Key = '9'; Name = '假条目'; Switch = 'Status'; Group = '日常'; Hint = '这条只用于自检' }
 $MenuItems = @($MenuItems) + $fakeRow
-$helpMenuText2 = (Format-HelpTopic '6')
+$helpMenuText2 = (Format-HelpTopic '2')
 Assert-Eq 'the help menu screen is generated from the table' $true ($helpMenuText2 -match '假条目')
 Assert-Eq 'a generated row keeps its hint' $true ($helpMenuText2 -match '这条只用于自检')
 $MenuItems = @($MenuItems | Where-Object { $_.Key -ne '9' })
@@ -2534,7 +2534,10 @@ Assert-Eq '渲染路径：异常态报出注意项' $true ($badLines[1] -match '
 foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {
     $i = $opsSrc.IndexOf('function ' + $fn)
     if ($i -ge 0) {
-        $chunk = $opsSrc.Substring($i, [Math]::Min(6000, $opsSrc.Length - $i))
+        # Take only this function body: a fixed-length slice pulls in the
+        # next function, whose file writes would keep this assertion red forever.
+        $nextFn = $opsSrc.IndexOf('function ', $i + 10)
+        $chunk = if ($nextFn -gt $i) { $opsSrc.Substring($i, $nextFn - $i) } else { $opsSrc.Substring($i) }
         Assert-Eq ('接线：' + $fn + ' 不写文件') $false ([bool]([regex]::IsMatch($chunk, 'Write-Text|Set-Content|New-Item|Remove-ItemSafe')))
         Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable|Write-UserEnv')))
     }

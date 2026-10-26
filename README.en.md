@@ -98,10 +98,12 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **7 Advanced** (`高级功能`) | Windows only: proxy-aware shortcut | One new icon; old ones untouched |
+| **5 Advanced** (`高级功能`) | Windows only: a blocked-site shortcut | One new icon only |
 | **Upkeep** | | |
-| **5 Stop the monitor** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
-| **6 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
+| **6 Stop the monitor** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
+| **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
+| **Support** | | |
+| **8 Problem report** (`问题反馈`) | Something is wrong | One report file |
 | **Quit** | | |
 | **0 Quit** (`退出`) | Closes the menu | Nothing |
 
@@ -116,14 +118,12 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | No. | One entry answers one question |
 |---|---|
 | 1 | What is this for |
-| 2 | What do I do after installing |
-| 3 | Pin this window to a direct connection / go back to automatic |
-| 4 | Send this window through a corporate proxy |
+| 2 | What each menu item does |
+| 3 | What do I do after installing |
+| 4 | Keep this window off the proxy / use a corporate proxy |
 | 5 | Make one command skip the proxy |
-| 6 | What each menu item does |
-| 7 | Installed but still cannot reach the internet / status looks wrong |
-| 8 | Still not working / I want to remove it |
-| 9 | One program does not go through the proxy |
+| 6 | One program still cannot reach blocked sites |
+| 7 | Something is wrong: how to check, how to report |
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 

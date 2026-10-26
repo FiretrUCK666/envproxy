@@ -118,7 +118,7 @@ function Install-EnvProxy {
         @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。', ''),
         @('装之前就开着的窗口', '重开一个，或者手动加载一次', ''),
         @('', '菜单选 4（帮助）第 2 条，各种终端都有现成命令。', ''),
-        @('想让某个窗口固定直连', '在它里面执行', "`$env:ENVPROXY_TERM = 'off'"),
+        @('想让某个窗口一直不翻墙', '在它里面执行', "`$env:ENVPROXY_TERM = 'off'"),
         @('改回跟着翻墙软件走', '在它里面执行', 'Remove-Item Env:ENVPROXY_TERM'),
         @('忘了怎么用', '菜单选 4（帮助）。', '')
     )
@@ -220,11 +220,13 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         $names = @($shortcutRecs | ForEach-Object { $_.Name })
         if ($names.Count -eq 0) { $names = @($orphanLaunchers | ForEach-Object { $_.Name }) }
         $listText = (($names | Select-Object -Unique) -join '、')
+        # @explain 「走代理的快捷方式」是产品里的图标名，用户会在桌面上看到它
         Write-Styled 'text' ("你为这些程序建了走代理的快捷方式：" + $listText)
         Write-Styled 'dim'  "卸载后它们仍然能启动程序，但不再自动带代理（那时按注册表现状走：有代理就用，没有就直连）。"
         if ($Purge) {
             # -Purge 的语义是"我知道我在干什么，全部清干净"，与"-Yes 跳过确认"同一条思路。
             $keepShortcuts = $false
+            # @explain 「走代理的快捷方式」是产品里的图标名，用户会在桌面上看到它
             Write-Styled 'dim' "已指定 -Purge：走代理的快捷方式一并删除。"
         } elseif (Test-CanPrompt) {
             try {
@@ -260,7 +262,8 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         # 图标也要删，否则桌面上会留下一堆点不开的空壳。判据是内容不是名字（见 Remove-ProxyShortcuts）。
         $rm = Remove-ProxyShortcuts
         if ($rm.RemovedLnk -gt 0) {
-            Write-Styled 'ok' ("走代理的快捷方式：已删除 {0} 个" -f $rm.RemovedLnk)
+            # @explain 「走代理的快捷方式」是产品里的图标名，不是解释机制
+        Write-Styled 'ok' ("走代理的快捷方式：已删除 {0} 个" -f $rm.RemovedLnk)
         }
         if ($rm.Failed.Count -gt 0) {
             Write-Styled 'warn' "这些快捷方式没能删掉（可能被占用）："
@@ -408,7 +411,8 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         # 保留下来的快捷方式要说清它现在的行为：用户最可能担心的是"图标还能不能用"。
         # 事实是能用，只是不再自动带代理——它读注册表现状，有代理就用，没有就直连。
         if ($keepShortcuts -and $hasShortcuts) {
-            Write-Styled 'dim' "        走代理的快捷方式按你的选择保留了："
+            # @explain 「走代理的快捷方式」是产品里的图标名，用户会在桌面上看到它
+        Write-Styled 'dim' "        走代理的快捷方式按你的选择保留了："
             Write-Styled 'dim' ("          " + (Get-ProxyLauncherDir))
             Write-Styled 'dim' "        那些图标仍然能启动程序；此时它们按注册表现状走（有代理就用，没有就直连）。"
             Write-Styled 'dim' "        以后想彻底清掉，删掉上面那个文件夹和对应的图标即可。"
@@ -710,6 +714,144 @@ function Show-Status {
     # 这一层也是 --json 之类机器可读输出的前提（先有对象，才有第二种渲染方式）。
     $st = Get-StatusSnapshot
     Show-StatusSnapshot $st
+}
+
+# 生成一份可以直接发给别人看的问题报告。
+#
+# 为什么要它：以前反馈唯一的办法是"自己找到日志文件、打开、复制、再贴到 GitHub"。
+# 不会用 GitHub、不会敲命令的人卡在第一步就放弃了。这里把整件事压成一个按键：
+# 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
+#
+# 边界：只读、不联网、不改任何配置。文件落在 monitor\ 下，卸载时会一起清掉。
+function New-ProblemReport {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $fileName = 'report-' + $stamp + '.txt'
+    $target = Join-Path $MonitorDir $fileName
+    # monitor\ 不可写时退到临时目录：报告不能因为路径问题就生成不出来。
+    if (-not (Test-Path -LiteralPath $MonitorDir)) { $null = New-Item -ItemType Directory -Path $MonitorDir -Force -ErrorAction SilentlyContinue }
+
+    $L = New-Object System.Collections.ArrayList
+    $add = { param($s) [void]$L.Add([string]$s) }
+    $rule = { param($title) [void]$L.Add('---------------- ' + $title + ' ----------------') }
+
+    & $add '======== EnvProxy 问题报告 ========'
+    & $add ('生成时间：' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+    $ver = ''
+    try { $ver = Get-LocalVersion } catch { $ver = '' }
+    if (-not $ver) { $ver = '未知' }
+    $isDev = $false
+    try { $isDev = Test-DevCopy } catch { $isDev = $false }
+    & $add ('程序版本：v' + $ver + $(if ($isDev) { '（开发副本）' } else { '' }))
+    & $add ('系统：' + [System.Environment]::OSVersion.VersionString)
+    & $add ('PowerShell：' + $PSVersionTable.PSVersion.ToString())
+    & $add ''
+
+    & $rule '当前状态'
+    try {
+        $snap = Get-StatusSnapshot
+        # 用纯文本渲染器：报告是给文件看的，不能带颜色控制字符。
+        # 底部那两句是屏幕上的操作提示（"正在实时刷新""按 0 返回"），
+        # 进了文件只会让读的人困惑——它们不是状态本身。按行剔掉。
+        foreach ($ln in @(Format-StatusLines $snap)) {
+            $plain = Remove-AnsiColor $ln
+            if ($plain -match '^\s*(正在实时刷新|按 0 或 Esc)') { continue }
+            if ($plain -match '^\s*=+\s*$') { continue }
+            if ($plain -match '^\s*======== EnvProxy 状态') {
+                & $add '======== EnvProxy 状态 ========'
+                continue
+            }
+            & $add $plain
+        }
+    } catch {
+        & $add ('（取状态时出错：' + $_.Exception.Message + '）')
+    }
+    & $add ''
+
+    & $rule '运行日志（最后 30 行）'
+    $tail = ''
+    try { $tail = [string](Get-LogTailText 30) } catch { $tail = '' }
+    if ($tail) { foreach ($ln in @($tail -split "`n")) { if ($ln) { & $add ('  ' + $ln) } } }
+    else { & $add '  （还没有日志：这个工具可能从未运行过）' }
+    & $add ''
+
+    & $rule '后台程序快照（排查用）'
+    $sn = $null
+    try { $sn = Read-StateSnapshot } catch { $sn = $null }
+    if ($sn -and $sn.Status -eq 'ok') {
+        & $add ('  最近一次判断：' + $sn.State)
+        & $add ('  写入轮次：' + $sn.Round + '    进程号：' + $sn.Pid)
+        & $add ('  距今：' + $sn.AgeSec + ' 秒前')
+        & $add ('  端口扫描：' + $sn.PortEnumeration + $(if ($sn.PortReason) { '（' + $sn.PortReason + '）' } else { '' }))
+        # 后台程序是旧版本时明确写出来：升级后没重启监控，这个差异会让人误判。
+        if ($sn.Pid -gt 0) {
+            $livePid = 0
+            try { $livePid = [int](Get-MonitorProcessFast).ProcessId } catch { $livePid = 0 }
+            if ($livePid -gt 0 -and $livePid -ne $sn.Pid) {
+                & $add ('  注意：快照是旧进程 ' + $sn.Pid + ' 写的，现在跑的是 ' + $livePid + '。选 1 可重启后台程序。')
+            }
+        }
+    } elseif ($sn) {
+        & $add ('  读不出来：' + $sn.Status + $(if ($sn.Reason) { '（' + $sn.Reason + '）' } else { '' }))
+        & $add '  （这不影响使用，状态页会自动改用实时探测）'
+    } else {
+        & $add '  （没有快照文件：后台程序可能从没跑过）'
+    }
+    & $add ''
+
+    & $rule '位置'
+    & $add ('  程序目录：' + $ScriptDir)
+    & $add ('  运行状态目录：' + $MonitorDir)
+    & $add ''
+
+    & $add '=================================='
+    & $add '这份报告含本机路径与端口，不含密码或账号。'
+    & $add '发给别人前可以先自己打开看一眼。'
+
+    $text = ($L -join "`r`n")
+    $saved = ''
+    try {
+        Write-Text -Path $target -Text $text -WithBom $false
+        $saved = $target
+    } catch {
+        # monitor\ 写不进去（只读分区、权限），退到临时目录
+        try {
+            $target = Join-Path $env:TEMP $fileName
+            Write-Text -Path $target -Text $text -WithBom $false
+            $saved = $target
+        } catch { $saved = '' }
+    }
+
+    Write-Host ''
+    if (-not $saved) {
+        Write-Styled 'warn' '报告生成失败：两个位置都写不进去。'
+        Write-Styled 'dim' '  可以先把菜单选 2（查看状态）的截图发给对方。'
+        return
+    }
+
+    Write-Styled 'title' '======== 报告已生成 ========'
+    Write-Host ''
+    Write-Styled 'ok' '  报告文件：'
+    Write-Styled 'value' ('  ' + $saved)
+    Write-Host ''
+    # 剪贴板：不保证有（远程会话、某些精简环境），失败就只打印路径，不报错。
+    $copied = $false
+    try {
+        Set-Clipboard -Value $saved -ErrorAction Stop
+        $copied = $true
+    } catch { $copied = $false }
+    if ($copied) {
+        Write-Styled 'ok' '  这个路径已经复制到剪贴板了，可以直接粘到聊天窗口里。'
+    } else {
+        Write-Styled 'dim' '  （这个环境没有剪贴板，请手动把上面那个路径复制下来）'
+    }
+    Write-Host ''
+    Write-Styled 'heading' '  接下来怎么发出去'
+    Write-Styled 'text' '    会开网页的话：打开项目页面，点 Issues，新建一个，把报告拖进去。'
+    Write-Styled 'text' '    不会也没关系：把报告文件直接发给帮你的人（微信、网盘都行）。'
+    Write-Styled 'dim' '  对方看到报告就知道是什么情况了，你不用自己解释。'
+    Write-Host ''
+    Write-Styled 'dim' '  按回车回到菜单'
+    try { $null = Read-Host } catch { }
 }
 
 # 采集状态：只读、不写文件、不提问、不猜。所有值都来自现成函数。
@@ -1121,9 +1263,10 @@ $MenuItems = @(
     @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "现在什么情况，一眼看清" },
     @{ Key = "3"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先告诉改了什么，同意才装" },
     @{ Key = "4"; Name = "帮助";       Switch = "Help";      Group = "日常"; Hint = "忘了怎么用就看它" },
-    @{ Key = "7"; Name = "高级功能";   Switch = "Advanced";  Group = "进阶"; Hint = "给某个程序建走代理的快捷方式" },
-    @{ Key = "5"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "先停掉，下次开机自己回来" },
-    @{ Key = "6"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
+    @{ Key = "5"; Name = "高级功能";   Switch = "Advanced";  Group = "进阶"; Hint = "给某个软件建一个能翻墙的图标" },
+    @{ Key = "6"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "先停掉，下次开机自己回来" },
+    @{ Key = "7"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
+    @{ Key = "8"; Name = "问题反馈";   Switch = "Report";    Group = "支持"; Hint = "出问题了，一键生成一份报告" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出"; Hint = "关掉这个窗口" }
 )
 
@@ -1365,27 +1508,32 @@ function Get-HelpTopics {
             Key = '1'; Title = '这是干什么用的'; Short = '用处'
             Lines = @(
                 'h 它做什么',
-                't 翻墙软件一开，终端里的 git、npm、curl 就能翻墙；',
-                't 一关，它们自动恢复直连。不用记任何开关。',
+                't 你的翻墙软件只管浏览器，不管终端里的 git、npm、curl。',
+                't 这个工具补上这一段：翻墙软件一开，它们跟着能翻；一关，自动恢复。',
+                't 你什么都不用记，也不用每次敲开关。',
                 'b ',
-                'h 它怎么判断你现在在翻墙',
-                't 每 2 到 3 秒看一次。要同时满足三条才算：',
-                'i 1. 本机有端口在监听；',
-                'i 2. 它确实是个代理，会回应握手；',
-                'i 3. 它确实连得通外面，试 6 个端点任意一个通就算。',
-                't 三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。',
-                't 它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。'
+                'h 它怎么知道你现在在翻墙',
+                't 每 2 到 3 秒看一次，要同时满足三条才算：',
+                'i 1. 你电脑上确实有程序开着一个口子（端口）在等连接；',
+                'i 2. 那个口子确实是个翻墙代理，会按规矩回应；',
+                'i 3. 它确实连得到外面，试 6 个端点（几个常用的检测网址）任意一个通就算。',
+                't 三条全过才动手。所以你本机开着网页服务、开发服务器都不会被误认。',
+                't 它不认品牌、不认程序名、不认端口号——那些只用来加快查找。'
             )
         },
         @{
-            Key = '2'; Title = '装完之后要我做什么'; Short = '装完'
+            Key = '2'; Title = '菜单每一项是干什么的'; Short = '菜单'
+            Lines = @(Get-HelpMenuLines)
+        },
+        @{
+            Key = '3'; Title = '装完之后要我做什么'; Short = '装完'
             Lines = @(
-                'h 装完之后，按窗口分三种情况',
+                'h 按窗口分三种情况，多半你属于第一种',
                 'b ',
                 'i 1. 装完之后才打开的窗口',
                 't2 启动时读到的就是当前状态，什么都不用做。',
                 'b ',
-                'i 2. 装完之后打开的窗口，后来代理又变了',
+                'i 2. 装完之后打开的窗口，后来翻墙软件又开了或关了',
                 't2 按一次回车即可（cmd 窗口只能重开，见下面第 3 条）。',
                 'b ',
                 'i 3. 装之前就已经开着的窗口',
@@ -1396,63 +1544,47 @@ function Get-HelpTopics {
                 'r cmd|没有这条命令，只能重开窗口',
                 'b ',
                 'h 为什么要按一次回车',
-                't 每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，',
-                't 已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、',
-                't 等你回到能打字的状态时同步——你本来就一直在敲命令，不用专门做什么。'
+                't 每个程序只在启动那一刻读一次「该走哪个代理」，读完就固定了。',
+                't 之后系统再改，已经在跑的窗口不会跟着变。',
+                't 这个工具挑的时机是每次命令跑完、等你回到能打字的时候同步——',
+                't 你本来就一直在敲命令，所以不用专门做什么。'
             )
         },
         @{
-            Key = '3'; Title = '这个窗口固定直连 / 恢复自动'; Short = '窗口'
+            Key = '4'; Title = '这个窗口不要翻墙 / 用公司的代理'; Short = '窗口'
             Lines = @(
-                'h 一、让这个窗口一直直连',
-                'b ',
+                'h 一、让这个窗口一直不翻墙',
                 'rc PowerShell|$env:ENVPROXY_TERM = ''off''',
                 'rc Git Bash|export ENVPROXY_TERM=off',
                 'b ',
-                't 敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。',
-                'b ',
+                't 下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。',
                 # cmd 这一行是表格的第三行，不是正文：写成正文会变成"缩进 2 格的灰字"，
                 # 与上面两行既不对齐、也不白——用户看到的就是"这里格式坏了"。
                 # 它下面的命令用空左列的 rc：左列补成同样的宽度，命令正好落在右列下方。
                 ('r cmd|没有这个开关，只能自己清 {0} 个变量（& 两边别留空格）：' -f @($ProxyVarNames).Count),
                 ('rc |set ' + ((@($ProxyVarNames) | ForEach-Object { $_ + '=' }) -join '&set ')),
-                'b ',
                 'w 别用 unset HTTP_PROXY：我们写进 Git Bash 的是小写拼写，',
-                't unset 大写的清不掉小写，curl 照样走代理，下个提示符还会写回来。',
-                'b ',
+                't unset 大写的清不掉小写，curl 照样用代理，下个提示符还会写回来。',
                 'h 二、改回自动跟随',
-                'b ',
                 'rc PowerShell|Remove-Item Env:ENVPROXY_TERM',
                 'rc Git Bash|unset ENVPROXY_TERM',
                 'r cmd|重开一个窗口',
-                'b ',
-                't 上面两节都只对这个窗口有效，窗口一关就没了。'
-            )
-        },
-        @{
-            Key = '4'; Title = '这个窗口走公司代理'; Short = '代理'
-            Lines = @(
-                't 先做第 3 条（固定直连），再设地址。顺序反了等于没设。',
-                'b ',
-                'h 一、设地址（换成公司给的）',
-                'b ',
+                'h 三、让这个窗口用公司的代理',
+                't 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：',
                 'rc PowerShell|$env:HTTPS_PROXY = ''http://你的地址:端口''',
                 'rc Git Bash|export HTTPS_PROXY=http://你的地址:端口',
                 'rc cmd|set HTTPS_PROXY=http://你的地址:端口',
-                'b ',
-                'h 二、看现在走不走代理（有值 = 走，空的 = 直连）',
-                'b ',
+                't 想确认现在用不用代理，敲这个（有值 = 用，空的 = 不用）：',
                 'rc PowerShell|$env:HTTPS_PROXY',
                 'rc Git Bash|echo $HTTPS_PROXY',
                 'rc cmd|set HTTPS_PROXY',
                 'b ',
-                't 端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。',
-                'w 注意：这里不是翻墙软件那个端口，别去那儿找。',
+                't 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。',
                 't 你手设的值不会被删，只清和工具写入值相同的那些。'
             )
         },
         @{
-            Key = '5'; Title = '我要让某条命令不走代理'; Short = '命令'
+            Key = '5'; Title = '某条命令不想翻墙'; Short = '命令行'
             Lines = @(
                 'h 不同工具写法不一样，没有通用的一条命令',
                 'b ',
@@ -1467,6 +1599,7 @@ function Get-HelpTopics {
                 'b ',
                 'h npm',
                 'c npm --noproxy=registry.npmjs.org install typescript',
+                # @explain 这里的「走代理」是产品里的图标名后缀，用户会在桌面上看到它
                 'w 注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。',
                 't 写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。',
                 't 另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。',
@@ -1480,82 +1613,56 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '菜单每一项是干什么的'; Short = '菜单'
-            Lines = @(Get-HelpMenuLines)
-        },
-        @{
-            Key = '7'; Title = '装了还是连不上网 / 状态不对'; Short = '连不上'
+            Key = '6'; Title = '某个程序还是翻不了墙'; Short = '软件'
             Lines = @(
-                'h 连不上网，按这个顺序查',
-                'i 1. 在出问题的窗口里敲对应的一条，看有没有值（空的 = 没注入，重开窗口）：',
-                'rc PowerShell|$env:HTTPS_PROXY',
-                'rc cmd|set HTTPS_PROXY',
-                'rc Git Bash|echo $HTTPS_PROXY',
-                'b ',
-                'i 2. 有值还是连不上：看菜单顶上「监控」写的是运行中还是未运行。',
-                't2 未运行就选 1（安装 / 修复）。',
-                'i 3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
-                'b ',
-                'h 状态页怎么读',
-                'r 监控进程|后台程序在不在跑',
-                'r 开机自启|下次登录会不会自动起来',
-                'r 翻墙代理|本机有没有翻墙软件在监听端口',
-                'r 终端同步|已经开着的窗口会不会跟着变',
-                'r 代理变量|这个工具往终端里设代理了没有',
-                't 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被停了，不是坏了。',
-                'b ',
-                'h 日志和 AI 排查',
-                't 反馈时附最后 20 行日志。先 cd 到装它的文件夹，再照对应的一条敲：',
-                'rc PowerShell|Get-Content .\win\monitor\monitor.log -Tail 20',
-                'rc Git Bash|tail -n 20 win/monitor/monitor.log',
-                't AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，不是网络坏了。',
-                't 菜单选 2 看「代理变量」那行会说清。它只管 HTTP/HTTPS 变量，ping、',
-                't 游戏、BT 走自己协议的不认，要开 TUN 模式。'
-            )
-        },
-        @{
-            Key = '8'; Title = '还是不行 / 想删掉它'; Short = '不行'
-            Lines = @(
-                'h 大部分问题都可以用「安装 / 修复」解决',
-                't 打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。',
-                'b ',
-                'h 还是不行',
-                't 菜单选 2 把状态截图，再选 1 修复一次。反馈时附上 monitor\monitor.log',
-                't 最后 20 行，能省很多来回。',
-                'b ',
-                'h 想彻底删掉它',
-                't 菜单选 6（一键恢复）。会问你要不要留日志。',
-                'b ',
-                'h 不开菜单也能用（适合写脚本，或远程连过来）',
-                'r 开关|-Install  -Status  -Stop  -Uninstall  -Update  -Help  -Menu',
-    'r 补充|-Yes        跳过确认（检查和卸载时问的那句）',
-    'r 补充|-Purge      卸载时连历史日志一起删',
-    'r 补充|-RepairProfile  摘掉配置文件里孤立的标记（会先备份）',
-                't -Purge 连日志一起删，只配 -Uninstall 用。完整写法：',
-                'c powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status'
-            )
-        },
-        @{
-            Key = '9'; Title = '某个程序不跟着走代理'; Short = '程序'
-            Lines = @(
-                'h 有些程序不认系统代理',
-                't 它们只在启动那一刻读一次环境变量，之后代理怎么变都不理。',
-                't 而它们多半是从桌面或任务栏点的，那一层拿不到我们写的值。',
-                'h 解决办法：给它建一个走代理的快捷方式',
-                't 菜单选 7 进高级功能，再选 1。挑程序（或输入路径），选放哪，确认。',
-                't 它会生成一个新图标，名字后面带「走代理」。以后点那个就行。',
+                'h 有些程序不认系统设的代理',
+                't 它们只在启动那一刻读一次「该走哪个代理」，之后怎么变都不理。',
+                't 而它们多半是从桌面或任务栏点的，那一层拿不到这个工具设的值。',
+                'h 解决办法：给它建一个能翻墙的图标',
+                't 菜单选 5 进高级功能，再选 1。挑程序（或输入路径），选放哪，确认。',
+                # @explain 「走代理」是图标名的后缀，帮助必须与桌面上的名字对上
+                't 它会生成一个新图标，名字后面带「走代理」。以后点那个就能翻墙。',
                 'b ',
                 'h 注意三件事',
                 't 程序已经开着的，点了不会换代理，必须先关掉再点。',
                 't 微软商店装的应用（没有独立 exe 的那种）不支持。',
                 't 新图标可以拖到任务栏固定；固定后删掉桌面那个不影响使用。',
                 'b ',
-                'h 代理换了端口之后',
+                'h 翻墙软件换了端口之后',
                 't 已经开着的程序还连着旧端口，会连不上。关掉重开就好。',
                 't 出现这种情况时会自动弹一句提示，不用你盯着。',
                 'b ',
                 'h 不想要了',
-                't 菜单选 7 再选 2，能看状态、逐个删。'
+                't 菜单选 5 再选 2，能看状态、逐个删。'
+            )
+        },
+        @{
+            Key = '7'; Title = '出问题了：怎么查、怎么报'; Short = '出问题'
+            Lines = @(
+                'h 先按这个顺序查，多数问题到第二步就好了',
+                'b ',
+                'i 1. 在出问题的窗口里敲下面这一条，看有没有地址',
+                't2 有地址 = 设好了；空的 = 没设上，重开一个窗口试试。',
+                'rc PowerShell|$env:HTTPS_PROXY',
+                'rc cmd|set HTTPS_PROXY',
+                'rc Git Bash|echo $HTTPS_PROXY',
+                'b ',
+                'i 2. 看菜单最上面那行写的什么',
+                't2 写「未运行」就选 1（安装 / 修复）。',
+                'i 3. 三个常见误会',
+                't2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
+                't2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、这个工具被停了，不是坏了。',
+                'h 还是不行：让它自己生成一份报告',
+                't 菜单选 8（问题反馈）。它会自己收齐信息、存成一个文件，并把路径复制好。',
+                't 你不用去找日志，也不用敲命令。发出去有两种方式：',
+                't 会开网页：打开项目页面点 Issues。不会也没关系：直接发给帮你的人。',
+                'h 想彻底删掉它',
+                't 菜单选 7（一键恢复）。会问你要不要留日志。',
+                'b ',
+                'h 不开菜单也能用（写脚本、远程连过来的时候）',
+                'r 开关|-Install -Status -Stop -Uninstall -Update -Help -Menu -Report',
+                'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记',
+                'c powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status'
             )
         }
     )

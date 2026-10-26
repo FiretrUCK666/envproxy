@@ -90,7 +90,7 @@ install_envproxy() {
     _tip_a1="新开的终端 / 程序"
     _tip_a2="一直开着的窗口"
     _tip_a3="装之前就开着的窗口"
-    _tip_a4="想让某个窗口固定直连"
+    _tip_a4="想让某个窗口不翻墙"
     _tip_a5="改回跟着翻墙软件走"
     _tip_a6="忘了怎么用"
     _tip_w=$(printf '%s\n' "$_tip_a1" "$_tip_a2" "$_tip_a3" "$_tip_a4" "$_tip_a5" "$_tip_a6" | _max_width_of)
@@ -174,8 +174,10 @@ uninstall_envproxy() {
         # 漏掉任何一个的后果都很具体：version.cache 会让重装后的状态页显示上一次的版本号；
         # update.inprogress 会被读成"上次更新没完成"（那是上一次安装的经历）；
         # 强杀留下的 .lock 空目录会让新监控的 mkdir 失败、多绕一圈接管分支。
+        # 状态快照不删的后果与 version.cache 一字不差：重装后状态页会读到上一份
+        # 安装留下的结论，而那是已经不存在的状态。
         rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
-              "$VERSION_CACHE" "$MONITOR_DIR/update.inprogress" 2>/dev/null || true
+              "$VERSION_CACHE" "$SNAPSHOT_FILE" "$MONITOR_DIR/update.inprogress" 2>/dev/null || true
         rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
             rmdir "$MONITOR_DIR" 2>/dev/null || true
@@ -422,6 +424,158 @@ _status_row() {
     else
         printf '\033[%sm%s : \033[0m\033[%sm%s\033[0m\n' "$_sr_lc" "$_sr_label" "$_sr_vc" "$_sr_value"
     fi
+    return 0
+}
+
+# 生成一份可以直接发给别人看的问题报告。
+#
+# 为什么要它：以前反馈唯一的办法是"自己找到日志文件、打开、复制、再贴到 GitHub"。
+# 不会用 GitHub、不会敲命令的人卡在第一步就放弃了。这里把整件事压成一个按键：
+# 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
+#
+# 边界：只读、不联网、不改任何配置。文件落在 monitor/ 下，卸载时会一起清掉。
+new_problem_report() {
+    _npr_stamp=$(date '+%Y%m%d-%H%M%S')
+    _npr_name="report-$_npr_stamp.txt"
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    _npr_target="$MONITOR_DIR/$_npr_name"
+
+    {
+        echo "======== EnvProxy 问题报告 ========"
+        echo "生成时间：$(date '+%Y-%m-%d %H:%M:%S')"
+        _npr_ver=$(get_local_version 2>/dev/null)
+        [ -z "$_npr_ver" ] && _npr_ver="未知"
+        echo "程序版本：v$_npr_ver"
+        echo "系统：$(uname -srm 2>/dev/null)"
+        echo "Shell：${SHELL:-未知}    bash：${BASH_VERSION:-未知}"
+        echo ""
+
+        echo "---------------- 当前状态 ----------------"
+        # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
+        show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+        echo ""
+
+        echo "---------------- 运行日志（最后 30 行） ----------------"
+        if [ -f "$LOG_FILE" ]; then
+            tail -n 30 "$LOG_FILE" 2>/dev/null | sed 's/^/  /'
+        else
+            echo "  （还没有日志：这个工具可能从未运行过）"
+        fi
+        echo ""
+
+        echo "---------------- 位置 ----------------"
+        echo "  程序目录：$SCRIPT_DIR"
+        echo "  运行状态目录：$MONITOR_DIR"
+        echo ""
+        echo "=================================="
+        echo "这份报告含本机路径与端口，不含密码或账号。"
+        echo "发给别人前可以先自己打开看一眼。"
+    } > "$_npr_target" 2>/dev/null
+
+    # monitor/ 写不进去时退到临时目录：报告不能因为路径问题就生成不出来。
+    if [ ! -s "$_npr_target" ]; then
+        _npr_target="${TMPDIR:-/tmp}/$_npr_name"
+        {
+            echo "======== EnvProxy 问题报告 ========"
+            echo "生成时间：$(date '+%Y-%m-%d %H:%M:%S')"
+            show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+            echo ""
+            echo "---------------- 运行日志 ----------------"
+            [ -f "$LOG_FILE" ] && tail -n 30 "$LOG_FILE" 2>/dev/null
+        } > "$_npr_target" 2>/dev/null
+    fi
+
+    echo ""
+    if [ ! -s "$_npr_target" ]; then
+        echo "报告生成失败：两个位置都写不进去。" >&2
+        echo "  可以先把菜单选 2（查看状态）的截图发给对方。" >&2
+        return 1
+    fi
+
+    style_out title "======== 报告已生成 ========"
+    echo ""
+    echo "  报告文件："
+    style_out value "  $_npr_target"
+    echo ""
+    # 剪贴板：macOS 自带 pbcopy。不保证有（极精简环境），失败就只打印路径。
+    if command -v pbcopy >/dev/null 2>&1 && printf '%s' "$_npr_target" | pbcopy 2>/dev/null; then
+        echo "  这个路径已经复制到剪贴板了，可以直接粘到聊天窗口里。"
+    else
+        echo "  （这个环境没有剪贴板，请手动把上面那个路径复制下来）"
+    fi
+    echo ""
+    style_out heading "  接下来怎么发出去"
+    echo "    会开网页的话：打开项目页面，点 Issues，新建一个，把报告拖进去。"
+    echo "    不会也没关系：把报告文件直接发给帮你的人（微信、网盘都行）。"
+    echo "  对方看到报告就知道是什么情况了，你不用自己解释。"
+    echo ""
+    echo "  按回车回到菜单"
+    read -r _npr_pause 2>/dev/null || true
+    return 0
+}
+
+# 状态页的纯文本帧（不带颜色控制字符）：给实时刷新与报告用。
+# 与 show_status 同一份内容，只是这里产出字符串而不是直接打印——
+# 屏幕渲染层要按行比较，所以必须先拿到"这一帧是什么"。
+format_status_lines() {
+    _fsl_out=$(show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+    printf '%s' "$_fsl_out"
+}
+
+# 实时状态页：进屏幕、自己刷新、按 0/q 退出。
+# 画不了屏（重定向 / 无终端 / 窗口太小）时退回一次性静态输出。
+show_status_live() {
+    _ssl_frame=$(format_status_lines)
+    _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
+    _ssl_width=0
+    while IFS= read -r _ssl_l; do
+        _ssl_w=$(_display_width "$_ssl_l")
+        [ "$_ssl_w" -gt "$_ssl_width" ] && _ssl_width="$_ssl_w"
+    done <<EOF
+$_ssl_frame
+EOF
+
+    if ! test_can_draw_screen "$_ssl_need" "$_ssl_width"; then
+        # 降级：退回一次性输出，与今天的行为一致
+        show_status
+        return 0
+    fi
+    enter_screen || { show_status; return 0; }
+
+    _ssl_prev=""
+    _ssl_next=0
+    _ssl_now=$(date +%s)
+    # Ctrl+C 也要恢复光标：不恢复的话用户下次看到的是一台"没有光标"的终端。
+    trap 'exit_screen; trap - INT; return 130' INT
+    while :; do
+        _ssl_now=$(date +%s)
+        if [ "$_ssl_now" -ge "$_ssl_next" ]; then
+            _ssl_frame=$(format_status_lines)
+            _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
+            _ssl_width=0
+            while IFS= read -r _ssl_l; do
+                _ssl_w=$(_display_width "$_ssl_l")
+                [ "$_ssl_w" -gt "$_ssl_width" ] && _ssl_width="$_ssl_w"
+            done <<EOF
+$_ssl_frame
+EOF
+            if test_can_draw_screen "$_ssl_need" "$_ssl_width"; then
+                write_screen_frame "$_ssl_prev" "$_ssl_frame"
+                _ssl_prev="$_ssl_frame"
+            else
+                # 画不了（窗口太小）：作废记账，等窗口恢复时必然整帧重画
+                _ssl_prev=""
+            fi
+            _ssl_next=$((_ssl_now + STATUS_REFRESH_SEC))
+        fi
+        # DIVERGE(Mac): read -t 只认整数秒，所以这里是 1 秒一轮。
+        _ssl_k=$(wait_screen_key "$SCREEN_POLL_SEC")
+        case "$_ssl_k" in
+            Quit) break ;;
+        esac
+    done
+    trap - INT
+    exit_screen
     return 0
 }
 
@@ -716,14 +870,12 @@ show_status() {
 # 编号必须连续且没有重复——自检里有一条断言直接检查这张表的形状。
 HELP_TOPICS=(
     '1|用处|这是干什么用的'
-    '2|装完|装完之后要我做什么'
-    '3|窗口|这个窗口固定直连 / 恢复自动'
-    '4|代理|这个窗口走公司代理'
-    '5|命令|我要让某条命令不走代理'
-    '6|菜单|菜单每一项是干什么的'
-    '7|连不上|装了还是连不上网 / 状态不对'
-    '8|不行|还是不行 / 想删掉它'
-    '9|程序|某个程序不跟着走代理'
+    '2|菜单|菜单每一项是干什么的'
+    '3|装完|装完之后要我做什么'
+    '4|窗口|这个窗口不要翻墙 / 用公司的代理'
+    '5|命令行|某条命令不想翻墙'
+    '6|软件|某个程序还是翻不了墙'
+    '7|出问题|出问题了：怎么查、怎么报'
 )
 
 # 从 HELP_TOPICS 取第 N 段（$1=字段号，$2=主题编号）。
@@ -983,80 +1135,80 @@ _help_topic_body() {
     case "$1" in
     1) cat <<'TOPIC'
 h 它做什么
-t 翻墙软件一开，终端里的 git、npm、curl 就能翻墙；
-t 一关，它们自动恢复直连。不用记任何开关。
+t 你的翻墙软件只管浏览器，不管终端里的 git、npm、curl。
+t 这个工具补上这一段：翻墙软件一开，它们跟着能翻；一关，自动恢复。
+t 你什么都不用记，也不用每次敲开关。
 b 
-h 它怎么判断你现在在翻墙
-t 每 2 到 3 秒看一次。要同时满足三条才算：
-i 1. 本机有端口在监听；
-i 2. 它确实是个代理，会回应握手；
-i 3. 它确实连得通外面，试 6 个端点任意一个通就算。
-t 三条全过才写变量。所以本机开着网页服务、开发服务器都不会被误判。
-t 它不认品牌、不认进程名、不认端口号，那些只用来加快扫描。
+h 它怎么知道你现在在翻墙
+t 每 2 到 3 秒看一次，要同时满足三条才算：
+i 1. 你电脑上确实有程序开着一个口子（端口）在等连接；
+i 2. 那个口子确实是个翻墙代理，会按规矩回应；
+i 3. 它确实连得到外面，试 6 个端点（几个常用的检测网址）任意一个通就算。
+t 三条全过才动手。所以你本机开着网页服务、开发服务器都不会被误认。
+t 它不认品牌、不认程序名、不认端口号——那些只用来加快查找。
 TOPIC
     ;;
     2) cat <<'TOPIC'
+h 菜单每一项是干什么的（就在左边，照着看）
+TOPIC
+    _help_menu_lines
+    cat <<'TOPIC'
+b 
+t 顶部那行显示后台程序在不在跑、当前版本号，不用进去看。
+t 直接按回车 = 查看状态，这是最常看的一项。
+TOPIC
+    ;;
+    3) cat <<'TOPIC'
 h 装完之后，按窗口分三种情况
 b 
-i 1. 装完之后才打开的窗口
+i 1. 装完之后新开的窗口
 t2 启动时读到的就是当前状态，什么都不用做。
 b 
-i 2. 装完之后打开的窗口，后来代理又变了
-t2 按一次回车即可。cmd 窗口没有这个机制，只能重开。
+i 2. 装完之后开的窗口，后来翻墙软件又开了或关了
+t2 按一次回车即可。
 b 
 i 3. 装之前就已经开着的窗口
 t2 同步代码还没装进去。在那个窗口里敲下面这一条，或者重开窗口：
 b 
 rc zsh / bash|. ~/.envproxy/prompt-sync.sh
-rc cmd|Windows 的 cmd 窗口没有这条命令，只能重开
 b 
 t 开头的点号和后面的空格都不能少；fish 不支持。
 b 
 h 为什么要按一次回车
-t 每个程序只在启动那一刻读一次环境变量，读完就固定了。之后系统改了，
-t 已经在跑的窗口不会跟着变。EnvProxy 挑的时机是每次命令跑完、
-t 等你回到能打字的状态时同步——你本来就一直在敲命令，不用专门做什么。
-TOPIC
-    ;;
-    3) cat <<'TOPIC'
-h 一、让这个窗口一直直连
-b 
-rc zsh / bash|export ENVPROXY_TERM=off
-b 
-t 敲完下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
-t fish 不支持：它不读这些配置文件，这个开关对它无效。
-b 
-w 别只 unset 一个拼写：mac 上大写和小写是两个变量，各写一份。
-t 只清大写的话，小写那份还在，curl 照样走代理——两个都要清。
-b 
-h 二、改回自动跟随
-b 
-rc zsh / bash|unset ENVPROXY_TERM
-b 
-t 上面两节都只对这个窗口有效，窗口一关就没了。
+t 每个程序只在启动那一刻读一次「该走哪个代理」，读完就固定了。
+t 之后系统再改，已经在跑的窗口不会跟着变。
+t 这个工具挑的时机是每次命令跑完、等你回到能打字的时候同步——
+t 你本来就一直在敲命令，所以不用专门做什么。
 TOPIC
     ;;
     4) cat <<'TOPIC'
-t 先做第 3 条（固定直连），再设地址。顺序反了等于没设。
+h 一、让这个窗口一直不翻墙
+rc zsh / bash|export ENVPROXY_TERM=off
+t 下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
+w 别只 unset 一个拼写：mac 上大写和小写是两个变量，各写一份。
+t 只清大写的话，小写那份还在，curl 照样用代理——两个都要清。
 b 
-h 一、设地址（换成公司给的）
+h 二、改回自动跟随
+rc zsh / bash|unset ENVPROXY_TERM
+b 
+h 三、让这个窗口用公司的代理
+t 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：
 b 
 rc zsh / bash|export HTTPS_PROXY=http://你的地址:端口
 b 
-h 二、看现在走不走代理（有值 = 走，空的 = 直连）
-b 
+t 想确认现在用不用代理，敲这个（有值 = 用，空的 = 不用）：
 rc zsh / bash|echo $HTTPS_PROXY
 b 
-t 端口是你公司给的，问 IT 要（通常会给一份代理设置说明）。
-w 注意：这里不是翻墙软件那个端口，别去那儿找。
+t 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。
 t 你手设的值不会被删，只清和工具写入值相同的那些。
+t fish 不支持这些配置文件，上面的开关对它无效。
 TOPIC
     ;;
     5) cat <<'TOPIC'
 h 不同工具写法不一样，没有通用的一条命令
 b 
 h curl
-c curl --noproxy '*' https://example.com
+c curl --noproxy "*" https://example.com
 b 
 h git
 c git -c http.proxy= -c https.proxy= clone https://github.com/git/git.git
@@ -1064,79 +1216,54 @@ t 等号后留空，这条就不用代理；写别的值，就改用那个代理
 b 
 h npm
 c npm --noproxy=registry.npmjs.org install typescript
-w 注意：只认具体网址，写 * 没用，而且不报错，请求照常走代理。
+w 注意：只认具体网址，写 * 没用，而且不报错，请求照常翻墙。
 t 写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
 t 另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
-b 
-h wget
-t Mac 不自带 wget，自己装过才用得上这一条：
-c wget --no-proxy https://example.com
 b 
 h docker
 t 没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
 TOPIC
     ;;
-    6) _help_menu_lines
-    ;;
-    7) cat <<'TOPIC'
-h 连不上网，按这个顺序查
-i 1. 在出问题的窗口里敲这一条，看有没有值（空的 = 没注入，重开窗口）：
-rc zsh / bash|echo $HTTPS_PROXY
-b 
-i 2. 有值还是连不上：看菜单顶上「监控」写的是运行中还是未运行。
-t2 未运行就选 1（安装 / 修复）。
-i 3. npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。
-b 
-h 状态页怎么读
-r 监控进程|后台程序在不在跑
-r 开机自启|下次登录会不会自动起来
-r 翻墙代理|本机有没有翻墙软件在监听端口
-r 终端同步|已经开着的窗口会不会跟着变
-r 代理变量|这个工具往终端里设代理了没有
-t 「翻墙代理」有、「代理变量」无 = 翻墙在跑、工具被你停了，不是坏了。
-b 
-h 日志和 AI 排查
-t 日志在 mac/monitor/monitor.log，反馈附最后 20 行。
-t AI 报 ECONNREFUSED 127.0.0.1:端口号 = 变量指向了已关闭的端口，
-t 不是网络坏了。菜单选 2 看「代理变量」那行会说清。
-t 它只管 HTTP/HTTPS 变量；ping、游戏、BT 这类走自己协议的不认
-t ——那些要开翻墙软件的 TUN 模式。
-TOPIC
-    ;;
-    8) cat <<'TOPIC'
-h 大部分问题都可以用「安装 / 修复」解决
-t 打开菜单选 1。它不会重复安装，不会中断网络，也不会丢失你的设置。
-b 
-h 还是不行
-t 菜单选 2 把状态截图，再选 1 修复一次。反馈时附上 mac/monitor/monitor.log
-t 最后 20 行，能省很多来回。
-b 
-h 想彻底删掉它
-t 菜单选 6（一键恢复）。会问你要不要留日志。
-b 
-h 不开菜单也能用（适合写脚本，或远程连过来）
-r 开关|install  status  stop  uninstall  update  help  menu  self-test
-r 补充|--yes    跳过确认（检查和卸载时问的那句）
-r 补充|--purge  卸载时连历史日志一起删
-r 补充|repair-profile  摘掉配置文件里孤立的标记（会先备份）
-t --purge 连日志一起删，只配 uninstall 用。完整写法：
-c bash envproxy.sh status
-t self-test 是 mac 独有（Windows 的同等检查不进安装包，由开发侧跑）。
-t 不碰你的 ~/.zshrc 和环境变量，只报告自检结果或指出哪一项不对。
-TOPIC
-    ;;
-    9) cat <<'TOPIC'
+    6) cat <<'TOPIC'
 h 这个平台基本不会遇到
 t 从 Dock 或访达启动的程序，读的是 launchctl 设的变量，本工具一直在设。
-t 所以它们开起来就能拿到代理，不需要额外做一个快捷方式。
-h 如果你确实遇到某个程序不跟代理走
-t 先在终端里用同一条命令试：够说明问题的是那个程序自己，不是环境变量。
+t 所以它们开起来就能拿到代理，不需要额外做一个启动器。
+b 
+h 如果你确实遇到某个程序还是翻不了墙
+t 先在终端里用同一条命令试：够说明问题的是那个程序自己，不是这个工具。
 c HTTPS_PROXY=$HTTPS_PROXY open -a "程序名"
-t 它自己带一个代理设置项的，直接填本工具的地址（菜单选 2 能看到）。
+t 它自己带代理设置项的，直接填本工具的地址（菜单选 2 能看到）。
 b 
 h Windows 版才有「高级功能」
-t 那边的资源管理器拿不到登录之后才注入的变量，必须给程序配一个启动器。
+t 那边的资源管理器拿不到登录之后才注入的值，必须给软件配一个启动器。
 t 这是平台差异，不是功能有没有做全。
+TOPIC
+    ;;
+    7) cat <<'TOPIC'
+h 先按这个顺序查，多数问题到第二步就好了
+b 
+i 1. 在出问题的窗口里敲下面这一条，看有没有地址
+t2 有地址 = 设好了；空的 = 没设上，重开一个窗口试试。
+rc zsh / bash|echo $HTTPS_PROXY
+b 
+i 2. 看菜单最上面那行写的什么
+t2 写「未运行」就选 1（安装 / 修复）。
+i 3. 两个常见误会
+t2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
+t2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、本工具被停了，不是坏了。
+h 还是不行：让它自己生成一份报告
+t 菜单选 8（问题反馈）。它自己收齐信息、存成一个文件，并把路径复制好。
+t 你不用去找日志，也不用敲命令。发出去有两种方式：
+t 会开网页就点 Issues 附上；不会就发给帮你的人。
+h 想彻底删掉它
+t 菜单选 7（一键恢复）。会问你要不要留日志。
+b 
+h 不开菜单也能用（写脚本、远程连过来的时候）
+r 开关|install status stop uninstall update help report
+r 补充|--yes 跳过确认   --purge 连日志删   repair-profile 摘标记
+c bash envproxy.sh status
+t self-test 是 mac 独有（Windows 那份由开发侧跑）。
+t 不碰 ~/.zshrc 和环境变量，只报告结果。
 TOPIC
     ;;
 
@@ -1313,13 +1440,18 @@ _help_key_valid() {
 # 不许再另写一份 case——两份清单必然漂移，症状是"表里加了、点了没反应"。
 # 格式固定为五个字段、四条竖线；少一条竖线字段会静默错位（菜单照常打印、不报错，
 # 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
+# 编号 5 在 Mac 上空缺：那边没有「高级功能」（DIVERGE(Mac): 从 Dock 启动的程序
+# 本来就拿得到 launchctl 设的变量，不需要额外做启动器，所以没有这一项）。
+# 留空而不是把后面的编号往前挤：两侧的编号是同一套（用户可能在两台机器上都用），
+# 挤动会让"选 6"在两边指不同的事。菜单渲染按表顺序打印，跳号不影响显示。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'
     '3|检查更新|有新版先告诉改了什么，同意才装|日常|update'
     '4|帮助|忘了怎么用就看它|日常|help'
-    '5|停止监控|先停掉，下次开机自己回来|维护|stop'
-    '6|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
+    '6|停止监控|先停掉，下次开机自己回来|维护|stop'
+    '7|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
+    '8|问题反馈|出问题了，一键生成一份报告|支持|report'
     '0|退出|关掉这个窗口|退出|'
 )
 
@@ -1520,6 +1652,13 @@ show_menu() {
         # 帮助留在本进程里跑：它要回到菜单，起子进程就回不来了。
         if [ "$_msub" = "help" ]; then
             show_help
+            _mode="menu"
+            continue
+        fi
+        # 状态页同理，而且它是实时刷新的：起子进程的话，子进程退出后屏幕就停在最后一帧。
+        # 与 Windows 侧对 Status 的处理同一条理由。
+        if [ "$_msub" = "status" ]; then
+            show_status_live
             _mode="menu"
             continue
         fi

@@ -975,7 +975,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     for _lmi in "${MENU_ITEMS[@]}"; do
         _lmgv=${_lmi%|*}; _lmgv=${_lmgv##*|}
         case "$_lmgv" in
-            日常|维护|退出) _lmgok=1;;
+            日常|进阶|维护|支持|退出) _lmgok=1;;
             *) _lmgok=0;;
         esac
         _selftest_assert_eq "分组字段是分组不是子命令（${_lmi%%|*}）" "1" "$_lmgok"
