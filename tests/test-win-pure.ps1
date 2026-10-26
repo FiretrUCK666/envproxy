@@ -656,7 +656,10 @@ Assert-Eq 'Show-Help is defined' 'Function' (Get-Command Show-Help -ErrorAction 
 #   - every topic resolves to a body, and the index lists every topic key;
 #   - the concatenation of all topics still carries the load-bearing facts.
 $helpTopics = @(Get-HelpTopics)
-Assert-Eq 'help has topics' $true ($helpTopics.Count -ge 7)
+# 数量不写死：写死 7 的话，每加删一条主题都要改测试，而改测试的人往往只是把数字改对，
+# 不会去想"这条例子的本意是什么"（它守的是"帮助不能是空的"）。改成"至少有一条"，
+# 再配一条"编号连续"的独立断言——那才是真正会让用户点错的东西。
+Assert-Eq 'help has topics' $true ($helpTopics.Count -ge 1)
 $helpIdx = Format-HelpIndex
 foreach ($t in $helpTopics) {
     Assert-Eq ('help topic ' + $t.Key + ' renders') $true ($null -ne (Format-HelpTopic $t.Key))
@@ -690,7 +693,7 @@ foreach ($t in $helpTopics) {
         foreach ($sg in $r.Segments) { $roleSeen[$sg.Role] = $true }
     }
 }
-foreach ($r in @('heading', 'cmd', 'text', 'item', 'key', 'value', 'dim')) {
+foreach ($r in @('heading', 'cmd', 'text', 'item', 'key', 'warn')) {
     Assert-Eq ('help uses the ' + $r + ' role') $true $roleSeen.ContainsKey($r)
 }
 # 配色契约：命令色必须一眼可辨。与 Mac 侧同一组断言（那边在 test-mac-pure.sh）。
@@ -2075,7 +2078,7 @@ if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
 }
 
 # 文档里每条命令的「形状」也要对：只有 PowerShell 才用 $env:，只有 bash 才用 export。
-$docText = (Format-HelpTopic '4')
+$docText = (Format-HelpTopic '3')
 Assert-Eq 'help gives a cmd form for pinning' $true ($docText -match 'set HTTP_PROXY=')
 Assert-Eq 'help gives a bash form for pinning' $true ($docText -match 'unset HTTP_PROXY')
 Assert-Eq 'help gives a PowerShell form for pinning' $true ($docText -match '\$env:ENVPROXY_TERM')
@@ -2169,8 +2172,9 @@ try {
 # an item invisible on screen while it stayed typeable -- the user sees one menu and
 # can run another. Pin it structurally: no hand-written group array may reappear.
 # 彩屏、纯文本、帮助第 6 条必须都从同一个渲染来源取分组顺序。
-# 三个函数各自拼一遍的话，分组只要改一处漏两处，就会出现"屏幕上少一项、却照样敲得动"。
-foreach ($fn in @('Get-MenuRenderedLines', 'Get-HelpMenuLines')) {
+# 帮助里那一条（菜单说明）已经不在了：主菜单自己就把每项干什么写得清清楚楚，
+# 再列一遍等于让用户读两遍同样的东西。所以这里只剩菜单渲染这一处要守。
+foreach ($fn in @('Get-MenuRenderedLines')) {
     $src = (Get-Command $fn).Definition
     Assert-Eq ($fn + ' derives its groups instead of listing them') $false ($src -match "@\('日常'")
     Assert-Eq ($fn + ' uses the shared group order') $true ($src -match 'Get-MenuGroups')
@@ -2182,24 +2186,6 @@ foreach ($fn in @('Show-MenuColored', 'Format-MenuText')) {
     Assert-Eq ($fn + ' renders from the shared source') $true ($src -match 'Get-MenuRenderedLines')
 }
 Assert-Eq 'the shared group order is the only place groups are ordered' 1 (([regex]::Matches((Get-Command Get-MenuGroups).Definition, 'Select-Object -Unique')).Count)
-
-# Help topic 6 is a second copy of the menu table. If it is hand-written it goes
-# stale silently, and the symptom is the worst kind: the user reads help, types the
-# number it names, and gets a DIFFERENT action (wants check-for-updates, uninstalls).
-# So it must be generated from $MenuItems, and this assertion proves it is: a fake
-# menu entry must show up in the help screen with no other edit.
-$helpMenuText = (Format-HelpTopic '2')
-foreach ($mi in $MenuItems) {
-    Assert-Eq ('help menu screen shows menu key ' + $mi.Key) $true ($helpMenuText -match ('(?m)^\s+' + [regex]::Escape($mi.Key) + '\s{2}'))
-    Assert-Eq ('help menu screen names menu key ' + $mi.Key) $true ($helpMenuText -match [regex]::Escape($mi.Name))
-}
-# Mutation test: append a row to the table and confirm it appears on the help screen.
-$fakeRow = @{ Key = '9'; Name = '假条目'; Switch = 'Status'; Group = '日常'; Hint = '这条只用于自检' }
-$MenuItems = @($MenuItems) + $fakeRow
-$helpMenuText2 = (Format-HelpTopic '2')
-Assert-Eq 'the help menu screen is generated from the table' $true ($helpMenuText2 -match '假条目')
-Assert-Eq 'a generated row keeps its hint' $true ($helpMenuText2 -match '这条只用于自检')
-$MenuItems = @($MenuItems | Where-Object { $_.Key -ne '9' })
 
 # ------------------------------------------------------------------------------
 # [21] README 抄了一份菜单表和帮助目录，必须是代码的镜像

@@ -118,12 +118,11 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | No. | One entry answers one question |
 |---|---|
 | 1 | What is this for |
-| 2 | What each menu item does |
-| 3 | What do I do after installing |
-| 4 | Keep this window off the proxy / use a corporate proxy |
-| 5 | Make one command skip the proxy |
-| 6 | One program still cannot reach blocked sites |
-| 7 | Something is wrong: how to check, how to report |
+| 2 | What do I do after installing |
+| 3 | Keep this window off the proxy / use a corporate proxy |
+| 4 | Make one command skip the proxy |
+| 5 | One program still cannot reach blocked sites |
+| 6 | Something is wrong: how to check, how to report |
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
@@ -695,6 +694,8 @@ Installing writes files to three places. **None of them is the folder you downlo
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
+| | `state.snapshot` | verdict the background program writes every round; the status page only reads it |
+| | `report-*.txt` | reports built by "Problem report"; open one before sending it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |

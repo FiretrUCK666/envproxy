@@ -30,6 +30,11 @@
 # 菜单里一眼分辨：同一个程序的两个图标各自身份明确，用户不会点错。
 $ProxyShortcutSuffix = '（走代理）'
 
+# 启动脚本里那一行「它服务的程序是哪个」的标记名。写与读共用这一个常量：
+# 两处各写一遍字面量的话，改一处会让所有已生成的图标静默读不出目标路径——
+# 症状是管理页里"目标程序"一栏全空，而没有任何报错。
+$ProxyLauncherMark = 'envproxy-target-hex:'
+
 # ------------------------------------------------------------------------------
 # 生成与扫描（无界面：不读输入、不画屏幕，可以脱离终端单独测）
 # ------------------------------------------------------------------------------
@@ -188,7 +193,7 @@ function New-ProxyLauncherVbs([string]$EncodedBody, [string]$TargetPath = "") {
     if ($TargetPath) {
         try {
             $hex = -join ([System.Text.Encoding]::UTF8.GetBytes($TargetPath) | ForEach-Object { $_.ToString('x2') })
-            $body += "' envproxy-target-hex: " + $hex + "`r`n"
+            $body += "' " + $ProxyLauncherMark + " " + $hex + "`r`n"
         } catch {}
     }
     return $body
@@ -200,7 +205,7 @@ function Get-ProxyLauncherTarget([string]$LauncherPath) {
     try {
         if (-not (Test-Path -LiteralPath $LauncherPath)) { return '' }
         $text = [System.IO.File]::ReadAllText($LauncherPath, [System.Text.Encoding]::ASCII)
-        $m = [regex]::Match($text, "envproxy-target-hex:\s*([0-9a-fA-F]+)")
+        $m = [regex]::Match($text, [regex]::Escape($ProxyLauncherMark) + '\s*([0-9a-fA-F]+)')
         if (-not $m.Success) { return '' }
         $hex = $m.Groups[1].Value
         if ($hex.Length % 2 -ne 0) { return '' }
@@ -423,12 +428,7 @@ function Get-ProxyShortcutRecords {
     # 位置名必须写进界面：同一个程序的图标可能同时出现在桌面、任务栏和开始菜单
     # （固定到任务栏时 Windows 会**复制**一份），只列文件名的话用户看到两行
     # 一模一样的内容，分不清哪个是哪个，也不敢删任何一个。
-    $dirs = @(
-        @{ Path = [Environment]::GetFolderPath('Desktop'); Where = '桌面' },
-        @{ Path = (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'); Where = '任务栏' },
-        @{ Path = [Environment]::GetFolderPath('Programs'); Where = '开始菜单' },
-        @{ Path = [Environment]::GetFolderPath('CommonPrograms'); Where = '开始菜单（所有用户）' }
-    )
+    $dirs = Get-ShortcutDirList -WithTaskBar $true
     $seen = @{}
     $shell = $null
     try {
@@ -548,14 +548,36 @@ function Remove-ProxyShortcuts {
 # 扫出可以作为候选的程序。
 # 来源：桌面 + 用户开始菜单 + 公共开始菜单的 .lnk。
 # 返回去重后的 { Name, TargetPath, WorkingDirectory }。
+# 快捷方式可能所在的目录，带一个给人看的位置名。
+#
+# 两处清单**必须分开**，不是重复：
+#   - 这一份（$WithTaskBar = $true）用于**管理我们建过的图标**：固定到任务栏时
+#     Windows 会复制一份到 TaskBar 目录，不扫那里就会漏掉用户实际点的那个。
+#   - 候选程序那份**不能**含任务栏：那里放的都是已经在别处出现过的图标，
+#     扫进来只会让同一个程序在候选列表里出现两次。
+# 合成一份的后果是两种场景必有一边错，所以差异是有意的。
+function Get-ShortcutDirList([bool]$WithTaskBar = $false) {
+    $dirs = @(
+        @{ Path = [Environment]::GetFolderPath('Desktop'); Where = '桌面' },
+        @{ Path = [Environment]::GetFolderPath('Programs'); Where = '开始菜单' },
+        @{ Path = [Environment]::GetFolderPath('CommonPrograms'); Where = '开始菜单（所有用户）' }
+    )
+    if ($WithTaskBar) {
+        $dirs = @(
+            @{ Path = [Environment]::GetFolderPath('Desktop'); Where = '桌面' },
+            @{ Path = (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'); Where = '任务栏' },
+            @{ Path = [Environment]::GetFolderPath('Programs'); Where = '开始菜单' },
+            @{ Path = [Environment]::GetFolderPath('CommonPrograms'); Where = '开始菜单（所有用户）' }
+        )
+    }
+    return $dirs
+}
+
 function Get-InstalledPrograms {
     $out = @()
     $seen = @{}
-    $dirs = @(
-        [Environment]::GetFolderPath('Desktop'),
-        [Environment]::GetFolderPath('Programs'),
-        [Environment]::GetFolderPath('CommonPrograms')
-    )
+    # 不含任务栏：那里的图标都是别处已出现过的，扫进来会让同一个程序出现两次。
+    $dirs = @(Get-ShortcutDirList -WithTaskBar $false | ForEach-Object { $_.Path })
     $shell = $null
     try {
         $shell = New-Object -ComObject WScript.Shell

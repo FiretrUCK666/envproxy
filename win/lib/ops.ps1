@@ -1,5 +1,5 @@
 ﻿# ==============================================================================
-#  ops.ps1 — 动作层：菜单背后的安装、停止、卸载、状态编排
+#  ops.ps1 — 动作层：菜单背后的安装、停止、卸载、状态编排、菜单与帮助、问题反馈
 #  把下面各层拼成使用者点得到的行为。
 #  卸载要处理「走代理的快捷方式」的去留，因此依赖 shortcut 层的扫描与删除函数。
 # ==============================================================================
@@ -1364,6 +1364,13 @@ function Get-MenuRenderedLines {
 }
 
 # 带配色地把菜单打到屏幕上。与 Format-MenuText 同源（Get-MenuRenderedLines），只差上不上色。
+# 渲染整张菜单（纯文本）。打印与测试共用内容，保证"表里有什么，屏幕就有什么"。
+function Format-MenuText {
+    $out = New-Object System.Collections.Generic.List[string]
+    foreach ($r in (Get-MenuRenderedLines)) { [void]$out.Add($r.Text) }
+    return ($out -join "`n")
+}
+
 function Show-MenuColored {
     foreach ($r in (Get-MenuRenderedLines)) {
         if ($r.Role -eq 'blank') { Write-Host ''; continue }
@@ -1372,52 +1379,19 @@ function Show-MenuColored {
     }
 }
 
-# 渲染整张菜单（纯文本）。打印与测试共用内容，保证"表里有什么，屏幕就有什么"。
-function Format-MenuText {
-    $out = New-Object System.Collections.Generic.List[string]
-    foreach ($r in (Get-MenuRenderedLines)) { [void]$out.Add($r.Text) }
-    return ($out -join "`n")
-}
-
-# 帮助里「菜单每一项是干什么的」那一屏的正文，从 $MenuItems 生成。
-# 为什么生成而不是手抄：手抄的那一份在改菜单时会静默过期，症状是用户照帮助里的
-# 编号去敲，敲到的是另一件事（想检查更新，结果卸载了）。生成之后这份内容与菜单
-# 读同一张表，改表即同步，不存在"两边都要记得改"。
-function Get-HelpMenuLines {
-    $out = New-Object System.Collections.Generic.List[string]
-    [void]$out.Add('t 这些编号要在主菜单里敲，不是在帮助里敲。')
-    foreach ($g in (Get-MenuGroups)) {
-        $items = @($MenuItems | Where-Object { $_.Group -eq $g })
-        if ($items.Count -eq 0) { continue }
-        [void]$out.Add('b ')
-        if ($g -eq '日常') { [void]$out.Add(('h ' + $g + '（平时只会用到这些）')) } else { [void]$out.Add(('h ' + $g)) }
-        foreach ($mi in $items) {
-            # 三格：编号 / 名字 / 说明。名字列由渲染器按整块自动补齐，不在这里手敲空格。
-            [void]$out.Add(('m ' + $mi.Key + '|' + $mi.Name + '|' + $mi.Hint))
-        }
-    }
-    return $out
-}
-
-# 帮助正文的角色标记。每一行自己声明"我是什么"，渲染器照着画，不再从行的形状去猜。
+# 帮助正文的缩进。所有角色都在 2 格或更深，**没有一个是 0**：
+# 标题贴到最左边时，屏幕上看起来像"这一行不属于任何结构"，而正文却缩进 2 格——
+# 结果是标题比内容更靠外，读起来是内容在往里缩，整页重心散掉（实测用户第一眼就说"贴边"）。
+# 现在标题与正文同级（都在 2 格），子项再往内一层：
 #
-# 为什么必须这样：靠形状猜的判据是"缩进 4 格以上 + 这一行没有汉字 = 命令"，
-# 而真实内容不按这个形状长——`Git Bash   source ~/.bashrc` 带了左列标签，
-# `PowerShell  $env:ENVPROXY_TERM = 'off'` 只缩进 2 格，两行都是能整行复制的命令，
-# 却都会被判成普通说明（灰）。同一屏里 `set HTTP_PROXY=…` 是绿的、旁边三行是灰的，
-# 用户看到的就是"配色坏了"。这不是漏了哪一行，是判据本身注定会错。
-#
-# 标记写在行首，一个字母加一个空格：
-#   h  小标题                         t  正文
-#   t2 正文（接在编号条目下面的续行）  i  编号条目
-#   w  提醒                           c  命令（整行可复制）
-#   b  空行
-#   r  两列：左列说"在哪儿敲"、右列是说明      rc 两列，右列是命令
-#   m  三格：编号 / 名字 / 说明（菜单那一屏）
-# 多列行的写法：'rc PowerShell|$env:ENVPROXY_TERM = ''off'''
-# 列宽由渲染器按整块自动算，不手敲空格——手敲与写死列宽是同一类毛病。
+#   标题        ← 2 格：与它下面的正文左边缘对齐
+#   正文        ← 2 格
+#     子项编号  ← 4 格：比正文深一层，表示"这是上面那句话的分项"
+#         说明  ← 6 格：子项的补充，比子项再深一层
+#       命令   ← 6 格：跟说明同一层，因为它解释的通常就是上一句
+#     左列|右列 ← 4 格：表格行与子项同级
 $HelpRoleIndent = @{
-    'h'  = 0
+    'h'  = 2
     't'  = 2
     't2' = 6
     'i'  = 4
@@ -1470,6 +1444,20 @@ function Split-HelpLine([string]$Line) {
 function Get-HelpRenderedLines([string[]]$Lines) {
     $parsed = @()
     foreach ($l in $Lines) { $parsed += (Split-HelpLine $l) }
+    # 块之间的空行由这里统一补：正文里只在需要「多一空行」时才手写 b。
+    # 手写空行的老做法是"有的地方记得、有的地方忘了"，屏幕上就是一段挤、一段松——
+    # 这种不一致单看每一行都挑不出错，但整页读起来就是"没排好"。
+    # 规则只有一条：**除第一行外，每个标题前自动空一行**。标题即分块边界，
+    # 正文里再怎么加删内容都不影响块间距。
+    $spaced = @()
+    for ($i = 0; $i -lt $parsed.Count; $i++) {
+        $cur = $parsed[$i]
+        if ($i -gt 0 -and $cur.Code -eq 'h' -and $parsed[$i - 1].Code -ne 'b') {
+            $spaced += (Split-HelpLine 'b ')
+        }
+        $spaced += $cur
+    }
+    $parsed = $spaced
     $keyW = 0
     $nameW = 0
     foreach ($r in $parsed) {
@@ -1536,11 +1524,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '2'; Title = '菜单每一项是干什么的'; Short = '菜单'
-            Lines = @(Get-HelpMenuLines)
-        },
-        @{
-            Key = '3'; Title = '装完之后要我做什么'; Short = '装完'
+            Key = '2'; Title = '装完之后要我做什么'; Short = '装完'
             Lines = @(
                 'h 按窗口分三种情况，多半你属于第一种',
                 'b ',
@@ -1565,24 +1549,27 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '4'; Title = '这个窗口不要翻墙 / 用公司的代理'; Short = '窗口'
+            Key = '3'; Title = '这个窗口不要翻墙 / 用公司的代理'; Short = '窗口'
             Lines = @(
                 'h 一、让这个窗口一直不翻墙',
                 'rc PowerShell|$env:ENVPROXY_TERM = ''off''',
                 'rc Git Bash|export ENVPROXY_TERM=off',
                 'b ',
                 't 下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。',
+                'b ',
                 # cmd 这一行是表格的第三行，不是正文：写成正文会变成"缩进 2 格的灰字"，
                 # 与上面两行既不对齐、也不白——用户看到的就是"这里格式坏了"。
                 # 它下面的命令用空左列的 rc：左列补成同样的宽度，命令正好落在右列下方。
                 ('r cmd|没有这个开关，只能自己清 {0} 个变量（& 两边别留空格）：' -f @($ProxyVarNames).Count),
                 ('rc |set ' + ((@($ProxyVarNames) | ForEach-Object { $_ + '=' }) -join '&set ')),
-                'w 别用 unset HTTP_PROXY：我们写进 Git Bash 的是小写拼写，',
-                't unset 大写的清不掉小写，curl 照样用代理，下个提示符还会写回来。',
+                'w 别用 unset HTTP_PROXY：Git Bash 里我们写的是小写，',
+                't 大写清不掉小写，curl 照样用代理，下个提示符还会写回来。',
+                'b ',
                 'h 二、改回自动跟随',
                 'rc PowerShell|Remove-Item Env:ENVPROXY_TERM',
                 'rc Git Bash|unset ENVPROXY_TERM',
                 'r cmd|重开一个窗口',
+                'b ',
                 'h 三、让这个窗口用公司的代理',
                 't 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：',
                 'rc PowerShell|$env:HTTPS_PROXY = ''http://你的地址:端口''',
@@ -1593,12 +1580,11 @@ function Get-HelpTopics {
                 'rc Git Bash|echo $HTTPS_PROXY',
                 'rc cmd|set HTTPS_PROXY',
                 'b ',
-                't 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。',
-                't 你手设的值不会被删，只清和工具写入值相同的那些。'
+                't 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。'
             )
         },
         @{
-            Key = '5'; Title = '某条命令不想翻墙'; Short = '命令行'
+            Key = '4'; Title = '某条命令不想翻墙'; Short = '命令行'
             Lines = @(
                 'h 不同工具写法不一样，没有通用的一条命令',
                 'b ',
@@ -1627,7 +1613,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '某个程序还是翻不了墙'; Short = '软件'
+            Key = '5'; Title = '某个程序还是翻不了墙'; Short = '软件'
             Lines = @(
                 'h 有些程序不认系统设的代理',
                 't 它们只在启动那一刻读一次「该走哪个代理」，之后怎么变都不理。',
@@ -1651,7 +1637,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '7'; Title = '出问题了：怎么查、怎么报'; Short = '出问题'
+            Key = '6'; Title = '出问题了：怎么查、怎么报'; Short = '出问题'
             Lines = @(
                 'h 先按这个顺序查，多数问题到第二步就好了',
                 'b ',

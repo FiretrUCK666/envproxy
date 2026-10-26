@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 #  runtime.ps1 — 运行时层：日志、监控进程管理、监控主循环、自启动与定位器、
-#                代理地址变化时的提醒（$MonitorDir、状态文件、弹窗都在这一层）
+#                代理地址变化时的提醒、状态快照（$MonitorDir、状态文件、弹窗都在这一层）
 #  路径常量依赖入口先设好的 $ScriptDir 与 $ScriptPath；本层不得自行推算脚本目录或入口路径。
 # ==============================================================================
 
@@ -2040,11 +2040,19 @@ function Test-ProxyShouldNotify([string]$OldState, [string]$NewState) {
 # 代价是启动慢一点（实测约 290 ms），但这是低频事件（只在代理地址真变时发生），
 # 而且它跑在独立进程里，不占监控主循环的时间。
 function Invoke-ProxyChangeNotice([string]$OldState, [string]$NewState) {
-    $oldTxt = if ($OldState.StartsWith('on:')) { $OldState.Substring(3) } else { '直连' }
-    $newTxt = if ($NewState.StartsWith('on:')) { $NewState.Substring(3) } else { '直连' }
-    $msg = "代理端口变了：$oldTxt -> $newTxt`r`n`r`n" +
-           "正在运行的程序还连在旧地址上，可能会连不上。`r`n" +
-           "如果它们打不开或一直转圈，关掉重开就好。"
+    # 措辞按"用户遇到什么"来写，不按"我们的状态机怎么变"来写：
+    #   on -> on  ：端口换了，他遇到的是"程序连不上"
+    #   on -> off ：代理关了，他遇到的同样也是"程序连不上"。这里若照旧说"端口变了"，
+    #               会让他去找一个已经不存在的端口——一句指错方向的提示比不提示更糟。
+    # 端口号不写进弹窗：用户不认端口号，也做不了什么，写出来只会让他以为要记下来。
+    $msg = if ($NewState.StartsWith('on:')) {
+        "翻墙软件换了个地方，正在运行的程序还连在旧的地方，可能会连不上。`r`n`r`n" +
+        "如果它们打不开或一直转圈，关掉重开就好。"
+    } else {
+        "翻墙软件关掉了（或者断开了）。`r`n`r`n" +
+        "正在运行的程序可能还接着那边，会连不上。`r`n" +
+        "关掉重开就好；不翻墙的话不用管它。"
+    }
     # 消息文本走 base64：中文、引号、换行都不用操心转义，编码由 base64 保证。
     $b64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($msg))
     $inner = "`$m=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('$b64'));" +
