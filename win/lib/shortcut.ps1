@@ -149,22 +149,79 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
     # PowerShell 单引号串里的单引号要写成两个
     $t = $TargetPath.Replace("'", "''")
     $w = $WorkingDir.Replace("'", "''")
-    # 变量名与 NO_PROXY 的默认值都从 base 层的权威常量来，不在这里手抄一遍。
-    # 手抄的后果不是"多写几个字"，而是同一个程序从快捷方式启动和从终端启动
-    # 拿到不同的 NO_PROXY：以后往默认值里加一项，这里会漏改，
-    # 症状是"有时候连不上"，而且只在某一种启动方式下出现。
-    $addrVars = @($ProxyVarNames | Where-Object { $_ -notin @('NO_PROXY', 'NODE_USE_ENV_PROXY') })
+    # 弹窗里要点名是哪个程序——用户往往点了一堆图标之后才发现不对，不点名就不知道关哪个。
+    # 只取文件名、去掉扩展名，并且截断：可执行文件名偶尔很长，整段塞进弹窗会把排版撑坏。
+    # 单引号必须转义（它要进单引号串），这一点与路径同样处理。
+    $appLabel = [System.IO.Path]::GetFileNameWithoutExtension($TargetPath)
+    if (-not $appLabel) { $appLabel = $TargetPath }
+    if ($appLabel.Length -gt 24) { $appLabel = $appLabel.Substring(0, 24) + '…' }
+    $appLabel = $appLabel.Replace("'", "''")
+    # 这一段里的每一个"名字"都从 base 层的权威常量来，不手抄：
+    #   变量清单      $ProxyAddrVarNames（"哪些变量是地址类"只定义一处）
+    #   主代理变量    $PrimaryProxyVarName（"读哪一个当代理源"只定义一处）
+    #   注册表落点    Get-RegSubKeyPath $UserEnvSubKey
+    #   开关值        $NodeUseEnvProxyValue
+    #   例外清单默认  $DefaultNoProxy
+    # 手抄的后果不是"多写几个字"：同一个程序从快捷方式启动和从终端启动会拿到不同的值，
+    # 而症状是"有时候连不上"，只在某一种启动方式下出现，极难查。
+    $addrVars = $ProxyAddrVarNames
     $setv = ''
     foreach ($n in $addrVars) { $setv += ('$env:' + $n + '=$p;') }
     $noProxyDefault = $DefaultNoProxy.Replace("'", "''")
-    $ps = "`$p=(gp 'HKCU:\Environment' -ea 0).HTTPS_PROXY;" +
+    $envKeyPath = Get-RegSubKeyPath $UserEnvSubKey
+    # 固定入口（中继）的端口记录文件。启动器**每次点击都重新读**，所以中继换了端口
+    # 它照样能跟上，用户不需要重建图标——这是"永不失效的地址"真正的落地方式。
+    $relayPortFile = (Get-RelayPortFile).Replace("'", "''")
+    # ---------------------------------------------------------------------------
+    # 自适应的两段式取代理值（顺序不能反）
+    # ---------------------------------------------------------------------------
+    # 1) 先试固定入口：读端口记录 -> 200ms 内探一次 -> 通了就用它。
+    #    用固定入口的好处是：翻墙软件换端口时，程序里的地址**永远不变**。
+    # 2) 不通就退回读注册表当前值（就是原来的行为）。
+    #    这条退路是必须的：中继可能没起来（端口被占、类型编译失败）、或者监控被停了。
+    #    有它在，最坏情况回到"没有固定入口"的旧行为，而不是"图标全废"。
+    # 两个都拿不到才弹窗——那个弹窗是用户唯一的线索，不能省。
+    #
+    # 探测必须带超时：不加超时连一个没人监听的口要等约 2 秒（TCP 重试），
+    # 用户会感觉图标点了没反应。200ms 足够区分"有人听"与"没人听"。
+    $relayProbe = "`$rp=0;" +
+        "try{`$f='$relayPortFile';" +
+        "if(tp `$f){`$rp=[int]((gc `$f -ea 0 -raw).Trim())}}catch{};" +
+        "`$useRelay=`$false;" +
+        "if(`$rp -gt 0){try{`$c=New-Object Net.Sockets.TcpClient;" +
+        "`$a=`$c.BeginConnect('127.0.0.1',`$rp,`$null,`$null);" +
+        "if(`$a.AsyncWaitHandle.WaitOne(200)){`$c.EndConnect(`$a);`$useRelay=`$true};`$c.Close()}catch{}};"
+    $ps = $relayProbe +
+          "`$p='';" +
+          "if(`$useRelay){`$p='http://127.0.0.1:'+`$rp}" +
+          "else{`$p=(gp 'HKCU:\$envKeyPath' -ea 0)." + $PrimaryProxyVarName + "};" +
           "if(`$p){" + $setv +
-          "`$n=(gp 'HKCU:\Environment' -ea 0).NO_PROXY;" +
+          "`$n=(gp 'HKCU:\$envKeyPath' -ea 0).NO_PROXY;" +
           "if(-not `$n){`$n='" + $noProxyDefault + "'};" +
-          "`$env:NO_PROXY=`$n;`$env:NODE_USE_ENV_PROXY='1'}" +
+          "`$env:NO_PROXY=`$n;" + 'NODE_USE_ENV_PROXY_PLACEHOLDER' + "}" +
           "else{try{Add-Type -AssemblyName PresentationFramework;" +
-          "[Windows.MessageBox]::Show('没检测到代理，程序将直连启动。请先开代理软件再点一次。','EnvProxy')|Out-Null}catch{}};" +
+          "[Windows.MessageBox]::Show('没找到可用的代理，《" + $appLabel + "》已经按直连打开了。`n`n" +
+          "翻墙软件开着的话：打开菜单选 1（安装 / 修复），再点这个图标。`n" +
+          "翻墙软件没开的话：先开它，再点这个图标。','EnvProxy')|Out-Null}catch{}};" +
           "Start-Process -FilePath '$t' -WorkingDirectory '$w'"
+    # ---------------------------------------------------------------------------
+    # 这段弹窗的三条约束，每条都对应一次真实的误用
+    # ---------------------------------------------------------------------------
+    # 1) **必须说清程序已经开了**。`Start-Process` 在弹窗之后照常执行，
+    #    所以用户看到弹窗时程序已经启动了。"请再点一次"会让他开第二个实例。
+    # 2) **必须点名是哪个程序**。用户常常是从任务栏/桌面点了一堆图标之后才发现不对，
+    #    不点名他就不知道该关哪个。程序名在这里，不额外花钱。
+    # 3) **必须给出"监控被停"这条出路**。停止监控会执行 Apply-State off、把代理变量删光，
+    #    那之后无论开多少次翻墙软件、点多少次图标，注册表里永远是空的——
+    #    只叫他"开代理软件"，他会陷进一个怎么试都出不来的循环，而且完全无从察觉。
+    #    选 1（安装 / 修复）会把监控重新拉起来，那条路才通。
+    # ---------------------------------------------------------------------------
+    # 开关变量名与它的取值都从权威处来：名字在变量表里，取值由 base 层给出。
+    $switchName = $ProxyVarNames | Where-Object { $_ -eq 'NODE_USE_ENV_PROXY' } | Select-Object -First 1
+    $ps = $ps.Replace('NODE_USE_ENV_PROXY_PLACEHOLDER', ('$env:' + $switchName + "='" + $NodeUseEnvProxyValue + "'"))
+    # tp 是 "Test-Path" 的简写：启动脚本体积有限（要塞进 base64 再塞进 .vbs），
+    # 全名与简写各出现一次就是几十字节。这里只为了省体积，行为完全等价。
+    $ps = $ps.Replace('tp $f', 'Test-Path -LiteralPath $f')
     return (Compress-ToBase64 $ps)
 }
 
@@ -638,6 +695,7 @@ function Get-AdvancedPageLines {
         @{ Role='blank';   Text='' },
         @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
         @{ Role='item';    Text='    2  管理已建的                 看状态、删掉不要的' },
+        @{ Role='item';    Text='    3  查看中继                   图标用的那个固定地址，现在怎么样' },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  要注意' },
         @{ Role='blank';   Text='' },
@@ -653,6 +711,67 @@ function Get-AdvancedPageLines {
 function Show-AdvancedPage {
     Clear-Screen
     foreach ($r in (Get-AdvancedPageLines)) {
+        if ($r.Role -eq 'blank') { Write-Host ''; continue }
+        Write-Styled $r.Role $r.Text
+    }
+}
+
+# 「查看中继」这一屏：**只读**，不需要用户做任何操作。
+#
+# 为什么叫「查看」而不是「设置」：中继跟监控同生共死，自动工作，没有开关可拨。
+# 把一屏"没有可操作项"的界面叫成"设置"，用户会一直在找那个不存在的开关。
+# 它存在的意义是回答三个疑问：
+#   ① 我那些图标用的是什么地址（为什么它们从来不用改）
+#   ② 它现在有没有在工作（没在工作也不要紧——图标会退回读当前代理）
+#   ③ 背后跟着的是哪个端口（换软件之后想确认一下）
+function Get-RelayPageLines {
+    $st = Get-RelayStatus
+    $icons = 0
+    try { $icons = @(Get-ProxyShortcutRecords).Count } catch {}
+    # 这一屏的职责只有一件事：告诉他"现在没事，不用管"。
+    # 所以"有没有在工作"必须在最前面用一句话说完，后面的内容只用来回答疑问。
+    # 曾经把"去选 1 修它"放在这里，同屏又写着"什么都不用做"——
+    # 给了动作又立刻收回，读者会在"要不要管"之间反复，那比不说更糟。
+    $lines = @(
+        @{ Role='title';   Text='======== 查看中继 ========' },
+        @{ Role='blank';   Text='' },
+        @{ Role='heading'; Text='  它是什么' },
+        @{ Role='blank';   Text='' },
+        @{ Role='text';    Text='    就是给图标用的那个永不变的地址。' },
+        @{ Role='text';    Text='    有些程序会把地址记进自己的设置里，翻墙软件一换端口它就废了；' },
+        @{ Role='text';    Text='    中继不让它变，所以那些程序不用你去改设置。' },
+        @{ Role='blank';   Text='' },
+        @{ Role='heading'; Text='  现在的情况' },
+        @{ Role='blank';   Text='' }
+    )
+    if ($st.Running) {
+        $lines += @{ Role='ok';  Text=("    入口地址      http://127.0.0.1:{0}" -f $st.Port) }
+        if ($st.Upstream -gt 0) {
+            $lines += @{ Role='text'; Text=("    当前转发到    127.0.0.1:{0}" -f $st.Upstream) }
+        } else {
+            $lines += @{ Role='dim'; Text='    当前转发到    （还没有可用的代理，所以暂时不转发）' }
+        }
+        $lines += @{ Role='ok';  Text='    工作状态      正常' }
+    } else {
+        $lines += @{ Role='dim'; Text='    入口地址      （暂时没有开）' }
+        $lines += @{ Role='dim'; Text='    工作状态      没在工作，但不影响使用' }
+        $lines += @{ Role='dim'; Text='    图标会退回去读当前代理，照样能用；下次监控正常跑起来它会自己回来。' }
+    }
+    if ($icons -gt 0) {
+        $lines += @{ Role='text'; Text=("    用它建的图标  {0} 个" -f $icons) }
+    } else {
+        $lines += @{ Role='dim';  Text='    用它建的图标  还没有' }
+    }
+    $lines += @(
+        @{ Role='blank';   Text='' },
+        @{ Role='dim';     Text='  这里没有开关要拨。看完按回车返回。' }
+    )
+    return $lines
+}
+
+function Show-RelayPage {
+    Clear-Screen
+    foreach ($r in (Get-RelayPageLines)) {
         if ($r.Role -eq 'blank') { Write-Host ''; continue }
         Write-Styled $r.Role $r.Text
     }
@@ -1066,8 +1185,14 @@ function Show-AdvancedMenu {
         switch ($ans) {
             '1' { Invoke-NewProxyShortcutFlow }
             '2' { Invoke-ManageProxyShortcuts }
+            '3' {
+                # 只读的一屏：看完按回车回来。不提供任何"开关"——
+                # 中继跟监控同生共死，没有可拨的开关，给一个假开关只会让人困惑。
+                Show-RelayPage
+                try { $null = Read-Host '' } catch { return }
+            }
             default {
-                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2，0 = 返回）')
+                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2、3，0 = 返回）')
                 Start-Sleep -Milliseconds 700
             }
         }

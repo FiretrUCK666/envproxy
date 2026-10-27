@@ -1585,23 +1585,32 @@ function Stop-Monitor {
     Remove-ItemSafe $StopFlag
     # 记下"这是使用者主动停的"，状态页据此区分它与"进程被外部结束"。
     try { Write-Text -Path $StopIntentFile -Text "user" } catch {}
+    # 强杀路径下监控来不及删自己的心跳与快照；不清掉它们，下面这条判定会读到一个
+    # "2 秒前刚刷新"的心跳，于是误报"未能停止"。
+    # 位置必须是目标目录（跨位置停止时目标不是本进程的 $MonitorDir）。
+    #
+    # 状态快照尤其要清："停止"是一个**明确的状态**，不该靠快照 240 秒自然过期来表达。
+    # 留着它，状态页在这段时间里仍会把它当"当前结论"，于是代理没在跑也报"已开启"——
+    # 而使用者刚刚才点过停止，屏幕与他的动作直接矛盾。
+    # 必须在"跨位置空目录清理"之前做：目录一旦被删掉，下面按路径删文件就落空了。
+    try {
+        $beatTarget = Join-Path $targetDir "monitor.beat"
+        if (Test-Item $beatTarget) { Remove-Item -LiteralPath $beatTarget -Force -ErrorAction SilentlyContinue }
+        $snapTarget = Join-Path $targetDir "state.snapshot"
+        if (Test-Item $snapTarget) { Remove-Item -LiteralPath $snapTarget -Force -ErrorAction SilentlyContinue }
+    } catch {}
+    if (-not (Test-Item $targetDir) -or $targetDir -eq $MonitorDir) {
+        try { Remove-ItemSafe $HeartbeatFile } catch {}
+        try { Remove-ItemSafe $StateSnapshotFile } catch {}
+    }
     # 跨位置停止的零残留：若停止标志写在"别的" monitor 目录、且该目录已空
-    # （旧监控退出时已清理自己的 pid/flag），则把这个重建的空目录一并移除
+    # （旧监控退出时已清理自己的 pid/flag），则把这个重建的空目录一并移除。
+    # 必须排在上面删心跳/快照之后：目录先没了，按路径删文件就全部落空。
     if ($targetDir -ne $MonitorDir) {
         $left = Get-ChildItem -LiteralPath $targetDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1
         if (-not $left) {
             Remove-Item -LiteralPath $targetDir -Recurse -Force -ErrorAction SilentlyContinue
         }
-    }
-    # 强杀路径下监控来不及删自己的心跳；不清掉它，下面这条判定会读到一个
-    # "2 秒前刚刷新"的心跳，于是误报"未能停止"。所以判定之前主动清一次。
-    # 位置必须是目标目录（跨位置停止时目标不是本进程的 $MonitorDir）。
-    try {
-        $beatTarget = Join-Path $targetDir "monitor.beat"
-        if (Test-Item $beatTarget) { Remove-Item -LiteralPath $beatTarget -Force -ErrorAction SilentlyContinue }
-    } catch {}
-    if (-not (Test-Item $targetDir) -or $targetDir -eq $MonitorDir) {
-        try { Remove-ItemSafe $HeartbeatFile } catch {}
     }
     if (Get-MonitorProcess) {
         Write-Styled 'warn' "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
@@ -1672,6 +1681,20 @@ function Run-MonitorLoop {
     Update-ScriptPathRecord
     Write-MonitorLog "==== 监控启动 ===="
 
+    # 固定入口（中继）：跟监控同生共死，不新增常驻进程。
+    # 起不来的原因只有两种（类型编译失败、连续端口都被占），都不该让监控停摆——
+    # 它只是"走代理的快捷方式"的一个便利，没有它那些图标照样能用（退回直读注册表）。
+    # 所以这里失败只记一行日志，不改变监控的任何行为。
+    try {
+        if (Start-Relay) {
+            Write-MonitorLog ("固定入口已启动：127.0.0.1:" + $script:RelayPort)
+        } else {
+            Write-MonitorLog "固定入口没能启动（不影响使用：走代理的图标会退回直读当前代理）"
+        }
+    } catch {
+        Write-MonitorLog ("固定入口启动异常（不影响使用）：" + $_.Exception.Message)
+    }
+
     # 启动立即对齐：不等去抖，当场校正环境变量。
     # 关键场景：关机前没退出翻墙软件 → 重启后环境变量残留死端口 →
     # 监控一启动就立即清掉残留（恢复直连）或注入正确值，闭环无窗口期。
@@ -1716,7 +1739,8 @@ function Run-MonitorLoop {
         if (-not (Test-Item $MonitorDir)) { Ensure-MonitorDir }
         # pid 文件同理：它一旦丢失，对外就"查不到自己在跑"。重新写一份，代价是一次小文件写。
         if (-not (Test-Item $PidFile)) { try { Write-Text -Path $PidFile -Text ([string]$PID) } catch {} }
-        # 心跳：每轮刷新一次（写单个字节，代价可忽略）。
+        # 心跳：每 3 轮刷新一次（写的内容是 pid + 启动时刻，比"单个字节"多几十字节，
+        # 但仍是一次小文件写，代价可忽略）。
         # 它的存在是为了让"没有 WMI 的机器上也能判断监控还活着"——
         # 不依赖任何系统服务，也不依赖进程查询接口。
         if ($repairRound % 3 -eq 0) {
@@ -1806,6 +1830,12 @@ function Run-MonitorLoop {
                     -VarsMatch $snapVars -ApplyResult $lastApplyResult
             } catch {}
 
+            # 固定入口跟着当前代理走：每轮把"我们注入的那个值指向哪个端口"告诉中继。
+            # 成本是一次静态字段写（微秒级），所以不必节流。
+            # 中继**不缓存**上游：换端口后下一条新连接就走新的，不需要重启它。
+            # 中继没在跑时这是空操作（Sync-RelayUpstream 自己判）。
+            try { Sync-RelayUpstream } catch {}
+
             # 每 30 轮自愈一次（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
             # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
             $repairRound++
@@ -1856,6 +1886,14 @@ function Run-MonitorLoop {
             Start-Sleep -Seconds 5
         }
     }
+
+    # 固定入口先停：它只是一个监听线程，与本进程同生共死。
+    # 停掉之后端口记录也一并清掉——留着它，启动器会去连一个没人听的口，
+    # 白白多等一个连接超时之后才降级。清掉则它立刻退回直读注册表。
+    try {
+        Stop-Relay
+    } catch {}
+    try { Write-MonitorLog "固定入口已停止" } catch {}
 
     if ($selfExit) {
         # 文件夹被移动/删除：自退时没有活着的组件会再纠正变量，先把我们写的东西清掉

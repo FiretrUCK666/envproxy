@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="543" viewBox="0 0 1200 543" role="img" aria-labelledby="limitsTitle limitsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="limitsTitle">五条技术边界</title>
-  <desc id="limitsDesc">五条编号的技术边界，说明它不做的五件事。第一，纯 TUN 模式不处理，因为不监听本地端口，没有端口可以判断，而这种模式下所有流量本来就经过它。第二，不修改系统代理设置，因为那会影响浏览器和其他程序，只写用户级环境变量。第三，不改变已经运行的程序，因为环境变量只在进程启动时读一次，已经打开的窗口需要按一次回车。第四，不管需要自己配置代理的工具，因为它们不读这几个变量。第五，不提供界面，因为零依赖是安装前提。</desc>
+  <desc id="limitsDesc">五条编号的技术边界，说明它不做的五件事。第一，分不清 TUN 与企业 VPN，两者都表现为一块虚拟网卡，没法可靠区分。多数软件开 TUN 后本地端口照旧在，本工具照常工作；少数会把端口关掉，那时探测不到也不影响上网。第二，不修改系统代理设置，因为那会影响浏览器和其他程序，只写用户级环境变量。第三，不改变已经运行的程序，因为环境变量只在进程启动时读一次，已经打开的窗口需要按一次回车。第四，不管需要自己配置代理的工具，因为它们不读这几个变量。第五，不提供界面，因为零依赖是安装前提。</desc>
 
   <rect width="1200" height="543" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.83" width="1198.5" height="541.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -30,8 +30,8 @@
   </g>
 
   <g id="labels" font-size="21" fill="#E9EFF8">
-    <text x="120" y="154">纯 TUN 模式不处理</text>
-    <text x="120" y="182.6" font-size="16" fill="#94A6BE">它不监听本地端口，没有端口可以判断；这种模式下流量本来就全走它。</text>
+    <text x="120" y="154">分不清 TUN 与企业 VPN</text>
+    <text x="120" y="182.6" font-size="16" fill="#94A6BE">两者都像一块虚拟网卡。多数软件开 TUN 后端口照旧在，少数会关掉。</text>
 
     <text x="120" y="231">不修改系统代理设置</text>
     <text x="120" y="259.6" font-size="16" fill="#94A6BE">那会影响浏览器和其他程序。只写用户级环境变量。</text>

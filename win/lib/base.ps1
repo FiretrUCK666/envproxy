@@ -114,6 +114,21 @@ $ProxyVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "NODE_U
 # Mac 侧对应 $PROXY_ADDR_VAR_NAMES；两侧同形，门禁 6 核对。
 $ProxyAddrVarNames = @("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY")
 
+# "读一个当前代理地址"该读哪个变量——只定义这一处。
+#
+# 为什么需要它：三个地址变量注入时值相同，取哪个都"能跑"，于是不同地方各写各的，
+# 悄悄分叉了：Get-EnvProxyValue 取的是 $ProxyVarNames[0]（HTTP_PROXY），
+# 而生成启动脚本的那一处写死了 HTTPS_PROXY。同一个程序对"主代理变量是哪个"
+# 给出两个不同答案，谁都没报错——将来只改其中一处，另一处就会静默读到别的值。
+# 取 HTTP_PROXY 的理由：它在变量表里排第一，且是最通用、兼容面最广的那个；
+# 三个地址变量由同一张表整批写入，读第一个与读第二个拿到的必然是同一个串。
+$PrimaryProxyVarName = $ProxyAddrVarNames[0]
+
+# NODE_USE_ENV_PROXY 的取值。就是"打开"的意思，但只定义这一处：
+# 注入端（Get-ProxyVarTable）与启动器生成端都要写它，各写一个字面量 '1'
+# 就会出现"终端里是 1、快捷方式里是 true"这种只有某一种启动方式才失效的分叉。
+$NodeUseEnvProxyValue = '1'
+
 # 本机地址直连的默认例外集，写法遵循 NO_PROXY 的通行规范：IPv6 地址**裸写**。
 # 裸写是各家的共同要求——httpx 的规范示例就是 `NO_PROXY=example.com,::1,localhost,...`，
 # 而且它会自己给 IPv6 补上方括号去构造内部模式（见其 _utils.is_ipv6_hostname 分支）；
@@ -131,7 +146,7 @@ $DefaultNoProxy = "localhost,127.0.0.1,::1"
 # 挤在一起的正文比多滚一屏更难读。所以排版优先，内容超了就调这个数，
 $HelpMaxLines = 40
 
-# ---- 屏幕渲染层的常量（仅 Windows 侧有实现；Mac 侧状态页仍是一次性输出）----
+# ---- 屏幕渲染层的常量（两侧都有实现：Mac 侧见 mac/lib/base.sh 同名同义的一组）----
 # 最小可用终端：宽度不够时一折行就认不出「标签 : 内容」的结构，宁可不刷新。
 # 40 与 Get-ConsoleWidth 的下限同一个数：那里也认为 40 是能正常阅读的底线。
 $ScreenMinWidth = 40
@@ -342,7 +357,7 @@ function Get-ProxyVarTable([string]$Port, [string]$ProxyUrl = "") {
     # 本机地址直连（与 README 变量表一致）
     $table["NO_PROXY"] = $DefaultNoProxy
     # 让新版 Node 系工具的原生 fetch 也自动读环境变量代理（老版本自动忽略）
-    $table["NODE_USE_ENV_PROXY"] = "1"
+    $table["NODE_USE_ENV_PROXY"] = $NodeUseEnvProxyValue
     return $table
 }
 

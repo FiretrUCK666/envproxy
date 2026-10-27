@@ -17,11 +17,16 @@ VERSION_CACHE="$MONITOR_DIR/version.cache"
 # 与 Windows 侧同名同字段同顺序（SNAPSHOT_KEYS 两边必须一致，门禁核对）。
 SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
 SNAPSHOT_KEYS="written round pid state prev_state pending_state pending_count port_enumeration port_reason vars_match apply_result log_tail"
-# 三档阈值，与 Windows 侧同值同语义：
+# 三档阈值，与 Windows 侧同值同语义（那边是 $SnapshotFreshSec / $SnapshotUsableSec /
+# $SnapshotStaleSec，门禁 6 核对两侧数值一致）：
 #   <= 10 秒：新鲜，当作当前状态直接说；
-#   <= 240 秒：仍然是最近的判断，但屏幕上要说清是几秒前的；
+#   <= 60 秒：过了新鲜线，屏幕上要补一句"（N 秒前的判断）"；
+#   <= 240 秒：仍然是最近的判断，但要明说"可能已不是现在的情况"；
 #   > 240 秒：不再当"当前状态"，退回实时探测。
+# 中间那一档不是可有可无：同一句话会让 30 秒和 200 秒看起来一样，
+# 而后者离"监控可能已经死了"很近，措辞必须区分开。
 SNAPSHOT_FRESH_SEC=10
+SNAPSHOT_USABLE_SEC=60
 SNAPSHOT_STALE_SEC=240
 LOG_FILE="$MONITOR_DIR/monitor.log"
 PATH_CONF="$ENVPROXY_HOME/path.conf"
@@ -680,7 +685,10 @@ is_monitor_args() {
         # 必须与入口分派认的子命令**完全一致**：两份清单漂移就会出现
         # 「带子命令的进程被当成监控」。purge 不是子命令（它是 --purge 开关），
         # repair-profile 与 help 是——少一个就多认一个，多一个就少认一个。
-        install|stop|uninstall|status|repair-profile|update|menu|help|self-test) return 1;;
+        # report 曾经漏在这里：入口认得它（envproxy.sh 的 report) 分支），
+        # 于是跑「问题反馈」的那个进程被认成监控——状态页可能报"监控在跑"，
+        # 安装/停止时也可能把它当成旧监控停掉。
+        install|stop|uninstall|status|repair-profile|update|menu|help|self-test|report) return 1;;
     esac
     return 0
 }
@@ -825,6 +833,74 @@ stop_monitor() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+#  代理地址变了以后，提醒使用者一句
+# ------------------------------------------------------------------------------
+# 为什么需要它：已经开着的程序连的是旧地址。代理换端口或关掉之后，它们会一直
+# 往一个死地址上连——而错误信息里根本没有本工具的名字，用户只会去查网络。
+# 与 Windows 侧 Invoke-ProxyChangeNotice / Register-ProxyStateChange 同一套语义，
+# 两端行为必须一致（那边用 WScript 弹窗，这边用系统通知中心）。
+#
+# 判据完全照搬 Windows 侧 Test-ProxyShouldNotify：
+#   off   -> on:P    不提示（旧程序照旧直连能通，没有"连不上"的问题）
+#   on:P1 -> on:P2   提示（端口变了，旧程序仍连 P1）
+#   on:P  -> off     提示（代理没了，旧程序还写着 P1）
+#   on:P  -> on:P    不提示（同一个地址）
+#   unknown 参与的任何迁移都不提示：那一轮根本不知道状态，提示等于谎报。
+proxy_should_notify() {
+    _psn_old="$1"; _psn_new="$2"
+    [ -n "$_psn_old" ] || return 1
+    [ -n "$_psn_new" ] || return 1
+    [ "$_psn_old" = "unknown" ] && return 1
+    [ "$_psn_new" = "unknown" ] && return 1
+    case "$_psn_old" in on:*) _psn_old_on=1 ;; *) _psn_old_on=0 ;; esac
+    case "$_psn_new" in on:*) _psn_new_on=1 ;; *) _psn_new_on=0 ;; esac
+    if [ "$_psn_old_on" = "1" ] && [ "$_psn_new_on" = "1" ]; then
+        [ "${_psn_old#on:}" != "${_psn_new#on:}" ] && return 0
+        return 1
+    fi
+    [ "$_psn_old_on" = "1" ] && return 0
+    return 1
+}
+
+# 去重只靠一件事：记下"上次提示时"的那个新状态。
+# 同一个目标状态已经提示过就不再弹——监控重启后又看到同样的翻转时特别要紧。
+proxy_notify_state_path() { printf '%s' "$MONITOR_DIR/notify.last"; }
+
+# 真的弹一句。用系统通知中心，不阻塞调用方。
+#
+# 为什么后台跑：osascript 起一个进程约几十毫秒，而这是主循环里的调用；
+# 弹窗本身要等用户看到，不能卡住探测节奏。
+# 文案与 Windows 侧同一套说法（不写端口号：用户不认端口，也做不了什么）。
+invoke_proxy_change_notice() {
+    _ipn_new="$1"
+    case "$_ipn_new" in
+        on:*)
+            _ipn_msg="翻墙软件换了个地方，正在运行的程序还连在旧的地方，可能会连不上。关掉重开就好。"
+            ;;
+        *)
+            _ipn_msg="翻墙软件关掉了（或者断开了）。正在运行的程序可能还接着那边，会连不上。关掉重开就好；不翻墙的话不用管它。"
+            ;;
+    esac
+    # osascript 的字符串里要转义双引号与反斜杠；内置 display notification 不需要额外权限。
+    _ipn_msg=$(printf '%s' "$_ipn_msg" | sed 's/\\/\\\\/g; s/"/\\"/g')
+    ( osascript -e "display notification \"$_ipn_msg\" with title \"EnvProxy\"" >/dev/null 2>&1 || true ) &
+}
+
+# 主循环看到状态翻转时调用：判断 + 提示 + 记录，一处做完，免得调用点各写一遍再分叉。
+register_proxy_state_change() {
+    _rpc_old="$1"; _rpc_new="$2"
+    proxy_should_notify "$_rpc_old" "$_rpc_new" || return 0
+    _rpc_p=$(proxy_notify_state_path)
+    _rpc_last=""
+    [ -f "$_rpc_p" ] && _rpc_last=$(sed -n '1p' "$_rpc_p" 2>/dev/null || echo "")
+    [ "$_rpc_last" = "$_rpc_new" ] && return 0
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    printf '%s\n' "$_rpc_new" > "$_rpc_p" 2>/dev/null || true
+    invoke_proxy_change_notice "$_rpc_new"
+    return 0
+}
+
 # 拿操作锁（安装/更新/停止/卸载共用）：成功返回 0；撞上返回 1 并打印提示。
 # 用 ln 而不是 mkdir：mkdir 成功到"把 pid 写进去"之间有个空窗，
 # 那个空窗里另一个进程读到空的 pid，会把锁当成陈旧的接管掉——
@@ -902,6 +978,16 @@ run_monitor_loop() {
     _repair=0
     _self=0
     _round_no=0
+    # 上一轮状态（快照的 prev_state 用）：启动对齐时与 _last 同步，
+    # 否则"监控刚起来之后的第一次翻转"写进快照的旧状态是空值。
+    _prev="$_last"
+    # 本轮端口枚举是否失败、原因（快照的 port_enumeration / port_reason 用）。
+    # 只由 get_current_state 的返回值驱动，不许预设成 "ok"——预设成功值会让
+    # "这一轮什么都没读到"在快照里长得跟"一切正常"一样。
+    _snap_enum="ok"
+    _snap_reason=""
+    _snap_vars="unknown"
+    _snap_apply="unknown"
 
     while [ ! -f "$STOP_FLAG" ]; do
         # ---- 运行时目录自愈（每轮，与 Windows 侧同一机制）----
@@ -917,14 +1003,26 @@ run_monitor_loop() {
         if ! get_current_state; then
             log_msg "检测异常：状态探测失败，沿用上一状态"
             CURRENT_STATE="$_last"
+            # 这一轮没读到端口：快照要如实记下，状态页据此显示"无法判断"而不是"没有代理"。
+            _snap_enum="failed"
+            _snap_reason="状态探测失败（详见 monitor.log）"
+        else
+            _snap_enum="ok"
+            _snap_reason=""
         fi
         _st="$CURRENT_STATE"
         if [ "$_st" != "$_last" ]; then
             if [ "$_st" = "$_pending" ]; then _pending_n=$((_pending_n + 1)); else _pending="$_st"; _pending_n=1; fi
             if [ $_pending_n -ge "$STATE_DEBOUNCE_ROUNDS" ]; then
+                _before="$_last"
                 apply_state "$_st" || true
                 _last="$_st"
                 _pending=""; _pending_n=0
+                # 代理地址换了之后，已经开着的程序还连着旧地址，会连不上。
+                # 提醒一句（提示跑在独立进程里，不阻塞这一轮探测）。
+                # 放在 apply_state 之后：变量已经写好，用户看到提示时去重开程序就是对的。
+                # 与 Windows 侧 Register-ProxyStateChange 同一时机、同一判据、同一去重语义。
+                register_proxy_state_change "$_before" "$_st" || true
             fi
         else
             _pending=""; _pending_n=0
@@ -944,6 +1042,7 @@ run_monitor_loop() {
             # （幂等，齐了则零写入）。只核对我们本该持有的那几个，与用户自己的变量无关。
             # on 态先判齐不齐再写，与 apply_state 同一判据；写完要真的核对一遍，
             # 不能只看"我调用过 set_user_env_vars"——它失败时不报错，屏幕上与正常一样。
+            _heal_ok=0
             case "$_last" in
                 on:*)
                     _heal_port="${_last#on:}"
@@ -952,6 +1051,7 @@ run_monitor_loop() {
                             log_msg "变量被人改坏了 -> 已按当前代理端口重新写回"
                         else
                             log_msg "变量自检没能写回（下一轮再试）"
+                            _heal_ok=1
                         fi
                     fi
                     ;;
@@ -964,12 +1064,24 @@ run_monitor_loop() {
                     fi
                     ;;
             esac
+            # 自愈这一轮才有"变量是否与状态一致"的结论；其余轮次如实写 unknown。
+            # 不许拿上一轮的结论顶替——那会把"没算"说成"一致"，与 Windows 侧同一条规矩。
+            if [ "$_heal_ok" = "0" ]; then _snap_vars="yes"; _snap_apply="ok"; else _snap_vars="no"; _snap_apply="failed"; fi
+        else
+            _snap_vars="unknown"; _snap_apply="unknown"
         fi
         # 把本轮的结论写成快照，供状态页只读。
         # 每轮都写、不只在变化时写：只在变化时写会让文件在稳态下永远停在上次翻转的时刻，
         # 状态页据此判"这是很久以前的判断"而退回现场探测——正好把它的价值抵消掉。
         # 失败一律吞掉：写快照是附带，写不出来不能让监控停摆。
-        write_state_snapshot "$_last" "$_last" "$_pending" "$_pending_n" "ok" "" "yes" "ok" "$_round_no" "$$" || true
+        #
+        # 字段必须来自**真实判定**，不许写死常量。曾经这里四个字段全是 "ok"/""/"yes"/"ok"，
+        # prev_state 直接等于 state——即使有人去读，读到的也是假数据：
+        # 状态页会永远显示"一切正常"，而变量可能早就被删光了。
+        # 这与 Windows 侧 runtime.ps1 逐项算出来再写是同一套口径。
+        write_state_snapshot "$_last" "$_prev" "$_pending" "$_pending_n" \
+            "$_snap_enum" "$_snap_reason" "$_snap_vars" "$_snap_apply" "$_round_no" "$$" || true
+        _prev="$_last"
         _round_no=$((_round_no + 1))
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
     done

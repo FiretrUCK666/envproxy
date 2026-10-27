@@ -1364,13 +1364,39 @@ jobs:
           # 并不存在（两端测试里也都 0 处断言）。假承诺比没有承诺更糟：
           # 下一个人会相信已经有人看着了。这里把它变成真的。
           $widthProbe = @('A', ' ', 'a', '~', '0', '©', '°', 'é', 'α', '·', '…', '→', '—', '中', '文', '測', 'あ', '한', 'Ａ', '　')
-          $wWinImpl = [scriptblock]::Create((Get-Content 'win/lib/ops.ps1' -Raw -Encoding UTF8))
-          # 直接算：判据是"码点 > 0x2E80 占两格"，与实现同一规则；再与 mac 的实测比。
+          # **必须从实现里读出阈值，不能在这里手抄一份。**
+          # 原来这里写死 `-gt 0x2E80`，注释还说"与实现同一规则"——
+          # 而那是门禁在跟自己比：把 base.ps1 的阈值改成 0xFFFF（所有中文变 1 格、
+          # 整屏表格歪掉），门禁照样算出"中"=2、照样绿。
+          # 现在从 Get-CharWidth 的真实实现里抽那个边界值；抽不到就判失败
+          # （抽不到说明实现换了形状，这条门禁得跟着改，不能假装通过）。
+          # **必须从实现里读出阈值，不能在这里手抄一份。**
+          # 原来这里写死 `-gt 0x2E80`，注释还说"与实现同一规则"——
+          # 而那是门禁在跟自己比：把 base.ps1 的阈值改成 0xFFFF（所有中文变 1 格、
+          # 整屏表格歪掉），门禁照样算出"中"=2、照样绿。
+          # 做法：先切出 Get-CharWidth 的函数体，再在那一小段里取边界值。
+          # 切不出来就判失败——那是实现换了形状，门禁得跟着改，不能假装通过。
+          $wWinSrc = Get-Content 'win/lib/base.ps1' -Raw -Encoding UTF8
+          $fStart = $wWinSrc.IndexOf('function Get-CharWidth')
+          $wWinBound = $null
+          if ($fStart -ge 0) {
+            $fEnd = $wWinSrc.IndexOf('function ', $fStart + 5)
+            if ($fEnd -lt 0) { $fEnd = [Math]::Min($fStart + 400, $wWinSrc.Length) }
+            $wWinBound = [regex]::Match($wWinSrc.Substring($fStart, $fEnd - $fStart), '-gt\s+(0x[0-9A-Fa-f]+|\d+)')
+          }
+          if (-not $wWinBound -or -not $wWinBound.Success) {
+            Write-Host 'win 侧读不到宽度判据的边界值（Get-CharWidth 形状变了？）——这条门禁需要跟着改'
+            $fail = 1
+          }
+          $winThreshold = 0
+          if ($wWinBound -and $wWinBound.Success) {
+            $rawB = $wWinBound.Groups[1].Value
+            $winThreshold = if ($rawB -match '^0[xX]') { [Convert]::ToInt32($rawB.Substring(2), 16) } else { [int]$rawB }
+          }
           $wWin = @{}
           foreach ($ch in $widthProbe) {
-            $wWin[$ch] = $(if ([int][char]$ch -gt 0x2E80) { 2 } else { 1 })
+            $wWin[$ch] = $(if ([int][char]$ch -gt $winThreshold) { 2 } else { 1 })
           }
-          # mac 的判据：3 字节序列里，首字节 > 0xE2 或（首字节 = 0xE2 且第二字节 >= 0xBA）算两格。
           # 只看首字节是不够的：U+2E80（分界线）与 U+2026（…）/U+2192（→）/U+2014（—）
           # 的 UTF-8 首字节都是 E2，必须再看第二字节才分得开。
           $wMac = @{}
@@ -1498,9 +1524,23 @@ jobs:
           #   (Get-ToolHomeDir)         —— 家目录下那个 .envproxy 里的（prompt-sync.sh 住这里）
           # 最后一条是补上来的：它原来用 Join-Path $env:USERPROFILE ".envproxy" 手拼，
           # 正则抽不到，于是 prompt-sync.sh 在 README 里出现是"人记得写"，不是门禁保证的。
-          $runWin = @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:MonitorDir|LauncherDir|dstDir|epHome)\s+"([^"$]+)"|Join-\s*Path\s+\(Get-ToolHomeDir\)\s+"([^"$]+)"') |
+          # **引号两种都要认。** 曾经只认双引号，于是三处用单引号写的
+          # （launchers、prompt-sync.sh、notify.last）压根抽不到——
+          # 把 notify.last 改名成别的，抽取结果不变、门禁照样绿，
+          # 而 README 里那两处立刻变成假话。这种事"改过一次没被发现"就会再来一次。
+          # 判据用 [""'] 字符类，而不是再补一条正则：
+          # 再补一条等于把"要认哪些写法"又手写一遍，下次多一种写法还是漏。
+          $runWin = @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:MonitorDir|LauncherDir|dstDir|epHome)\s+["'']([^"''$]+)["'']|Join-\s*Path\s+\(Get-ToolHomeDir\)\s+["'']([^"''$]+)["'']') |
                       ForEach-Object { if ($_.Groups[1].Value) { $_.Groups[1].Value } else { $_.Groups[2].Value } })
-          $runMac = @([regex]::Matches($sh, '\$(?:MONITOR_DIR|ENVPROXY_HOME)/([A-Za-z0-9._-]+)"') |
+          # relay.port 是经变量拼的（Join-Path $dir 'relay.port'），上面那两条抽不到。
+          # 补一条通则：**拼在"运行时目录语义的变量"下的带引号文件名**都算。
+          # 不能写成"任何 Join-Path 的文件名"——`Join-Path $ScriptDir "locator.ps1"`
+          # 抽的是项目文件夹里的**源码**，不是运行时产物，混进来会造成误报
+          # （第一次加宽时就这样误报了 locator.ps1）。
+          # 判据用变量名形状而不是逐个点名目录：名字里带 dir/home 的才是"某个位置"。
+          $runWin += @([regex]::Matches($ps, 'Join-\s*Path\s+\$(?:dir|dstDir|stage|backup)\s+["'']([A-Za-z0-9._-]+\.[A-Za-z0-9]+)["'']') |
+                       ForEach-Object { $_.Groups[1].Value })
+          $runMac = @([regex]::Matches($sh, '\$(?:MONITOR_DIR|ENVPROXY_HOME)/["'']?([A-Za-z0-9._-]+)["'']?') |
                       ForEach-Object { $_.Groups[1].Value })
           $runWin = @($runWin | Sort-Object -Unique)
           $runMac = @($runMac | Sort-Object -Unique)
@@ -1510,16 +1550,54 @@ jobs:
             $fail = 1
           }
           if ($runMac.Count -lt 5) { Write-Host ("Mac 运行时文件名只抽到 {0} 个，抽取规则可能失效" -f $runMac.Count); $fail = 1 }
+          # 按小标题切出一节。切不到返回 $null，由调用方判失败。
+          # 用"标题里的关键词"匹配而不是完整标题：两种语言的措辞会改、编号会调，
+          # 而"这一节讲的是运行时文件表"这件事不会变。锚定完整标题等于让门禁
+          # 对一次无害的措辞修改就报警——那种门禁最后会被关掉。
+          # 终止边界用"下一个二级标题"：运行时表都在各自那一节里。
+          function Get-DocSection([string]$Text, [string]$HeadingKeyword) {
+            $m = [regex]::Match($Text, '(?m)^#{3,4}\s+[0-9.]*\s*' + [regex]::Escape($HeadingKeyword))
+            if (-not $m.Success) { return $null }
+            $rest = $Text.Substring($m.Index + $m.Length)
+            $e = [regex]::Match($rest, '(?m)^## ')
+            if ($e.Success) { return $rest.Substring(0, $e.Index) }
+            return $rest
+          }
           $zhDoc = Get-Content 'README.md' -Raw -Encoding UTF8
           $enDoc = Get-Content 'README.en.md' -Raw -Encoding UTF8
-          $missingDoc = @()
-          foreach ($n in $runWin) {
-            if ($zhDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 少了 ' + $n) }
-            if ($enDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 少了 ' + $n) }
+          # **必须按平台分段核对，不能全文匹配。**
+          # 全文匹配的漏洞是实打实的：Windows 那张表里有 notify.last，Mac 那张漏了，
+          # 而全文搜索照样命中，于是"Mac 表少一行"这件事永远查不出来。
+          # 两个平台的文件名清单本来就有交集（monitor.log、state.snapshot 等），
+          # 交集越大，全文匹配越接近完全失效。
+          # 判据：先按各自的小标题把文档切开，再各查各的。
+          # 切不出来（标题被改过）直接判失败——那说明这条门禁又瞎了，必须让人知道。
+          $zhWinSec = Get-DocSection $zhDoc '安装之后，它往哪儿写了东西'
+          $zhMacSec = Get-DocSection $zhDoc '安装后多出哪些东西'
+          $enWinSec = Get-DocSection $enDoc 'Where the installer writes things'
+          $enMacSec = Get-DocSection $enDoc 'What the installer adds'
+          $secOk = $true
+          foreach ($pair in @(
+              @{ n='README.md 第 8 节 Windows 运行时表';    v=$zhWinSec },
+              @{ n='README.md 12.6 节 Mac 运行时表';        v=$zhMacSec },
+              @{ n='README.en.md 第 8 节 Windows 运行时表'; v=$enWinSec },
+              @{ n='README.en.md 12.6 节 Mac 运行时表';     v=$enMacSec })) {
+            if (-not $pair.v) {
+              Write-Host ('切不出「' + $pair.n + '」——标题改过？这条门禁要跟着改，否则它静默失效')
+              $secOk = $false
+            }
           }
-          foreach ($n in $runMac) {
-            if ($zhDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 少了 ' + $n) }
-            if ($enDoc -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 少了 ' + $n) }
+          if (-not $secOk) { $fail = 1 }
+          $missingDoc = @()
+          if ($secOk) {
+            foreach ($n in $runWin) {
+              if ($zhWinSec -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 的 Windows 表少了 ' + $n) }
+              if ($enWinSec -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 的 Windows 表少了 ' + $n) }
+            }
+            foreach ($n in $runMac) {
+              if ($zhMacSec -notmatch [regex]::Escape($n)) { $missingDoc += ('README.md 的 Mac 表少了 ' + $n) }
+              if ($enMacSec -notmatch [regex]::Escape($n)) { $missingDoc += ('README.en.md 的 Mac 表少了 ' + $n) }
+            }
           }
           if ($missingDoc.Count) {
             Write-Host '安装后多出的运行时文件没在文档里交代清楚：'
@@ -1662,14 +1740,48 @@ jobs:
           foreach ($m in [regex]::Matches($ps, 'Key = "(\d)"; Name = "([^"]*)"')) {
             $winMenu[$m.Groups[2].Value] = $m.Groups[1].Value
           }
+          # Mac 的菜单表格式是 '编号|名字|说明|分组|子命令'。
+          # **必须限定在菜单表块内**：原来在整份 ops.sh 上跑，
+          # 把帮助主题表（同样是 '数字|名字|…' 形状）也当菜单抓了进来，
+          # 解析出 14 项、其中 6 项是帮助主题，靠编号恰好不冲突才没误报。
           $macMenu = @{}
-          foreach ($m in [regex]::Matches($sh, "(?m)^\s+'(\d)\|([^|]+)\|")) {
-            $macMenu[$m.Groups[2].Value] = $m.Groups[1].Value
+          $macMenuBlock = [regex]::Match($sh, '(?s)MENU_ITEMS=\((.*?)\n\)')
+          if (-not $macMenuBlock.Success) {
+            Write-Host 'Mac 侧找不到 MENU_ITEMS 菜单表，菜单核对无法进行'
+            $fail = 1
+          } else {
+            foreach ($m in [regex]::Matches($macMenuBlock.Groups[1].Value, "(?m)^\s*'(\d)\|([^|]+)\|")) {
+              $macMenu[$m.Groups[2].Value] = $m.Groups[1].Value
+            }
           }
-          foreach ($name in $macMenu.Keys) {
-            if ($winMenu.ContainsKey($name) -and $winMenu[$name] -ne $macMenu[$name]) {
+          # **双向核对。** 原来只遍历 Mac 的名字、在 Win 里找同名项——
+          # 于是一侧改名就彻底逃逸：Mac 把「停止监控」改成「暂停监控」，
+          # 两边再没有同名项，循环体一次都不执行，门禁照样绿。
+          # 那正是这道门禁最该防的漂移（用户在两台机器上看到两个产品）。
+          # 现在两侧各遍历一次，任何一侧独有的名字都算分叉；
+          # 有意缺项（Mac 没有「高级功能」）走下面的显式白名单，不靠"恰好同名"躲过去。
+          # Mac 侧编号 5 为空（那边没有「高级功能」），所以这个项名只在 Win 侧出现——那是设计。
+          # 白名单写「哪一侧允许独有」，方向必须对：反过来写会让真正的漏同步被放行。
+          $winOnlyAllowed = @('高级功能')
+          $macOnlyAllowed = @()
+           = @()
+              if ($macOnlyAllowed -notcontains $name) {
+                Write-Host ("菜单项「{0}」只在 Mac 侧存在（编号 {1}）——改名了？还是漏了同步？" -f $name, $macMenu[$name])
+                $fail = 1
+              }
+              continue
+            }
+            if ($winMenu[$name] -ne $macMenu[$name]) {
               Write-Host ("菜单项「{0}」编号不同：Win {1} / Mac {2}" -f $name, $winMenu[$name], $macMenu[$name])
               $fail = 1
+            }
+          }
+          foreach ($name in $winMenu.Keys) {
+            if (-not $macMenu.ContainsKey($name)) {
+              if ($winOnlyAllowed -notcontains $name) {
+                Write-Host ("菜单项「{0}」只在 Win 侧存在（编号 {1}）——改名了？还是漏了同步？" -f $name, $winMenu[$name])
+                $fail = 1
+              }
             }
           }
           if ($winMenu['退出'] -ne '0') { Write-Host 'Win 侧退出项编号必须为 0'; $fail = 1 }
@@ -2005,6 +2117,68 @@ jobs:
                 Write-Host ("{0} 有标记没在行里居中：中心 {1}，最近的行中心 {2}" -f $f.Name, [math]::Round($mid, 1), $nearest)
                 $fail = 1
               }
+            }
+          }
+          # SVG 里画的"菜单项"必须与代码里的菜单表一致。
+          #
+          # 为什么需要这条：配图是手写的 SVG，菜单表是代码里的数组，两者没有任何
+          # 机械联系。改菜单（改名、加一项、调编号）时图不会跟着变，
+          # 而屏幕上一点异常都没有——图只是安静地画着旧菜单，读者照着敲就会错。
+          # 之前的做法是人肉核对，核对过一轮就再也不核了。
+          #
+          # 判据不写死任何具体菜单项：从 base 层的菜单表取权威清单，
+          # 再用它去核图里所有"编号 + 名字"形态的文字。菜单改了，这条自动跟着改。
+          $menuSrc = Get-Content 'win/lib/ops.ps1' -Raw
+          $menuBlock = [regex]::Match($menuSrc, '\$MenuItems\s*=\s*@\((?<b>[\s\S]*?)\r?\n\)')
+          if (-not $menuBlock.Success) {
+            Write-Host 'SVG 事实核验：取不到 $MenuItems 菜单表，无法核对'
+            $fail = 1
+          } else {
+            # 菜单表里每一项都是 @{ Key = "1"; Name = "安装 / 修复"; ... }
+            $codeItems = @{}
+            foreach ($m in [regex]::Matches($menuBlock.Groups['b'].Value, 'Key\s*=\s*"(?<k>[^"]+)"\s*;\s*Name\s*=\s*"(?<n>[^"]+)"')) {
+              $codeItems[$m.Groups['k'].Value] = $m.Groups['n'].Value
+            }
+            if ($codeItems.Count -eq 0) {
+              Write-Host 'SVG 事实核验：菜单表解析出 0 项，判据失效'
+              $fail = 1
+            }
+            foreach ($f in @(Get-ChildItem 'assets/readme' -Filter 'buttons*.svg' -File)) {
+              $isEn = $f.Name -like '*.en.svg'
+              $svgText = Get-Content $f.FullName -Raw
+              foreach ($m in [regex]::Matches($svgText, '>(?<t>[0-9]\s+[^<]+)<')) {
+                $label = $m.Groups['t'].Value.Trim()
+                $num = ($label -split '\s+')[0]
+                if (-not $codeItems.ContainsKey($num)) {
+                  Write-Host ("{0} 画了编号 {1}（{2}），但菜单表里没有这个编号" -f $f.Name, $num, $label)
+                  $fail = 1
+                  continue
+                }
+                # 英文图不比对中文名字（它是翻译），只比对编号存在与项数
+                if (-not $isEn) {
+                  $want = $codeItems[$num]
+                  if ($label -notlike ("{0} {1}" -f $num, $want)) {
+                    Write-Host ("{0} 写的是「{1}」，菜单表是「{2} {3}」" -f $f.Name, $label, $num, $want)
+                    $fail = 1
+                  }
+                }
+              }
+              # 中英两张按钮图的项数必须相同
+              if ($isEn) {
+                $zhCount = 0
+                $zhFile = $f.FullName -replace '\.en\.svg$', '.svg'
+                if (Test-Path -LiteralPath $zhFile) {
+                  $zhCount = ([regex]::Matches((Get-Content $zhFile -Raw), '>[0-9]\s+[^<]+<')).Count
+                }
+                $enCount = ([regex]::Matches($svgText, '>[0-9]\s+[^<]+<')).Count
+                if ($zhCount -ne $enCount) {
+                  Write-Host ("{0} 与中文版项数不一致（{1} vs {2}）" -f $f.Name, $enCount, $zhCount)
+                  $fail = 1
+                }
+              }
+            }
+            if ($fail -eq 0) {
+              Write-Host ("SVG 事实核验通过（菜单 {0} 项，与按钮图一致）" -f $codeItems.Count)
             }
           }
           if ($fail) { exit 1 }

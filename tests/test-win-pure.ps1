@@ -1464,6 +1464,377 @@ try {
 }
 
 # ------------------------------------------------------------------------------
+# [7d] off 态不许每轮都做全端口扫描
+# ------------------------------------------------------------------------------
+# "第一次全扫要不要做"曾经用"候选集签名是不是空"来回答。在一台从头到尾没有代理的
+# 机器上，候选集恒空、签名恒为空串、与初值相同 -> 签名永不更新 -> 那个条件恒为真
+# -> **每一轮都全扫**。实测 8 轮做 8 次全扫、每次约 2.8 秒，而 off 态轮间隔 3 秒，
+# 占空比接近 50%——机器上什么都没发生，监控却在满负荷跑。
+# 现在改用一次性标记 EverFullScanned：做过就置位、永不回退。
+# 这条用例钉住"20 轮里全扫次数是 3（第 1、10、20 轮），不是 20"。
+$script:SavedFind = ${function:Find-CandidatePorts}
+$script:SavedRealConn = ${function:Test-RealConnectivity}
+try {
+    $script:FullScanCalls = 0
+    function Find-CandidatePorts([bool]$FullScan = $true) {
+        if ($FullScan) { $script:FullScanCalls++ }
+        $script:PortEnumerationFailed = $false
+        return @()
+    }
+    function Test-RealConnectivity([int]$Port) { return $false }
+    $script:CachedPort = $null
+    $script:LastAlivePort = $null
+    $script:LastSeenSet = ""
+    $script:Round = 0
+    $script:NeedDeepScan = $false
+    $script:EverFullScanned = $false
+    $script:NodeState = @{}
+    foreach ($__i in 1..20) { $null = Get-CurrentState }
+    # 第 1 轮（首次全扫）、第 10 轮、第 20 轮 = 3 次。允许小幅差异是因为
+    # 轮次取模与"首次"可能落在同一轮上，但绝不允许回到"每轮一次"。
+    Assert-Eq '无代理时 20 轮里只做 3 次全扫（不是每轮）' $true ($script:FullScanCalls -le 3)
+    Assert-Eq '无代理时确实做过首次全扫' $true ($script:EverFullScanned)
+} finally {
+    Set-Item -Path Function:Find-CandidatePorts -Value $script:SavedFind
+    Set-Item -Path Function:Test-RealConnectivity -Value $script:SavedRealConn
+    Remove-Variable -Name SavedFind, SavedRealConn -Scope Script -ErrorAction SilentlyContinue
+    $script:CachedPort = $null
+    $script:NodeState = @{}
+    $script:EverFullScanned = $false
+}
+
+# ------------------------------------------------------------------------------
+# [7e] "按进程名提速"必须真的会执行
+# ------------------------------------------------------------------------------
+# 这段提速依赖 PID，而默认取值路径（进程内的 GetActiveTcpListeners）结构上不提供 PID。
+# 曾经用"这一路有没有 PID"当开关，于是正常机器上它恒为假、整段从未执行过。
+# 更隐蔽的是：改成"单独取一次 PID 表"之后，循环里把变量名写成了 $pid——
+# 那是 PowerShell 的**只读自动变量**，赋值直接抛错，而整段外面包着 try/catch，
+# 异常被静默吞掉，于是"看起来实现了、实际还是不生效"。
+# 这条用例钉住两件事：PID 表能取到、且按进程名能认出对应的端口。
+$script:SavedPidMap = ${function:Get-ListeningPortPidMap}
+$script:SavedListeners = ${function:Get-ListeningTcpConnections}
+$script:SavedHttpProxy = ${function:Test-HttpProxy}
+try {
+    # 造一个"端口 59999 由 monocloud 进程监听"的世界，不依赖本机真实进程
+    $selfPid = $PID
+    function Get-ListeningTcpConnections {
+        @([pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = 59999; OwningProcess = 0 })
+    }
+    function Get-ListeningPortPidMap {
+        $m = @{}; $m[59999] = $selfPid; return $m
+    }
+    function Test-HttpProxy([int]$Port) { return ($Port -eq 59999) }
+    # 把当前进程"改名"成 monocloud 不可行，改用"进程名特征含当前进程名"来验证链路：
+    # 真正要证明的是"PID 表 -> 进程名 -> 匹配 -> 入候选"这条链没断，而不是某个具体品牌。
+    $selfName = (Get-Process -Id $selfPid -ErrorAction SilentlyContinue).ProcessName
+    if ($selfName) {
+        $savedPatterns = $ProxyProcessPatterns
+        $savedKnown = $KnownProxyPorts
+        try {
+            $ProxyProcessPatterns = @($selfName.ToLowerInvariant())
+            $KnownProxyPorts = @()
+            $hit = @(Find-CandidatePorts -FullScan:$false)
+            Assert-Eq '按进程名提速：PID 表取得到并命中端口' $true ($hit -contains 59999)
+        } finally {
+            $ProxyProcessPatterns = $savedPatterns
+            $KnownProxyPorts = $savedKnown
+        }
+    } else {
+        Write-Host '  SKIP 按进程名提速（拿不到当前进程名）'
+    }
+} finally {
+    Set-Item -Path Function:Get-ListeningPortPidMap -Value $script:SavedPidMap
+    Set-Item -Path Function:Get-ListeningTcpConnections -Value $script:SavedListeners
+    Set-Item -Path Function:Test-HttpProxy -Value $script:SavedHttpProxy
+    Remove-Variable -Name SavedPidMap, SavedListeners, SavedHttpProxy -Scope Script -ErrorAction SilentlyContinue
+}
+
+# ------------------------------------------------------------------------------
+# [7f] "读哪个变量当代理源"只能有一个答案
+# ------------------------------------------------------------------------------
+# 曾经分叉过：Get-EnvProxyValue 取 $ProxyVarNames[0]（HTTP_PROXY），
+# 而生成启动脚本那一处写死 HTTPS_PROXY。同一个程序对同一个问题给出两个答案，
+# 谁都不报错——将来只改其中一处，另一处就会静默读到别的值。
+# 现在两处都从 $PrimaryProxyVarName 取。这条用例钉住：
+#   ① 它确实是地址类变量之一；
+#   ② 生成出来的启动脚本读的就是它（而不是别写一个）；
+#   ③ 改这个常量，脚本跟着改——证明是插值而非抄写。
+$__genBody = {
+    param([string]$Target)
+    $b = New-ProxyLauncherBody $Target 'C:\Test'
+    $bytes = [Convert]::FromBase64String($b)
+    $ms = New-Object IO.MemoryStream(,$bytes)
+    $gz = New-Object IO.Compression.GZipStream($ms, [IO.Compression.CompressionMode]::Decompress)
+    (New-Object IO.StreamReader($gz)).ReadToEnd()
+}
+Assert-Eq '主代理变量是地址类之一' $true ($ProxyAddrVarNames -contains $PrimaryProxyVarName)
+$__body = & $__genBody 'C:\Test\app.exe'
+# 匹配 ".<变量名>" 这个形态：它出现在"从注册表读当前代理值"的那一处
+# （`(gp '...').HTTP_PROXY` 或 `(gp '...').ALL_PROXY`）。
+# 不锚定后面的分号/括号：启动脚本加了固定入口的探测之后，那里跟的是 `}`
+# 而不是 `;`——锚死标点会让这条用例在实现变化时假红，而它要测的是
+# "读的是哪个变量"，不是"那个字符是什么"。
+Assert-Eq '启动脚本读的是主代理变量（插值，不是另写一个）' $true `
+    ($__body -match ('\.' + [regex]::Escape($PrimaryProxyVarName) + '(?![A-Za-z_])'))
+$__savedPrimary = $PrimaryProxyVarName
+$__savedSubKey = $UserEnvSubKey
+try {
+    $PrimaryProxyVarName = 'ALL_PROXY'
+    $UserEnvSubKey = 'Software\EnvProxy\__probe'
+    $__body2 = & $__genBody 'C:\Test\app.exe'
+    Assert-Eq '改主代理变量，脚本跟着改' $true ($__body2 -match '\.ALL_PROXY(?![A-Za-z_])')
+    Assert-Eq '改注册表落点，脚本跟着改' $true ($__body2 -match [regex]::Escape('HKCU:\Software\EnvProxy\__probe'))
+} finally {
+    $PrimaryProxyVarName = $__savedPrimary
+    $UserEnvSubKey = $__savedSubKey
+}
+
+# ------------------------------------------------------------------------------
+# [7g] 固定入口（中继）：能起、能转发、能降级
+# ------------------------------------------------------------------------------
+# 它给「走代理的快捷方式」一个永不改变的地址，所以三件事必须成立：
+#   ① 起得来，并把实际端口写进记录文件（启动器靠它找过来）；
+#   ② 真的能转发（HTTP 与 HTTPS 两种形态都要过——只做 CONNECT 时纯 HTTP 全挂）；
+#   ③ 上游不在时要**快速明确失败**，而不是让客户端挂在那儿。
+# 第三条尤其重要：中继活着但上游死了，如果中继不吭声，用户看到的是"程序卡住"，
+# 比"连不上"更难查。
+if ((Test-RelayType)) {
+    $__relayPort = 0
+    $__relayFile = ''
+    try {
+        $__relayFile = Get-RelayPortFile
+        $__relayStarted = Start-Relay
+        Assert-Eq '中继起得来' $true $__relayStarted
+        if ($__relayStarted) {
+            $__relayPort = $script:RelayPort
+            Assert-Eq '中继监听在一个合法端口上' $true ($__relayPort -gt 0 -and $__relayPort -le 65535)
+            # 记录文件必须写出来：否则启动器读不到端口，会一直退回直读注册表，
+            # "永不失效的地址"这个能力等于没做。
+            if ($__relayFile) {
+                Assert-Eq '端口记录文件已写出' $true (Test-Item $__relayFile)
+                Assert-Eq '记录内容就是实际端口' ([string]$__relayPort) ((Read-Text $__relayFile).Trim())
+            }
+            # 上游设成一个确定没人监听的口：中继必须在有限时间内给出失败，
+            # 不许无限等待。判据用"能连上中继"+"很快收到回应"两件事。
+            [EnvProxyRelay]::SetUpstream(1)
+            $__sw = [Diagnostics.Stopwatch]::StartNew()
+            $__gotAnswer = $false
+            try {
+                $__c = New-Object System.Net.Sockets.TcpClient
+                $__c.Connect('127.0.0.1', $__relayPort)
+                $__s = $__c.GetStream()
+                $__s.ReadTimeout = 6000
+                $__req = [System.Text.Encoding]::ASCII.GetBytes("CONNECT example.com:443 HTTP/1.1`r`nHost: example.com:443`r`n`r`n")
+                $__s.Write($__req, 0, $__req.Length)
+                $__s.Flush()
+                $__buf = New-Object byte[] 256
+                $__n = $__s.Read($__buf, 0, 256)
+                $__gotAnswer = ($__n -gt 0)
+                if ($__gotAnswer) {
+                    $__resp = [System.Text.Encoding]::ASCII.GetString($__buf, 0, $__n)
+                    Assert-Eq '上游不可用时回的是明确的失败状态码（不是 200）' $false ($__resp -match '^HTTP/1\.[01] 200')
+                }
+                $__c.Close()
+            } catch { $__gotAnswer = $false }
+            Assert-Eq '上游不可用时也会给客户端一个明确答复' $true $__gotAnswer
+            Assert-Eq '失败答复不超过 5 秒' $true ($__sw.ElapsedMilliseconds -lt 5000)
+            # 上游没了就清空：不留下一个指向死端口的静态字段，后面的用例会读它。
+            [EnvProxyRelay]::SetUpstream(0)
+        }
+    } finally {
+        Stop-Relay
+        # 记录文件必须随停止消失：留着它，启动器会去连一个没人听的口，
+        # 白等一次连接超时之后才降级。
+        if ($__relayFile) {
+            Assert-Eq '停掉中继后端口记录被清掉' $false (Test-Item $__relayFile)
+        }
+    }
+} else {
+    Write-Host '  SKIP 固定入口（本机编译不出中继类型）'
+}
+
+# ------------------------------------------------------------------------------
+# [7h] 中继状态必须能被**另一个进程**读到
+# ------------------------------------------------------------------------------
+# 状态页与「查看中继」那一屏都运行在独立进程里，而中继跑在监控进程里。
+# 曾经 Get-RelayStatus 读的是 $script:RelayInstance——那只存在于起中继的那个进程。
+# 结果是：中继明明在跑，界面永远显示"没在工作"，而且看起来一切正常。
+# 这个用例钉住"判据跨进程有效"：本进程起中继 -> 用子进程去读 -> 必须读得到。
+# 同时钉住"上游端口也读得准"，因为那是显示"当前转发到哪儿"的唯一来源。
+if (Test-RelayType) {
+    $__rp = 0
+    try {
+        $null = Start-Relay
+        if ($script:RelayPort -gt 0) {
+            $__rp = $script:RelayPort
+            [EnvProxyRelay]::SetUpstream(7078)
+            Start-Sleep -Milliseconds 150
+            # 子进程是完全独立的一份 PowerShell：它没有任何进程内状态，
+            # 只能靠 relay.port 文件 + 状态探针。这正是状态页所处的环境。
+            $probe = @"
+`$ErrorActionPreference='Stop'
+`$ScriptDir='$ScriptDir'
+foreach (`$n in @('base','probe','env','runtime','relay')) { . (Join-Path (Join-Path `$ScriptDir 'lib') "`$n.ps1") }
+`$s = Get-RelayStatus
+Write-Output ("{0}|{1}|{2}" -f `$s.Running, `$s.Port, `$s.Upstream)
+"@
+            $f = Join-Path ([System.IO.Path]::GetTempPath()) ("relayprobe_" + [guid]::NewGuid().ToString('N') + ".ps1")
+            try {
+                [System.IO.File]::WriteAllText($f, $probe, (New-Object System.Text.UTF8Encoding($true)))
+                $out = @(& (Get-Command pwsh -ErrorAction SilentlyContinue).Source -NoProfile -File $f 2>$null)
+                $line = @($out | Where-Object { $_ -match '^\w+\|\d+\|\d+$' }) | Select-Object -First 1
+                if ($line) {
+                    $parts = $line -split '\|'
+                    Assert-Eq '另一个进程读得到中继在跑' 'True' $parts[0]
+                    Assert-Eq '另一个进程读得到中继端口' ([string]$__rp) $parts[1]
+                    Assert-Eq '另一个进程读得到上游端口' '7078' $parts[2]
+                } else {
+                    Write-Host '  SKIP 跨进程中继判据（子进程没跑起来）'
+                }
+            } finally {
+                if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    } finally {
+        Stop-Relay
+    }
+} else {
+    Write-Host '  SKIP 跨进程中继判据（本机编译不出中继类型）'
+}
+
+# ------------------------------------------------------------------------------
+# [7i] 状态判决在真实使用场景里的整条路径
+# ------------------------------------------------------------------------------
+# 上面那些用例各测一个判据，这一条测**组合起来的实际行为**。
+# 起因是一次真实故障：翻墙软件关掉后，状态页十几分钟一直显示"已开启"、
+# 同时又说"端口已不在"、加一句"正在确认"。三句话互相矛盾，而每一处判据单看都对。
+# 根因是快扫返回空时一律返回 unknown——unknown 不计进去抖，
+# 于是永远凑不齐"连续两轮确认"，状态永远翻不过来。
+#
+# 单测判据抓不到这一类问题，因为它们只在**组合**里出现。
+# 所以这里直接驱动真实的 Get-CurrentState，只替换探测层（那是唯一的外部依赖）。
+# 每个场景都对应一个用户真实会遇到的情形：
+#   A 正常开着 / B 关掉 / C 换成表外的端口 / D 两个软件同时开
+#   E 首次启动 / F 从旧端口换到新端口 / G 端口被非代理程序占着
+#
+# 判据写成"必须出现某个结论"而不是"第 N 轮必须是某值"：
+# 轮次节流（每 10 轮一次全扫）是内部实现，钉死它会让人一调参就假红。
+# 唯一额外约束是"不许永远判不出来"——那正是这次故障的形态。
+function Invoke-StateScenario {
+    param(
+        [int[]]$Listening,      # 本机在监听的端口（= 候选集的全扫结果）
+        [int[]]$QuickVisible,   # 快扫看得见的（常见端口表 + 进程名认得出的）
+        [int[]]$NotProxy,       # 在监听但不是代理（握手不过）
+        [bool]$NodeAlive,
+        [int]$Rounds,
+        [bool]$EverFullScanned = $true,
+        [int]$InitPort = 0
+    )
+    $script:CachedPort = $null
+    $script:LastAlivePort = $null
+    $script:LastSeenSet = ""
+    if ($InitPort -gt 0) {
+        $script:CachedPort = $InitPort
+        $script:LastAlivePort = $InitPort
+        $script:LastSeenSet = [string]$InitPort
+    }
+    $script:Round = 100
+    $script:NeedDeepScan = $false
+    $script:EverFullScanned = $EverFullScanned
+    $script:PortEnumerationFailed = $false
+    $__out = New-Object System.Collections.ArrayList
+    for ($k = 0; $k -lt $Rounds; $k++) {
+        # 每一轮都重新定义桩：真实实现会改这些函数之外的状态，桩必须无状态。
+        $__l = $Listening; $__q = $QuickVisible; $__np = $NotProxy; $__alive = $NodeAlive
+        function Find-CandidatePorts {
+            param([bool]$FullScan = $true)
+            $script:PortEnumerationFailed = $false
+            if ($FullScan) { return $__l }
+            return $__q
+        }
+        function Test-PortListening {
+            param([int]$Port)
+            if ($__l -contains $Port) { return "listening" }
+            return "absent"
+        }
+        function Test-HttpProxy {
+            param([int]$Port)
+            if ($__np -contains $Port) { return $false }
+            return $__alive
+        }
+        function Test-NodeAlive { param([int]$Port) return $__alive }
+        function Confirm-CandidatePort {
+            param($Candidates, $Preferred)
+            foreach ($x in @($Candidates)) {
+                if (Test-HttpProxy ([int]$x)) { return [int]$x }
+            }
+            return $null
+        }
+        [void]$__out.Add((Get-CurrentState))
+    }
+    return $__out.ToArray()
+}
+
+# A：正常开着。第一轮就该确认（用户不该等）。
+$__a = @(Invoke-StateScenario -Listening @(7078) -QuickVisible @(7078) -NodeAlive $true -Rounds 3)
+Assert-Eq "场景A 正常开着：第一轮就判 on" "on:7078" $__a[0]
+Assert-Eq "场景A 正常开着：三轮都稳定" "on:7078 on:7078 on:7078" ($__a -join " ")
+
+# B：翻墙软件关掉。这是那次故障的场景——必须能翻到 off。
+$__b = @(Invoke-StateScenario -Listening @() -QuickVisible @() -NodeAlive $false -Rounds 3)
+Assert-Eq "场景B 关掉：能判 off（曾经卡死在 on）" "off off off" ($__b -join " ")
+
+# C：换成表外端口。快扫看不见，全扫才看得见——必须最终发现，且不许永远判不出来。
+$__c = @(Invoke-StateScenario -Listening @(7890) -QuickVisible @() -NodeAlive $true -Rounds 12)
+
+# C 的断言就是"最终必须发现"：发现不了，这 12 轮全是 off，
+# 那正是"永远判不出来"的形态，一条断言足够。
+Assert-Eq "场景C 表外端口：最终必须发现（全 off 就是找不回来）" $true ([bool](@($__c | Where-Object { $_ -eq "on:7890" }).Count))
+
+# D：两个翻墙软件同时开。判一个就行（变量只能指向一个），不许判 off。
+$__d = @(Invoke-StateScenario -Listening @(7078,7890) -QuickVisible @(7078,7890) -NodeAlive $true -Rounds 3)
+Assert-Eq "场景D 两个同时开：判出其中一个" $true ([bool](@($__d | Where-Object { $_ -like "on:*" }).Count))
+
+# E：首次启动就遇到表外端口（还没做过任何全扫）。首轮必须全扫，否则用户要等 30 秒。
+$__e = @(Invoke-StateScenario -Listening @(7890) -QuickVisible @() -NodeAlive $true -Rounds 2 -EverFullScanned $false)
+Assert-Eq "场景E 首启就是表外端口：第一轮全扫直接发现" "on:7890" $__e[0]
+
+# F：从 7078 换到 7890（改端口重开软件）。旧端口没了必须尽快跟到新端口。
+$__f = @(Invoke-StateScenario -Listening @(7890) -QuickVisible @() -NodeAlive $true -Rounds 6 -InitPort 7078)
+Assert-Eq "场景F 换端口：最终跟到新端口" $true ([bool](@($__f | Where-Object { $_ -eq "on:7890" }).Count))
+
+# G：端口被非代理程序占着（开发服务器常占 8080/3000）。
+# 握手不过就绝不能判 on —— 否则用户开个本地服务就被误注入代理。
+# 注意这里测的是"上层会不会把握手失败的端口判成 on"，握手本身由
+# Test-ConnectResponse 的纯函数用例覆盖（见下面的 [7j]，那个才打到生产代码）。
+# 桩必须真的返回 false，否则这条就成了自己测自己。
+$__g = @(Invoke-StateScenario -Listening @(8080) -QuickVisible @(8080) -NotProxy @(8080) -NodeAlive $true -Rounds 3)
+Assert-Eq "场景G 非代理占端口：不许判 on" "off off off" ($__g -join " ")
+# ------------------------------------------------------------------------------
+# [7j] 握手判定：什么才算"这是个代理端口"
+# ------------------------------------------------------------------------------
+# 这是区分"代理端口"与"其他服务端口"的唯一判据，不依赖进程名/端口号猜测。
+# 判错两个方向都致命：把开发服务器当成代理 -> 注入死代理、终端全断；
+# 把真代理漏掉 -> 用户以为工具坏了。
+# 纯函数，喂字符串就能测，不必真连网络。
+Assert-Eq "握手：标准 200 算代理" $true (Test-ConnectResponse "HTTP/1.1 200 Connection established`r`n`r`n")
+Assert-Eq "握手：1.0 的 200 也算" $true (Test-ConnectResponse "HTTP/1.0 200 OK`r`n`r`n")
+Assert-Eq "握手：前面有空白也算" $true (Test-ConnectResponse "`r`nHTTP/1.1 200 OK")
+Assert-Eq "握手：404 不算" $false (Test-ConnectResponse "HTTP/1.1 404 Not Found`r`n`r`n")
+Assert-Eq "握手：403 不算" $false (Test-ConnectResponse "HTTP/1.1 403 Forbidden`r`n`r`n")
+Assert-Eq "握手：500 不算" $false (Test-ConnectResponse "HTTP/1.1 500 Internal Server Error")
+Assert-Eq "握手：2000 不算（只认 200 本身，不许前缀匹配放过）" $false (Test-ConnectResponse "HTTP/1.1 2000 OK")
+Assert-Eq "握手：空应答不算" $false (Test-ConnectResponse "")
+Assert-Eq "握手：非 HTTP 应答不算（不是 HTTP 服务）" $false (Test-ConnectResponse "SSH-2.0-OpenSSH_8.9")
+Assert-Eq "握手：HTTP/2 不算（CONNECT 走 1.x，2 的语义不同）" $false (Test-ConnectResponse "HTTP/2 200")
+
+# 收尾：把桩换回真实实现，后面的用例不该被这些桩影响。
+$__probeLib = Get-Content (Join-Path $ScriptDir "lib\probe.ps1") -Raw -Encoding UTF8
+. ([scriptblock]::Create($__probeLib))
+
+
+# ------------------------------------------------------------------------------
 # [8c] 资产解析契约：同一批应答，两侧必须得出同一个结论
 # ------------------------------------------------------------------------------
 # 用例放在 tests/asset-cases.txt：名字、正文种类、编号、校验值、失败原因、正文。
@@ -1630,12 +2001,15 @@ Assert-Eq '双条件：更多次、更久当然判断' $true (Test-NodeVerdict (
 # 决定间隔的话，节点一直死时计数会无界增长、间隔永远钉在快速档（实测 2.5 倍流量）。
 $tNow = Get-MonotonicSeconds
 $thr = $NodeFailThreshold
-Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr -1.0 $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 $thr -1.0 $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：稳定态用稳定间隔' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr $null $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：有失败未达阈值时加密' $NodeFastSec (Get-NodeProbeInterval 1 $thr $null $tNow $NodeCheckThrottleSec $NodeFastSec)
 Assert-Eq '间隔：刚下完结论时加密' $NodeFastSec (Get-NodeProbeInterval 0 $thr ($tNow + 1) $tNow $NodeCheckThrottleSec $NodeFastSec)
 Assert-Eq '间隔：加密窗口过了就回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr ($tNow + -1) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：失败已达阈值（结论已定）回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval $thr $thr (-1.0) $tNow $NodeCheckThrottleSec $NodeFastSec)
-Assert-Eq '间隔：失败远超阈值也仍是稳定档（计数不会让间隔永远快下去）' $NodeCheckThrottleSec (Get-NodeProbeInterval 999 $thr (-1.0) $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败已达阈值（结论已定）回到稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval $thr $thr $null $tNow $NodeCheckThrottleSec $NodeFastSec)
+Assert-Eq '间隔：失败远超阈值也仍是稳定档（计数不会让间隔永远快下去）' $NodeCheckThrottleSec (Get-NodeProbeInterval 999 $thr $null $tNow $NodeCheckThrottleSec $NodeFastSec)
+# 时钟为负时，"现在 < 哨兵" 曾在每个负数时刻都成立，把间隔永久钉在快档。
+# 哨兵改 $null 之后，负时钟下也应该拿到稳定间隔。
+Assert-Eq '间隔：时钟为负且没开过加密窗口，仍是稳定档' $NodeCheckThrottleSec (Get-NodeProbeInterval 0 $thr $null (-4000.0) $NodeCheckThrottleSec $NodeFastSec)
 
 # 常量自身的形状：加密必须比稳定快，否则"加密"没有意义；判据时长必须是可解释的小数秒。
 if ($NodeFastSec -lt $NodeCheckThrottleSec) { Write-Host '  ok   加密间隔确实比稳定态快' } else { Write-Host '  FAIL 加密间隔不比稳定态快，加密没有意义'; $script:fails++ }
@@ -1661,6 +2035,44 @@ $slot.FailCount = 1
 $span = ((Get-MonotonicSeconds) - $script:NodeState['7078'].FirstFailAt)
 Assert-Eq '闲置太久的旧失败起点被丢弃（跨度从 0 重算，不是 600 秒）' $true ($span -lt 60)
 Assert-Eq '闲置后失败计数从 1 重新算' 1 $script:NodeState['7078'].FailCount
+
+# 单调钟为负时仍然能判"断"。
+#
+# 这是 PowerShel 5.1 上的真实故障，不是假想：那边没有 TickCount64，退到 Int32 的
+# TickCount，而它是**有符号**的——连续开机满 24.86 天就变负。原来用 -1.0 当"从未探过"
+# 的哨兵、又用 -lt 0 判断它，两者在负值区间无法区分：每轮都被当成"没探过"，
+# 节流恒生效、失败计数每轮清零、跨度恒为 0 -> 永不判"断"。
+# 后果是代理早已死亡、变量永远指向死端口，终端全部 ECONNREFUSED。
+# 该用例把时钟推到负值区间再推进，钉住"照样 3 次就判死"。
+# 判据全部从常量推导，不写字面量——以后调阈值不该让它误报红。
+$__monoSaved = (Get-Item -Path Function:Get-MonotonicSeconds).ScriptBlock
+$__trcSaved2 = (Get-Item -Path Function:Test-RealConnectivity).ScriptBlock
+$script:fakeNow = 0.0
+try {
+    ${function:Get-MonotonicSeconds} = { return $script:fakeNow }
+    ${function:Test-RealConnectivity} = { param([int]$p) return $false }
+    $script:NodeState = @{}
+    $script:fakeNow = -5000.0
+    $script:NodeState['7078'] = @{ LastCheck = $null; Alive = $true; FailCount = 0
+                                   FirstFailAt = $null; FastUntil = $null }
+    $verdictRound = 0
+    for ($i = 1; $i -le ($NodeFailThreshold + 3); $i++) {
+        # 每轮推进比稳定间隔多一点，保证节流不会把这次探测挡掉
+        $script:fakeNow = $script:fakeNow + ($NodeCheckThrottleSec + 1)
+        $alive = Test-NodeAlive 7078
+        if (-not $alive -and $verdictRound -eq 0) { $verdictRound = $i }
+    }
+    Assert-Eq '时钟为负时仍然判得出断（不是永远 True）' $false (Test-NodeAlive 7078)
+    # 判死发生在"次数够"的那一刻；时长条件也在同一轮满足（每轮推进 > dwell）。
+    # 断言它确实在循环内发生过，而不是一直没判。
+    Assert-Eq '时钟为负时循环内就判出了断' $true ($verdictRound -gt 0)
+    Assert-Eq '时钟为负时判死不晚于阈值轮次' $true ($verdictRound -le $NodeFailThreshold)
+} finally {
+    ${function:Get-MonotonicSeconds} = $__monoSaved
+    ${function:Test-RealConnectivity} = $__trcSaved2
+    $script:fakeNow = 0.0
+    $script:NodeState = @{}
+}
 
 # 加密观察窗只在**结论翻转**时开。若每次成功都重开，窗口永远不结束，稳态间隔就永远
 # 走不到——实测会退化成每 5-6 秒一探，流量变成承诺值的 3 倍。钉住这个闭环：
@@ -2527,6 +2939,85 @@ Assert-Eq '渲染路径：正常态不含「项要注意」' $false ([bool](@($l
 
 $badLines = @(Format-StatusLines $probeSt)
 Assert-Eq '渲染路径：异常态报出注意项' $true ([bool](@($badLines | Where-Object { $_ -match '\d+ 项要注意' }).Count))
+
+# ------------------------------------------------------------------------------
+# 两版状态页必须说同样的话（真比对，不是各自测各的）
+# ------------------------------------------------------------------------------
+# 上面那些断言只验 Format-StatusLines 自己，从未把两版放在一起看，
+# 于是"注释声称自检会比对两版"这句话长期是假的，而两版真的分叉了：
+# 静态页有「上次更新」「系统代理」两段带'怎么办'的说明，实时帧完全没有——
+# 同一份状态，按回车看 8 行、等它刷新看 6 行，缺的正好是行动指引。
+# 用户报"信息对不上"时，查的人会以为是缓存问题，实际是两份代码。
+#
+# 判据：同一份状态喂给两版，**抠掉颜色与排版差异后，两版的"内容行"必须一致**。
+# 排版允许不同（实时帧有边框、有刷新提示；静态页没有），内容不允许。
+# 这一条不依赖行号、不写死具体句子——将来加行，两版都得加，否则这里红。
+$__cmpSt = [ordered]@{
+    Monitor = [pscustomobject]@{ ProcessId = 4321 }
+    StopIntent = $false; NeverInstalled = $false; AutoRunOk = $true
+    Port = 7078; PortUnknown = $false
+    ProxyValue = 'http://127.0.0.1:7078'; ProxyAlive = $true
+    TermSync = $null
+    SysProxy = [pscustomobject]@{ State = 'residual'; Server = '127.0.0.1:9999' }
+    UpdateInProgress = $true
+    VarsMatch = 'no'; ApplyResult = 'failed'
+}
+# 只保留"内容"：去掉颜色、去掉纯装饰（分隔线、刷新提示、空行）。
+function __cmpContent([string[]]$Lines) {
+    $keep = @()
+    foreach ($ln in $Lines) {
+        $t = (Remove-AnsiColor $ln).Trim()
+        if (-not $t) { continue }
+        if ($t -match '^=+$' -or $t -match '^-{2,}' -or $t -match '正在实时刷新' -or $t -match 'EnvProxy 状态') { continue }
+        $keep += $t
+    }
+    return $keep
+}
+# 从静态页的行里抽出"状态项"：它的形态是 `标签 :` 单独一行，值在下一行。
+# 返回 @( @{Label; Value} ... )
+# 为什么要这样抽：两版的**行结构本来就不同**——静态页把标签和值分两行，
+# 实时帧合成 "标签 : 值" 一行。逐字比行永远不等，那是排版差异，不是内容差异。
+function __cmpItems([string[]]$Lines) {
+    $items = @()
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        $t = (Remove-AnsiColor $Lines[$i]).Trim()
+        if ($t -match '^(?<lbl>[^:]+):$' -and $i + 1 -lt $Lines.Count) {
+            $val = (Remove-AnsiColor $Lines[$i + 1]).Trim()
+            if ($val -and $val -notmatch '^[^:]+:$') {
+                $items += @{ Label = $Matches['lbl'].Trim(); Value = $val }
+            }
+        }
+    }
+    return $items
+}
+$__liveRaw = @(Format-StatusLines $__cmpSt)
+$__statRaw = @(Show-StatusSnapshot $__cmpSt 6>&1 | ForEach-Object { "$_" })
+$__live = __cmpContent $__liveRaw
+$__stat = __cmpContent $__statRaw
+
+# 关键断言：静态页报出来的每一个"状态项"（标签 + 值），实时帧里都得有。
+# 判据落在**标签和值都出现**上，不落到行格式上——两版排版可以不同，
+# 但"这一项说了什么"必须一样。静态页多出来一项而实时帧没有，就是这次的真实故障形态。
+$__items = @(__cmpItems $__stat)
+Assert-Eq '两版状态页：至少抽出 5 个状态项（抽取规则没失效）' $true ($__items.Count -ge 5)
+$__missingInLive = @()
+foreach ($it in $__items) {
+    $hitLabel = @($__live | Where-Object { $_ -match ('^' + [regex]::Escape($it.Label) + '\s*[:：]') }).Count -gt 0
+    $hitValue = @($__live | Where-Object { $_ -like ('*' + $it.Value + '*') }).Count -gt 0
+    if (-not ($hitLabel -and $hitValue)) { $__missingInLive += ($it.Label + ' -> ' + $it.Value) }
+}
+Assert-Eq '两版状态页：静态页的每一项实时帧都有（缺了就是分叉）' 0 $__missingInLive.Count
+foreach ($m in $__missingInLive) { Write-Host ('    实时帧缺少：' + $m) }
+
+# 反向：实时帧报出来的项，静态页也得有（防止以后只改实时帧）
+$__liveItems = @(__cmpItems $__liveRaw)
+$__missingInStat = @()
+foreach ($it in $__liveItems) {
+    $hitLabel = @($__stat | Where-Object { $_ -match ('^' + [regex]::Escape($it.Label) + '\s*[:：]') }).Count -gt 0
+    if (-not $hitLabel) { $__missingInStat += $it.Label }
+}
+Assert-Eq '两版状态页：实时帧的每一项静态页都有' 0 $__missingInStat.Count
+foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 
 # 状态页整段不许写文件、不许改变量（只读契约）
 foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {

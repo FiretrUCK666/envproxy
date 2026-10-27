@@ -181,6 +181,39 @@ function Get-ListeningTcpConnections {
     }
 }
 
+# 本机监听端口 -> 拥有该端口的进程号。取不到就返回空表（调用方按"没有 PID"处理）。
+#
+# 为什么不复用 Get-ListeningTcpConnections：那条路的首选实现是进程内的
+# GetActiveTcpListeners()，它返回的只有地址与端口，**结构上拿不到 PID**。
+# 需要 PID 的地方（按进程名提速）只能单独问一次系统。
+# 走 netstat -ano：实测 34ms 取表 + 8ms 解析，而且它的行形状与解析函数
+# （ConvertFrom-NetstatOutput）已经有现成的、被测试钉住的实现，不再另写一套文本解析。
+#
+# 失败一律返回空表：这一整段只是提速，不是正确性的必要条件——
+# 拿不到 PID 时全端口握手兜底照样能发现代理（只是慢一点）。
+function Get-ListeningPortPidMap {
+    $map = @{}
+    $netstat = [string]$env:ENVPROXY_NETSTAT
+    if (-not $netstat) {
+        $netstat = Join-Path ([string]$env:SystemRoot) "System32\netstat.exe"
+        if (-not (Test-Path -LiteralPath $netstat)) { $netstat = "netstat.exe" }
+    }
+    try {
+        $raw = & $netstat -ano 2>$null
+        if (-not $raw) { return $map }
+        foreach ($line in $raw) {
+            if ($line -notmatch '^\s*TCP\s+(\S+)\s+(\S+)\s+LISTENING\s+(\d+)') { continue }
+            $ep = ConvertTo-ListenEndpoint $Matches[1]
+            if (-not $ep) { continue }
+            $map[[int]$ep.Port] = [int]$Matches[3]
+        }
+    } catch {
+        # 拿不到就是拿不到：净化成空表，让调用方走"没有 PID"这条正常分支。
+        return @{}
+    }
+    return $map
+}
+
 function Test-PortListening([int]$Port) {
     # 命令本身可能不可用（被裁剪的系统、极老版本）：-ErrorAction 拦不住 CommandNotFoundException，
     # 必须包 try，否则 -Install 与监控主循环都会被一条终端命令打断（与 Find-CandidatePorts 同一套处理）。
@@ -217,7 +250,9 @@ function Get-ConnectProbeRequest {
 # 504/502/超时/拒绝都不算（内核还活着但出口断了，那属于节点不通，不是"这不是代理"）。
 function Test-ConnectResponse([string]$Response) {
     if (-not $Response) { return $false }
-    return [bool]($Response -match "^\s*HTTP/1\.[01]\s+200")
+    # 状态码必须**整段**是 200：写成 \s+200 会放过 "2000"、"2001" 这类，
+    # 那是"看着对其实不对"的判据——逐位比对一个状态码，不该留这种模糊地带。
+    return [bool]($Response -match "^\s*HTTP/1\.[01]\s+200(?:\s|$)")
 }
 
 # 这是区分"代理端口"与"其他服务端口"的终极判定，不依赖进程名/端口号猜测。
@@ -379,6 +414,14 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         if (-not $why) { $why = "（无异常消息）" }
         $script:PortEnumerationReason = $why
     }
+    # 后面的候选发现整段包在 try/catch 里：任何一步抛异常都不能让一轮探测中断监控。
+    # 但"吞掉异常"不等于"结果可信"——发现过程半途而废时候选集可能为空，
+    # 上层会把空集读成"本机没有代理"-> 判 off -> 删掉用户的代理变量。
+    # 所以这里单独记一个"发现过程是否跑完"的标记，与"端口枚举是否成功"分开：
+    #   端口枚举失败 = 连监听表都拿不到
+    #   发现过程未完成 = 拿到了监听表，但后续某一步抛了异常
+    # 两者都意味着"这一轮不知道"，都不许被判成"没有代理"。
+    $discoveryDone = $false
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
 
@@ -392,32 +435,35 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         # 来源 2 第一轮：疑似翻墙软件的进程监听的端口（始终执行，覆盖 99% 常见软件）
         # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
         #       第二轮的"全端口 CONNECT 探测"也能发现它（见下）。
-        # 键必须显式转 [int]：Get-Process.Id 是 Int32，而 Get-NetTCPConnection 的
-        # OwningProcess 是 UInt32（netstat 路径已是 Int32，见上面的 [int]$Matches[4]）。
-        # 哈希表键类型严格——[uint32]1234 查不到 [int]1234——不转的话，走 WMI 兜底
-        # 的非英文系统上这个进程名过滤整段失效（只剩全端口兜底，收敛变慢）。
-        # 名字转小写必须用 ToLowerInvariant：ToLower 受当前区域设置影响，
-        # 土耳其语下 HIDDIFY 会变成 hıddıfy（无点 ı），匹配不到 *hiddify*。
         # 这一整段只是**提速**，不是正确性的必要条件：即使一个端口都认不出来，
         # 下面第二轮的"全端口并行握手探测"照样能发现代理（只是慢一点）。
         # 所以它出任何问题都必须静默跳过，绝不能让整轮枚举失败。
         #
-        # 为什么要单独说这件事：OwningProcess = 0 表示"取不到 PID"（进程内那条路拿不到）。
-        # 以前这里直接按 PID 去查名字，拿不到就 continue——逻辑上没错，但前提是
-        # "一定有 PID"。现在前提变了，就得把"没有 PID"写成正常的、预期内的情况。
+        # PID 单独取一次，不指望枚举层带回来。
+        # 原因：默认取值路径是进程内的 GetActiveTcpListeners()，它返回的每个元素
+        # 只有 Address/Port，**结构上不提供 PID**，于是那里把 OwningProcess 写成 0。
+        # 原来用"这一路有没有 PID"当作要不要提速的开关，结果是：正常机器上第一层
+        # 永远成功，$hasPid 恒为假，整段提速**从未执行过**——实测 68 个监听口 PID>0 的
+        # 有 0 个。而 mac 侧用的是 lsof+ps，同一功能是活的，两端行为就分了叉。
+        # 正确做法是按需取一次 PID 表（实测 netstat -ano 34ms + 解析 8ms），
+        # 而且只在"确实有点可查"时才付这个开销。
         $suspectPorts = @()
-        $hasPid = @($listeners | Where-Object { [int]$_.OwningProcess -gt 0 }).Count -gt 0
-        if ($hasPid) {
-            # 键必须显式转 [int]：Get-Process.Id 是 Int32，而 Get-NetTCPConnection 的
-            # OwningProcess 是 UInt32。哈希表键类型严格——[uint32]1234 查不到 [int]1234。
+        $pidMap = Get-ListeningPortPidMap
+        if ($pidMap.Count -gt 0) {
             # 名字转小写必须用 ToLowerInvariant：ToLower 受当前区域设置影响，
-            # 土耳其语下 HIDIFY 会变成 hıdıfy（无点 ı），匹配不到 *hiddify*。
+            # 土耳其语下 HIDDIFY 会变成 hıdıfy（无点 ı），匹配不到 *hiddify*。
             $procMap = @{}
             foreach ($pr in @(Get-Process -ErrorAction SilentlyContinue)) {
                 try { $procMap[[int]$pr.Id] = $pr.ProcessName.ToLowerInvariant() } catch {}
             }
             foreach ($l in ($listeners | Where-Object { $_.LocalAddress -in @("127.0.0.1", "::1", "0.0.0.0", "::") })) {
-                $pname = $procMap[[int]$l.OwningProcess]
+                # 变量不能叫 $pid：它是 PowerShell 的**只读自动变量**（当前进程号），
+                # 赋值会抛 "无法覆盖变量 PID"，而这一整段外面包着 try/catch，
+                # 于是异常被静默吞掉、$suspectPorts 恒为空——提速又"看起来实现了却从不生效"。
+                $ownerPid = [int]$l.OwningProcess
+                if ($ownerPid -le 0) { $ownerPid = [int]$pidMap[[int]$l.LocalPort] }
+                if ($ownerPid -le 0) { continue }
+                $pname = $procMap[$ownerPid]
                 if (-not $pname) { continue }
                 foreach ($pat in $ProxyProcessPatterns) {
                     if ($pname -like "*$pat*") { $suspectPorts += $l.LocalPort; break }
@@ -436,7 +482,12 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         # 候选集里有它，试活层就能收敛到它；其余同为代理的端口要等下一次集合变化或全扫再验。
         # 覆盖面上限是"同时开两个都不在常见表里的代理软件，只认其中一个"——够用，
         # 因为只要有一个可用端口，注入就是正确的。
-        if ($FullScan) {
+        #
+        # 已经有候选了就跳过这个尾巴：批量探测一次只带回**一个**端口，多扫的那些
+        # 一个都用不上。实测本机已知端口命中后，这个尾巴仍要跑 3042ms
+        # （IPv4 1443ms + IPv6 1372ms，51 个端口 × 2 个地址族），而结果完全一样。
+        # 全扫的用途是"表里没有、进程名也认不出"的那种代理，那种情况下 $ordered 才是空的。
+        if ($FullScan -and $ordered.Count -eq 0) {
             $restPorts = @()
             foreach ($lp in $listening) {
                 if ($ordered -notcontains $lp) { $restPorts += $lp }
@@ -450,7 +501,24 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
                 }
             }
         }
-    } catch {}
+        # 跑到这里说明整段候选发现没有抛异常，结论可以信。
+        $discoveryDone = $true
+    } catch {
+        # 发现过程抛了异常：把原因记下来（不许静默），并且**不置完成标记**。
+        # 上层看到"未完成"会沿用上一状态、不动环境变量——这是唯一安全的处置：
+        # 半路而废的候选集可能刚好是空的，把它当成"没有代理"就是删掉用户唯一的代理路径。
+        $why = "候选发现过程异常：" + $_.Exception.Message
+        $why = ($why -replace "\s+", " ").Trim()
+        if ($why.Length -gt 200) { $why = $why.Substring(0, 200) + "..." }
+        $script:PortEnumerationReason = $why
+    }
+    # 两个失败来源合流：连监听表都拿不到，或者拿到了但后续步骤抛了异常。
+    # 只要有一项成立，这一轮就是"不知道"，不许被判成"没有代理"。
+    if (-not $discoveryDone -and $enumerated) {
+        # 枚举成功但发现过程未完成：补一句说明，避免上面只写了"（无异常消息）"之类
+        if (-not $script:PortEnumerationReason) { $script:PortEnumerationReason = "候选发现过程未完成" }
+        $script:PortEnumerationFailed = $true
+    }
     return $ordered
 }
 
@@ -831,10 +899,12 @@ $NodeIdleResetSec     = 30
 # 间隔永远钉在快速档——实测 3600 秒探测 601 次，是承诺值的 2.5 倍。
 # "已经得出结论"就不必再勤问：多问几次不会改变结论。
 # 时刻参数一律是单调秒数（Get-MonotonicSeconds 的结果），不是墙上时钟。
-function Get-NodeProbeInterval([int]$FailCount, [int]$Threshold, [double]$FastUntil, [double]$Now,
+function Get-NodeProbeInterval([int]$FailCount, [int]$Threshold, $FastUntil, [double]$Now,
                                [int]$Steady, [int]$Fast) {
     if ($FailCount -gt 0 -and $FailCount -lt $Threshold) { return $Fast }
-    if ($Now -lt $FastUntil) { return $Fast }
+    # FastUntil 为 $null = 还没开过加密窗口（与 -1 哨兵同一个陷阱：时钟为负时
+    # "现在 < 哨兵" 会在每个负数时刻成立，把间隔永久钉在快档）。判空而不是比大小。
+    if ($null -ne $FastUntil -and $Now -lt [double]$FastUntil) { return $Fast }
     return $Steady
 }
 
@@ -898,9 +968,18 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     $now = Get-MonotonicSeconds
     $st = $script:NodeState["$Port"]
     if (-not $st) {
-        # 时刻一律用单调秒数：-1 表示"从未"（单调时钟起点是开机，不会是负数）。
-        $st = @{ LastCheck = -1.0; Alive = $false; FailCount = 0
-                 FirstFailAt = -1.0; FastUntil = -1.0 }
+        # 时刻一律用单调秒数，$null 表示"从未"。
+        #
+        # 为什么不能用 -1 当哨兵：单调钟在 5.1 上取的是 Int32 的 TickCount，
+        # 它**有符号**，连续开机满 24.86 天就变成负数（不是无符号回绕的 49.7 天）。
+        # 用负数表示"没有值"、又用 -lt 0 判断它，两者在时钟为负时无法区分：
+        # 每一轮都会被当成"从未探过" -> 节流恒不生效、失败计数每轮清零、
+        # FirstFailAt 每轮重盖章使跨度恒为 0 -> **永不判"断"**。
+        # 实测：时钟为负、节点持续不通，12 轮下来 Alive 一直是 True；
+        # 代理早已死亡，变量却永远指向它，终端全部 ECONNREFUSED。
+        # 用 $null 之后哨兵与值域彻底解耦，时钟再怎么变都不会混淆。
+        $st = @{ LastCheck = $null; Alive = $false; FailCount = 0
+                 FirstFailAt = $null; FastUntil = $null }
         $script:NodeState["$Port"] = $st
     }
     # "连续"失败必须先真的连续观测：这个端口很久没被探过（槽位留着旧账），
@@ -908,16 +987,14 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     # 一回来就同时满足"≥N 次"和"≥dwell 秒"而当场判"断"——比契约激进，也和 Mac 侧不等价。
     # 门限用独立的常量，不借用节流档位：判定的节奏是快档（5 秒），而节流档位说的是"多久探一次"，
     # 两者含义不同，绑在一起会让以后调任一个都牵动另一个。
-    # LastCheck = -1 表示这个槽位还没被探过：$idle 取一个大于任何门限的值即可，
-    # 但不能参与后面的减法（-1 - now 会得到很大的负数）。
+    # LastCheck = $null 表示这个槽位还没被探过：$idle 取一个大于任何门限的值即可。
     # 相减走 ConvertTo-MonotonicDelta 做 32 位回绕校正。5.1 上没有 TickCount64，用的是 Int32 的
-    # TickCount，开机满 49.7 天它归零：直接相减会得到很大的负数，$age -lt $iv 恒成立，
-    # 于是再也不做真实探测、代理状态永久冻结（用户关掉翻墙软件也不删变量）。
-    # 校正函数早就写好了却没接线，等于没有——这里接上它。
-    $idle = if ($st.LastCheck -lt 0) { [double]::MaxValue } else { ConvertTo-MonotonicDelta ($st.LastCheck * 1000.0) ($now * 1000.0) }
+    # TickCount：它**有符号**，开机满 24.86 天就变负。单靠回绕校正不够（校正假设的是无符号回绕），
+    # 所以"有没有探过"这件事改用 $null 表达，与数值无关。
+    $idle = if ($null -eq $st.LastCheck) { [double]::MaxValue } else { ConvertTo-MonotonicDelta ($st.LastCheck * 1000.0) ($now * 1000.0) }
     if ($st.FailCount -gt 0 -and $idle -gt $NodeIdleResetSec) {
         $st.FailCount = 0
-        $st.FirstFailAt = -1.0
+        $st.FirstFailAt = $null
     }
     if (-not $Force) {
         $age = $idle
@@ -929,14 +1006,14 @@ function Test-NodeAlive([int]$Port, [bool]$Force = $false) {
     $result = Test-RealConnectivity $Port
     if ($result) {
         $st.FailCount = 0
-        $st.FirstFailAt = -1.0
+        $st.FirstFailAt = $null
         $st.Alive = $true
         # 只在结论翻转（断->通）时开加密观察窗。若每次成功都重开，窗口永远不结束，
         # 稳态间隔就永远走不到——实测会退化成每 6 秒一探，流量是承诺值的 3 倍。
         if (-not $wasAlive) { $st.FastUntil = $now + $NodeFastWindowSec }
     } else {
         $st.FailCount++
-        if ($st.FirstFailAt -lt 0) { $st.FirstFailAt = $now }
+        if ($null -eq $st.FirstFailAt) { $st.FirstFailAt = $now }
         $span = ConvertTo-MonotonicDelta ($st.FirstFailAt * 1000.0) ($now * 1000.0)
         # Force 探测绕过迟滞立即生效（端口变化场景需真实判定）；否则双条件都满足才判死
         if ($Force -or (Test-NodeVerdict $st.FailCount $span $NodeFailThreshold $NodeFailDwellSec)) {
@@ -959,15 +1036,28 @@ $script:CachedPort = $null
 # 用户改端口、换软件、断开重连都走这条路径，新端口往往不在常见表里，
 # 靠"每 10 轮才全扫一次"会让空窗拖到约 27 秒。
 $script:NeedDeepScan = $false
+# 是否**已经成功做过至少一次全端口扫描**。做过就置位、永不回退。
+# 它只用来回答"第一次全扫要不要做"，不能拿别的量顶替：
+# 用"候选集签名是不是空"顶替过，结果是机器上一直没有代理时签名永远为空、
+# 这个条件恒真、每轮都全扫（实测占空比接近 50%，而那台机器上什么都没发生）。
+$script:EverFullScanned = $false
 $script:LastSeenSet = ""
 $script:LastAlivePort = $null
 $script:Round = 0
 
 # 端口枚举这一轮是否失败（true = 不知道，不是不在翻墙）。
 # 由 Find-CandidatePorts 写，由 Get-CurrentState 读。
+#
+# **每轮开头必须复位。** 它问的是"这一轮枚举结果如何"，不是"曾经有没有失败过"。
+# 曾经漏了复位：一旦某轮枚举失败，走缓存端口那条分支根本不调用 Find-CandidatePorts，
+# 标记就一直停在 failed 上。于是快照里同时出现 port_enumeration=failed 与 state=on:7078，
+# 状态页据此持续报"这一轮没读到本机端口，无法判断"——链路其实完全正常，
+# 而且它会一直这样报到下一次正好命中全扫轮为止（可能是几小时）。
+# 那种黄字看久了就被当成背景色，真出问题时反而没人看。
 $script:PortEnumerationFailed = $false
 function Get-CurrentState {
     $script:Round++
+    $script:PortEnumerationFailed = $false
     $port = $script:CachedPort
 
     if ($port) {
@@ -1025,17 +1115,25 @@ function Get-CurrentState {
     # 三种情况要全扫：
     #   ① 到了 10 轮的节流点；
     #   ② 刚丢掉缓存（端口停了 / 在位复核失守 / 节点不通）——用户正改端口；
-    #   ③ 还没确认过任何端口（LastSeenSet 为空）：此时快扫的"什么都没看见"
-    #      无法区分"真没有"与"端口在表外"，必须全扫一次才能下结论。
-    #      少了③就会卡在 unknown 里出不来（实测：改端口后 6 轮全是 unknown）。
+    #   ③ **还没做过任何一次全扫**：此时快扫的"什么都没看见"无法区分"真没有"
+    #      与"端口在表外"，必须全扫一次才能下结论。少了③就会卡在 unknown 里出不来
+    #      （实测：改端口后 6 轮全是 unknown）。
+    #
+    # ③ 的判据必须是一个**做过就置位、永不回退**的标记，不能用"签名是不是空"。
+    # 曾经那样写过，代价是：机器上从头到尾没有代理时，候选集恒空、签名恒为空串、
+    # 与初值相同 -> 签名永不更新 -> "还没确认过"恒为真 -> **每一轮都全扫**。
+    # 实测 8 轮做 8 次全扫、每次约 2.8 秒，而 off 态轮间隔 3 秒，占空比接近 50%。
+    # 那台机器上什么都没发生，监控却在满负荷跑。
     $justLostCache = [bool]$script:NeedDeepScan
     $script:NeedDeepScan = $false
-    $neverConfirmed = ($script:LastSeenSet -eq '') -and ($null -eq $script:LastAlivePort)
-    $fullScan = (($script:Round % 10) -eq 0) -or $justLostCache -or $neverConfirmed
+    $needFirstFullScan = -not $script:EverFullScanned
+    $fullScan = (($script:Round % 10) -eq 0) -or $justLostCache -or $needFirstFullScan
     $cands = Find-CandidatePorts -FullScan:$fullScan
     # 端口枚举失败 = 这一轮不知道，不是不在翻墙。判 off 会删掉用户的代理变量，
     # 而真实情况可能只是这一次没读到。交给主循环"沿用上一状态"。
+    # 注意：失败时**不置** EverFullScanned——那一次全扫并没有真的完成。
     if ($script:PortEnumerationFailed) { return "unknown" }
+    if ($fullScan) { $script:EverFullScanned = $true }
     $sig = ($cands -join ",")
     # 快扫只认"常见端口表 + 进程名"，它给出的是全集的一个**子集**，不是完整观测。
     # 这带来两个必须分开处理的问题：
@@ -1050,7 +1148,24 @@ function Get-CurrentState {
     #    这时唯一安全的动作是"不知道"（沿用上一状态、不动变量），
     #    与端口枚举失败时同一处置——把"没看见"当成"不存在"会删掉用户的代理变量。
     if (-not $fullScan) {
-        if ($cands.Count -eq 0) { return "unknown" }
+        # 快扫什么都没看见时，结论取决于**上次全扫看见了什么**：
+        #   · 上次全扫也是空的 -> 两轮一致，"确实没有代理"，直接 off。
+        #     这是最常见的情形（翻墙软件关着），必须能判出来。否则：
+        #     快扫空 -> unknown -> 不计进去抖 -> 永远凑不齐"连续两轮确认"
+        #     -> 状态卡在旧的 on:端口 下不来 -> 变量一直指向死端口，
+        #     而屏幕上同时显示"已开启""端口已不在""正在确认"，自相矛盾。
+        #     实测就是这样卡住的：用户关了翻墙软件，状态页十几分钟不变。
+        #   · 上次全扫看见过端口 -> 快扫的空可能是"它搬到了表外的新端口"，
+        #     不能当成没有（会删掉用户正在用的变量）；本轮不下结论，
+        #     并立刻安排一次全扫去确认。
+        if ($cands.Count -eq 0) {
+            # 判据用「做过全扫」而不是「签名非空」：全扫做过但结果为空时签名就是空串，
+            # 用签名判断会把"扫过了、真没有"误当成"从没扫过"，于是永远只走快扫、
+            # 永远不安排全扫——端口在表外时就再也发现不了（实测卡死 5 轮以上）。
+            if ($script:EverFullScanned -and $script:LastSeenSet -eq '') { return "off" }
+            $script:NeedDeepScan = $true
+            return "unknown"
+        }
         # 快扫有结果：不动签名，但可以按现有签名判断"是否已知变化"。
         # 签名里本来就有这个端口 = 与上次全扫一致；否则说明快扫看到了新东西，按变化处理。
         if ($sig -eq $script:LastSeenSet) {

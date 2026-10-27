@@ -146,7 +146,11 @@ function Remove-UserEnvNames([string[]]$Names) {
 # 用 GetEnvironmentVariable 会被展开（HTTP_PROXY 里一般没有 %…%，但口径要一致：
 # 全文件只留 Get-UserEnvRaw 一个读法，将来任何人加一处读取都不会引入第二种语义）。
 function Get-EnvProxyValue {
-    return (Get-UserEnvRaw $ProxyVarNames[0])
+    # 读哪个变量由 base 层的 $PrimaryProxyVarName 唯一决定，不在这里另选一个。
+    # 三个地址变量由同一张表整批写入、值必然相同，但"读哪一个"必须只有一处定义：
+    # 曾经这里取 $ProxyVarNames[0]、而生成启动脚本那处写死 HTTPS_PROXY，
+    # 同一个程序对同一个问题给出两个答案，且谁都不报错。
+    return (Get-UserEnvRaw $PrimaryProxyVarName)
 }
 
 function Sync-UserEnvVars([string]$Port) {
@@ -307,6 +311,15 @@ function Test-OwnedProxyShape([string]$Name, [string]$Value) {
 # 第 2 层：安装快照里本来就记着它吗？记着 = 使用者自己的，我们永远不许动。
 # 这一层是必需的：光看形状会把用户自己写的 NO_PROXY=localhost、或 mitmproxy 的
 # http://127.0.0.1:8080 当成我们的，在 off 态每 30 轮定时删掉，日志还谎称"回收残留"。
+#
+# 返回**三态**，不是布尔：
+#   $true  = 快照里确定记过这个名字（使用者自己的）
+#   $false = 快照里确定没这个名字（装前是空的，所以现在这个值是我们写的）
+#   $null  = **读不出来**（快照键不存在但连"在不在"都判断不了 / 读取抛异常）
+# 为什么必须三态：读不出来时若返回 $false，调用方会判成"我们写的"，
+# 于是 off 态或卸载时**删掉使用者自己设的本机代理**（本地 mitmproxy 这类），
+# 日志还说"已回收残留"。这是"把读不出来当成没有"的典型，方向恰好是"可以删"。
+# 读不出来时唯一安全的处置是"不动"。
 function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     try {
         if (-not (Test-RegKey (Get-PrevEnvRegKeyPath))) { return $false }
@@ -337,14 +350,20 @@ function Test-SnapshotRecorded([string]$Name, [string]$Value) {
             if (-not ($bakSet -contains $e)) { return $false }
         }
         return $true
-    } catch { return $false }
+    } catch {
+        # 读不出来 = 不知道。绝不许折叠成"不是使用者的"——那个方向会删掉他的值。
+        return $null
+    }
 }
 
 # 第 3 层：到底该不该回收。形状像、且快照里没有它，才是我们写下的。
 # 判据与 Remove-UserEnvVars 必须同一套，否则会出现"删得掉但门槛没让它删"的残留。
+# 快照读不出来时返回 $false（= 不认领），调用方据此跳过这个变量一个都不动。
 function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
     if (-not (Test-OwnedProxyShape $Name $Value)) { return $false }
-    return (-not (Test-SnapshotRecorded $Name $Value))
+    $recorded = Test-SnapshotRecorded $Name $Value
+    if ($null -eq $recorded) { return $false }
+    return (-not $recorded)
 }
 # 我们该持有的那套变量现在还在不在。判据与 Remove-UserEnvVars 完全一致：
 # 三个代理变量只要有一个还有值就算在，NO_PROXY 看有没有我们写的默认项，
@@ -543,7 +562,15 @@ function Invoke-EnvStateWrite([string]$state, [string]$LogOff, [string]$LogOn) {
             if (Test-ProxyVarsPresent) {
                 Remove-UserEnvVars
                 Broadcast-EnvironmentChange
-                if ($LogOff) { Write-MonitorLog $LogOff }
+                # 删完必须**回读确认**，与 on 分支的 Test-ProxyVarsMatch 对称。
+                # Remove-UserEnvVars 把写失败整个吞进 catch{}，所以"我调用过删除"
+                # 不等于"已经删掉了"。不在这里确认的后果是三层同时说错话：
+                # 日志照样打"已删除代理变量，恢复直连"、快照写 vars_match=yes、
+                # 状态页显示"一切正常"——而用户实际处于半代理状态，
+                # 变量还指向一个死端口，所有终端都在连空气。
+                # 这个项目里最贵的错误就是"看起来正常实则错"，这里正好落在最危险的方向。
+                if (Test-ProxyVarsPresent) { $ok = 1 }
+                elseif ($LogOff) { Write-MonitorLog $LogOff }
             }
         } else {
             $port = $state.Substring(3)

@@ -87,7 +87,7 @@ Open the menu and pick **`3 Check for updates`**. It reports the latest version 
 Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes the number you pick to the real program; it does not modify any file itself.
 
 > **The menu and the program output are in Chinese.** This table gives the exact label you will see
-> on screen first, then its English meaning: **`5 停止监控`** means **Stop the monitor**.
+> on screen first, then its English meaning: **`6 停止监控`** means **Stop the monitor**.
 > The number is what you type; the label is what you will be looking at.
 
 | Menu item | What it does | What it affects |
@@ -357,7 +357,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 
 ### 3.6 Use it without the menu (scripts, remote sessions)
 
-The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first seven rows match the seven menu items one to one; the next row (`-Menu`) simply opens the menu itself; the last two rows (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
+The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first eight rows below match the eight menu actions one to one; the next row (`-Menu`) simply opens the menu itself; the last two rows (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
 
 | Goal | Windows | Mac |
 |---|---|---|
@@ -368,11 +368,12 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Advanced (Windows only) | `-Advanced` | — |
 | Stop the monitor | `-Stop` | `stop` |
 | Full restore | `-Uninstall` | `uninstall` |
+| Problem report | `-Report` | `report` |
 | Open the menu | `-Menu` | `menu` |
 | Self-check (troubleshooting) | — | `self-test` |
 | Repair a broken marker in your profile | `-RepairProfile` | `repair-profile` |
 
-The order matches the menu: four everyday items first, then the advanced one, then the two upkeep ones. The last two rows are troubleshooting helpers: `self-test` (Mac only) runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables; `-RepairProfile` removes a lone marker line left in a profile file (it backs the file up first).
+The order matches the menu: four everyday items, then the advanced one, then the two upkeep ones, then the support one. The last two rows are troubleshooting helpers: `self-test` (Mac only) runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables; `-RepairProfile` removes a lone marker line left in a profile file (it backs the file up first).
 
 `-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates and full restore: it means stop asking. For restore it is also the only way to uninstall where nothing can ask (scripts, remote sessions), since that command refuses to run without an answer.
 
@@ -395,6 +396,19 @@ bash envproxy.sh status
 **Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
 
 **Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
+### 3.7 Why proxy-aware shortcuts never need a new address
+
+A proxy app's local port changes now and then: you switch apps, it picks a random port on restart, or the port is taken and the app moves on to the next one. When that happens, some programs keep the old address you gave them and stop connecting — and you have to go into their own settings and fix it.
+
+This tool opens a **fixed entry** on your machine (an address that never changes). The shortcuts only know that address, and behind it the tool follows the proxy app. So you never deal with a changing port, and you never rebuild a shortcut.
+
+Three things worth knowing:
+
+- **It runs alongside the background program.** No switch to turn on or off. Menu 5 then 3 shows how it is doing (that screen only reports; it changes nothing).
+- **It not working is not a problem.** The shortcut falls back to reading the current address and still works. You only lose the "address never changes" part.
+- **Shortcuts you already made need no rebuild** — every launch reads the current state again.
+
+This exists on Windows only. Mac does not need it; see section 12.1 for why.
 
 ## 4. Something is wrong: check in this order
 
@@ -552,6 +566,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | `%LOCALAPPDATA%\EnvProxy\` | `launcher.ps1` | locator; the login item uses it to find the program |
 | | `terminal.env` | the mirror file Git Bash reads: current state and proxy address |
 | | `launchers\` | startup scripts for the proxy-aware shortcuts (only exists once you use menu 5) |
+| | `relay.port` | the fixed-entry port; shortcuts read it on every launch |
 | `HKCU\Environment` | those 5 proxy variables | where the terminal actually picks up the proxy |
 | `HKCU\Software\EnvProxy` | `ScriptPath` + `Owned`/`Backup` | where it is; what we wrote; yours |
 | `HKCU\...\Run` | one start-up entry | launches the background program when you log in |
@@ -567,10 +582,11 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
 | | `notify.last` | the state last warned about; keeps the same change from being reported twice |
+| | `report-*.txt` | the report written by "Problem report"; open it yourself before sending it on |
 
 The items in `win\monitor\` are local runtime state. Deleting them is harmless (the background program recreates them) and does not touch the program files.
 
-Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
+Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted).
 
 `~\.envproxy\` contains **exactly one file, `prompt-sync.sh`**. Anything else appearing there means something other than this tool wrote it — uninstall names each one and reports it, but does not delete it for you (it may be yours).
 
@@ -608,13 +624,15 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 
 | Limit | Reason | Effect |
 |---|---|---|
-| **Pure TUN mode is not handled** | No local port to judge | Its traffic already goes through the app |
+| **TUN vs. corporate VPN** | Both are virtual adapters | Most apps keep the port open; a few close it |
 | **System proxy is not modified** | It would affect browsers | Only user-level variables |
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
 
-Why pure TUN mode is left alone: it cannot be told apart from a corporate VPN. A wrong decision there would remove your only proxy path, so it is better to do nothing.
+One thing worth stating plainly about TUN: **most apps keep their local proxy port open in TUN mode**, so this tool detects them and keeps working, and you do nothing. **A few apps close that port.** Then there is nothing to detect. That is not a defect: it is how those apps work, and in that mode the app itself already carries all traffic, so whether terminal tools need a proxy is up to that app.
+
+Why it does not try to recognise TUN and special-case it: a TUN adapter and a corporate VPN adapter look the same. A wrong call there would declare a live proxy dead and remove your only proxy path. The two mistakes do not cost the same, so it does nothing.
 
 Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
 
@@ -623,6 +641,8 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 ### 12.1 Difference from the Windows version
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
+
+**That is why Mac needs no "fixed entry"** (the thing section 3.7 describes for Windows): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
 
 On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped.
 
@@ -640,9 +660,9 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with macOS 12 and later is enough. (Mac only: download [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz).)
 
-### 12.3 Menu (identical to Windows)
+### 12.3 Menu (same as Windows)
 
-The numbers, behaviour and what each item affects are identical to Windows, including `4 Help` and `0 Quit`. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, including `4 Help` and `0 Quit`. **One number differs**: `5 Advanced` exists on Windows only, so 5 is empty on Mac while `6 Stop monitoring` and `7 Restore everything` keep the same numbers as Windows. The gap is deliberate: the same action should be the same number on both machines. Pressing Enter directly means show status.
 
 ### 12.4 What is in the `mac` folder
 
@@ -699,6 +719,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
+| | `notify.last` | the state last warned about; keeps the same change from being reported twice |
 | | `.lock` | single-instance lock, so two copies never run at once |
 | | `.op.lock` | one install/uninstall/stop/update at a time |
 
@@ -708,7 +729,7 @@ The items in `mac/monitor/` are local runtime state. Deleting them is harmless (
 
 **`proxy.env`, `owned.env` and `prev.env` are macOS-only**: Windows never writes them and does not recognise them. The Windows `~\.envproxy\` holds only `prompt-sync.sh`.
 
-**The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep.
+**The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted).
 
 #### What each button actually removes
 
@@ -716,9 +737,9 @@ The three actions differ a lot in force. Read before clicking:
 
 | What you click | Deletes | Keeps |
 |---|---|---|
-| `5 Stop monitoring` | the process and its pid file | every other file |
+| `6 Stop monitoring` | the process and its pid file | every other file |
 | `1 Install / repair` | nothing; overwrites our own files | your config and logs |
-| `6 Restore everything` | all we wrote | the `monitor.log` you kept |
+| `7 Restore everything` | all we wrote | the `monitor.log` you kept |
 
 What each one means in practice:
 

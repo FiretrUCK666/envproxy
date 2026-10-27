@@ -252,7 +252,9 @@ _handshake_at() {
             curl --disable -s -o /dev/null -D - --connect-timeout 1 --max-time 2 \
             --noproxy '' -p -x "http://$(url_host_for "$1"):$2" "http://127.0.0.1:9/" 2>/dev/null | head -n 1)
     fi
-    printf '%s' "$_ha_resp" | grep -qE '^HTTP/1\.[01] +200'
+    # 状态码必须**整段**是 200：写成以 200 结尾会让 "2000"、"2001" 也匹配上。
+    # 逐位比对一个状态码，不该留这种模糊地带；与 Windows 侧同一判据。
+    printf '%s' "$_ha_resp" | grep -qE '^HTTP/1\.[01] +200( |$)'
 }
 
 # 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
@@ -328,6 +330,11 @@ test_http_proxy_batch() {
 #
 # lsof 退出码 1 = 没有匹配的进程（这是正常结果，端口表就是空的）；
 # 127 = 命令不存在或跑不起来（这才是"读不出来"）。
+# DIVERGE(Mac): 取监听端口只有两层（lsof -> netstat），Windows 侧有三层。
+# 差的第三层是 IPGlobalProperties.GetActiveTcpListeners()——那是个**进程内**接口，
+# shell 里没有任何等价物，所以这边两层都得起外部进程。这不是漏做：
+# 判据（读不出来 ≠ 没有端口）与上层语义两侧完全一致，只是实现手段受平台限制。
+# 代价是 mac 每轮要多起一次进程；换来的是同一个三态结论（找到 / 真没有 / 读不出来）。
 get_listening_ports() {
     # lsof 优先。退出码 1 = 没有匹配的进程（这是正常结果，不是读不出来），
     # 127 = 命令不存在或跑不起来（这才是读不出来）。
@@ -415,7 +422,16 @@ get_suspect_ports() {
 #
 #   1) 环境变量里那个值是我们自己写下的，它指向哪个端口就先验哪个（一次 TCP，毫秒级）。
 #   2) 没命中才去找候选集，且**用全扫**：状态页一年点不了几次，"慢一点"远比"说谎"便宜。
-# 输出端口号；找不到时输出空、返回 1。
+# 输出端口号；返回码就是三态，调用方一次调用即可：
+#   0 = 找到了（端口打印在 stdout）
+#   1 = 枚举成功、确实没有代理（"真的没有"）
+#   2 = 枚举读不出来（"不知道"）
+#
+# 为什么把三态放进返回码，而不是让调用方再问一次枚举层：
+# 原来调用方拿到 1 之后又调了一次 find_candidate_ports 去分辨这两种，
+# 而 find_candidate_ports 内部本身就是一次全端口 lsof+ps+CONNECT。
+# 于是"没有代理"的机器上，状态页每 2 秒要跑**两轮**全扫。
+# 三态在源头分开，调用方一次即可——状态页是每 2 秒刷新的热路径。
 get_in_use_proxy_port() {
     _giu_known=$(get_current_proxy_port 2>/dev/null || echo "")
     case "$_giu_known" in
@@ -429,7 +445,11 @@ get_in_use_proxy_port() {
             fi
             ;;
     esac
-    _giu_cands=$(find_candidate_ports 1) || return 1
+    _giu_cands=$(find_candidate_ports 1)
+    _giu_rc=$?
+    if [ $_giu_rc -ne 0 ]; then
+        return 2
+    fi
     _giu_first=$(printf '%s' "$_giu_cands" | awk '{print $1}')
     [ -n "$_giu_first" ] || return 1
     printf '%s' "$_giu_first"
@@ -722,10 +742,35 @@ get_current_state() {
         log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
         return 1
     fi
-    if [ "$_cands" != "$LAST_SEEN_SET" ]; then
+    # ① **快扫的空结果要看"上次全扫看见了什么"**，不能一律当成"本机没有代理"，
+    #    也不能一律当成"不知道"：
+    #    · 上次全扫也是空的 -> 两轮一致，"确实没有代理"，判 off。
+    #      这是最常见的情形（翻墙软件关着）。若在这里返回"不知道"，
+    #      调用方的去抖永远凑不齐"连续两轮确认"，状态会卡在旧的 on:端口 下不来，
+    #      变量一直指向死端口，而屏幕上同时显示"已开启""端口已不在"，自相矛盾。
+    #      Windows 侧实测就是这样卡住的（关了软件十几分钟不变）。
+    #    · 上次全扫看见过端口 -> 快扫的空可能是"它搬到了表外的新端口"，
+    #      不能当成没有（会删掉使用者正在用的变量）；本轮不下结论，
+    #      并安排下一轮全扫去确认。
+    # ② **快扫不许改写签名**。全扫记下 "7099"，下一轮快扫算出 ""，两串不同 ->
+    #    判"集合变化" -> 重新试活 -> 候选集空 -> off -> 下一轮全扫又"发现变化"。
+    #    "集合变化 = 强信号"会被自己的节流反复触发。故只有全扫轮更新签名。
+    if [ "$_full" = "0" ] && [ -z "$_cands" ] && [ -n "$LAST_SEEN_SET" ]; then
+        # 上一轮全扫记得有端口，而这一轮快扫什么都没看见：不下结论，并安排全扫。
+        NEED_DEEP_SCAN=1
+        return 0
+    fi
+    _sig_changed=0
+    if [ "$_full" = "1" ]; then
+        if [ "$_cands" != "$LAST_SEEN_SET" ]; then _sig_changed=1; fi
+        LAST_SEEN_SET="$_cands"
+    else
+        # 快扫：只在"看见了东西"时才算集合变化，且不改签名。
+        if [ -n "$_cands" ] && [ "$_cands" != "$LAST_SEEN_SET" ]; then _sig_changed=1; fi
+    fi
+    if [ "$_sig_changed" = "1" ]; then
         # 集合变化 = 强信号（新到、离开、换端口、增减成员）：走一遍有序试活。
         # 上次验活的仍在就认回它（缓存结论，零新增探测）；新面孔当场验 → 秒级收敛。
-        LAST_SEEN_SET="$_cands"
         _pref="$LAST_ALIVE_PORT"
         if [ -n "$_pref" ] && ! _in_list "$_pref" "$_cands"; then _pref=""; fi
         confirm_candidate_port "$_cands" "$_pref"

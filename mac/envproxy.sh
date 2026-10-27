@@ -132,7 +132,7 @@ _usage_err=$(usage_error)
 _usage_rc=$?
 if [ $_usage_rc -ne 0 ]; then
     echo "$_usage_err" >&2
-    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile} [--purge] [--yes]" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile|report} [--purge] [--yes]" >&2
     exit 2
 fi
 
@@ -161,9 +161,11 @@ fi
 case "${OSTYPE:-}" in
     darwin*) ;;
     *)
+        # 白名单：只有「只读本机、不碰用户环境」的子命令放行，其余一律拦。
+        # report 也拦——它会往 mac/monitor/ 写报告文件，那不是"只读"。
         case "$_CMD_NORM" in
             help|self-test) : ;;
-            menu|install|stop|uninstall|status|update|repair-profile|'')
+            menu|install|stop|uninstall|status|update|repair-profile|report|'')
                 echo "这是 macOS 版，只能在 macOS 上运行（当前系统不是 macOS）。" >&2
                 echo "Windows 请用 win 目录里的 envproxy.ps1，或双击「打开菜单」。" >&2
                 exit 1
@@ -237,6 +239,6 @@ case "$_CMD_NORM" in
         fi;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile} [--purge] [--yes]"; exit 2;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile|report} [--purge] [--yes]"; exit 2;;
 esac
 fi

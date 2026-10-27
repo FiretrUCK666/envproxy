@@ -130,7 +130,7 @@ uninstall_envproxy() {
     style_out title "======== EnvProxy 卸载（一键恢复原状）========"
     if [ "$(id -u 2>/dev/null)" = "0" ]; then echo "当前是 root 身份：接下来改的会是 root 这个账号的配置。日常使用请用普通终端重来一次。"; fi
     # 先问一句再动手。这是整个工具里**唯一不可逆**的动作：会删开机自启、摘终端配置、
-    # 清掉代理变量。而它在菜单里紧挨着「5 停止监控」（那个是可逆的）。
+    # 清掉代理变量。而它在菜单里紧挨着「6 停止监控」（那个是可逆的）。
     # 原来全函数里唯一的提问是"日志要不要保留"——那时监控已停、自启已删、配置已摘，问什么都晚了。
     # 默认不卸载：危险动作的默认必须是"不做"。与 Windows 侧同一口径。
     if [ "$_un_yes" = "1" ]; then
@@ -176,8 +176,13 @@ uninstall_envproxy() {
         # 强杀留下的 .lock 空目录会让新监控的 mkdir 失败、多绕一圈接管分支。
         # 状态快照不删的后果与 version.cache 一字不差：重装后状态页会读到上一份
         # 安装留下的结论，而那是已经不存在的状态。
+        # notify.last 也必须删：它记的是"上次提示过代理变了"。
+        # 留着它，重装后第一次真实的端口变化会被上一份安装留下的值吃掉——
+        # 使用者换了端口却什么提示都没有，而那些程序正连着旧地址。
+        # Windows 侧同一位置也删它（ops.ps1 卸载分支），两侧行为必须一致。
         rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
-              "$VERSION_CACHE" "$SNAPSHOT_FILE" "$MONITOR_DIR/update.inprogress" 2>/dev/null || true
+              "$VERSION_CACHE" "$SNAPSHOT_FILE" "$MONITOR_DIR/update.inprogress" \
+              "$MONITOR_DIR/notify.last" 2>/dev/null || true
         rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
             rmdir "$MONITOR_DIR" 2>/dev/null || true
@@ -309,20 +314,44 @@ get_status_snapshot() {
     #      "慢一点"远比"说谎"便宜。
     _port=""
     _port_unknown=0
-    # 三态：找到 / 枚举成功但确实没有 / 枚举失败。
-    # get_in_use_proxy_port 把后两种压成同一个返回码 1，于是"你正常关掉了翻墙软件"
-    # 会被报成"这一轮没读到本机端口，无法判断"——那是 warn，还进问题清单。
-    # 真相是 healthy 的 dim。这里再问一次枚举层把它分开：
-    # find_candidate_ports 在"枚举读不出来"时返回 1，在"枚举成功但没候选"时返回 0。
-    if _p=$(get_in_use_proxy_port); then
-        _port="$_p"
-    else
-        _port=""
-        if find_candidate_ports 1 >/dev/null 2>&1; then
-            _port_unknown=0   # 枚举成功、确实没有代理：dim "未检测到"
-        else
-            _port_unknown=1   # 枚举失败：warn "没读到，无法判断"
+    # 优先读监控写下的结论快照，读不到或太旧才自己现场探测。
+    #
+    # 为什么不一律现场探测：最坏情况（代理刚换端口、变量指向的旧端口已死）要走
+    # 全端口扫描，而监控每 2–3 秒就在做同一件事、结论它早就有了。
+    # 读快照是个位数毫秒，且两边结论同源——不会再出现"状态页说没代理、监控还在用某个端口"
+    # 这种自相矛盾。这与 Windows 侧读 state.snapshot 是同一套做法，两端终于同形。
+    #
+    # 降级由 read_state_snapshot 的 SNAP_STATUS 表达：ok 用快照；
+    # none / unreadable / damaged / 太旧 退回实时探测。任何情况下都不许把
+    # "读不出来"当成"没有代理"——那会删掉用户的变量，方向与保留相反。
+    read_state_snapshot
+    _snap_ok=0
+    if [ "$SNAP_STATUS" = "ok" ]; then
+        # 时间戳比现在晚 60 秒以上 = 系统时间被调过，不许当"刚写的"
+        if [ "$SNAP_AGE" -lt -60 ]; then
+            _snap_ok=0
+        elif [ "$SNAP_AGE" -le "$SNAPSHOT_STALE_SEC" ]; then
+            _snap_ok=1
         fi
+    fi
+    if [ "$_snap_ok" = "1" ]; then
+        case "$SNAP_STATE" in
+            on:*) _port="${SNAP_STATE#on:}" ;;
+            *)    _port="" ;;
+        esac
+        if [ "$SNAP_PORT_ENUMERATION" = "failed" ]; then _port_unknown=1; fi
+    else
+        # 三态直接由返回码给出（0 找到 / 1 确实没有 / 2 读不出来），**不要再问一次枚举层**。
+        # 曾经是"拿到 1 之后再调一次 find_candidate_ports 去分辨"，而那个函数内部
+        # 本身就是一次全端口 lsof+ps+CONNECT——于是没有代理的机器上，每 2 秒刷新的
+        # 状态页要跑两轮全扫。三态在源头分开，这里一次即可。
+        _p=$(get_in_use_proxy_port)
+        _p_rc=$?
+        case "$_p_rc" in
+            0) _port="$_p" ;;
+            1) _port=""; _port_unknown=0 ;;   # 枚举成功、确实没有代理：dim「未检测到」
+            *) _port=""; _port_unknown=1 ;;   # 枚举失败：warn「没读到，无法判断」
+        esac
     fi
 
     # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
@@ -434,7 +463,7 @@ _status_row() {
 # 收集 → 存成单个文件 → 路径直接进剪贴板 → 屏幕上说清下一步做什么。
 #
 # 边界：只读、不联网、不改任何配置。文件落在 monitor/ 下，卸载时会一起清掉。
-# 反馈时要问的三个问题。顺序即重要性：先定"哪个环节坏了"，作者才知道该看哪一段；
+# 反馈时要问的四个问题。顺序即重要性：先定"哪个环节坏了"，作者才知道该看哪一段；
 # 再问"你看到什么"，那是最能定位症状的一条；最后问"你本来想做什么"，
 # 因为同一现象在不同意图下是完全不同的问题。
 # 问题写成大白话：使用者不是工程师，问"请描述复现步骤"只会得到一句"就是不好使"。
@@ -707,6 +736,16 @@ show_status() {
 ";; esac
     [ "$_sp_bad" = "1" ] && _pb="$_pb系统代理可能残留（不是本工具写的）
 "
+    # 监控每轮都算"变量与状态对不对得上""写进去了没有"，但这里从来没读过它。
+    # 结果是：变量被别的程序改坏、或写入失败时，状态页仍然说"一切正常"，
+    # 而终端其实连不上。与 Windows 侧同一套判据、同一句措辞。
+    # 空串（老版本写的快照没有这两个字段）按"不报"处理，不许当成"有问题"。
+    if [ "$_snap_ok" = "1" ]; then
+        [ "$SNAP_VARS_MATCH" = "no" ] && _pb="$_pb代理变量和当前状态对不上（可能被别的程序改了）
+"
+        [ "$SNAP_APPLY_RESULT" = "failed" ] && _pb="$_pb代理变量写不进去（下一轮还会再试）
+"
+    fi
     # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
     # 那种情况下入口通常还能起来、启动自检全绿，但安装区可能新旧混合，
     # 表现为某些功能静默失效——所以必须主动说出来。
@@ -860,7 +899,20 @@ show_status() {
         fi
     fi
     if [ -n "$_port" ]; then
-        _status_row "翻墙代理" "已开启（本地端口 $_port 监听中）" ok
+        # 快照过旧时必须标注"这是几秒前的判断"。
+        # 少了这句，200 秒前的结论和此刻的结论在屏幕上长得一模一样——
+        # 而那一刻离"监控可能已经死了"很近，用户会以为一切正常。
+        # 两档措辞与 Windows 侧逐字对应：刚过新鲜线只是"稍旧"，
+        # 过了可用线要明说"可能已不是现在的情况"。同一句话会让 30 秒与 200 秒看起来一样。
+        _age_note=""
+        if [ "$_snap_ok" = "1" ] && [ "$SNAP_AGE" -gt "$SNAPSHOT_FRESH_SEC" ]; then
+            if [ "$SNAP_AGE" -gt "$SNAPSHOT_USABLE_SEC" ]; then
+                _age_note="（${SNAP_AGE} 秒前的判断，可能已不是现在的情况）"
+            else
+                _age_note="（${SNAP_AGE} 秒前的判断）"
+            fi
+        fi
+        _status_row "翻墙代理" "已开启（本地端口 $_port 监听中）${_age_note}" ok
     elif [ "$_port_unknown" = "1" ]; then
         _status_row "翻墙代理" "这一轮没读到本机端口，无法判断（正常，会自动重试）" warn
     else
@@ -1039,8 +1091,8 @@ format_help_nav_line() {
     printf "%s\n" "${_hnl_out%  }"
 }
 
-# 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-8"，不会留下写死的旧范围。
-# 菜单可用的编号，从表里算：加一项就自动变成 "1-6 和 0"，不会留下写死的旧范围。
+# 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-7"，不会留下写死的旧范围。
+# 菜单可用的编号，从表里算：加一项就自动变成 "1-8 和 0"，不会留下写死的旧范围。
 # 和帮助的 format_help_key_range 同一个思路——改数字的地方只该有一处。
 # 把一组编号写成人话。连续就写「1-6」，中间有断层就逐个列出来。
 # 为什么不能只取首尾：从表里删掉一项之后，首尾相减仍然给出「1-6」，
@@ -1087,7 +1139,7 @@ get_menu_key_range() {
     echo "$_mkr_text"
 }
 
-# 底部那一行「有 1-8」/「有 1 2 3 5 6 7 8」。
+# 底部那一行「有 1-7」/「有 1 2 3 4 6 7 8」。
 # **不能只取首尾**：从主题表里删掉一项之后，首尾相减仍然给出「1-8」，
 # 而那段时间里 4 已经不存在了——用户照着敲 4，得到「没有这个编号」。
 # 提示的用途是告诉他能敲什么，说错比不说更糟。
@@ -1347,7 +1399,7 @@ i 3. 两个常见误会
 t2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
 t2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、本工具被停了，不是坏了。
 h 还是不行：把问题报上去
-t 菜单选 8（问题反馈）。它先问你三句话，再自动补上这台机器的情况，
+t 菜单选 8（问题反馈）。它先问你四句话，再自动补上这台机器的情况，
 t 存成一个文件、把路径复制好。你不用找日志，也不用敲命令。
 t 然后把文件内容贴到下面这个地址（本项目只在这里收问题）：
 TOPIC

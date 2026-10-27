@@ -402,6 +402,20 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     if is_owned_proxy_value "http://corp:8080"; then _o2=1; else _o2=0; fi
     _selftest_assert_eq "本机地址算我们的" "1" "$_o1"
     _selftest_assert_eq "公司地址不算我们的" "0" "$_o2"
+    # 快照文件存在、但一个代理变量都没读出内容 = 这份快照不可用（截断 / 权限 / 格式坏）。
+    # 此时不许认领：认错了会把这个本机地址删掉，而那可能正是使用者自己挂的 mitmproxy；
+    # 不认领最多多留一个值（下一轮还会再判）。两个方向的代价不对称。
+    # 与 Windows 侧 Test-SnapshotRecorded 三态化是同一条判据。
+    _s0_bak=$(mktemp "${TMPDIR:-/tmp}/envproxy_prev_empty.XXXXXX" 2>/dev/null) || _s0_bak=""
+    if [ -n "$_s0_bak" ]; then
+        _s0_old_prev="$PREV_ENV"
+        PREV_ENV="$_s0_bak"
+        : > "$PREV_ENV"
+        if is_owned_proxy_value "http://127.0.0.1:7890"; then _s0a=1; else _s0a=0; fi
+        _selftest_assert_eq "空快照不认领本机地址（读不出来不等于我们的）" "0" "$_s0a"
+        rm -f "$PREV_ENV" 2>/dev/null || true
+        PREV_ENV="$_s0_old_prev"
+    fi
     _selftest_assert_eq "转义幂等" "'a'" "$(shell_escape_sq 'a')"
     # 归属的第二层：安装快照（prev.env）里本来就记着的值，哪怕长得像我们的，也是使用者的。
     # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy 会在 off 态被定时删掉。
@@ -931,6 +945,69 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     node_probe_interval 999 "$NODE_FAIL_THRESHOLD" 0 1000 \
         "$NODE_CHECK_THROTTLE_SEC" "$NODE_FAST_SEC"
     _selftest_assert_eq "失败远超阈值也仍是稳定档" "$NODE_CHECK_THROTTLE_SEC" "$NODE_PROBE_INTERVAL"
+
+    # 代理地址变了要不要提醒：判据必须与 Windows 侧 Test-ProxyShouldNotify 逐条一致。
+    # 两端用户看到的是同一件事，一边提醒一边不提醒就是行为漂移。
+    _pn() { if proxy_should_notify "$1" "$2"; then echo 1; else echo 0; fi; }
+    _selftest_assert_eq "提醒：端口变了要提醒" "1" "$(_pn on:7078 on:7890)"
+    _selftest_assert_eq "提醒：同一个端口不提醒" "0" "$(_pn on:7078 on:7078)"
+    _selftest_assert_eq "提醒：代理关掉要提醒" "1" "$(_pn on:7078 off)"
+    _selftest_assert_eq "提醒：从无到有不提醒（旧程序照旧直连能通）" "0" "$(_pn off on:7078)"
+    _selftest_assert_eq "提醒：一直直连不提醒" "0" "$(_pn off off)"
+    _selftest_assert_eq "提醒：不知道时不提醒（提示等于谎报）" "0" "$(_pn unknown on:7078)"
+    _selftest_assert_eq "提醒：不知道时不提醒（反向）" "0" "$(_pn on:7078 unknown)"
+    _selftest_assert_eq "提醒：空状态不提醒" "0" "$(_pn "" on:7078)"
+
+    # 快扫什么都没看见 ≠ 本机没有代理。
+    # 这是会删掉使用者代理变量的一类错误：用户把端口改成表外的值时，
+    # 快扫每轮都返回空；若当成"集合变空"就判 off、删变量，终端突然断网。
+    # 判据：快扫(_full=0) + 候选集空 + 上次全扫记得有端口 -> 本轮不下结论。
+    if [ "$(type -t get_current_state 2>/dev/null || true)" = "function" ]; then
+        _gs_saved_round="$ROUND"; _gs_saved_full="$NEED_DEEP_SCAN"
+        _gs_saved_seen="$LAST_SEEN_SET"; _gs_saved_alive="$LAST_ALIVE_PORT"; _gs_saved_state="$CURRENT_STATE"
+        _gs_saved_fcp="$(type -t find_candidate_ports 2>/dev/null || true)"
+        # 桩：快扫返回空（模拟"端口不在常见表里"），且不是全扫轮
+        find_candidate_ports() { return 0; }
+        ROUND=3; NEED_DEEP_SCAN=0
+        LAST_SEEN_SET="7099"; LAST_ALIVE_PORT="7099"; CURRENT_STATE="on:7099"
+        _gs_before="$LAST_SEEN_SET"
+        if get_current_state >/dev/null 2>&1; then :; fi
+        _selftest_assert_eq "快扫空结果不清签名（不当成集合变空）" "$_gs_before" "$LAST_SEEN_SET"
+        _selftest_assert_eq "快扫空结果不改判 off" "on:7099" "$CURRENT_STATE"
+        # 还原
+        ROUND="$_gs_saved_round"; NEED_DEEP_SCAN="$_gs_saved_full"
+        LAST_SEEN_SET="$_gs_saved_seen"; LAST_ALIVE_PORT="$_gs_saved_alive"; CURRENT_STATE="$_gs_saved_state"
+        if [ -n "$_gs_saved_fcp" ]; then eval "find_candidate_ports() { $(declare -f find_candidate_ports | sed -n '2,$p'); }" 2>/dev/null || true; fi
+        unset -f find_candidate_ports 2>/dev/null || true
+
+    # 握手判定：什么才算"这是个代理端口"。
+    # 这是区分"代理端口"与"其他服务端口"的唯一判据，不依赖进程名/端口号猜测。
+    # 判错两个方向都致命：把开发服务器当成代理 -> 注入死代理、终端全断；
+    # 把真代理漏掉 -> 使用者以为工具坏了。
+    # 判据是纯文本比较，直接喂字符串，不必真连网络。与 Windows 侧同一批用例。
+    if [ "$(type -t _ha_is_connect_ok 2>/dev/null || true)" = "function" ] || true; then
+        # 用**生产代码里那条正则**，不在这里另抄一份——抄一份就等于自己测自己，
+        # 改了 probe.sh 的判据而测试仍绿，那种绿是假的。从源码抽出来再求值。
+        _ha_pat=$(grep -oE '\^HTTP/1\\\.\[01\] \+200\( \|\$\)' "${SCRIPT_DIR:-mac}/lib/probe.sh" 2>/dev/null | head -n 1)
+        if [ -z "$_ha_pat" ]; then _ha_pat=$(grep -oE '\^HTTP/1\\\.\[01\] \+200\( \|\$\)' "$(dirname "$0")/lib/probe.sh" 2>/dev/null | head -n 1); fi
+        _selftest_assert_eq "握手：能从 probe.sh 里抽到那条判据正则" "yes" "$(if [ -n "$_ha_pat" ]; then echo yes; else echo no; fi)"
+        _ha_check() {
+            if printf '%s' "$1" | grep -qE "$_ha_pat"; then echo "yes"; else echo "no"; fi
+        }
+        _selftest_assert_eq "握手：标准 200 算代理" "yes" "$(_ha_check "HTTP/1.1 200 Connection established")"
+        _selftest_assert_eq "握手：1.0 的 200 也算" "yes" "$(_ha_check "HTTP/1.0 200 OK")"
+        _selftest_assert_eq "握手：只有状态码没有原因短语也算" "yes" "$(_ha_check "HTTP/1.1 200")"
+        _selftest_assert_eq "握手：404 不算" "no" "$(_ha_check "HTTP/1.1 404 Not Found")"
+        _selftest_assert_eq "握手：403 不算" "no" "$(_ha_check "HTTP/1.1 403 Forbidden")"
+        _selftest_assert_eq "握手：500 不算" "no" "$(_ha_check "HTTP/1.1 500 Internal Server Error")"
+        _selftest_assert_eq "握手：2000 不算（只认 200 本身，不许前缀匹配放过）" "no" "$(_ha_check "HTTP/1.1 2000 OK")"
+        _selftest_assert_eq "握手：2001 不算" "no" "$(_ha_check "HTTP/1.1 2001")"
+        _selftest_assert_eq "握手：204 不算（不是 CONNECT 成功）" "no" "$(_ha_check "HTTP/1.1 204 No Content")"
+        _selftest_assert_eq "握手：空应答不算" "no" "$(_ha_check "")"
+        _selftest_assert_eq "握手：非 HTTP 应答不算" "no" "$(_ha_check "SSH-2.0-OpenSSH_8.9")"
+        unset -f _ha_check 2>/dev/null || true
+    fi
+    fi
 
     # 换端口必须重新判定，不能沿用上个端口的结论——Mac 单槽曾因此把死端口报成"通"。
     # 用替身驱动真实 test_node_alive（只换掉网络那一层）。

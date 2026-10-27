@@ -344,22 +344,42 @@ function Invoke-UpdateText([string]$Url) {
     return $null
 }
 
+# 造一个已配好的 HttpClient：代理、超时、UA、是否跟随重定向，四件事只在这里定。
+#
+# 为什么抽出来：更新这条路有三个地方要发 HTTP 请求（问版本 / 网页兜底读标签 / 取包），
+# 每一处都要相同的代理探测与超时设置。各写一份的后果不是"多几行"，而是
+# "某一处忘了跟随用同一个代理地址探测函数"——那条路就会在某些机器上永远失败，
+# 而且只在某些机器上，最难查。
+#
+# $FollowRedirect 默认跟随；网页兜底那条路要传 $false，因为它靠读 Location 拿标签。
+# 调完必须 Dispose（handler 与 client 一起），否则连接池会漏。
+function New-UpdateHttpClient([string]$ProxyPort, [bool]$FollowRedirect = $true, [int]$TimeoutSec = 8) {
+    if (-not ("System.Net.Http.HttpClient" -as [type])) {
+        Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+    }
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    if ($ProxyPort) {
+        $handler.UseProxy = $true
+        # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
+        # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
+        $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
+    } else {
+        $handler.UseProxy = $false
+    }
+    $handler.AllowAutoRedirect = $FollowRedirect
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    # 超时按用途分：问版本/读标签是短请求（8 秒够），下载安装包要长得多（60 秒），
+    # 用同一档会让大文件在小带宽下必然超时。这是"同一个工厂、不同用途"的正解。
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSec)
+    $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+    return @{ Client = $client; Handler = $handler }
+}
+
 function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
     $handler = $null; $client = $null
     try {
-        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
-        $handler = New-Object System.Net.Http.HttpClientHandler
-        if ($ProxyPort) {
-            $handler.UseProxy = $true
-            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
-            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
-            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
-        } else {
-            $handler.UseProxy = $false
-        }
-        $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromSeconds(8)
-        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        $made = New-UpdateHttpClient $ProxyPort
+        $client = $made.Client; $handler = $made.Handler
         $task = $client.GetAsync($Url)
         if (-not $task.Wait(8000)) { return @{ Text = ""; Failure = "network" } }
         $resp = $task.Result
@@ -381,7 +401,7 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
 }
 
 # 查最新 Release（状态显示与更新入口共用）：
-# 返回 @{ Version="1.2.0"; Tag="v1.2.0"; Base="<下载前缀>"; Name="<源名>" }，
+# 返回 @{ Version="<去掉 v 的标签>"; Tag="<标签>"; Base="<下载前缀>"; Name="<源名>" }，
 # 所有源都问不到才返回 $null（只读，不抛异常，不写文件）。
 # 逐个源尝试，第一个答出来的胜出。
 # 顺带把胜出源的下载前缀一并带回去——版本与安装包必须来自同一个源，
@@ -499,21 +519,9 @@ function Get-TagFromWeb([string]$Url) {
 function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
     $handler = $null; $client = $null
     try {
-        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
-        $handler = New-Object System.Net.Http.HttpClientHandler
-        if ($ProxyPort) {
-            $handler.UseProxy = $true
-            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
-            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
-            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
-        } else {
-            $handler.UseProxy = $false
-        }
         # 不跟随重定向：只有拦住第一跳，才读得到 Location 里的标签。
-        $handler.AllowAutoRedirect = $false
-        $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromSeconds(8)
-        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        $made = New-UpdateHttpClient $ProxyPort $false
+        $client = $made.Client; $handler = $made.Handler
         $task = $client.GetAsync($Url)
         if (-not $task.Wait(8000)) { return @{ Tag = ""; Failure = "network" } }
         $resp = $task.Result
@@ -720,19 +728,9 @@ function Save-UpdateFile([string]$Url, [string]$DestFile, [hashtable]$Headers = 
 function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort, [hashtable]$Headers = @{}) {
     $handler = $null; $client = $null
     try {
-        if (-not ("System.Net.Http.HttpClient" -as [type])) { Add-Type -AssemblyName System.Net.Http -ErrorAction Stop }
-        $handler = New-Object System.Net.Http.HttpClientHandler
-        if ($ProxyPort) {
-            $handler.UseProxy = $true
-            # 地址现场探测，与注入端同源：只绑 ::1 的代理在 IPv4 上连不上，
-            # 写死 127.0.0.1 会让"更新"这条路对它永远失败。
-            $handler.Proxy = New-Object System.Net.WebProxy((Get-ProxyUrlForPort ([int]$ProxyPort)))
-        } else {
-            $handler.UseProxy = $false
-        }
-        $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromSeconds(60)
-        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyUpdate")
+        # 下载可能要几十秒，超时单独放宽。
+        $made = New-UpdateHttpClient $ProxyPort $true 60
+        $client = $made.Client; $handler = $made.Handler
         # 自定义头（API 资产端点要 Accept: application/octet-stream）。返回 false 说明头没加上，
         # 那这条请求拿回来的会是 JSON 而不是安装包——当场判失败，别把 JSON 当包往下走。
         if ($Headers) {

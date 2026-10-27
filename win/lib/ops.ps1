@@ -141,7 +141,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     Write-Styled 'title' "======== EnvProxy 卸载（一键恢复原状）========"
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" }
     # 先问一句再动手。这是整个工具里**唯一不可逆**的动作：会删开机自启、摘终端配置、
-    # 清掉代理变量。而它在菜单里紧挨着「5 停止监控」（那个是可逆的，"下次开机会自己回来"），
+    # 清掉代理变量。而它在菜单里紧挨着「6 停止监控」（那个是可逆的，"下次开机会自己回来"），
     # 手滑按错就没有回头路。原来全函数里唯一的提问是"日志要不要保留"——
     # 而那时监控已停、自启已删、配置已摘，问什么都晚了。
     # 默认 N（回车 = 不卸载）：危险动作的默认必须是"不做"。
@@ -206,6 +206,11 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     # Git Bash 同步用的状态镜像也在定位器目录里：它由本工具新引入，卸载必须带走。
     # 先删文件再删目录，否则目录非空、Remove-Item 不带 -Recurse 会失败（原来就是这样漏的）。
     Remove-Item -LiteralPath (Join-Path $LauncherDir "terminal.env") -Force -ErrorAction SilentlyContinue
+    # 固定入口的端口记录也带走：它是本工具写的运行时状态，留着只会让保留的图标
+    # 去连一个没人听的口（白等一次连接超时），随后才降级到直读注册表。
+    $relayPortFile = ''
+    try { $relayPortFile = Get-RelayPortFile } catch {}
+    if ($relayPortFile) { Remove-Item -LiteralPath $relayPortFile -Force -ErrorAction SilentlyContinue }
     # 走代理的快捷方式：能问的时候先问再定 launcher.ps1 与 launchers\ 的去留；
     # -Purge 与无交互环境不问（前者直接删，后者默认保留）。
     # 这一问必须在删目录**之前**——先删了再问，用户答"保留"就来不及了。
@@ -570,6 +575,20 @@ function Format-StatusLines($st) {
         & $row '代理变量' '无（直连状态）' 'dim'
     }
 
+
+    # ---- 第三组之二：更新中断 / 系统代理残留 ----
+    # 这两段静态页有、实时帧曾经没有——同一份状态，按回车看和等它刷新，
+    # 屏幕上的行数不一样，而缺的正好是"怎么办"那句。
+    # 用户报"信息对不上"时，查的人会以为是缓存问题，实际是两份代码。
+    if ($st.UpdateInProgress) {
+        & $row '上次更新' '没有完成（覆盖过程中断）' 'warn'
+        & $line '  程序文件可能新旧混合，某些功能会静默失效。' 'dim'
+        & $line '  打开菜单选 1（安装 / 修复）重做一次即可。' 'dim'
+    }
+    if ($st.SysProxy) {
+        & $row '系统代理' ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
+        & $line '  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。' 'dim'
+    }
     # ---- 第四组：终端同步 ----
     # 话术从 Get-TermSyncText 取，与静态页同源
     & $line '' 'text'
@@ -584,21 +603,30 @@ function Format-StatusLines($st) {
         }
     } else {
         & $row '终端同步' '状态未知' 'dim'
-    }
 
-    # 版本（与上面的状态分组分开：那是当前状态，这是软件版本）
-    & $line '' 'text'
-    $verText = if ($st.LocalVersion) { 'v' + $st.LocalVersion } else { '未知' }
-    $verRole = 'value'
-    if ($st.RemoteCache -and $st.RemoteCache.Version) {
-        if ($st.LocalVersion -and ($st.RemoteCache.Version -eq $st.LocalVersion)) {
-            $verText += '（已是最新）'
+    # ---- 第四组之二：固定入口（只在真的建过走代理的图标时才出现）----
+    # 两版必须说同一句话，措辞与 Show-StatusSnapshot 里那一段逐字相同。
+    # 判据用"有没有图标"而不是"中继在不在跑"：对没建图标的人那是必然的噪音。
+    $relayIconCount = 0
+    try { $relayIconCount = @(Get-ProxyShortcutRecords).Count } catch { $relayIconCount = 0 }
+    if ($relayIconCount -gt 0) {
+        $rs = $null
+        try { $rs = Get-RelayStatus } catch {}
+        & $line '' '' 'text'
+        if ($rs -and $rs.Running) {
+            & $row '高级功能' ("{0} 个走代理的图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
-            $verText += ('（新版 ' + $st.RemoteCache.Version + ' 可用，选 3 升级）')
-            $verRole = 'warn'
+            & $row '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
     }
-    & $row '版本' $verText $verRole
+    # 版本（与上面的状态分组分开：那是当前状态，这是软件版本）
+    # 文案从 Get-VersionText 取——与静态页**同一份判断**。
+    # 这里原来自己写了一小套（只认"相等=最新 / 否则=新版可用"），
+    # 于是静态页说"开发副本"、实时帧说"已是最新"，同一台机器两句话。
+    & $line '' '' 'text'
+    $vt = Get-VersionText $st
+    }
+    & $row '版本' $vt.Text $vt.Role
 
     # 日志尾
     #
@@ -1025,10 +1053,18 @@ function Get-StatusSnapshot {
         $st.Port = if ($snapPort -gt 0) { $snapPort } else { $null }
         $st.PortUnknown = ($st.Snapshot.PortEnumeration -eq 'failed')
         $st.PortEnumerationReason = [string]$st.Snapshot.PortReason
+        # 监控每轮算过"变量是否与状态一致、写进去了没有"，状态页要消费它们。
+        # 不读的后果是白算——快照里有，而屏幕上永远看不到，用户以为一切正常。
+        # 读不到（老版本写的快照没有这两个字段）时留空串，判据那里按"不报"处理。
+        $st.VarsMatch = [string]$st.Snapshot.VarsMatch
+        $st.ApplyResult = [string]$st.Snapshot.ApplyResult
     } else {
         $st.Port = Get-InUseProxyPort -FullScan:$true
         $st.PortUnknown = [bool]$script:PortEnumerationFailed
         try { $st.PortEnumerationReason = [string]$script:PortEnumerationReason } catch { $st.PortEnumerationReason = '' }
+        # 没读到快照就没有这两个结论：留空串，不许假设成"一致 / 成功"。
+        $st.VarsMatch = ''
+        $st.ApplyResult = ''
     }
     try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
     $st.ProxyValue = Get-EnvProxyValue
@@ -1118,6 +1154,11 @@ function Get-StatusProblems($st) {
     if ($st.TermSync -and $st.TermSync.State -ne 'ok') { $problems += "终端同步没生效" }
     if ($st.SysProxy) { $problems += "系统代理可能残留（不是本工具写的）" }
     if ($st.UpdateInProgress) { $problems += "上次更新没有完成，程序文件可能新旧混合" }
+    # 代理变量与"当前状态"对不上、以及写不进去——这两件事监控每轮都算，
+    # 但状态页从来没读过，于是它们即使出问题也不会出现在"有 N 项要注意"里。
+    # 用户看到的是"一切正常"，而终端其实连不上。
+    if ($st.VarsMatch -eq 'no') { $problems += "代理变量和当前状态对不上（可能被别的程序改了）" }
+    if ($st.ApplyResult -eq 'failed') { $problems += "代理变量写不进去（下一轮还会再试）" }
     return $problems
 }
 
@@ -1287,41 +1328,49 @@ function Show-StatusSnapshot($st) {
 #   有但很旧  → 仍然比较，但把"这是多久以前查的"一起说出来（陈旧数据不许假装是当前数据）
 #   还没有    → 说明为什么还没有（监控没在跑 / 刚装上），并给出主动查的办法
 function Show-VersionLines($st) {
+    $vt = Get-VersionText $st
+    Write-StatusRow '版本' $vt.Text $vt.Role
+}
+
+# 版本那一行说的是什么——**唯一实现**，静态页与实时帧都从这里取。
+#
+# 为什么抽出来：这一行原来有两份判断。静态页认六种情况（开发副本 / 源码包 /
+# 还没查过 / 比发布版新 / 发现有新版 / 已是最新），实时帧只认两种（相等就"已是最新"、
+# 否则"新版可用"）。于是同一台机器上，按回车看到"开发副本（更新走 git pull）"、
+# 等五秒后刷新变成"已是最新"——两句互相矛盾的话，而两处代码各自"看起来都对"。
+# 用户报"信息对不上"时，查的人会以为是缓存问题，实际是两份代码。
+#
+# 返回 @{ Text; Role }：Text 是完整的一整句（含括号），Role 是颜色角色。
+function Get-VersionText($st) {
     $localVer = $st.LocalVersion
     $cache = $st.RemoteCache
-    $remote = $null
-    if ($cache) { $remote = @{ Version = $cache.Version; Tag = ("v" + $cache.Version) } }
     $localText = if ($localVer) { "v$localVer" } else { "未知" }
     if (-not $cache) {
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        Write-StatusRow '版本' ("{0}（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" -f $localText) 'dim'
-        return
+        return @{ Text = ("{0}（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" -f $localText); Role = 'dim' }
     }
+    $remote = $null
+    if ($cache.Version) { $remote = @{ Version = $cache.Version; Tag = ("v" + $cache.Version) } }
     $ageText = ""
     if ($cache.AgeMinutes -ge 1440) { $ageText = ("（{0} 天前的记录）" -f [int]($cache.AgeMinutes / 1440)) }
     elseif ($cache.AgeMinutes -ge 60) { $ageText = ("（{0} 小时前的记录）" -f [int]($cache.AgeMinutes / 60)) }
-    if ($remote) {
-        $state = $null
-        $role = 'ok'
-        if (Test-DevCopy) {
-            $state = "开发副本（更新走 git pull，本入口不改动文件）"; $role = 'dim'
-        } elseif (Test-SourceCopy) {
-            $state = "源码包（更新入口会先确认用途再动手）"; $role = 'warn'
-        } elseif (-not $localVer) {
-            $state = "可打开菜单选 3（检查更新）升级"; $role = 'warn'
-        } elseif ((Compare-Versions $localVer $remote.Version) -gt 0) {
-            $state = "本地版本比最新发布版新"; $role = 'dim'
-        } elseif ((Compare-Versions $remote.Version $localVer) -gt 0) {
-            $state = ("发现新版 {0}，选 3（检查更新）即可升级" -f $remote.Tag); $role = 'warn'
-        } else {
-            $state = "已是最新"; $role = 'dim'
-        }
-        if ($role -eq 'dim') {
-            Write-StatusRow '版本' ("{0}（{1}）{2}" -f $localText, $state, $ageText) 'dim'
-        } else {
-            Write-StatusRow '版本' ("{0}（{1}）{2}" -f $localText, $state, $ageText) $role
-        }
+    if (-not $remote) { return @{ Text = ($localText + $ageText); Role = 'dim' } }
+    $state = $null
+    $role = 'ok'
+    if (Test-DevCopy) {
+        $state = "开发副本（更新走 git pull，本入口不改动文件）"; $role = 'dim'
+    } elseif (Test-SourceCopy) {
+        $state = "源码包（更新入口会先确认用途再动手）"; $role = 'warn'
+    } elseif (-not $localVer) {
+        $state = "可打开菜单选 3（检查更新）升级"; $role = 'warn'
+    } elseif ((Compare-Versions $localVer $remote.Version) -gt 0) {
+        $state = "本地版本比最新发布版新"; $role = 'dim'
+    } elseif ((Compare-Versions $remote.Version $localVer) -gt 0) {
+        $state = ("发现新版 {0}，选 3（检查更新）即可升级" -f $remote.Tag); $role = 'warn'
+    } else {
+        $state = "已是最新"; $role = 'dim'
     }
+    return @{ Text = ("{0}（{1}）{2}" -f $localText, $state, $ageText); Role = $role }
 }
 
 # 把一段文本裁到指定**显示宽度**，超出时末尾补省略号。
@@ -1807,6 +1856,14 @@ function Get-HelpTopics {
                 't 已经开着的程序还连着旧端口，会连不上。关掉重开就好。',
                 't 出现这种情况时会自动弹一句提示，不用你盯着。',
                 'b ',
+                'h 固定入口是干什么的',
+                't 有些程序会把你给的地址写进它自己的设置里，之后一直用那个。',
+                't 翻墙软件一换端口它们就连不上，而你还得去它的设置里改一遍。',
+                't 固定入口在本机开一个永不变的地址，程序只认这个，背后自动跟着翻墙软件走。',
+                't 建图标时自动就用它，不用你做什么；它跟着监控一起跑，也没有开关要拨。',
+                't 它没在工作也不要紧：图标会退回去读当前地址，照样能用。',
+                't 想看它现在的状态：菜单选 5 再选 3，那一屏只看不改。',
+                'b ',
                 'h 不想要了',
                 't 菜单选 5 再选 2，能看状态、逐个删。'
             )
@@ -1824,11 +1881,11 @@ function Get-HelpTopics {
                 'b ',
                 'i 2. 看菜单最上面那行写的什么',
                 't2 写「未运行」就选 1（安装 / 修复）。',
-                'i 3. 三个常见误会',
+                'i 3. 两个常见误会',
                 't2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
                 't2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、这个工具被停了，不是坏了。',
                 'h 还是不行：把问题报上去',
-                't 菜单选 8（问题反馈）。它先问你三句话，再自动补上这台机器的情况，',
+                't 菜单选 8（问题反馈）。它先问你四句话，再自动补上这台机器的情况，',
                 't 存成一个文件、把路径复制好。你不用找日志，也不用敲命令。',
                 't 然后把文件内容贴到这里（本项目只在这里收问题）：',
                 ('i ' + $HelpProjIssue),

@@ -271,10 +271,10 @@ STYLE_COLOR_NAMES="cyan brightwhite green yellow darkgray none"
 
 style_code_of_name() {
     case "$1" in
-        cyan)        echo "36" ;;
+        cyan)        echo "96" ;;
         brightwhite) echo "97" ;;
-        green)       echo "32" ;;
-        yellow)      echo "33" ;;
+        green)       echo "92" ;;
+        yellow)      echo "93" ;;
         darkgray)    echo "90" ;;
         *)           echo "" ;;
     esac
@@ -424,13 +424,27 @@ is_owned_proxy_value() {
     # 快照里存的是单引号转义后的值（见 shell_escape_sq），所以两种写法都要认。
     # 逐变量比对，而不是"整份文件里 grep 一下"：后者会把 NO_PROXY 里恰好含同一串
     # 文本的情况也算进来，而且依赖分隔符形式，格式一改保护就静默失效。
-    if [ -f "$PREV_ENV" ]; then
-        _iov_want=$(printf '%s' "$1")
-        for _iov_v in $PROXY_ADDR_VAR_NAMES; do
-            _iov_have=$(_snapshot_value_of "$_iov_v")
-            [ -n "$_iov_have" ] && [ "$_iov_have" = "$_iov_want" ] && return 1
-        done
+    #
+    # 快照文件**不存在**：按"全新安装、用户原本没设过代理变量"处理，这个本机地址就是我们的。
+    # 这条不能改成"不认领"——那样每次全新安装注入的值都清不掉，off 态会永远残留一套变量。
+    if [ ! -f "$PREV_ENV" ]; then
+        return 0
     fi
+    _iov_want=$(printf '%s' "$1")
+    _iov_readable=0
+    for _iov_v in $PROXY_ADDR_VAR_NAMES; do
+        _iov_have=$(_snapshot_value_of "$_iov_v")
+        if [ -n "$_iov_have" ]; then
+            _iov_readable=1
+            [ "$_iov_have" = "$_iov_want" ] && return 1
+        fi
+    done
+    # 文件在、但一个变量都没读出内容：说明这份快照不可用（被截断 / 权限 / 格式坏了），
+    # 此时**不认领**。这与 Windows 侧 Test-SnapshotRecorded 的三态化同一条：
+    # 读不出来若落成"是我们的"，后续会把这个本机地址删掉——而那可能正是使用者自己挂的
+    # mitmproxy。两个方向的代价不对称：不认领最多多留一个值（下一轮还会再判），
+    # 认错了则删掉他本来能用的东西，而且没有任何提示。
+    [ "$_iov_readable" = "1" ] || return 1
     return 0
 }
 

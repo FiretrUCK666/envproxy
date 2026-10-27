@@ -85,7 +85,9 @@ $ScriptPath = if ($PSCommandPath) { $PSCommandPath }
 $ScriptDir  = Split-Path -Parent $ScriptPath
 $LibDir = Join-Path $ScriptDir "lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib\ 实际内容一致。
-$CoreLibs = @("base", "probe", "env", "runtime", "package", "update", "ops", "shortcut")
+# relay 只依赖 base（它用的是固定安装目录，不是 monitor 目录），所以排在 runtime 之前
+# 也可以；排在 package 之前是因为建快捷方式那一段要用它算端口记录的位置。
+$CoreLibs = @("base", "probe", "env", "runtime", "relay", "package", "update", "ops", "shortcut")
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 $missingLib = @()
 foreach ($libName in $CoreLibs) {
@@ -294,6 +296,13 @@ if ($RepairProfile) {
     if ($r.Fixed.Count -eq 0 -and $r.Failed.Count -eq 0) {
         Write-Styled 'dim' "没有需要修的：所有配置文件里的标记都是成对的。"
     }
+    # 有没修好的就返回非 0。
+    #
+    # 不返回非 0 的后果：脚本里写成 `envproxy.ps1 -RepairProfile; if ($?) { ... }`
+    # 的人会以为修好了，接着去开菜单重装，然后又被同一条护栏拒绝——
+    # 退出码是这条命令唯一能被程序读懂的结论，说"成功"而实际失败是谎报。
+    # 与 mac 侧同一套语义（那边 repair_hook_markers 有失败就 return 1）。
+    if ($r.Failed.Count -gt 0) { exit 1 }
     return
 }
 # 无参数 = 监控模式（由开机自启调用）。
