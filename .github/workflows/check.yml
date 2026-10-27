@@ -1764,7 +1764,8 @@ jobs:
           # 白名单写「哪一侧允许独有」，方向必须对：反过来写会让真正的漏同步被放行。
           $winOnlyAllowed = @('高级功能')
           $macOnlyAllowed = @()
-           = @()
+          foreach ($name in $macMenu.Keys) {
+            if (-not $winMenu.ContainsKey($name)) {
               if ($macOnlyAllowed -notcontains $name) {
                 Write-Host ("菜单项「{0}」只在 Mac 侧存在（编号 {1}）——改名了？还是漏了同步？" -f $name, $macMenu[$name])
                 $fail = 1
