@@ -1064,7 +1064,19 @@ function Get-CurrentState {
         $listenState = Test-PortListening $port
         # 读不出来（unknown）时这一轮**是"不知道"**：既不能当"还在听"（可能早没了），
         # 也不能当"没在听"（那会判 off、删掉用户的代理变量）。原地不动最安全。
-        if ($listenState -eq "unknown") { return "unknown" }
+        if ($listenState -eq "unknown") {
+            # 这一轮确实"读不出来"，必须让上层知道。
+            #
+            # 这里曾经只是 return：标记没置位，于是快照写 port_enumeration=ok，
+            # 状态页把上一轮的结论当成"此刻的结论"报成绿的，问题报告也印"端口扫描：ok"。
+            # 而用户最需要知道"这一轮没读到"的，正是这种说不清的时刻。
+            # 与上面那段"每轮必须复位"是同一枚硬币的两面：复位做了，置位也得做。
+            $script:PortEnumerationFailed = $true
+            if (-not $script:PortEnumerationReason) {
+                $script:PortEnumerationReason = "端口在不在读不出来（两次都没读到端口表）"
+            }
+            return "unknown"
+        }
         if ($listenState -eq "listening") {
             # 在位复核（约每 10 轮一次，本机零流量）：代理退出后若有别的程序
             # 占了同一端口，握手不过立即丢缓存，不等 15 秒节点节流。
@@ -1132,7 +1144,13 @@ function Get-CurrentState {
     # 端口枚举失败 = 这一轮不知道，不是不在翻墙。判 off 会删掉用户的代理变量，
     # 而真实情况可能只是这一次没读到。交给主循环"沿用上一状态"。
     # 注意：失败时**不置** EverFullScanned——那一次全扫并没有真的完成。
-    if ($script:PortEnumerationFailed) { return "unknown" }
+    if ($script:PortEnumerationFailed) {
+        # 这一轮白跑了。**把"该深扫"的意图还回去**：上面已经把它清掉了，
+        # 而这次全扫根本没做成——吞掉意图等于让"刚丢缓存就立刻深扫一次"
+        # 这条补救白设计，实测会多花约 2 轮（6 秒）才恢复。
+        if ($justLostCache -or $needFirstFullScan) { $script:NeedDeepScan = $true }
+        return "unknown"
+    }
     if ($fullScan) { $script:EverFullScanned = $true }
     $sig = ($cands -join ",")
     # 快扫只认"常见端口表 + 进程名"，它给出的是全集的一个**子集**，不是完整观测。

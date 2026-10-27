@@ -134,6 +134,11 @@ NODE_FAST_UNTIL=0        # 刚下结论后的加密观察窗口截止时刻（ep
 CACHED_PORT=""
 # 刚丢掉缓存时置 1：下一轮立刻深扫（与 Windows 侧 $script:NeedDeepScan 同义）。
 NEED_DEEP_SCAN=0
+# 是否做过至少一次**成功的**全扫。它与 NEED_DEEP_SCAN 是两件事：
+# 后者是"下一轮要不要特意全扫"，一次性、用完清零；
+# 这个是"有没有确认过全集"，做过就永不回退。用它当"首轮必须全扫"的判据，
+# 才不会被"签名恒为空"这种巧合反复触发全扫（Windows 侧同名 $script:EverFullScanned）。
+EVER_FULL_SCANNED=0
 LAST_SEEN_SET=""
 LAST_ALIVE_PORT=""
 ROUND=0
@@ -714,6 +719,9 @@ get_current_state() {
             # 端口枚举失败：这一轮不知道。不判 off——判 off 会删掉用户的代理变量，
             # 而真实情况可能只是这一次没读到。返回非 0，交给主循环"沿用上一状态"。
             log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+            # 这次全扫没做成，但"刚丢了端口、需要深扫确认"的意图仍然成立，
+            # 记下来下一轮再试——不记的话要等第 10 轮的节流点，实测多花约 6 秒。
+            NEED_DEEP_SCAN=1
             return 1
         fi
         LAST_SEEN_SET="$_cands"
@@ -733,15 +741,35 @@ get_current_state() {
     # 用户改端口、换软件、断开重连都走这条路径，新端口往往不在常见表里，
     # 靠"每 10 轮才全扫"会让空窗拖到约 27 秒（off 态每轮 sleep 3）。
     # 稳态（一直 off、从没活过）仍按 10 轮节流，不白烧 CPU。
-    if [ $((ROUND % 10)) -eq 0 ] || [ "$NEED_DEEP_SCAN" = "1" ]; then _full=1; else _full=0; fi
+    #
+    # ③ **还没做过任何一次全扫**：此时快扫的"什么都没看见"分不清"真没有"
+    # 与"端口在表外"，必须全扫一次才能下结论。少了 ③，机器上已经开着翻墙软件、
+    # 而它绑在表外端口时，首轮快扫会判 off，要等到第 10 轮才发现——约 27 秒里
+    # 用户看着"未检测到"而代理其实好好的。Windows 侧同样有这条（needFirstFullScan）。
+    #
+    # ③ 的判据必须是"做过就置位、永不回退"的标记，不能用"签名是不是空"：
+    # 机器上从头到尾没有代理时签名恒为空串，用它当判据会让每一轮都全扫。
+    _just_lost=$NEED_DEEP_SCAN
     NEED_DEEP_SCAN=0
+    if [ "$EVER_FULL_SCANNED" = "1" ]; then _need_first=0; else _need_first=1; fi
+    if [ $((ROUND % 10)) -eq 0 ] || [ "$_just_lost" = "1" ] || [ "$_need_first" = "1" ]; then
+        _full=1
+    else
+        _full=0
+    fi
     _cands=$(find_candidate_ports "$_full")
     _rc=$?
     if [ $_rc -ne 0 ]; then
         # 端口枚举失败：这一轮不知道。不判 off（理由同上）。
         log_msg "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
+        # 把"该深扫"的意图还回去：上面已经清掉，而这次全扫根本没做成。
+        # 首轮那次也不能算数，否则 EVER_FULL_SCANNED 被误置后永不再补扫。
+        if [ "$_just_lost" = "1" ] || [ "$_need_first" = "1" ]; then NEED_DEEP_SCAN=1; fi
         return 1
     fi
+    # 到这里全扫是真的做成了（枚举成功）。置位那个"永不回退"的标记，
+    # 让"首轮必须全扫"只在真的没扫过时成立。与 Windows 侧 30 行位置同义。
+    if [ "$_full" = "1" ]; then EVER_FULL_SCANNED=1; fi
     # ① **快扫的空结果要看"上次全扫看见了什么"**，不能一律当成"本机没有代理"，
     #    也不能一律当成"不知道"：
     #    · 上次全扫也是空的 -> 两轮一致，"确实没有代理"，判 off。

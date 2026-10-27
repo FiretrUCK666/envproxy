@@ -139,67 +139,152 @@ function Initialize-RelayType {
     if ('EnvProxyRelay' -as [type]) { return $true }
     $code = @'
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 
 public class EnvProxyRelay {
-    // 上游端口：由宿主（监控主循环）在每轮写入，转发时读取。
-    // volatile：写线程与读线程不同，不加会读到旧值（尤其在多核上被缓存）。
-    private static volatile int _upstreamPort = 0;
+    // 上游 = 地址 + 端口，必须**一起**换。
+    //
+    // 只存端口会丢掉地址族：只监听 ::1 的代理（mihomo / sing-box 配 bind-address: "::1"）
+    // 对 IPv4 回环是**主动拒绝**，那条链路 100% 失败；而终端里 curl 一切正常
+    // （变量注入的是 http://[::1]:端口），用户只会觉得"某个软件坏了"。
+    private static readonly object _upLock = new object();
+    private static string _upstreamHost = "127.0.0.1";
+    private static int _upstreamPort = 0;
+
+    public static void SetUpstream(string host, int port) {
+        lock (_upLock) {
+            _upstreamHost = string.IsNullOrEmpty(host) ? "127.0.0.1" : host;
+            _upstreamPort = port;
+        }
+    }
+    public static void SetUpstream(int port) { SetUpstream("127.0.0.1", port); }
+    public static int GetUpstream() { lock (_upLock) { return _upstreamPort; } }
+
     private TcpListener _listener = null;
     private Thread _acceptThread = null;
     private volatile bool _running = false;
     private int _port = 0;
+    private int _active = 0;
+    private readonly List<Socket> _conns = new List<Socket>();
 
-    public static void SetUpstream(int port) { _upstreamPort = port; }
-    public static int GetUpstream() { return _upstreamPort; }
+    private const int MaxConnections = 200;
+    private const int ThreadStackBytes = 256 * 1024;
+    private const int MaxHeadBytes = 65536;
+    private const int ConnectTimeoutMs = 4000;
+    private const int FirstPacketTimeoutMs = 2000;
+
+    private static string _lastError = "";
+    public static string LastError { get { return _lastError; } }
 
     public int Port { get { return _port; } }
-    public bool Running { get { return _running; } }
+    // 判活要看**线程还在不在**，不能只看那个布尔。
+    // accept 线程异常退出后 _running 若还留着 true，会同时骗过两个人：
+    // 界面读到 Running=true（以为没事）、Start-Relay 的幂等判据也读到 true（不重建），
+    // 于是永久坏到监控进程重启——图标还能点，但永远不走代理，谁都不修。
+    public bool Running {
+        get { return _running && _acceptThread != null && _acceptThread.IsAlive; }
+    }
 
-    // 起监听。port=0 表示让系统挑（测试用）。
-    public bool Start(int port) {
-        try {
-            _listener = new TcpListener(IPAddress.Loopback, port);
-            _listener.Start();
-            _port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+    public bool Start(int port) { return StartRange(port, 1); }
+
+    // 在 [startPort, startPort+span) 里找第一个能绑的端口，**一次 bind 定胜负**。
+    //
+    // 原来分两步：先 bind 探一次、Stop、返回端口，回来再 bind 一次。两步之间有窗口，
+    // 探测说完好、真正绑定时被别人抢走，于是 Start 返回 false——而窗口里还有十几个空闲端口，
+    // 代码一个都不再试，整条能力就此消失，日志里还没有任何细节。
+    public bool StartRange(int startPort, int span) {
+        if (span < 1) { span = 1; }
+        Stop();
+        _lastError = "";
+        for (int i = 0; i < span; i++) {
+            int p = (startPort <= 0) ? 0 : (startPort + i);
+            TcpListener l = null;
+            try {
+                l = new TcpListener(IPAddress.Loopback, p);
+                l.Start();
+            } catch (Exception ex) {
+                if (l != null) { try { l.Stop(); } catch {} }
+                _lastError = "bind " + p + ": " + ex.Message;
+                if (startPort <= 0) { _running = false; return false; }
+                continue;
+            }
+            _listener = l;
+            _port = ((IPEndPoint)l.LocalEndpoint).Port;
             _running = true;
             _acceptThread = new Thread(AcceptLoop);
-            _acceptThread.IsBackground = true;   // 宿主退出时不阻止进程结束
+            _acceptThread.IsBackground = true;
             _acceptThread.Start();
             return true;
-        } catch {
-            _running = false;
-            return false;
         }
+        _lastError = "no free port in [" + startPort + ", " + (startPort + span - 1) + "]";
+        _running = false;
+        return false;
     }
 
     public void Stop() {
         _running = false;
-        try { if (_listener != null) _listener.Stop(); } catch {}
+        try { if (_listener != null) { _listener.Stop(); } } catch {}
         _listener = null;
+        // 已建立的连接也要关。不然"停止"之后旧隧道还在继续转发，
+        // 而端口记录已经删了——读方以为中继没了，实际还有流量在走。
+        Socket[] snap;
+        lock (_conns) { snap = _conns.ToArray(); _conns.Clear(); }
+        for (int i = 0; i < snap.Length; i++) { try { snap[i].Close(); } catch {} }
     }
 
     private void AcceptLoop() {
         while (_running) {
             Socket client = null;
             try { client = _listener.AcceptSocket(); }
-            catch { break; }   // 监听被关掉：正常退出路径
-            try { ThreadPool.QueueUserWorkItem(delegate(object o) { Handle((Socket)o); }, client); }
-            catch { try { client.Close(); } catch {} }
+            catch { break; }
+            // 超过上限：立刻回 503 再关，不让它堆在线程里。
+            if (Interlocked.Increment(ref _active) > MaxConnections) {
+                Interlocked.Decrement(ref _active);
+                Reply(client, "HTTP/1.1 503 Service Unavailable", "busy", 0);
+                try { client.Close(); } catch {}
+                continue;
+            }
+            Track(client, true);
+            Socket c = client;
+            // **每条连接一个专属线程**，不用线程池。
+            // 线程池超过最小线程数后约每 0.5-1 秒才补一个线程，而 Handle 是阻塞写法、
+            // 整条连接都占着线程：实测 50 条并发时最后一条要等 22 秒才拿到线程，
+            // 用户看到的是"点了图标先卡十几秒才动"，连状态探针也一起堵死。
+            // 专属线程 + 小栈（256KB）让开销可预期；上限 200 防失控程序吃光内存。
+            Thread t = new Thread(delegate() {
+                try { Handle(c); }
+                finally {
+                    Track(c, false);
+                    Interlocked.Decrement(ref _active);
+                }
+            }, ThreadStackBytes);
+            t.IsBackground = true;
+            t.Start();
+        }
+        // 退出这个循环只有两种可能：Stop() 关了监听（_running 已是 false），
+        // 或者监听出了异常。后者必须把 _running 也置假，让上层能发现并重建。
+        _running = false;
+    }
+
+    private void Track(Socket s, bool add) {
+        lock (_conns) {
+            if (add) { _conns.Add(s); }
+            else { _conns.Remove(s); }
         }
     }
 
-    // 单向泵：读到 0 就把对端的发送方向关掉（半关闭），
-    // 不这么做大响应体会被截断——表现为"下载到一半失败"。
     private static void Pump(Socket from, Socket to) {
         byte[] buf = new byte[16384];
         try {
             while (true) {
                 int n = from.Receive(buf);
                 if (n <= 0) {
+                    // 半关闭：不这么做大响应体会被截断（"下载到一半失败"）。
                     try { to.Shutdown(SocketShutdown.Send); } catch {}
                     return;
                 }
@@ -208,118 +293,195 @@ public class EnvProxyRelay {
         } catch {}
     }
 
-    // 状态探针的专用路径。读方（状态页、查看中继那一屏）运行在别的进程，
-    // 想确认"中继还在、上游是谁"。**不能拿普通请求去探**：那会被转发给上游，
-    // 回什么取决于上游（实测上游对裸 GET 回 400，中继原样转回，
-    // 读方据此会误判"这不是中继"）。
-    // 所以中继必须自己应答这个路径，不转发。
     private const string StatusPath = "/__envproxy_relay_status__";
+
+    // 只看请求行，且路径必须**完全相等**。
+    // 前缀匹配会把 GET /__envproxy_relay_status__evil 也截胡，那条请求永远到不了上游。
+    private static bool IsStatusRequest(string head) {
+        int e = head.IndexOf("\r\n", StringComparison.Ordinal);
+        string line = (e > 0) ? head.Substring(0, e) : head;
+        string[] parts = line.Split(' ');
+        if (parts.Length < 2) { return false; }
+        return string.Equals(parts[1], StatusPath, StringComparison.Ordinal);
+    }
+
+    private static int IndexOfCrLfCrLf(byte[] buf, int len) {
+        for (int i = 0; i + 3 < len; i++) {
+            if (buf[i] == 13 && buf[i+1] == 10 && buf[i+2] == 13 && buf[i+3] == 10) { return i; }
+        }
+        return -1;
+    }
+
+    // 读到头的结尾（空行）为止，**不能只读一次**。
+    // 客户端的请求头经常分两次写出，也可能是很大的 Cookie（>16KB）。
+    // 只读一次就把半截头当完整头转给上游，上游等不到空行不应答，
+    // 客户端挂满超时后收到 504——每条这类请求都彻底失败。
+    private static byte[] ReadHead(Socket s, int timeoutMs) {
+        s.ReceiveTimeout = timeoutMs;
+        byte[] buf = new byte[8192];
+        MemoryStream ms = new MemoryStream();
+        int total = 0;
+        while (total < MaxHeadBytes) {
+            int n;
+            try { n = s.Receive(buf); }
+            catch { return null; }
+            if (n <= 0) { break; }
+            ms.Write(buf, 0, n);
+            total += n;
+            if (IndexOfCrLfCrLf(ms.GetBuffer(), total) >= 0) { break; }
+        }
+        if (total <= 0) { return null; }
+        byte[] outb = new byte[total];
+        Array.Copy(ms.GetBuffer(), outb, total);
+        return outb;
+    }
+
+    // 上游地址候选：给的地址优先，若它是回环再补另一个地址族。
+    // 与本项目"探测本机代理要试两个回环地址"同一条道理。
+    private static string[] BuildCandidates(string host) {
+        if (string.IsNullOrEmpty(host)) { return new string[] { "127.0.0.1", "::1" }; }
+        if (host == "::1") { return new string[] { "::1", "127.0.0.1" }; }
+        if (host == "127.0.0.1") { return new string[] { "127.0.0.1", "::1" }; }
+        return new string[] { host };
+    }
+
+    private static Socket ConnectUpstream(string host, int port, out bool timedOut) {
+        timedOut = false;
+        string[] cands = BuildCandidates(host);
+        for (int i = 0; i < cands.Length; i++) {
+            Socket s = null;
+            try {
+                IPAddress addr = IPAddress.Parse(cands[i]);
+                s = new Socket(addr.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                s.NoDelay = true;
+                IAsyncResult ar = s.BeginConnect(new IPEndPoint(addr, port), null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(ConnectTimeoutMs)) {
+                    timedOut = true;
+                    try { s.Close(); } catch {}
+                    continue;
+                }
+                s.EndConnect(ar);
+                return s;
+            } catch {
+                if (s != null) { try { s.Close(); } catch {} }
+            }
+        }
+        return null;
+    }
+
+    private static bool IsOkStatus(string text) {
+        return text.StartsWith("HTTP/1.1 200", StringComparison.Ordinal)
+            || text.StartsWith("HTTP/1.0 200", StringComparison.Ordinal);
+    }
 
     private void Handle(Socket client) {
         Socket upstream = null;
         try {
             client.NoDelay = true;
-            client.ReceiveTimeout = 15000;
-            byte[] head = new byte[16384];
-            int n = client.Receive(head);
-            if (n <= 0) return;
-            string requestHead = Encoding.ASCII.GetString(head, 0, n);
+            byte[] head = ReadHead(client, 15000);
+            if (head == null) { return; }
+            string requestHead = Encoding.ASCII.GetString(head);
 
-            // 状态探针：自己回，不进转发流程。
-            if (requestHead.StartsWith("GET " + StatusPath, StringComparison.Ordinal)) {
-                int cur = _upstreamPort;
+            if (IsStatusRequest(requestHead)) {
+                int cur;
+                lock (_upLock) { cur = _upstreamPort; }
                 string body = "{\"running\":true,\"upstream\":" + cur + "}";
                 byte[] payload = Encoding.UTF8.GetBytes(body);
-                string hdr = "HTTP/1.1 200 OK\r\n"
-                    + "Content-Type: application/json\r\n"
-                    + "Content-Length: " + payload.Length + "\r\n"
-                    + "Connection: close\r\n"
-                    + "X-EnvProxy-Relay: status\r\n"
-                    + "X-EnvProxy-Upstream: " + cur + "\r\n\r\n";
-                byte[] hb = Encoding.ASCII.GetBytes(hdr);
-                client.Send(hb);
+                StringBuilder sb = new StringBuilder();
+                sb.Append("HTTP/1.1 200 OK\r\n");
+                sb.Append("Content-Type: application/json\r\n");
+                sb.Append("Content-Length: ").Append(payload.Length).Append("\r\n");
+                sb.Append("Connection: close\r\n");
+                sb.Append("X-EnvProxy-Relay: status\r\n");
+                sb.Append("X-EnvProxy-Upstream: ").Append(cur).Append("\r\n\r\n");
+                client.Send(Encoding.ASCII.GetBytes(sb.ToString()));
                 client.Send(payload);
                 return;
             }
 
-            // 上游端口现场取：换端口后无需重启中继。
-            int upPort = _upstreamPort;
-            if (upPort <= 0) { Reply(client, "HTTP/1.1 503 Service Unavailable", "no upstream"); return; }
-
-            upstream = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
-            upstream.NoDelay = true;
-            // 连接超时不能太长：上游死时要快速回 502，而不是让客户端挂在那儿。
-            IAsyncResult ar = upstream.BeginConnect(new IPEndPoint(IPAddress.Loopback, upPort), null, null);
-            if (!ar.AsyncWaitHandle.WaitOne(2000)) {
-                Reply(client, "HTTP/1.1 504 Gateway Timeout", "upstream timeout");
+            string upHost;
+            int upPort;
+            lock (_upLock) { upHost = _upstreamHost; upPort = _upstreamPort; }
+            if (upPort <= 0) {
+                Reply(client, "HTTP/1.1 503 Service Unavailable", "no upstream", 0);
                 return;
             }
-            try { upstream.EndConnect(ar); }
-            catch { Reply(client, "HTTP/1.1 502 Bad Gateway", "upstream refused"); return; }
 
-            // 把客户端的请求头原样交给上游（CONNECT 与绝对 URI 两种形态都一样处理）。
-            upstream.Send(head, 0, n, SocketFlags.None);
+            bool timedOut;
+            upstream = ConnectUpstream(upHost, upPort, out timedOut);
+            if (upstream == null) {
+                // 拒绝与超时要分开：拒绝是"上游没开"（去开翻墙软件），
+                // 超时是"上游不答"（重连 / 换节点）。混成一个码，用户不知道从哪儿下手。
+                if (timedOut) {
+                    Reply(client, "HTTP/1.1 504 Gateway Timeout", "upstream timeout", upPort);
+                } else {
+                    Reply(client, "HTTP/1.1 502 Bad Gateway", "upstream refused", upPort);
+                }
+                return;
+            }
 
-            // 等上游的第一段响应，确认它接受了这次请求。
-            byte[] upBuf = new byte[16384];
-            upstream.ReceiveTimeout = 10000;
-            int m;
-            try { m = upstream.Receive(upBuf); }
-            catch { Reply(client, "HTTP/1.1 504 Gateway Timeout", "upstream no response"); return; }
-            if (m <= 0) { Reply(client, "HTTP/1.1 502 Bad Gateway", "upstream closed"); return; }
+            upstream.Send(head, 0, head.Length, SocketFlags.None);
 
-            string upHead = Encoding.ASCII.GetString(upBuf, 0, m);
+            byte[] upHead = ReadHead(upstream, FirstPacketTimeoutMs);
+            if (upHead == null) {
+                Reply(client, "HTTP/1.1 504 Gateway Timeout", "upstream no response", upPort);
+                return;
+            }
+            string upText = Encoding.ASCII.GetString(upHead);
             bool isConnect = requestHead.StartsWith("CONNECT ", StringComparison.OrdinalIgnoreCase);
 
             if (isConnect) {
-                // 隧道：上游回了 2xx 才算建立成功。非 2xx 原样回给客户端（它自己能看懂）。
-                if (upHead.StartsWith("HTTP/1.1 200") || upHead.StartsWith("HTTP/1.0 200")) {
+                if (IsOkStatus(upText)) {
                     byte[] ok = Encoding.ASCII.GetBytes("HTTP/1.1 200 Connection established\r\n\r\n");
                     client.Send(ok);
+                    // 上游把 200 头和数据放在同一个包里是合法的（TLS 握手包常见）。
+                    // 头之后那些字节必须转给客户端，否则隧道第一段就丢数据、TLS 直接崩。
+                    int hdrEnd = IndexOfCrLfCrLf(upHead, upHead.Length);
+                    if (hdrEnd >= 0) {
+                        int bodyStart = hdrEnd + 4;
+                        if (bodyStart < upHead.Length) {
+                            byte[] rest = new byte[upHead.Length - bodyStart];
+                            Array.Copy(upHead, bodyStart, rest, 0, rest.Length);
+                            client.Send(rest);
+                        }
+                    }
                 } else {
-                    byte[] raw = Encoding.ASCII.GetBytes(upHead);
-                    client.Send(raw);
+                    client.Send(upHead);
                     return;
                 }
             } else {
                 // 普通 HTTP：上游已经把响应头（可能连正文）回过来了，原样转给客户端。
-                client.Send(upBuf, 0, m, SocketFlags.None);
+                client.Send(upHead);
             }
 
-            // 双向泵。第二条泵放线程池，本线程跑反向，两个方向同时进行。
-            //
-            // **进泵之前必须把读超时清掉。** Socket.ReceiveTimeout 管的是
-            // "每一次 Read 最多等多久"，不是"首包等多久"——超时对整条连接的
-            // 生命周期都生效。而隧道里出现十几秒没有任何字节是**完全正常的**：
-            // 浏览器 keep-alive 等下一页、SSE、WebSocket、看文章时页面静止、
-            // 分段下载之间的停顿，都会超过 15 秒。留着超时的后果是
-            // 客户端在 15004ms 处读到 read=0（连接被静默关闭），
-            // 表现为"走代理看网页，停十几秒不动就断了"，而且完全不报错。
-            // 上游死掉不靠读超时发现——那由 TCP 自己负责（RST / keepalive）。
+            // 进泵之前必须把读超时清零。Socket.ReceiveTimeout 管的是整条连接的生命周期，
+            // 而隧道里十几秒没有字节是完全正常的（keep-alive、SSE、看文章时页面静止）。
+            // 留着超时的表现是"停十几秒不动就断了"，而且完全不报错。
             client.ReceiveTimeout = 0;
             upstream.ReceiveTimeout = 0;
             Socket upRef = upstream;
-            Thread t = new Thread(delegate() { Pump(upRef, client); });
+            Socket clRef = client;
+            Thread t = new Thread(delegate() { Pump(upRef, clRef); }, ThreadStackBytes);
             t.IsBackground = true;
             t.Start();
             Pump(client, upstream);
         } catch {
-            try { Reply(client, "HTTP/1.1 502 Bad Gateway", "relay error"); } catch {}
+            try { Reply(client, "HTTP/1.1 502 Bad Gateway", "relay error", 0); } catch {}
         } finally {
-            try { if (client != null) client.Close(); } catch {}
-            try { if (upstream != null) upstream.Close(); } catch {}
+            try { if (client != null) { client.Close(); } } catch {}
+            try { if (upstream != null) { upstream.Close(); } } catch {}
         }
     }
 
-    private static void Reply(Socket s, string status, string why) {
-        // 把当前上游端口一起回到头里：读方（状态页、查看中继那一屏）运行在别的进程，
-        // 看不到这里的静态字段，只能靠这个头知道"它现在转发到哪儿"。
-        // 5xx 时上游是 0（没得转发），这正是读方要区分的那件事。
-        int up = (why == "no upstream") ? 0 : _upstreamPort;
-        byte[] b = Encoding.ASCII.GetBytes(
-            status + "\r\nContent-Length: 0\r\nX-EnvProxy-Relay: " + why
-            + "\r\nX-EnvProxy-Upstream: " + up + "\r\n\r\n");
-        s.Send(b);
+    private static void Reply(Socket s, string status, string why, int upPort) {
+        StringBuilder sb = new StringBuilder();
+        sb.Append(status).Append("\r\n");
+        sb.Append("Content-Length: 0\r\n");
+        // 必须有 Connection: close，否则客户端会按长连接等着，白白挂到超时。
+        sb.Append("Connection: close\r\n");
+        sb.Append("X-EnvProxy-Relay: ").Append(why).Append("\r\n");
+        sb.Append("X-EnvProxy-Upstream: ").Append(upPort).Append("\r\n\r\n");
+        try { s.Send(Encoding.ASCII.GetBytes(sb.ToString())); } catch {}
     }
 }
 '@
@@ -344,25 +506,43 @@ function Test-RelayType {
 $script:RelayInstance = $null
 $script:RelayPort = 0
 $script:RelayFailed = $false
+# 上一次失败的原因（空串 = 没失败过）。三种失败（编译不了 / 端口全占 / 启动异常）
+# 必须分得开：只置一个 bool 的话，日志里那句话对三种情况都成立，
+# 用户和开发者都分不清该查哪儿。
+$script:RelayFailReason = ""
 
 # 起中继。已在跑就什么都不做（幂等——主循环会反复调它）。
 # 返回 $true 表示"现在有一个在跑"。
 function Start-Relay {
+    # 幂等：主循环每轮都会调（它本来就是"死了就重建"的唯一收敛点）。
     if ($script:RelayInstance -and $script:RelayInstance.Running) { return $true }
-    if (-not (Initialize-RelayType)) { $script:RelayFailed = $true; return $false }
-    $pick = Select-RelayPort
-    if (-not $pick.Ok) { $script:RelayFailed = $true; return $false }
+    # 上一份实例还在但不 Running（accept 线程死了）：先收干净再重建，
+    # 不然旧监听可能还占着端口。
+    if ($script:RelayInstance) { try { $script:RelayInstance.Stop() } catch {}; $script:RelayInstance = $null }
+    if (-not (Initialize-RelayType)) {
+        $script:RelayFailed = $true
+        $script:RelayFailReason = "中继类型编译失败（.NET 组件可能被裁剪）"
+        return $false
+    }
     try {
         $relay = New-Object EnvProxyRelay
-        if (-not $relay.Start($pick.Port)) { $script:RelayFailed = $true; return $false }
+        # **在 C# 里一次绑到底**：别在这边先探一次端口再让它绑一次。
+        # 两步之间有窗口，抢输之后原来直接放弃，而窗口里还有十几个空闲端口。
+        if (-not $relay.StartRange($RelayDefaultPort, $RelayPortScanSpan)) {
+            $script:RelayFailed = $true
+            $script:RelayFailReason = "端口绑定失败：" + [string]([EnvProxyRelay]::LastError)
+            return $false
+        }
         $script:RelayInstance = $relay
         $script:RelayPort = $relay.Port
         $script:RelayFailed = $false
+        $script:RelayFailReason = ""
         # 记录实际端口：启动器要读它。写失败不影响中继工作（启动器会退回直读注册表）。
         try { Write-Text -Path (Get-RelayPortFile) -Text ([string]$relay.Port) } catch {}
         return $true
     } catch {
         $script:RelayFailed = $true
+        $script:RelayFailReason = "启动异常：" + $_.Exception.Message
         return $false
     }
 }
@@ -384,15 +564,24 @@ function Stop-Relay {
 # 上游取"我们注入的那个值指向的端口"——它是权威来源，与终端拿到的完全一致。
 function Sync-RelayUpstream {
     if (-not ($script:RelayInstance -and $script:RelayInstance.Running)) { return }
+    $upHost = "127.0.0.1"
     $port = 0
     try {
         $val = Get-EnvProxyValue
         if ($val) {
             $parts = Split-ProxyUrl $val
-            if ($parts -and $parts.Port -gt 0) { $port = [int]$parts.Port }
+            if ($parts -and $parts.Port -gt 0) {
+                $port = [int]$parts.Port
+                # **地址也要带上**，不能只传端口。
+                # 只监听 ::1 的代理（mihomo / sing-box 配 bind-address: "::1"）对 IPv4
+                # 回环是主动拒绝：只传端口等于把这类用户的固定入口直接判死，
+                # 而终端里 curl 一切正常（变量注入的是 http://[::1]:端口），
+                # 用户只会觉得"某个软件坏了"，根本不会想到是中继。
+                if ($parts.Host) { $upHost = [string]$parts.Host }
+            }
         }
     } catch {}
-    try { [EnvProxyRelay]::SetUpstream($port) } catch {}
+    try { [EnvProxyRelay]::SetUpstream($upHost, $port) } catch {}
 }
 
 # 中继当前是否可用（状态页、查看中继页用；只读，不启动任何东西）。

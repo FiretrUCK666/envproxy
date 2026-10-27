@@ -2957,7 +2957,11 @@ $__cmpSt = [ordered]@{
     StopIntent = $false; NeverInstalled = $false; AutoRunOk = $true
     Port = 7078; PortUnknown = $false
     ProxyValue = 'http://127.0.0.1:7078'; ProxyAlive = $true
-    TermSync = $null
+    # 终端同步用**正常态**（最常见的那条路），不用 $null。
+    # 用 $null 会让 fixture 恰好走进 else 分支——那里曾因为一个大括号错位
+    # 被误当成 `$vt 的作用域，于是"版本行是空的"这个真 bug 被这条用例放过了。
+    # 用正常态才对：正常机器永远走 if 分支，那才是用户实际看到的样子。
+    TermSync = [pscustomobject]@{ State = 'ok' }
     SysProxy = [pscustomobject]@{ State = 'residual'; Server = '127.0.0.1:9999' }
     UpdateInProgress = $true
     VarsMatch = 'no'; ApplyResult = 'failed'
@@ -3009,14 +3013,34 @@ foreach ($it in $__items) {
 Assert-Eq '两版状态页：静态页的每一项实时帧都有（缺了就是分叉）' 0 $__missingInLive.Count
 foreach ($m in $__missingInLive) { Write-Host ('    实时帧缺少：' + $m) }
 
-# 反向：实时帧报出来的项，静态页也得有（防止以后只改实时帧）
-$__liveItems = @(__cmpItems $__liveRaw)
+# 反向：实时帧报出来的项，静态页也得有（防止以后只改实时帧）。
+#
+# 实时帧的行是"标签 : 值"一行写完的，而 __cmpItems 认的是"标签单独一行带冒号"，
+# 所以它从实时帧抽出 0 项——下面那条断言于是恒真，静默丢行（比如整段"高级功能"）
+# 它永远发现不了。实测把静态页的"高级功能"整段删掉，这条照样绿。
+# 这里改用专门认"标签 : 值"的抽取，并且**先断言抽到了东西**：
+# 抽取规则失效必须报红，不能让"抽不到"悄悄退化成"没问题"。
+function __cmpLiveLabels([string[]]$Lines) {
+    $labels = @()
+    foreach ($ln in $Lines) {
+        $t = (Remove-AnsiColor $ln).Trim()
+        if ($t -match '^(?<lbl>[^:：]+)\s*[:：]') {
+            $l = $Matches['lbl'].Trim()
+            # 排除说明性文字（含空格的都不是标签，例如"打开菜单选 1"）
+            if ($l -and $l -notmatch '\s' -and $labels -notcontains $l) { $labels += $l }
+        }
+    }
+    return $labels
+}
+$__liveItems = @(__cmpLiveLabels $__liveRaw)
+Assert-Eq '两版状态页：实时帧至少抽出 5 个标签（抽取规则没失效）' $true ($__liveItems.Count -ge 5)
 $__missingInStat = @()
-foreach ($it in $__liveItems) {
-    $hitLabel = @($__stat | Where-Object { $_ -match ('^' + [regex]::Escape($it.Label) + '\s*[:：]') }).Count -gt 0
-    if (-not $hitLabel) { $__missingInStat += $it.Label }
+foreach ($lbl in $__liveItems) {
+    $hit = @($__stat | Where-Object { $_ -match ('^' + [regex]::Escape($lbl) + '\s*[:：]') }).Count -gt 0
+    if (-not $hit) { $__missingInStat += $lbl }
 }
 Assert-Eq '两版状态页：实时帧的每一项静态页都有' 0 $__missingInStat.Count
+foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 
 # 状态页整段不许写文件、不许改变量（只读契约）

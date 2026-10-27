@@ -872,14 +872,17 @@ proxy_notify_state_path() { printf '%s' "$MONITOR_DIR/notify.last"; }
 # 为什么后台跑：osascript 起一个进程约几十毫秒，而这是主循环里的调用；
 # 弹窗本身要等用户看到，不能卡住探测节奏。
 # 文案与 Windows 侧同一套说法（不写端口号：用户不认端口，也做不了什么）。
+# DIVERGE(Mac): 这里的文案比 Windows 侧少一句"用菜单建的图标不受影响"。
+# 原因：固定入口（中继）与走代理的快捷方式都是 Windows 独有（本目录没有 relay / shortcut），
+# macOS 上不存在"图标记着固定地址"这回事，说了反而是让人去找一个不存在的东西。
 invoke_proxy_change_notice() {
     _ipn_new="$1"
     case "$_ipn_new" in
         on:*)
-            _ipn_msg="翻墙软件换了个地方，正在运行的程序还连在旧的地方，可能会连不上。关掉重开就好。"
+            _ipn_msg="翻墙软件换了个端口。在终端里跑的程序新开一个窗口就跟上了；已经开着的（zsh / bash）敲一下回车也会跟上。"
             ;;
         *)
-            _ipn_msg="翻墙软件关掉了（或者断开了）。正在运行的程序可能还接着那边，会连不上。关掉重开就好；不翻墙的话不用管它。"
+            _ipn_msg="翻墙软件关掉了（或者断开了），现在上不了外网。终端里的程序也会连不上；要用就重新打开它，代理会自动回来。"
             ;;
     esac
     # osascript 的字符串里要转义双引号与反斜杠；内置 display notification 不需要额外权限。
@@ -1000,9 +1003,13 @@ run_monitor_loop() {
         # pid 文件同理：它一旦丢失，对外就"查不到自己在跑"。重新写一份，代价是一次小文件写。
         [ -f "$PID_FILE" ] || printf '%s\n' "$$" > "$PID_FILE" 2>/dev/null || true
         if [ ! -f "$SCRIPT_PATH" ]; then _self=1; break; fi
+        _st_unknown=0
         if ! get_current_state; then
             log_msg "检测异常：状态探测失败，沿用上一状态"
             CURRENT_STATE="$_last"
+            # 这一轮是"读不出来"。它既不是"变化"也不是"稳定"，
+            # **不参与去抖记账**（见下面 if 处的说明）。
+            _st_unknown=1
             # 这一轮没读到端口：快照要如实记下，状态页据此显示"无法判断"而不是"没有代理"。
             _snap_enum="failed"
             _snap_reason="状态探测失败（详见 monitor.log）"
@@ -1011,7 +1018,14 @@ run_monitor_loop() {
             _snap_reason=""
         fi
         _st="$CURRENT_STATE"
-        if [ "$_st" != "$_last" ]; then
+        if [ "$_st_unknown" = "1" ]; then
+            # 保留 _pending / _pending_n 原样：这一轮没读到，既不能当作证据支持翻转，
+            # 也不能当作反证否掉已有证据。原来这里落进 else 把计数清零，
+            # 于是只要探测在 2 轮确认窗口里失败过一次，on→off 就永远走不完：
+            # 状态永远是旧的 on:端口，变量指向死端口，状态页还绿字"已开启"。
+            # Windows 侧同一处有同一个缺陷，两侧一起修。
+            :
+        elif [ "$_st" != "$_last" ]; then
             if [ "$_st" = "$_pending" ]; then _pending_n=$((_pending_n + 1)); else _pending="$_st"; _pending_n=1; fi
             if [ $_pending_n -ge "$STATE_DEBOUNCE_ROUNDS" ]; then
                 _before="$_last"

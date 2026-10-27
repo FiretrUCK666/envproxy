@@ -124,6 +124,19 @@ install_envproxy() {
     _tip_row "$_tip_a6" "菜单选 4（帮助）。" ""
 }
 
+# 卸载时要清掉的运行时文件清单——**删除与复检的唯一来源**。
+#
+# 为什么要抽出来：这两件事原来各写一份，删除列了 7 个、复检一个都没查。
+# 删失败（权限、被占用、杀软锁住）时仍然报"[完成] 已恢复到安装前的状态"，
+# 而重装后状态页会读到上一份留下的 version.cache / state.snapshot。
+# 同一份清单只有一处，就不会再出现"删了忘了查"。
+# 与 Windows 侧 ops.ps1 卸载分支同一套文件（那边逐项 Remove-Item）。
+monitor_runtime_files() {
+    printf '%s\n' "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
+        "$VERSION_CACHE" "$SNAPSHOT_FILE" \
+        "$MONITOR_DIR/update.inprogress" "$MONITOR_DIR/notify.last"
+}
+
 uninstall_envproxy() {
     _purge="$1"
     _un_yes="${2:-}"
@@ -180,9 +193,11 @@ uninstall_envproxy() {
         # 留着它，重装后第一次真实的端口变化会被上一份安装留下的值吃掉——
         # 使用者换了端口却什么提示都没有，而那些程序正连着旧地址。
         # Windows 侧同一位置也删它（ops.ps1 卸载分支），两侧行为必须一致。
-        rm -f "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
-              "$VERSION_CACHE" "$SNAPSHOT_FILE" "$MONITOR_DIR/update.inprogress" \
-              "$MONITOR_DIR/notify.last" 2>/dev/null || true
+        # 运行时文件清单从这里取，删除与复检**共用同一份**。
+        # 原来删除列了 7 个、复检一个都没查：删失败（权限、被占用、杀软锁住）时
+        # 仍然报"[完成] 电脑已恢复到安装前的状态"，而重装后状态页会读到上一份的
+        # version.cache / state.snapshot——正是上面那段注释自己点名的后果，只是没人验。
+        rm -f $(monitor_runtime_files) 2>/dev/null || true
         rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
             rmdir "$MONITOR_DIR" 2>/dev/null || true
@@ -219,6 +234,14 @@ uninstall_envproxy() {
     # owned.env 上面删过，但复检原来没查它——删失败时报"已完成"，而它记着
     # "我们写下的值"，留着会让终端钩子继续认为代理是我们设的。
     # 复检项必须与删除项一一对应，删了不查等于没删。
+    # 运行时文件逐个查：删除清单与这里**同源**（monitor_runtime_files）。
+    # 只加一处清单、不在这里重列：重列就会再次出现"删了忘了查"。
+    while IFS= read -r _rf; do
+        [ -z "$_rf" ] && continue
+        if [ -f "$_rf" ]; then _dirty="$_dirty 运行时文件仍在（$_rf）；"; fi
+    done <<EOF_RUNTIME_FILES
+$(monitor_runtime_files)
+EOF_RUNTIME_FILES
     if [ -f "$OWNED_ENV" ]; then _dirty="$_dirty 归属记录仍在（$OWNED_ENV）；"; fi
     if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
@@ -1155,33 +1178,6 @@ format_help_key_range() {
 # 为什么生成而不是手抄：手抄的那一份在改菜单时会静默过期，症状是用户照帮助里的
 # 编号去敲，敲到的是另一件事（想检查更新，结果卸载了）。生成之后这份内容与菜单
 # 读同一张表，改表即同步，不存在"两边都要记得改"。
-_help_menu_lines() {
-    _hml_w=$(for _hml_i in "${MENU_ITEMS[@]}"; do
-        _hml_rest=${_hml_i#*|}
-        printf '%s\n' "${_hml_rest%%|*}"
-    done | _max_width_of)
-    echo "t 这些编号要在主菜单里敲，不是在帮助里敲。"
-    for _hml_g in $(_menu_group_order); do
-        echo "b "
-        if [ "$_hml_g" = "日常" ]; then
-            echo "h $_hml_g（平时只会用到这些）"
-        else
-            echo "h $_hml_g"
-        fi
-        for _hml_i in "${MENU_ITEMS[@]}"; do
-            _hml_rest=${_hml_i#*|}
-            _hml_name=${_hml_rest%%|*}
-            _hml_rest2=${_hml_rest#*|}
-            _hml_hint=${_hml_rest2%%|*}
-            _hml_grp=${_hml_i%|*}; _hml_grp=${_hml_grp##*|}
-            [ "$_hml_grp" != "$_hml_g" ] && continue
-            _hml_key=${_hml_i%%|*}
-            # 三格：编号 / 名字 / 说明。名字列由渲染器按整块自动补齐，不在这里手敲空格。
-            echo "m $_hml_key|$_hml_name|$_hml_hint"
-        done
-    done
-}
-
 # 帮助正文的角色标记。每一行自己声明"我是什么"，渲染器照着画，不再从行的形状去猜。
 #
 # 为什么必须这样：靠形状猜的判据是"缩进 4 格以上 + 这一行没有汉字 = 命令"，

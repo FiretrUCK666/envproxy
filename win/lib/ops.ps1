@@ -603,6 +603,7 @@ function Format-StatusLines($st) {
         }
     } else {
         & $row '终端同步' '状态未知' 'dim'
+    }
 
     # ---- 第四组之二：固定入口（只在真的建过走代理的图标时才出现）----
     # 两版必须说同一句话，措辞与 Show-StatusSnapshot 里那一段逐字相同。
@@ -625,7 +626,6 @@ function Format-StatusLines($st) {
     # 于是静态页说"开发副本"、实时帧说"已是最新"，同一台机器两句话。
     & $line '' '' 'text'
     $vt = Get-VersionText $st
-    }
     & $row '版本' $vt.Text $vt.Role
 
     # 日志尾
@@ -1315,6 +1315,24 @@ function Show-StatusSnapshot($st) {
         Write-Host ''
         Write-StatusRow '终端同步' '已生效（已开着的窗口敲回车即跟上）' 'ok'
     }
+    # ---- 固定入口（只在真的建过走代理的图标时才出现）----
+    # 措辞与实时帧逐字相同：两版是同一屏的两种刷新方式，改一处必须改另一处。
+    # 这里曾经只有实时帧有、静态页整段缺失——建过图标的人在降级路径下就看不到它，
+    # 而它正是"程序记的地址为什么不会失效"的唯一解释。
+    # 判据用"有没有图标"而不是"中继在不在跑"：对没建图标的人那是必然的噪音。
+    $relayIconCount = 0
+    try { $relayIconCount = @(Get-ProxyShortcutRecords).Count } catch { $relayIconCount = 0 }
+    if ($relayIconCount -gt 0) {
+        $rs = $null
+        try { $rs = Get-RelayStatus } catch {}
+        Write-Host ''
+        if ($rs -and $rs.Running) {
+            Write-StatusRow '高级功能' ("{0} 个走代理的图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
+        } else {
+            Write-StatusRow '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
+        }
+    }
+
     Write-Host ''
     Show-VersionLines $st
     Show-RecentLog

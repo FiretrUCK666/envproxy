@@ -1682,14 +1682,22 @@ function Run-MonitorLoop {
     Write-MonitorLog "==== 监控启动 ===="
 
     # 固定入口（中继）：跟监控同生共死，不新增常驻进程。
-    # 起不来的原因只有两种（类型编译失败、连续端口都被占），都不该让监控停摆——
-    # 它只是"走代理的快捷方式"的一个便利，没有它那些图标照样能用（退回直读注册表）。
-    # 所以这里失败只记一行日志，不改变监控的任何行为。
+    # 起不来不该让监控停摆——它只是"走代理的快捷方式"的一个便利，
+    # 没有它那些图标照样能用（退回直读当前代理）。所以失败只记日志，不改监控行为。
+    #
+    # 但**日志必须说清是哪一种失败**：编译不了 / 端口全被占 / 启动抛异常，
+    # 这三种的排查方向完全不同。只写一句"没能启动"，事后只能靠改代码去试。
     try {
         if (Start-Relay) {
             Write-MonitorLog ("固定入口已启动：127.0.0.1:" + $script:RelayPort)
         } else {
-            Write-MonitorLog "固定入口没能启动（不影响使用：走代理的图标会退回直读当前代理）"
+            $why = ""
+            try { $why = [string]$script:RelayFailReason } catch {}
+            if ($why) {
+                Write-MonitorLog ("固定入口没能启动（不影响使用）：" + $why)
+            } else {
+                Write-MonitorLog "固定入口没能启动（不影响使用：走代理的图标会退回直读当前代理）"
+            }
         }
     } catch {
         Write-MonitorLog ("固定入口启动异常（不影响使用）：" + $_.Exception.Message)
@@ -1767,6 +1775,9 @@ function Run-MonitorLoop {
         if (-not $ScriptPath -or -not (Test-Item $ScriptPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
+            # 本轮是不是"读不出来"。unknown 既不是"变化"也不是"稳定"，
+            # 它**不参与去抖记账**——见下面 if 处的说明。
+            $stateUnknown = $false
 
             if ($state -eq "unknown") {
                 # 这一轮不知道（端口枚举失败）：沿用上一状态，不动环境变量，
@@ -1782,9 +1793,22 @@ function Run-MonitorLoop {
                     Write-MonitorLog "端口枚举失败 -> 本轮沿用上一状态，不动环境变量"
                 }
                 $state = $lastState
+                $stateUnknown = $true
             }
 
-            if ($state -ne $lastState) {
+            # 去抖记账。**unknown 轮必须整段跳过**，这是"状态翻不过来"的第二条路径：
+            #
+            # 上面把 $state 换成了 $lastState，于是这里的 $state -ne $lastState 恒为假，
+            # 直接落进 else 把 $pendingCount 清零——前面几轮攒下的"待确认"证据全废。
+            # 后果：只要端口枚举在 2 轮确认窗口里失败过一次，on→off 就永远走不完。
+            # 实测：关掉翻墙软件 + 枚举隔轮失败，12 轮内状态一次都没动，
+            # 变量一直指向死端口，状态页绿字"已开启"——正是刚修的那个故障换了个入口。
+            #
+            # 根因是"不计入"被实现成了"清零"。正确的语义是：这一轮没读到，
+            # 既不能当作证据支持翻转，也不能当作反证否掉已有证据——原地不动。
+            if ($stateUnknown) {
+                # 什么都不做：保留 $pendingState / $pendingCount 原样，下一轮接着攒。
+            } elseif ($state -ne $lastState) {
                 # 状态疑似翻转：连续确认 $StateDebounceRounds 轮才动手，杜绝抖动
                 if ($state -eq $pendingState) { $pendingCount++ } else { $pendingState = $state; $pendingCount = 1 }
                 if ($pendingCount -ge $StateDebounceRounds) {
@@ -1834,6 +1858,16 @@ function Run-MonitorLoop {
             # 成本是一次静态字段写（微秒级），所以不必节流。
             # 中继**不缓存**上游：换端口后下一条新连接就走新的，不需要重启它。
             # 中继没在跑时这是空操作（Sync-RelayUpstream 自己判）。
+            # 中继本身也要每轮确认还活着。
+            #
+            # accept 线程可能因为一次监听异常就退出了。那时如果不重建，会永久坏到
+            # 监控进程重启：图标还能点，但永远不走代理，状态页说"没在工作"，
+            # 没有任何路径会修它。Start-Relay 是幂等的（在跑就直接返回），
+            # 所以拿它当"死了就重建"的唯一收敛点，成本是一次布尔判断。
+            #
+            # 顺序在 Sync 之前：先在的中继不存在时重建，再告诉它上游是谁——
+            # 反过来的话，刚重建的那一个会空等一轮才拿到上游。
+            try { $null = Start-Relay } catch {}
             try { Sync-RelayUpstream } catch {}
 
             # 每 30 轮自愈一次（轮间隔 on 2 秒 / off 3 秒 → 约 60–90 秒一次）。
@@ -2078,18 +2112,27 @@ function Test-ProxyShouldNotify([string]$OldState, [string]$NewState) {
 # 代价是启动慢一点（实测约 290 ms），但这是低频事件（只在代理地址真变时发生），
 # 而且它跑在独立进程里，不占监控主循环的时间。
 function Invoke-ProxyChangeNotice([string]$OldState, [string]$NewState) {
-    # 措辞按"用户遇到什么"来写，不按"我们的状态机怎么变"来写：
-    #   on -> on  ：端口换了，他遇到的是"程序连不上"
-    #   on -> off ：代理关了，他遇到的同样也是"程序连不上"。这里若照旧说"端口变了"，
-    #               会让他去找一个已经不存在的端口——一句指错方向的提示比不提示更糟。
+    # 措辞按"用户遇到什么"来写，不按"我们的状态机怎么变"来写。
+    #
+    # 两种情况要分开说，因为后果真的不同：
+    #   on -> on  ：翻墙软件换了端口。**用菜单建的图标不受影响**——它们连的是固定入口，
+    #               那个地址永不变，背后自动跟着换。会断的只有直接读环境变量的程序
+    #               （git/npm/curl 这类在终端里跑的），它们下次开就会读新值。
+    #               所以这句不能再吓唬人说"程序都连不上了"，那是固定入口出现之前的说法。
+    #   on -> off ：代理真的关了，谁都用不了。这时"关掉重开"也救不了——
+    #               要救只能重新开翻墙软件。指错方向比不提示更糟。
+    #
     # 端口号不写进弹窗：用户不认端口号，也做不了什么，写出来只会让他以为要记下来。
     $msg = if ($NewState.StartsWith('on:')) {
-        "翻墙软件换了个地方，正在运行的程序还连在旧的地方，可能会连不上。`r`n`r`n" +
-        "如果它们打不开或一直转圈，关掉重开就好。"
+        "翻墙软件换了个端口。`r`n`r`n" +
+        "用菜单建的那些图标不受影响，照常用就行。`r`n" +
+        "在终端里跑的程序（git、npm 这类）新开一个窗口就跟着换了；`r`n" +
+        "PowerShell 和 Git Bash 里，已经开着的窗口敲一下回车也会跟上`r`n" +
+        "（cmd 窗口没有这个机制，得关掉重开一个）。"
     } else {
         "翻墙软件关掉了（或者断开了）。`r`n`r`n" +
-        "正在运行的程序可能还接着那边，会连不上。`r`n" +
-        "关掉重开就好；不翻墙的话不用管它。"
+        "现在上不了外网，终端里的程序也会连不上。`r`n" +
+        "要用就把它重新打开，代理会自动回来；不用管也行。"
     }
     # 消息文本走 base64：中文、引号、换行都不用操心转义，编码由 base64 保证。
     $b64 = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($msg))

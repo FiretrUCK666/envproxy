@@ -724,8 +724,28 @@ function Show-AdvancedPage {
 #   ① 我那些图标用的是什么地址（为什么它们从来不用改）
 #   ② 它现在有没有在工作（没在工作也不要紧——图标会退回读当前代理）
 #   ③ 背后跟着的是哪个端口（换软件之后想确认一下）
+# 把「查看中继」的一行行对象转成可交给屏幕层渲染的字符串帧。
+#
+# 为什么需要这一层：屏幕层（Write-ScreenFrame / Measure-ScreenFrame）处理的是
+# 已经带颜色的字符串，而 Get-RelayPageLines 返回的是 { Role; Text } 结构。
+# 两者之间要有个转换——否则每一处调用都得自己拼颜色，拼接规则一分叉就又回到
+# "同一屏两种长相"那类问题。
+#
+# 角色到颜色走同一张表（Write-Styled 用的就是它），不在这里另写一份。
+function ConvertTo-RelayFrame($Status) {
+    $out = @()
+    foreach ($r in (Get-RelayPageLines -Status $Status)) {
+        if ($r.Role -eq 'blank') { $out += ''; continue }
+        $out += (Format-Styled $r.Role $r.Text)
+    }
+    return $out
+}
+
 function Get-RelayPageLines {
-    $st = Get-RelayStatus
+    # 可选传入状态：实时刷新时调用方已经取过一次，再取一次等于每帧多发一个探针。
+    # 不传就自己取，保证单独调用（一次性输出那条路）照常能用。
+    param($Status = $null)
+    $st = if ($Status) { $Status } else { Get-RelayStatus }
     $icons = 0
     try { $icons = @(Get-ProxyShortcutRecords).Count } catch {}
     # 这一屏的职责只有一件事：告诉他"现在没事，不用管"。
@@ -770,11 +790,82 @@ function Get-RelayPageLines {
 }
 
 function Show-RelayPage {
+    # 这一屏要**实时刷新**：用户可能就一直开着它，期间关了翻墙软件、
+    # 换了端口、又反复开关过。画一次就停住的话，他盯着一个"当前转发到 7078"
+    # 的旧结论，而实际早就变了——屏幕上那句"现在的情况"就成了假话。
+    #
+    # 数据本来就是现成的：Get-RelayStatus 每帧重新读端口文件 + 发探针，
+    # 它一直是新的。问题只在"画一次就返回"，所以这里照状态页那套做循环。
+    #
+    # 刷新节奏与状态页同一常量：数据是监控写的，监控 2-3 秒才更新一次，
+    # 比它更快没有意义，只会白烧 CPU。
+    $frame = @(ConvertTo-RelayFrame (Get-RelayStatus))
+    $need = Measure-ScreenFrame $frame
+    if (-not (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width)) {
+        # 画不了（窗口太小 / 不是终端）：退回一次性输出，至少让他看得见内容。
+        Show-RelayPageOnce
+        return
+    }
+    if (-not (Enter-Screen)) {
+        Show-RelayPageOnce
+        return
+    }
+    $prev = @()
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $nextPaint = 0
+    try {
+        while ($true) {
+            if ($sw.ElapsedMilliseconds -ge $nextPaint) {
+                # 取数与渲染都要保护：一帧失败不该把用户踢出这一屏，
+                # 保留上一帧、下一轮再试——与状态页同一套处置。
+                try { $frame = @(ConvertTo-RelayFrame (Get-RelayStatus)) } catch { $frame = $prev }
+                $need = Measure-ScreenFrame $frame
+                if (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width) {
+                    $null = Write-ScreenFrame -Old $prev -New $frame
+                    $prev = $frame
+                } else {
+                    # 窗口被拉小了：作废记账，恢复时必然整帧重画。
+                    $prev = @()
+                }
+                $nextPaint = $sw.ElapsedMilliseconds + $StatusRefreshIntervalMs
+            }
+            $k = Wait-ScreenKey -Milliseconds $ScreenPollMs
+            # 退出判据必须**和屏幕上写的话一致**。
+            #
+            # 这一屏写着"看完按回车返回"，而 Wait-ScreenKey 只把 Esc / 0 / q 当 Quit，
+            # 回车返回的是 CR 字符——既不等于 Quit 也不等于 Error，于是循环继续：
+            # 用户读完了、按了回车，屏幕上毫无变化。他会以为卡住、再按几次，
+            # 最后只能去点窗口右上角的关闭按钮。那正是这一屏最不该出现的死路。
+            #
+            # 所以直接认回车（CR / LF），再加上与别处一致的 Esc / 0 / q（返回 Quit）。
+            if ($k -eq "Error") { break }
+            if ($k -eq "Quit") { break }
+            if ($k -eq "" -or $k -eq "`r" -or $k -eq "`n") { break }
+        }
+    } finally {
+        Exit-Screen
+    }
+}
+
+# 一次性输出（实时刷新不可用时的降级路径）。
+function Show-RelayPageOnce {
     Clear-Screen
     foreach ($r in (Get-RelayPageLines)) {
         if ($r.Role -eq 'blank') { Write-Host ''; continue }
         Write-Styled $r.Role $r.Text
     }
+    # 这里必须自己等一次回车。
+    #
+    # 从"实时刷新"降级到"画一次"有两个触发条件：窗口太小，或者不是真终端
+    # （比如输出被重定向）。这两种情况下若画完就返回，调用方会立刻重画上一层菜单——
+    # 这一屏只闪几十毫秒，用户什么都没看清就没了，他会以为"点了没反应"。
+    # 那正是 Show-ProgramPicker 里记过的同一个毛病：能看见的提示必须配一个能应答的输入。
+    #
+    # 等键放在这个函数内部，而不是交给调用方补一次 Read-Host：
+    # 那样实时路径和降级路径的"怎么退出"就散在两处，将来改一处忘另一处。
+    try { $null = Wait-ScreenKey -Milliseconds 60000 } catch {}
+    # Wait-ScreenKey 最多等 60 秒；真终端里任何键都会立刻返回，不会真等满。
+    # 非交互环境（没有控制台句柄）它会连续失败并返回 Error，那时也没必要再等。
 }
 
 # 选程序页：把扫出来的程序列成编号表。
@@ -1188,8 +1279,9 @@ function Show-AdvancedMenu {
             '3' {
                 # 只读的一屏：看完按回车回来。不提供任何"开关"——
                 # 中继跟监控同生共死，没有可拨的开关，给一个假开关只会让人困惑。
+                # 这一屏自己就地实时刷新、自己收退出键，所以这里不再补一次 Read-Host：
+                # 那会让用户按回车回到这一屏，再按一次才真的返回（多按一次、看不出所以然）。
                 Show-RelayPage
-                try { $null = Read-Host '' } catch { return }
             }
             default {
                 Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2、3，0 = 返回）')

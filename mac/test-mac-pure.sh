@@ -963,19 +963,23 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 快扫每轮都返回空；若当成"集合变空"就判 off、删变量，终端突然断网。
     # 判据：快扫(_full=0) + 候选集空 + 上次全扫记得有端口 -> 本轮不下结论。
     if [ "$(type -t get_current_state 2>/dev/null || true)" = "function" ]; then
-        _gs_saved_round="$ROUND"; _gs_saved_full="$NEED_DEEP_SCAN"
+        _gs_saved_round="$ROUND"; _gs_saved_full="$NEED_DEEP_SCAN"; _gs_saved_efs="$EVER_FULL_SCANNED"
         _gs_saved_seen="$LAST_SEEN_SET"; _gs_saved_alive="$LAST_ALIVE_PORT"; _gs_saved_state="$CURRENT_STATE"
         _gs_saved_fcp="$(type -t find_candidate_ports 2>/dev/null || true)"
         # 桩：快扫返回空（模拟"端口不在常见表里"），且不是全扫轮
         find_candidate_ports() { return 0; }
-        ROUND=3; NEED_DEEP_SCAN=0
+        # 显式声明"已经做过全扫"：不声明的话首轮会走"必须全扫"那条路
+        # （EVER_FULL_SCANNED=0 -> _need_first=1），而这条用例要测的是**快扫**行为。
+        # 顺手也当一条回归：少了 EVER_FULL_SCANNED 时这里是红的——
+        # 说明"首轮强制全扫"那个机制真的接上了，不是写着好看的。
+        ROUND=3; NEED_DEEP_SCAN=0; EVER_FULL_SCANNED=1
         LAST_SEEN_SET="7099"; LAST_ALIVE_PORT="7099"; CURRENT_STATE="on:7099"
         _gs_before="$LAST_SEEN_SET"
         if get_current_state >/dev/null 2>&1; then :; fi
         _selftest_assert_eq "快扫空结果不清签名（不当成集合变空）" "$_gs_before" "$LAST_SEEN_SET"
         _selftest_assert_eq "快扫空结果不改判 off" "on:7099" "$CURRENT_STATE"
         # 还原
-        ROUND="$_gs_saved_round"; NEED_DEEP_SCAN="$_gs_saved_full"
+        ROUND="$_gs_saved_round"; NEED_DEEP_SCAN="$_gs_saved_full"; EVER_FULL_SCANNED="$_gs_saved_efs"
         LAST_SEEN_SET="$_gs_saved_seen"; LAST_ALIVE_PORT="$_gs_saved_alive"; CURRENT_STATE="$_gs_saved_state"
         if [ -n "$_gs_saved_fcp" ]; then eval "find_candidate_ports() { $(declare -f find_candidate_ports | sed -n '2,$p'); }" 2>/dev/null || true; fi
         unset -f find_candidate_ports 2>/dev/null || true
@@ -1175,16 +1179,24 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     #   update.inprogress -> 被读成"上次更新没完成"，其实是上一次安装的经历；
     #   stopped.intent -> 重装后状态页说"你点过停止"而监控正在跑；
     #   .lock 空目录   -> 新监控 mkdir 失败，多绕一圈接管分支。
-    # 这里抽源码核对：卸载函数体里必须点到这几个名字。
+    # 这里抽源码核对，判据是**结构**而不是"这些名字出现过"：
+    #   ① 卸载函数必须走那份共用清单（monitor_runtime_files）去删；
+    #   ② 那份清单必须逐项点到下面这些文件。
+    # 为什么分两步：原来删除处内联一串 rm -f、复检处一个都没查，删失败也报"已完成"。
+    # 抽成一份清单后，删除、复检、以及这条用例看的是同一个来源——
+    # 将来漏加一个文件，这里会红；而"删了忘了查"在结构上就不可能再发生。
     _un_body=$(sed -n "/^uninstall_envproxy()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
+    _selftest_assert_eq "卸载: 删除走共用清单（不内联重列）" "1" \
+        "$(case "$_un_body" in *'monitor_runtime_files'*) echo 1 ;; *) echo 0 ;; esac)"
+    _un_files=$(sed -n "/^monitor_runtime_files()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
     _un_bad=""
-    for _un_f in 'VERSION_CACHE' 'update.inprogress' 'STOP_INTENT' 'PID_FILE' 'STOP_FLAG'; do
-        case "$_un_body" in
+    for _un_f in 'VERSION_CACHE' 'update.inprogress' 'STOP_INTENT' 'PID_FILE' 'STOP_FLAG' 'SNAPSHOT_FILE' 'notify.last'; do
+        case "$_un_files" in
             *"$_un_f"*) ;;
             *) _un_bad="$_un_bad $_un_f(缺)" ;;
         esac
     done
-    _selftest_assert_eq "卸载: 运行时状态逐项点到（不留过期答案）" "" "$_un_bad"
+    _selftest_assert_eq "卸载: 共用清单逐项点到（删了必查）" "" "$_un_bad"
     # 目录只删空的：使用者在 ~/.envproxy 里自己放的东西一个字节都不许动。
     case "$_un_body" in
         *'rmdir "$ENVPROXY_HOME"'*) _un_rmdir=1 ;;
