@@ -1186,8 +1186,11 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 抽成一份清单后，删除、复检、以及这条用例看的是同一个来源——
     # 将来漏加一个文件，这里会红；而"删了忘了查"在结构上就不可能再发生。
     _un_body=$(sed -n "/^uninstall_envproxy()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
-    _selftest_assert_eq "卸载: 删除走共用清单（不内联重列）" "1" \
-        "$(case "$_un_body" in *'monitor_runtime_files'*) echo 1 ;; *) echo 0 ;; esac)"
+    # 用 grep -q 而不是 `case` 套在命令替换里：后者在 macOS 自带的 bash 3.2 上
+    # 表现与新版 bash 不同（实测 CI 报出的是半截 case 正文），而这条用例
+    # 要在真机上跑，不能用「本地能过」当标准。
+    if printf '%s' "$_un_body" | grep -q 'monitor_runtime_files'; then _un_uses=1; else _un_uses=0; fi
+    _selftest_assert_eq "卸载: 删除走共用清单（不内联重列）" "1" "$_un_uses"
     _un_files=$(sed -n "/^monitor_runtime_files()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
     _un_bad=""
     for _un_f in 'VERSION_CACHE' 'update.inprogress' 'STOP_INTENT' 'PID_FILE' 'STOP_FLAG' 'SNAPSHOT_FILE' 'notify.last'; do

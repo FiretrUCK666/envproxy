@@ -615,7 +615,7 @@ function Format-StatusLines($st) {
         try { $rs = Get-RelayStatus } catch {}
         & $line '' '' 'text'
         if ($rs -and $rs.Running) {
-            & $row '高级功能' ("{0} 个走代理的图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
+            & $row '高级功能' ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
             & $row '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
@@ -1327,7 +1327,7 @@ function Show-StatusSnapshot($st) {
         try { $rs = Get-RelayStatus } catch {}
         Write-Host ''
         if ($rs -and $rs.Running) {
-            Write-StatusRow '高级功能' ("{0} 个走代理的图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
+            Write-StatusRow '高级功能' ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
             Write-StatusRow '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
