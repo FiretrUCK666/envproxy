@@ -1344,20 +1344,20 @@ rc zsh / bash|export ENVPROXY_TERM=off
 t 下次回到提示符才生效，别的窗口照旧跟着翻墙软件走。
 w 别只 unset 一个拼写：mac 上大写小写是两个变量，各清一份。
 h 二、让这个窗口用公司的代理
-t 公司代理和自动跟随只能选一个。先做第一节再设地址（反了会被盖掉）。
-t 地址端口问公司 IT 要（下面 A 换成它），不是翻墙软件那个：
-rc 先设这个|export HTTPS_PROXY=http://A:端口
-rc 不认就再补|export ALL_PROXY=http://A:端口; export NODE_USE_ENV_PROXY=1
+t 公司代理和自动跟随只能选一个，先做第一节再设地址（反了会被盖掉）。
+t 地址端口问公司 IT 要，不是翻墙软件那个（下面 A 换成它）：
+rc zsh / bash|export HTTPS_PROXY=http://A:端口
+t 上面这条够 git、curl、npm 用。有程序还是不认，就再抄下面这条：
+rc zsh / bash|export ALL_PROXY=http://A:端口; export NODE_USE_ENV_PROXY=1
 h 三、改回自动跟随
-t 把 ENVPROXY_TERM 清掉即可，前两节做的都在这一下撤回：
 rc zsh / bash|unset ENVPROXY_TERM
-t 改回来公司地址会被盖掉——那是对的，表示回到自动；
-t 地址没被删，只是不再用它。
+t 清掉 ENVPROXY_TERM 就都撤回了。改回来公司地址会被盖掉——那是对的，
+t 表示回到自动；地址没删，只是不用。
 t fish 不支持这些配置文件，上面的开关对它无效。
 TOPIC
     ;;
     4) cat <<'TOPIC'
-h 不同工具写法不一样，没有通用的一条命令
+h 每个工具写法不一样，没有通用的一条命令
 h curl
 c curl --noproxy "*" https://example.com
 h git
@@ -1368,8 +1368,12 @@ c npm --noproxy=registry.npmjs.org install typescript
 w 注意：只认具体网址，写 * 没用，而且不报错，请求照常翻墙。
 t 写成 --no-proxy 会被理解成关闭代理，也不是你要的效果。
 t 另外 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY。
+h wget
+c wget --no-proxy https://example.com
 h docker
 t 没有单条命令的写法，改 Docker 自己的设置（Settings 里的 Proxies）。
+h 这些参数是各工具自己的，不是这个工具提供的
+t 不加参数时，它们读的才是这个工具写进系统的代理。
 TOPIC
     ;;
     5) cat <<'TOPIC'
