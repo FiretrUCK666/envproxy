@@ -179,6 +179,36 @@ self_test() {
     # 的 UTF-8 首字节都是 E2，只看首字节判不出差别——这条钉住"看第二字节"。
     _selftest_assert_eq "宽度：U+2E80 占两格" "2" "$(_display_width "$(printf '\xe2\xba\x80')")"
     _selftest_assert_eq "宽度：U+2E7F 占一格" "1" "$(_display_width "$(printf '\xe2\xb9\xbf')")"
+    # 4 字节序列（补充平面）：码位必然 > U+2E80，占两格。
+    # 这一条挡的是"推进量只认 1/2/3 字节"那类错——它会让截断点落在半个字符中间。
+    _selftest_assert_eq "宽度：😀 占两格" "2" "$(_display_width "😀")"
+    _selftest_assert_eq "宽度：混合 中文😀 共 6 格" "6" "$(_display_width "中文😀")"
+    # ANSI 颜色序列不占格子。Windows 侧 Get-DisplayWidth 会先剥掉再算，
+    # 这里不剥就会把一行 34 格的标题算成 51 格，"这帧太宽画不下"而白白降级。
+    _selftest_assert_eq "宽度：ANSI 转义不占格" "11" \
+        "$(_display_width "$(printf '\033[36m版本 v2.0.0\033[0m')")"
+
+    # 截断：结果宽度**不超过**上限（含补上的省略号）。
+    # 若按"截到上限再补…"算，实际宽度是上限+1：日志行正好顶满终端宽度而自动折行，
+    # 而状态页按绝对行号画，折行会把后面每一行往下推。
+    _tw_ok=1
+    for _tw_m in 1 2 5 6 10 20 40; do
+        _tw_o=$(_truncate_width "检测到本地代理端口 7078 已注入代理" "$_tw_m")
+        _tw_w=$(_display_width "$_tw_o")
+        [ "$_tw_w" -le "$_tw_m" ] || _tw_ok=0
+    done
+    _selftest_assert_eq "截断：结果宽度不超过上限" "1" "$_tw_ok"
+    # 放得下就原样返回，一个字节都不动、不加省略号。
+    _selftest_assert_eq "截断：放得下时原样返回" "中中中" "$(_truncate_width "中中中" 6)"
+    # 截断点不许落在字符中间：4 字节字符必须按 4 字节推进，按 3 推进会把剩下的
+    # 1 个孤儿字节拼进结果——输出不是合法 UTF-8，屏幕上是一个乱码方块。
+    _selftest_assert_eq "截断：不劈开 4 字节字符" \
+        "$(printf '\xf0\x9f\x98\x80\xe2\x80\xa6')" "$(_truncate_width "😀中中中" 4)"
+    # LC_ALL=C 必须留在函数里：不写 local 时它会把调用方的 locale 改掉，
+    # 之后所有 ${#x} 从"字符数"变成"字节数"，两列表格按字节数对齐就会歪。
+    _tw_loc=${LC_ALL-<unset>}
+    _truncate_width "很长的中文日志行需要截断" 10 > /dev/null
+    _selftest_assert_eq "截断：不泄漏 locale 到调用方" "$_tw_loc" "${LC_ALL-<unset>}"
 
     # 畸形状态串必须被拒，不许静默当成功。与 Windows 侧同一判据。
     # 为什么能安全地测：apply_state 对畸形输入在动任何东西之前就返回了。
@@ -1828,11 +1858,15 @@ EOF
     # 只数函数体里的命中：整文件计数会漏判（probe.sh 里另有几处同名调用）。
     _w2=$(_wiring_fn_count "$SCRIPT_DIR/lib/probe.sh" confirm_candidate_port test_node_alive)
     _selftest_assert_eq "接线：候选确认会验证真实节点（两处分支）" 1 "$([ "$_w2" -ge 2 ] && echo 1 || echo 0)"
-    # 装配：清理门槛会被真正调用（定义 + apply-state + 监控自愈 = 至少 3 次）。
-    _w3a=$(_wiring_count "$SCRIPT_DIR/lib/env.sh" proxy_vars_present)
-    _w3b=$(_wiring_count "$SCRIPT_DIR/lib/runtime.sh" proxy_vars_present)
-    _w3=$((_w3a + _w3b))
-    _selftest_assert_eq "接线：清理门槛被至少两处调用" 1 "$([ "$_w3" -ge 3 ] && echo 1 || echo 0)"
+    # 装配：清理门槛会被真正调用（apply-state 与监控自愈各一处）。
+    # 只数**真正的调用**：_wiring_count 数全文命中，而 env.sh 里 proxy_vars_present
+    # 还在函数定义那一行、以及两句解释性注释里出现——把两个真实调用点全删掉，
+    # 命中数照样够，断言照样绿。判据改成"剥掉注释行、去掉函数定义行"。
+    _w3=0
+    for _w3f in "$SCRIPT_DIR/lib/env.sh" "$SCRIPT_DIR/lib/runtime.sh"; do
+        _w3=$((_w3 + $(sed -e 's/^[[:space:]]*#.*//' -e '/^[[:space:]]*proxy_vars_present()[[:space:]]*{/d' "$_w3f" 2>/dev/null | grep -c -F 'proxy_vars_present' || true)))
+    done
+    _selftest_assert_eq "接线：清理门槛被至少两处调用" 1 "$([ "$_w3" -ge 2 ] && echo 1 || echo 0)"
     # 装配：门槛本身必须真的去问归属记录。
     _w4=$(_wiring_count "$SCRIPT_DIR/lib/env.sh" is_owned_proxy_value)
     _selftest_assert_eq "接线：清理门槛会问归属记录" 1 "$([ "$_w4" -ge 1 ] && echo 1 || echo 0)"

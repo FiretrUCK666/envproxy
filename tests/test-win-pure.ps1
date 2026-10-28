@@ -2877,13 +2877,22 @@ Assert-Eq '接线：入口会进入监控主循环' $true (Test-SourceMatch 'win
 # 但"优先端口"那条路上就绕过了节点验证。
 Assert-Eq '接线：候选确认会验证真实节点（两处分支）' $true (Test-BodyHas 'win/lib/probe.ps1' 'Confirm-CandidatePort' 'Test-NodeAlive' 2)
 # 装配：清理门槛必须被真正调用（至少 apply-state 与监控自愈两处）。
-$script:pvpHits = 0
+# 只数**真正的调用**，不数注释与函数定义：全文命中会把解释性注释（env.ps1 里
+# 有两句提到这个名字）和定义行一起算进去，于是两个真实调用点全删掉、命中数仍然够，
+# 断言照样绿。判据是"剥掉注释行、再去掉定义那一行之后还剩几次"。
+$script:pvpCalls = 0
 foreach ($f in @('win/lib/env.ps1', 'win/lib/runtime.ps1')) {
     $p = Join-Path (Get-Location) $f
-    $script:pvpHits += ([regex]::Matches([System.IO.File]::ReadAllText($p), 'Test-ProxyVarsPresent')).Count
+    foreach ($ln in ([System.IO.File]::ReadAllText($p) -split "`r?`n")) {
+        $t = $ln.Trim()
+        if (-not $t) { continue }
+        if ($t.StartsWith('#')) { continue }
+        if ($t -match '^function\s+Test-ProxyVarsPresent\b') { continue }
+        $script:pvpCalls += ([regex]::Matches($t, 'Test-ProxyVarsPresent')).Count
+    }
 }
-# 定义本身算一次，所以两处调用点意味着至少 3 次命中。
-Assert-Eq '接线：清理门槛被至少两处调用' $true ($script:pvpHits -ge 3)
+# apply-state 与监控自愈各一处：少于 2 就说明有一条路的门槛被剪断了。
+Assert-Eq '接线：清理门槛被至少两处调用' $true ($script:pvpCalls -ge 2)
 # 装配：门槛本身必须真的去问归属记录，不能是恒假的空壳。
 # "恒返回 $false"这一种破坏，光数调用点看不出来（调用还在，只是永远说不该清）。
 Assert-Eq '接线：清理门槛会问归属记录' $true (Test-BodyHas 'win/lib/env.ps1' 'Test-ProxyVarsPresent' 'Test-IsOwnedProxyValue' 1)
@@ -2910,13 +2919,9 @@ foreach ($r in $cmdRefs) {
 Assert-Eq '接线：菜单壳引用的脚本都存在' 0 $cmdMissing.Count
 # 状态页必须只读：它在"查看状态"里被调用，写文件或改变量都是越界。
 foreach ($fn in @('Show-Status')) {
-    $p = Join-Path (Get-Location) 'win/lib/ops.ps1'
-    $src = [System.IO.File]::ReadAllText($p)
-    $i = $src.IndexOf('function ' + $fn)
-    if ($i -ge 0) {
-        $chunk = $src.Substring($i, [Math]::Min(9000, $src.Length - $i))
-        Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable')))
-    }
+    $chunk = Get-FunctionBody 'win/lib/ops.ps1' $fn
+    Assert-Eq ('接线：' + $fn + ' 函数体取到了') $true ($chunk.Length -gt 0)
+    Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable')))
 }
 
 # ------------------------------------------------------------------------------
@@ -3070,15 +3075,15 @@ Assert-Eq '问题清单：全正常时零条' 0 (@(Get-StatusProblems $goodSt)).
 # 判断只有一处实现：Show-StatusSnapshot 必须调 Get-StatusProblems，
 # 不许自己再算一遍（两处各写一套必然分叉）
 $opsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/ops.ps1'))
-$ssIdx = $opsSrc.IndexOf('function Show-StatusSnapshot')
-$ssChunk = $opsSrc.Substring($ssIdx, [Math]::Min(2500, $opsSrc.Length - $ssIdx))
-Assert-Eq '接线：Show-StatusSnapshot 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($ssChunk, 'Get-StatusProblems')))
-Assert-Eq '接线：Show-StatusSnapshot 不自己累加问题' $false ([bool]([regex]::IsMatch($ssChunk, '\$problems \+= ')))
+$ssBody = Get-FunctionBody 'win/lib/ops.ps1' 'Show-StatusSnapshot'
+Assert-Eq '接线：Show-StatusSnapshot 函数体取到了' $true ($ssBody.Length -gt 0)
+Assert-Eq '接线：Show-StatusSnapshot 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($ssBody, 'Get-StatusProblems')))
+Assert-Eq '接线：Show-StatusSnapshot 不自己累加问题' $false ([bool]([regex]::IsMatch($ssBody, '\$problems \+= ')))
 
 # Format-StatusLines 也必须走同一个判断
-$fsIdx = $opsSrc.IndexOf('function Format-StatusLines')
-$fsChunk = $opsSrc.Substring($fsIdx, [Math]::Min(2500, $opsSrc.Length - $fsIdx))
-Assert-Eq '接线：Format-StatusLines 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($fsChunk, 'Get-StatusProblems')))
+$fsBody = Get-FunctionBody 'win/lib/ops.ps1' 'Format-StatusLines'
+Assert-Eq '接线：Format-StatusLines 函数体取到了' $true ($fsBody.Length -gt 0)
+Assert-Eq '接线：Format-StatusLines 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($fsBody, 'Get-StatusProblems')))
 
 # 两条渲染路径的输出要能对上：拿同一份状态，逐条比对结论行
 $lines = @(Format-StatusLines $goodSt)
@@ -3202,27 +3207,19 @@ foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 
 # 状态页整段不许写文件、不许改变量（只读契约）
 foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {
-    $i = $opsSrc.IndexOf('function ' + $fn)
-    if ($i -ge 0) {
-        # Take only this function body: a fixed-length slice pulls in the
-        # next function, whose file writes would keep this assertion red forever.
-        $nextFn = $opsSrc.IndexOf('function ', $i + 10)
-        $chunk = if ($nextFn -gt $i) { $opsSrc.Substring($i, $nextFn - $i) } else { $opsSrc.Substring($i) }
-        Assert-Eq ('接线：' + $fn + ' 不写文件') $false ([bool]([regex]::IsMatch($chunk, 'Write-Text|Set-Content|New-Item|Remove-ItemSafe')))
-        Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable|Write-UserEnv')))
-    }
+    # 按花括号配对取函数体：截固定长度会把下一个函数框进来，
+    # 而它的写文件调用会让这条断言永远红——量错对象比没量更糟。
+    $chunk = Get-FunctionBody 'win/lib/ops.ps1' $fn
+    Assert-Eq ('接线：' + $fn + ' 函数体取到了') $true ($chunk.Length -gt 0)
+    Assert-Eq ('接线：' + $fn + ' 不写文件') $false ([bool]([regex]::IsMatch($chunk, 'Write-Text|Set-Content|New-Item|Remove-ItemSafe')))
+    Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable|Write-UserEnv')))
 }
 
 # 轻量判活与完整判活：前者只读心跳，不许碰进程表
 $rtSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/runtime.ps1'))
-$fastIdx = $rtSrc.IndexOf('function Get-MonitorProcessFast')
-Assert-Eq '接线：Get-MonitorProcessFast 存在' $true ($fastIdx -ge 0)
-if ($fastIdx -ge 0) {
-    $fastChunk = $rtSrc.Substring($fastIdx, [Math]::Min(1500, $rtSrc.Length - $fastIdx))
-    # 只取这个函数的函数体：截固定长度会把后面那个完整的 Get-MonitorProcess
-    # 一起框进来，它的 Get-CimInstance 会让断言永远红——量错对象比没量更糟。
-    $nextFn = $rtSrc.IndexOf("function ", $fastIdx + 10)
-    $fastChunk = if ($nextFn -gt $fastIdx) { $rtSrc.Substring($fastIdx, $nextFn - $fastIdx) } else { $rtSrc.Substring($fastIdx) }
+$fastChunk = Get-FunctionBody 'win/lib/runtime.ps1' 'Get-MonitorProcessFast'
+Assert-Eq '接线：Get-MonitorProcessFast 函数体取到了' $true ($fastChunk.Length -gt 0)
+if ($fastChunk.Length -gt 0) {
     # Get-Item 读的是文件属性（心跳文件的 mtime），不是进程表——不算重判活。
     # 真正要禁的是查进程：那才是 170ms 的来源。
     # 真正贵的是 Get-CimInstance（查全表，实测 170ms）。Get-Process -Id 是单查某个
@@ -3281,9 +3278,8 @@ Assert-Eq '提示：提到的每个按键都有对应分支' 0 $unstoppable.Coun
 # 3. Wait-ScreenKey 的异常路径不许让外层空转
 #    曾经：catch { return '' } 立即返回，循环毫无间隔地转，一秒几千次、吃满一个核。
 $bsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/base.ps1'))
-$wsIdx = $bsSrc.IndexOf('function Wait-ScreenKey')
-$wsEnd = $bsSrc.IndexOf("`n}", $wsIdx)
-$wsChunk = $bsSrc.Substring($wsIdx, $wsEnd - $wsIdx)
+$wsChunk = Get-FunctionBody 'win/lib/base.ps1' 'Wait-ScreenKey'
+Assert-Eq '接线：Wait-ScreenKey 函数体取到了' $true ($wsChunk.Length -gt 0)
 Assert-Eq '按键：读键失败时不会立即返回空转' $false ([bool]([regex]::IsMatch($wsChunk, "catch\s*\{\s*return\s+''\s*\}")))
 Assert-Eq '按键：有放弃阈值常量' $true ($ScreenKeyFailLimit -gt 0)
 Assert-Eq '按键：功能键（空字符）不当成输入返回' $true ([bool]([regex]::IsMatch($wsChunk, 'if \(\$c\)')))
@@ -3315,14 +3311,12 @@ foreach ($pair in @(@('win/lib/ops.ps1', '状态页'), @('win/lib/shortcut.ps1',
 #     而 monitor.log 明明写着"固定入口已启动：127.0.0.1:17099"。
 #     实测过这个组合，用户看到的就是两句互相矛盾的话。
 $rlSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/relay.ps1'))
-$syncIdx = $rlSrc.IndexOf('function Sync-RelayUpstream')
-$syncEnd = $rlSrc.IndexOf("`n}", $syncIdx)
-$syncChunk = $rlSrc.Substring($syncIdx, $syncEnd - $syncIdx)
+$syncChunk = Get-FunctionBody 'win/lib/relay.ps1' 'Sync-RelayUpstream'
+Assert-Eq '接线：Sync-RelayUpstream 函数体取到了' $true ($syncChunk.Length -gt 0)
 Assert-Eq '中继：每轮同步会确认端口记录' $true ([bool]([regex]::IsMatch($syncChunk, 'Get-RelayPortFile')))
 Assert-Eq '中继：内容已对就不重复写盘' $true ([bool]([regex]::IsMatch($syncChunk, '\$now -ne \$want')))
-$startIdx = $rlSrc.IndexOf('function Start-Relay')
-$startEnd = $rlSrc.IndexOf("`n}", $startIdx)
-$startChunk = $rlSrc.Substring($startIdx, $startEnd - $startIdx)
+$startChunk = Get-FunctionBody 'win/lib/relay.ps1' 'Start-Relay'
+Assert-Eq '接线：Start-Relay 函数体取到了' $true ($startChunk.Length -gt 0)
 Assert-Eq '中继：端口记录写失败要留日志' $false ([bool]([regex]::IsMatch($startChunk, 'Port\) \} catch \{\}')))
 # 4. 画屏门槛必须按真实帧尺寸判，不能只看固定最小宽高
 #    曾经：固定 40 列放行，而帧里有 82 列的日志行 → 折行 → 绝对定位全错位。
@@ -3360,13 +3354,11 @@ Assert-Eq '快照转义：真换行仍能还原' $true ($rtNl -eq "甲`n乙")
 Assert-Eq '快照转义：编码结果不含真换行（否则会劈开键值对）' $false ([bool]([regex]::IsMatch((ConvertTo-SnapshotValue "甲`n乙"), '[\r\n]')))
 
 # 8. 轻量判活必须核 pid 存在性（不能只看心跳文件的 mtime）
-#    曾经：只看 mtime，强杀后留下的新鲜心跳被当成活着，状态页报出死进程的 PID。
-Assert-Eq '判活：轻量版核过 pid' $true ([bool]([regex]::IsMatch($wsChunk, 'x')) -or $true)
-$rtSrc2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/runtime.ps1'))
-$fIdx = $rtSrc2.IndexOf('function Get-MonitorProcessFast')
-$nextFnF = $rtSrc2.IndexOf('function ', $fIdx + 10)
-$fChunk = if ($nextFnF -gt $fIdx) { $rtSrc2.Substring($fIdx, $nextFnF - $fIdx) } else { $rtSrc2.Substring($fIdx) }
-$fCode = (@($fChunk -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+#    只看 mtime 时，强杀后留下的新鲜心跳被当成活着，状态页会报出死进程的 PID。
+#    判据必须真的比到东西：恒真表达式（如 `... -or $true`）永远绿、等于零覆盖。
+#    这两条是这段唯一有效的断言（核 pid 存在性、比对启动时刻）。
+$fCode = (@((Get-FunctionBody 'win/lib/runtime.ps1' 'Get-MonitorProcessFast') -split "`n" |
+        Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
 Assert-Eq '判活：核了 pid 存在性（Get-Process -Id）' $true ([bool]([regex]::IsMatch($fCode, 'Get-Process\s+-Id')))
 Assert-Eq '判活：比对了启动时刻（挡 pid 复用）' $true ([bool]([regex]::IsMatch($fCode, 'wantTicks')))
 Assert-Eq '判活：不再只靠文件 mtime' $false ([bool]([regex]::IsMatch($fCode, 'LastWriteTime')))
@@ -3376,7 +3368,11 @@ $unIdx = $opsSrc2.IndexOf('function Uninstall-EnvProxy')
 $nextUn = $opsSrc2.IndexOf('function ', $unIdx + 10)
 $unChunk = if ($nextUn -gt $unIdx) { $opsSrc2.Substring($unIdx, $nextUn - $unIdx) } else { $opsSrc2.Substring($unIdx) }
 Assert-Eq '卸载：清掉状态快照' $true ([bool]([regex]::IsMatch($unChunk, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
-Assert-Eq '停止：清掉状态快照' $true ([bool]([regex]::IsMatch($rtSrc2, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
+# 停止流程住在 runtime 层的 Stop-Monitor 里：按函数体取，不看全文——
+# 全文里这个调用只出现一次，删掉停止流程那一处、别处补一个同形调用就能骗过它。
+$stopChunk = Get-FunctionBody 'win/lib/runtime.ps1' 'Stop-Monitor'
+Assert-Eq '接线：Stop-Monitor 函数体取到了' $true ($stopChunk.Length -gt 0)
+Assert-Eq '停止：清掉状态快照' $true ([bool]([regex]::IsMatch($stopChunk, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
 
 # 10. 端口枚举失败的原因必须能显示出来
 #     曾经：用 PSObject.Properties.Name -contains 判断键存在，对字典恒为假，

@@ -78,73 +78,112 @@ STATUS_REFRESH_SEC=2
 LOG_MAX_BYTES=204800
 LOG_TAIL_LINES=200
 
-# 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
-# 所有需要对齐的地方（菜单、帮助的两列、安装提示、日志裁剪）都走这一处：
+# ------------------------------------------------------------------------------
+# 显示宽度：唯一判据 _dw_walk（走一遍字节，给出宽度与"到哪个字节为止还放得下"）
+# ------------------------------------------------------------------------------
+# 所有需要对齐的地方（菜单、帮助的两列、安装提示、日志裁剪）都走这里：
 # 写第二份就会有一天两份算出两个宽度，屏幕上看就是"某一屏的表格歪了"。
 # 放在 base 层而不是 ops：帮助与菜单都要用它，而 ops 里的定义顺序会随编辑变化。
 #
-# 判据与 Windows 侧 Get-DisplayWidth 逐字节同一条：码位 > U+2E80 记两格。
-# UTF-8 下等价于"3 字节序列的首字节 >= 0xE3"——2 字节序列（é · °）与
-# U+2000..U+2E7F 的三字节序列（… → ）都只有一格，与 Windows 的结论一致。
+# 判据与 Windows 侧 Get-CharWidth 同一条：码位 > U+2E80 记两格。
+# UTF-8 下等价于"3 字节序列且（首字节 > 0xE2，或首字节 = 0xE2 且第二字节 >= 0xBA）"；
+# 4 字节序列（补充平面）码位必然 > U+2E80，也记两格。
 #
-# 为什么按字节走而不是按字符走：旧版用 `wc -c` + `tr` 数多字节字节数再除以 3，
-# 于是每个 2 字节字符（… → · ° é）被算成 2 格，比 Windows 宽一格，表格歪掉；
-# 而 `_truncate_width` 逐字符调本函数，一个字符 forks 3 次——实测一条超宽日志行
-# （98 列、137 字符）要 11 秒，状态页每多打印一行日志就多等这么久。
-# 现在整个函数零 fork：`printf -v` 取字节值，纯算术累加。
-_display_width() {
+# 为什么整行只开一次 od、之后纯算术：这个遍历被 _truncate_width 按字符反复调用过，
+# 每次调用都 fork 一次 od——实测一条 80 列的中文日志行在 Git Bash 上要 4-8 秒。
+# 整行一次性转成十六进制文本之后，解码全靠 $(( )) 与 ${var:i:n}，
+# 与 shell 版本、locale 都无关（od 的输出恒为 ASCII）。
+#
+# 为什么要一次性算出"截到第几个字节"：_truncate_width 需要两个断点——
+# "宽度不超过 max"与"宽度不超过 max-1"（后者给省略号腾一格）。一次遍历同时记下，
+# 免得为了第二个断点把 od 再开一遍。
+#
+# 输出（调用方直接读这几个全局，不开子 shell）：
+#   DW_W      这一段文字的总显示宽度
+#   DW_BYTES  总字节数
+#   DW_END    累计宽度首次达到 _dw_walk 的 $2 时的字节位置
+#   DW_END1   累计宽度首次达到 ($2 - 1) 时的字节位置
+# $2 < 0 表示只要总宽度，两个断点不记。
+#
+# 这个函数的结论必须在 GNU bash 5 与 macOS bash 3.2 上**逐字符相同**，
+# 否则菜单与帮助的两列表格只在 Mac 上歪，而开发机复现不出来。踩过的坑：
+#   ① printf -v '%d' "'$ch" 取字节值：3.2 对多字节字节返回 < 128，
+#      整个函数退化成"按字节数算宽度"（「中」3 格、「…」3 格）；
+#   ② case [$'\001'-$'\177'] 区间模式：3.2 对 case 里的 ANSI-C 引用
+#      支持不完整，报 syntax error near ';;'。
+# 所以只用 od 取字节，之后的解码是纯算术。
+#
+# ANSI 颜色序列不占格子——终端把它当控制指令执行，屏幕上不留宽度。
+# 与 Windows 侧 Get-DisplayWidth 的剥除判据同形（那边是一条正则，这里是同一套
+# CSI 语法的手工扫描）：不剥掉就会把 ESC[36m 这类序列也算进去，一行 34 格的
+# 标题被算成 51 格，于是"这帧太宽画不下"而白白降级，日志裁剪也会截短。
+_dw_walk() {
     _dw_s="$1"
-    [ -n "$_dw_s" ] || { printf '0'; return 0; }
-    # 判据与 Windows 侧 Get-DisplayWidth 同一条：码位 > U+2E80 记两格。
-    # UTF-8 下等价于"3 字节序列且（首字节 > 0xE2，或首字节 = 0xE2 且第二字节 >= 0xBA）"；
-    # 4 字节序列（补充平面）码位必然 > U+2E80，也记两格。
-    #
-    # 这个函数的结论必须在 GNU bash 5 与 macOS bash 3.2 上**逐字符相同**，
-    # 否则菜单与帮助的两列表格只在 Mac 上歪，而开发机复现不出来。踩过的坑：
-    #   ① printf -v '%d' "'$ch" 取字节值：3.2 对多字节字节返回 < 128，
-    #      整个函数退化成"按字节数算宽度"（「中」3 格、「…」3 格）；
-    #   ② case [$'\001'-$'\177'] 区间模式：3.2 对 case 里的 ANSI-C 引用
-    #      支持不完整，报 syntax error near ';;'。
-    # 现在只用 od：它的输出是纯十六进制文本，与 shell 版本、locale 都无关，
-    # 之后的解码是纯算术。
-    #
-    # 性能：od 是一次进程启动。调用点都是"渲染一行"，量级够用；
-    # 频繁重复的字符串（菜单同一行渲染多次）走下面的记忆表。
-    # 算对的代价是一次进程启动，而算错的代价是 Mac 上整屏表格歪掉。
-    printf -v _dw_key '%s' "$_dw_s"
-    if [ "${_DW_CACHE_K-}" = "$_dw_key" ] && [ -n "${_DW_CACHE_V+x}" ]; then
-        printf '%s' "$_DW_CACHE_V"
-        return 0
-    fi
+    _dw_soft="$2"
+    DW_W=0
+    DW_BYTES=0
+    DW_END=0
+    DW_END1=0
+    [ -n "$_dw_s" ] || return 0
     _dw_hex=$(printf '%s' "$_dw_s" | od -An -tx1 -v)
     _dw_hex="${_dw_hex//[[:space:]]/}"
+    # _dw_n 是十六进制字符数，恒等于字节数 × 2（od 的输出是纯 ASCII）。
     _dw_n=${#_dw_hex}
     _dw_i=0
-    _dw_w=0
     while [ "$_dw_i" -lt "$_dw_n" ]; do
         _dw_b=$((16#${_dw_hex:$_dw_i:2}))
+        if [ "$_dw_b" -eq 27 ] && [ $((_dw_i + 4)) -le "$_dw_n" ]; then
+            # ESC [ …… 末字节（0x40..0x7E）：整段零宽，一个像素都不占。
+            _dw_b2=$((16#${_dw_hex:$((_dw_i + 2)):2}))
+            if [ "$_dw_b2" -eq 91 ]; then
+                _dw_i=$((_dw_i + 4))
+                while [ "$_dw_i" -lt "$_dw_n" ]; do
+                    _dw_b2=$((16#${_dw_hex:$_dw_i:2}))
+                    _dw_i=$((_dw_i + 2))
+                    if [ "$_dw_b2" -ge 64 ] && [ "$_dw_b2" -le 126 ]; then break; fi
+                done
+                _dw_w=0
+                DW_BYTES=$((_dw_i / 2))
+                continue
+            fi
+        fi
         if [ "$_dw_b" -lt 128 ]; then
-            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 2))
-        elif [ "$_dw_b" -ge 240 ]; then
-            _dw_w=$((_dw_w + 2)); _dw_i=$((_dw_i + 8))
-        elif [ "$_dw_b" -ge 224 ]; then
+            _dw_w=1; _dw_i=$((_dw_i + 2))
+        elif [ "$_dw_b" -lt 224 ]; then
+            _dw_w=1; _dw_i=$((_dw_i + 4))
+        elif [ "$_dw_b" -lt 240 ]; then
             _dw_b2=0
             if [ "$_dw_b" -eq 226 ] && [ $((_dw_i + 4)) -le "$_dw_n" ]; then
                 _dw_b2=$((16#${_dw_hex:$((_dw_i + 2)):2}))
             fi
             if [ "$_dw_b" -gt 226 ] || { [ "$_dw_b" -eq 226 ] && [ "$_dw_b2" -ge 186 ]; }; then
-                _dw_w=$((_dw_w + 2))
+                _dw_w=2
             else
-                _dw_w=$((_dw_w + 1))
+                _dw_w=1
             fi
             _dw_i=$((_dw_i + 6))
         else
-            _dw_w=$((_dw_w + 1)); _dw_i=$((_dw_i + 4))
+            # 4 字节序列（补充平面）。推进量必须是 4：按 3 推进会把一个字符
+            # 剩下一字节留给下一轮，截断点落在字符中间，输出就不是合法 UTF-8
+            # （实测：😀 后面跟中文时会被劈开，屏幕上是一个乱码方块）。
+            _dw_w=2; _dw_i=$((_dw_i + 8))
         fi
+        DW_W=$((DW_W + _dw_w))
+        DW_BYTES=$((_dw_i / 2))
+        if [ "$DW_W" -le "$_dw_soft" ]; then DW_END=$DW_BYTES; fi
+        if [ "$DW_W" -le $((_dw_soft - 1)) ]; then DW_END1=$DW_BYTES; fi
     done
-    _DW_CACHE_K="$_dw_key"
-    _DW_CACHE_V="$_dw_w"
-    printf '%s' "$_dw_w"
+    # 循环里只按"每加完一个可见字符"更新断点，整段都是转义序列时两个断点会留在 0。
+    # 收尾再确认一次：总宽度已经放得下就等于"整段都放得下"，断点落在末尾。
+    if [ "$DW_W" -le "$_dw_soft" ]; then DW_END=$DW_BYTES; fi
+    return 0
+}
+
+# 一段文字在终端里占几格。
+# 返回总宽度；这里是唯一的"宽度怎么算"实现，别处一律调它。
+_display_width() {
+    _dw_walk "$1" -1
+    printf '%s' "$DW_W"
 }
 
 # 把文字补齐到指定宽度（按上面的显示宽度算）。
@@ -209,11 +248,6 @@ is_loopback_url() {
     return 1
 }
 
-# 把一段文字按终端显示宽度截断，超出时补省略号。
-# 必须按"字符"走而不是按字节切：中文占两格，按字节切会把一个汉字切成半个，
-# 屏幕上就是乱码。逐字符累加显示宽度，超过就停。
-# 截断走的是与 _display_width 同一套字节判据（就地展开，不再逐字符调子 shell）：
-# 逐字符调子 shell 的代价是每个字符 forks 数次，一条超宽日志行要十几秒。
 # 从标准输入读若干行，输出其中最大的显示宽度。
 # 五处「求一列里最宽的名字」原来是同一形状各写一遍（安装提示列、菜单名字列、
 # 帮助两列、帮助名字列），只有变量前缀不同。收敛成一处之后，
@@ -227,34 +261,33 @@ _max_width_of() {
     printf '%s' "$_mwo_w"
 }
 
+# 把一段文字按终端显示宽度截断，超出时补省略号。
+# 返回的字符串加上省略号之后**不会超过** $2 格——与 Windows 侧 Limit-DisplayText
+# 同一条判据：截到 max-1，最后补一个占 1 格的…。若按"截到 max 再补…"算，
+# 实际宽度是 max+1：日志行正好顶满终端宽度而触发自动折行，
+# 而状态页是按绝对行号画的（write_screen_frame），折行会把后面每一行往下推。
+#
+# 必须按字符走而不是按字节切：中文占两格，按字节切会把一个汉字切成半个，
+# 屏幕上就是乱码。判据与 _display_width 同一套（就是它底下的 _dw_walk），
+# 只走一遍字节、只开一次 od，两个断点一起算出来。
+#
+# 为什么 LC_ALL=C 要写成 local：不写 local 时它会把**调用方**的 locale 改掉。
+# 实测：调用方 LC_ALL=C.UTF-8，调完这个函数变成 C，同一 shell 里之后所有
+# ${#x} 从"字符数"变成"字节数"，两列表格按字节数对齐就会歪。
+# 写成 local 之后作用域跟着函数走，退出即还原（bash 3.2 支持 local）。
 _truncate_width() {
-    LC_ALL=C
+    local LC_ALL=C
     _tw_s="$1"
     _tw_max="$2"
-    if [ "$(_display_width "$_tw_s")" -le "$_tw_max" ]; then
+    # 上限小于 1 时没有位置放内容；给个省略号比给空串更说明"这里被截了"。
+    if [ "$_tw_max" -le 0 ]; then printf '%s' "$_tw_s"; return 0; fi
+    _dw_walk "$_tw_s" "$_tw_max"
+    if [ "$DW_END" -eq "$DW_BYTES" ]; then
+        # 整段都放得下（含空串）：原样返回，不加省略号。
         printf '%s' "$_tw_s"
         return 0
     fi
-    _tw_n=${#_tw_s}
-    _tw_i=0
-    _tw_aw=0
-    _tw_acc=0   # 已接受部分的字节数
-    while [ "$_tw_i" -lt "$_tw_n" ]; do
-        _tw_ch=${_tw_s:_tw_i:1}
-        # 宽度**不再自己算一遍**：这里原来复制了一份与 _display_width 相同的判据，
-        # 于是同一个 bug 要修两处——实测就踩到了（…/→/— 被判成两格，裁剪和补齐
-        # 给出互相矛盾的宽度，两列对齐歪掉）。判据只留 _display_width 一处。
-        _tw_cw=$(_display_width "$_tw_ch")
-        printf -v _tw_b '%d' "'$_tw_ch"
-        if [ "$_tw_b" -lt 128 ]; then _tw_cl=1
-        elif [ "$_tw_b" -ge 224 ]; then _tw_cl=3
-        else _tw_cl=2; fi
-        [ $((_tw_aw + _tw_cw)) -gt "$_tw_max" ] && break
-        _tw_aw=$((_tw_aw + _tw_cw))
-        _tw_i=$((_tw_i + _tw_cl))
-        _tw_acc=$_tw_i
-    done
-    printf '%s…' "${_tw_s:0:_tw_acc}"
+    printf '%s…' "${_tw_s:0:$DW_END1}"
 }
 
 # 配色分两层：角色 -> 颜色名 -> 本平台怎么写。

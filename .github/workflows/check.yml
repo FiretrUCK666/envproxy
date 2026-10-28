@@ -616,12 +616,24 @@ jobs:
             }
           }
           # c) README 里不写死版本号（写死了每发一版就过期）
+          #
+          # 判据必须是"本项目的版本号"，而不是"任何形如 x.y.z 的数"。
+          # 一条只认 \d+\.\d+\.\d+ 的通用正则会把 macOS 14.0.1、Windows 10.0.19041、
+          # Node 20.11.1、甚至日期 2026.10.29 一起算成违规——补一条系统版本要求就红，
+          # 与这条门禁的本意无关，久了只会被当成噪音绕过。
+          # 所以只认两种写法：紧跟项目名（EnvProxy 2.0.0），或带 v 前缀且处在词首
+          # （v3.1.4）。二者是本项目版本的两种习惯写法，系统版本与日期不会长成这样。
+          $verPatterns = @(
+            'EnvProxy\s*v?\d+\.\d+\.\d+',
+            '(^|[\s(（])v\d+\.\d+\.\d+'
+          )
           foreach ($f in 'README.md','README.en.md') {
-            $hit = Select-String -Path $f -Pattern '(?<![\d.])v?\d+\.\d+\.\d+(?![\d.])' -Encoding UTF8
-            if ($hit) {
-              Write-Host ("{0}：出现写死的版本号" -f $f)
-              $hit | ForEach-Object { Write-Host ("  行 {0}" -f $_.LineNumber) }
-              $fail = 1
+            $txt = Get-Content $f -Raw -Encoding UTF8
+            foreach ($vp in $verPatterns) {
+              if ($txt -match $vp) {
+                Write-Host ("{0}：出现写死的版本号（匹配 {1}）" -f $f, $vp)
+                $fail = 1
+              }
             }
           }
           # d) 安装包里的每个顶层条目都要写进两语 README 第 8 节的文件夹清单代码块里
