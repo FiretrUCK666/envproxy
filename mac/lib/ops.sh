@@ -685,10 +685,16 @@ format_status_lines() {
     printf '%s' "$_fsl_out"
 }
 
-# 实时状态页：进屏幕、自己刷新、按 0/q 退出。
+# 实时状态页：进屏幕、自己刷新、按 0/q/Esc 退出。
 # 画不了屏（重定向 / 无终端 / 窗口太小）时退回一次性静态输出。
 show_status_live() {
+    # 底部要留一行放操作提示（下面 _ssl_frame 末尾追加），所以行数预算 +1。
+    # 提示只能写真正支持的键——写了却没人处理的键，用户按下去毫无反应，
+    # 会以为程序卡住了。这里三个键 wait_screen_key 都认。
+    _ssl_hint='正在实时刷新 · 按 0 或 Esc 返回'
     _ssl_frame=$(format_status_lines)
+    _ssl_frame="$_ssl_frame
+$_ssl_hint"
     _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
     _ssl_width=0
     while IFS= read -r _ssl_l; do
@@ -716,7 +722,10 @@ EOF
             # 渲染失败就保留上一帧：状态页是"看一眼"用的，不该被一帧失败踢出去。
             # 与 Windows 侧同一处理（那边两个调用各包一层 try）。
             _ssl_new=$(format_status_lines 2>/dev/null)
-            [ -n "$_ssl_new" ] && _ssl_frame="$_ssl_new"
+            # 提示行每一帧都要重新接上：它不属于状态内容（format_status_lines 不产出它），
+            # 只接在首帧的话，刷一次就消失了。
+            [ -n "$_ssl_new" ] && _ssl_frame="$_ssl_new
+$_ssl_hint"
             _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
             _ssl_width=0
             while IFS= read -r _ssl_l; do

@@ -988,6 +988,9 @@ function New-ProblemReport {
     if (-not $saved) {
         Write-Styled 'warn' '报告生成失败：两个位置都写不进去。'
         Write-Styled 'dim' '  可以先把菜单选 2（查看状态）的截图发给对方。'
+        # 退出码是这条命令唯一能被程序读懂的结论，说"成功"而实际失败是谎报。
+        # 与 mac 侧同一套语义（那边 report 分支 return 1）。AGENTS 规定：1 = 失败。
+        $script:ReportExitCode = 1
         return
     }
 

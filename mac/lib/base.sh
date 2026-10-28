@@ -643,7 +643,10 @@ wait_screen_key() {
     fi
     case "$_wsk_c" in
         ''|$'\r'|$'\n') return 0 ;;
-        '0'|'q'|'Q') printf '%s' 'Quit'; return 0 ;;
+        # Esc 也退出：Windows 侧一直是 0/q/Esc 三个键，这里少了 Esc 就成了两种行为。
+        # 终端里的 Esc 是一个裸 0x1B 字节（方向键是 0x1B 后跟别的字节，在这里只会取到
+        # 第一个字节，按方向键等于按 Esc——状态页没有需要方向键的操作，可以接受）。
+        '0'|'q'|'Q'|$'\033') printf '%s' 'Quit'; return 0 ;;
     esac
     printf '%s' "$_wsk_c"
     return 0

@@ -270,8 +270,11 @@ if ($Advanced) {
     return
 }
 if ($Report) {
+    # 写盘失败要让它反映到退出码上（与 mac 侧 return 1 同一套语义）。
+    # 否则脚本里 `envproxy.ps1 -Report; if ($?) { 发出去 }` 会拿着一份不存在的报告往下走。
+    $script:ReportExitCode = 0
     New-ProblemReport
-    return
+    exit $script:ReportExitCode
 }
 if ($Help) {
     Show-Help

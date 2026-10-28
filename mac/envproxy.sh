@@ -219,7 +219,9 @@ case "$_CMD_NORM" in
     update) update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     help) show_help;;
-    report) new_problem_report;;
+    # 退出码要如实反映结果：报告没写出来时说"成功"是谎报，
+    # 脚本里 `envproxy.sh report && 发出去` 会拿着一份不存在的报告往下走。
+    report) new_problem_report; exit $?;;
     # DIVERGE(Mac): self-test 只有 mac 有，Windows 侧没有对应子命令。
     #   为什么：这份自检跑在临时沙箱里（重定向 HOME、不碰真实配置），靠的是 shell 的
     #   变量替换与子进程隔离，用 bash 实现是自然的。Windows 侧的同等回归住在
