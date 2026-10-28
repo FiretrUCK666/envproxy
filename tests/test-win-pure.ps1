@@ -221,17 +221,24 @@ Assert-Eq 'var table value' 'http://127.0.0.1:17890' ($t['HTTP_PROXY'])
 # Test-IsOwnedProxyValue 内部会去读安装快照判断「这个名字装前就有了吗」，
 # 那结论必须由本用例自己控制：装过的机器上快照里有这几个名字，断言就会拿到
 # 与干净 CI 相反的结论——同一份测试两边结论相反，是最难查的一类红。
+Write-Host '[2] ownership convention (real predicate)'
 if ($env:OS -eq 'Windows_NT') {
     Remove-Item -LiteralPath (Get-PrevEnvRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -Path (Get-PrevEnvRegKeyPath) -Force | Out-Null
+    # 这几条的前提是"快照键在、且里面没有这几个名字"——只有注册表能造出来。
+    # 没有注册表时（CI 的 ubuntu 作业跑同一份文件）Test-SnapshotRecorded 会走到
+    # "键整个不存在且无安装记录"那一支、返回 $null（不知道），于是判 false。
+    # 那是**正确行为**（分不清就别认领），只是与本组断言要问的问题不同。
+    # 所以整组跟着前提一起跳过，而不是把断言放宽——放宽会让真回归溜过去。
+    Assert-Eq 'local counts as ours' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7890')
+    Assert-Eq 'corp does not' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://corp:8080')
+    Assert-Eq 'own no_proxy entry counts' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,example.com')
+    Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'example.com')
+    Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
+    Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
+} else {
+    Write-Host '  SKIP 归属判定的"快照在、里面没有"前提（本机没有注册表，造不出这个前提）'
 }
-Write-Host '[2] ownership convention (real predicate)'
-Assert-Eq 'local counts as ours' $true (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7890')
-Assert-Eq 'corp does not' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://corp:8080')
-Assert-Eq 'own no_proxy entry counts' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,example.com')
-Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'example.com')
-Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
-Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
 Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
 # NO_PROXY 为空也必须算"没有痕迹"。
 #
@@ -2597,9 +2604,22 @@ Assert-Eq 'PS: corporate proxy reads back' 'http://1.2.3.4:8080' $env:HTTPS_PROX
 Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
 
 # curl 的别名差异：文档说 5.1 是别名、7 不是。这条钉住这个前提。
-$curlKind = (Get-Command curl -ErrorAction SilentlyContinue).CommandType.ToString()
-$is51 = ($PSVersionTable.PSVersion.Major -lt 6)
-Assert-Eq 'curl kind matches what the docs claim for this version' $true (($is51 -and $curlKind -eq 'Alias') -or ((-not $is51) -and $curlKind -ne 'Alias'))
+#
+# 必须先判"这台机器上有没有 curl"。取不到时**跳过**，不要硬算：
+# `(Get-Command curl).CommandType` 在结果为 null 时抛
+# "You cannot call a method on a null-valued expression"，
+# 而本文件 $ErrorActionPreference = 'Stop'，于是整段自检当场中止——
+# 后面几百条用例一条都不跑，CI 日志里只剩一句"退出码 1"。
+# 精简的 Linux 容器、Server Core、被清理过的系统都可能没有 curl。
+# 这与下面 cmd 那段是同一个教训（那里已经先算路径再判存在）。
+$curlCmd = Get-Command curl -ErrorAction SilentlyContinue
+if ($curlCmd) {
+    $curlKind = $curlCmd.CommandType.ToString()
+    $is51 = ($PSVersionTable.PSVersion.Major -lt 6)
+    Assert-Eq 'curl kind matches what the docs claim for this version' $true (($is51 -and $curlKind -eq 'Alias') -or ((-not $is51) -and $curlKind -ne 'Alias'))
+} else {
+    Write-Host '  SKIP curl 别名前提（这台机器上取不到 curl）'
+}
 
 # cmd：清 5 个变量（一行写法）。用独立 cmd 进程，不碰本进程环境。
 # 没有 SystemRoot 就是不在 Windows 上（CI 的 Linux 侧会跑这一份）：这时根本没有 cmd.exe，
