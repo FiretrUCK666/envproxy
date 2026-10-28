@@ -454,8 +454,8 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   跑全部门禁 → 校验标签形状与发版说明 → 用 `git archive` 从该标签打 2 个分平台资产 →
   校验逐字节一致与编码红线 → 挂到 Release。
 - **幂等且自愈**：Release 已存在时不跳过，而是补挂资产**并刷新发版说明**
-  （`gh release edit --notes-file`）：只补资产等于没改。
-  **删标签会把 Release 退回草稿**（不能标 latest，会 422）：先发布再标注；判"在不在"必须走 API，`gh release view` 看不见草稿。
+  （`gh release edit --notes-file`）。
+  **删标签会把 Release 退回草稿**（不能标 latest，会 422）：先发布再标注；判据用 `gh release view`（看得见草稿），`/releases/tags/` 对草稿回 404。
 - **补漏**：标签已推但 Release 没建或资产没挂上，用 `workflow_dispatch` 填标签名重跑补齐；
   **不重打标签**（版本号永不复用）。
 - **已发布的版本只用新版本修**：废弃用标记，不删除（别人的锁定引用可能写死该号）。
