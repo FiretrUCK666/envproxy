@@ -538,7 +538,12 @@ function Start-Relay {
         $script:RelayFailed = $false
         $script:RelayFailReason = ""
         # 记录实际端口：启动器要读它。写失败不影响中继工作（启动器会退回直读注册表）。
-        try { Write-Text -Path (Get-RelayPortFile) -Text ([string]$relay.Port) } catch {}
+        # 写失败不拦中继（它照样转发），但要留痕迹：
+        # 这个文件是别的进程看见中继的唯一凭据，写不出来时状态页会说"没在工作"，
+        # 而屏幕上没有任何东西能解释为什么——那正是最难查的一类故障。
+        # 主循环每轮会再试一次（见 Sync-RelayUpstream），所以这里只记一行。
+        try { Write-Text -Path (Get-RelayPortFile) -Text ([string]$relay.Port) }
+        catch { try { Write-MonitorLog ("固定入口端口记录写不进去（界面可能显示未在工作）：" + $_.Exception.Message) } catch {} }
         return $true
     } catch {
         $script:RelayFailed = $true
@@ -582,6 +587,22 @@ function Sync-RelayUpstream {
         }
     } catch {}
     try { [EnvProxyRelay]::SetUpstream($upHost, $port) } catch {}
+    # 端口记录每轮确认一次——它是**另一个进程唯一能看见中继的凭据**。
+    #
+    # 只靠启动时写一次不够：那个文件会被别的东西删掉（跑一次卸载、
+    # 清理工具扫 AppData、上次停→启之间的窗口期），而中继本身还活着。
+    # 删掉之后没有任何代码会重建它，于是状态页与「查看中继」永远读不到，
+    # 屏幕上写"没在工作"，实际端口正在转发——用户看到的就是两句假话
+    # （实测过：monitor.log 说"已启动 17099"，状态页说"固定入口没在工作"）。
+    #
+    # 所以判据是"这个文件的内容是否等于我现在的端口"，每轮对一次。
+    # 成本：一次文件存在性判断（内容对得上就不再写），不对才真正写盘。
+    try {
+        $want = [string]$script:RelayPort
+        $now = ''
+        try { $now = (Get-Content -LiteralPath (Get-RelayPortFile) -Raw -ErrorAction Stop).Trim() } catch {}
+        if ($now -ne $want) { Write-Text -Path (Get-RelayPortFile) -Text $want }
+    } catch {}
 }
 
 # 中继当前是否可用（状态页、查看中继页用；只读，不启动任何东西）。

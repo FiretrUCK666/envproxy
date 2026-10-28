@@ -1,4 +1,5 @@
-﻿# EnvProxy Windows pure-function regression tests.
+﻿
+# EnvProxy Windows pure-function regression tests.
 # Run: pwsh tests/test-win-pure.ps1   (PowerShell 5.1 compatible, UTF-8 with BOM)
 #
 # 注册表用例写在临时键上，不碰使用者的真实环境：下面把四个落点整体改道，
@@ -19,6 +20,7 @@ foreach ($__n in @('HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','NO_PROXY','NODE_USE_E
                   'http_proxy','https_proxy','all_proxy','no_proxy')) {
     $__savedProxy[$__n] = [Environment]::GetEnvironmentVariable($__n, 'Process')
 }
+
 Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
 foreach ($__n in $__savedProxy.Keys) { [Environment]::SetEnvironmentVariable($__n, $null, 'Process') }
 $ErrorActionPreference = 'Stop'
@@ -3150,6 +3152,23 @@ foreach ($pair in @(@('win/lib/ops.ps1', '状态页'), @('win/lib/shortcut.ps1',
     }
     Assert-Eq ('按键：' + $pair[1] + ' 不把空串当退出') 0 $badEmpty
 }
+
+# 3c. 中继的端口记录必须能自愈，不能只靠启动时写一次。
+#     曾经：中继启动时写一次 relay.port，之后再不写。那个文件被删掉
+#     （跑一次卸载 / 清理工具 / 停→启的窗口期）后，中继还在转发，
+#     但状态页与「查看中继」读不到凭据，双双显示"没在工作"——
+#     而 monitor.log 明明写着"固定入口已启动：127.0.0.1:17099"。
+#     实测过这个组合，用户看到的就是两句互相矛盾的话。
+$rlSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/relay.ps1'))
+$syncIdx = $rlSrc.IndexOf('function Sync-RelayUpstream')
+$syncEnd = $rlSrc.IndexOf("`n}", $syncIdx)
+$syncChunk = $rlSrc.Substring($syncIdx, $syncEnd - $syncIdx)
+Assert-Eq '中继：每轮同步会确认端口记录' $true ([bool]([regex]::IsMatch($syncChunk, 'Get-RelayPortFile')))
+Assert-Eq '中继：内容已对就不重复写盘' $true ([bool]([regex]::IsMatch($syncChunk, '\$now -ne \$want')))
+$startIdx = $rlSrc.IndexOf('function Start-Relay')
+$startEnd = $rlSrc.IndexOf("`n}", $startIdx)
+$startChunk = $rlSrc.Substring($startIdx, $startEnd - $startIdx)
+Assert-Eq '中继：端口记录写失败要留日志' $false ([bool]([regex]::IsMatch($startChunk, 'Port\) \} catch \{\}')))
 # 4. 画屏门槛必须按真实帧尺寸判，不能只看固定最小宽高
 #    曾经：固定 40 列放行，而帧里有 82 列的日志行 → 折行 → 绝对定位全错位。
 Assert-Eq '画屏：Test-CanDrawScreen 支持按帧宽判' $true ([bool]([regex]::IsMatch($bsSrc, 'function Test-CanDrawScreen\(\[int\]\$NeedLines = 0, \[int\]\$NeedWidth = 0\)')))
