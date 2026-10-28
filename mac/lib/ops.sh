@@ -69,7 +69,7 @@ install_envproxy() {
     # 不说的话，用户卸载后发现自己原来的公司代理没了，而安装时屏幕上一切正常。
     if [ "$_snapshot_ok" = "0" ]; then
         style_out warn "      没能记下你原来的代理设置（写入被拦住），卸载时可能还原不回来。"
-        style_out warn "      如果原本自己设过代理，请先抄一份；再点一次菜单选 1 重试。"
+        style_out warn "      如果原本自己设过代理，请先抄一份；再点一次菜单$(menu_ref install)重试。"
     fi
     style_out text "[4/4] 正在写终端配置……"
     if insert_shell_hooks; then
@@ -127,10 +127,10 @@ install_envproxy() {
     _tip_row "$_tip_a1" "自动就是对的，什么都不用做。" ""
     _tip_row "$_tip_a2" "敲一下回车就跟上。" ""
     _tip_row "$_tip_a3" "重开一个，或者手动加载一次" ""
-    _tip_row "" "菜单选 4（帮助）第 2 条，有现成命令。" ""
+    _tip_row "" "菜单$(menu_ref help)第 2 条，有现成命令。" ""
     _tip_row "$_tip_a4" "在它里面执行" "export ENVPROXY_TERM=off"
     _tip_row "$_tip_a5" "在它里面执行" "unset ENVPROXY_TERM"
-    _tip_row "$_tip_a6" "菜单选 4（帮助）。" ""
+    _tip_row "$_tip_a6" "菜单$(menu_ref help)。" ""
 }
 
 # 卸载时要清掉的运行时文件清单——**删除与复检的唯一来源**。
@@ -170,7 +170,7 @@ uninstall_envproxy() {
         # 没有可交互的终端：不能问，也不能替使用者答应。
         # "问不到人就直接做"等于没有确认（Windows 侧实测过一次：管道里跑直接把工具卸干净了）。
         style_out warn "这里没法问你要不要卸载（没有可交互的终端），所以什么都不会做。"
-        style_out dim "  真的要卸载，请双击 打开菜单.command 选 7（一键恢复）；"
+        style_out dim "  真的要卸载，请双击 打开菜单.command $(menu_ref uninstall)；"
         style_out dim "  或者确认无误后加 --yes：bash envproxy.sh uninstall --yes"
         return 0
     fi
@@ -223,7 +223,7 @@ uninstall_envproxy() {
     if ! restore_prev_env; then
         style_out warn "[未完成] 你原来的代理设置没能写回去（可能被安全软件或权限拦住了）。"
         style_out warn "        备份还留着（$PREV_ENV），没有再删任何东西。"
-        style_out warn "        请先手动把原来的设置加回去，再点一次菜单选 7（一键恢复）收尾。"
+        style_out warn "        请先手动把原来的设置加回去，再点一次菜单$(menu_ref uninstall)收尾。"
         return 1
     fi
     # launchd 的两个重定向文件（StandardOutPath/StandardErrorPath）是运行时管道，不是黑匣子：
@@ -651,7 +651,7 @@ new_problem_report() {
     echo ""
     if [ ! -s "$_npr_target" ]; then
         echo "报告生成失败：两个位置都写不进去。" >&2
-        echo "  可以先把菜单选 2（查看状态）的截图发给对方。" >&2
+        echo "  可以先把菜单$(menu_ref status)的截图发给对方。" >&2
         return 1
     fi
 
@@ -819,7 +819,7 @@ show_status() {
     elif [ "$_never_installed" = "1" ]; then
         # 从没装过：几件"没生效"都是同一个事实（还没装），
         # 说成"有 N 项要注意"会让第一次打开的人以为机器有好几处毛病。
-        style_out dim "还没开始用。打开菜单选 1（安装 / 修复）就能装上。"
+        style_out dim "还没开始用。打开菜单$(menu_ref install)就能装上。"
     else
         style_out warn "有 $_pn 项要注意："
         printf '%s' "$_pb" | while IFS= read -r _pb1; do
@@ -837,37 +837,37 @@ show_status() {
         # 与 Windows 侧 stopped.intent 同一手法：猜错的代价是把崩溃说成用户选择。
         if [ -f "$STOP_INTENT" ]; then
             if [ "$_autorun_ok" = "1" ]; then
-                style_out dim "  （你点过停止。下次登录会自动恢复，或现在选 1）"
+                style_out dim "  （你点过停止。下次登录会自动恢复，或现在$(menu_ref install)）"
             else
                 style_out warn "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
-                style_out dim "  打开菜单选 1（安装 / 修复）可以一起修好。"
+                style_out dim "  打开菜单$(menu_ref install)可以一起修好。"
             fi
         elif [ "$_never_installed" = "1" ]; then
             # 从没装过：这不是问题，是起点。用"崩溃/被强制退出"描述它，
             # 第一次打开的人会以为自己的机器出了事（"我明明没装过"）。
             style_out dim "  （还没装过。装上之后它会自己常驻，不用你管）"
-            style_out dim "  打开菜单选 1（安装 / 修复）开始使用。"
+            style_out dim "  打开菜单$(menu_ref install)开始使用。"
         else
             style_out warn "  （不是点了停止，是进程不在了：可能被强制退出，或崩溃）"
-            style_out dim "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
+            style_out dim "  打开菜单$(menu_ref install)可以让它重新跑起来。"
         fi
     fi
     if [ "$_autorun_ok" = "0" ]; then
         if [ "$_autorun_reg" = "1" ]; then
             _status_row "开机自启" "记录还在，但启动文件已不存在（登录时不会启动）" warn
             style_out dim "  记录指向：$LOCATOR_PATH"
-            style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
+            style_out dim "  打开菜单$(menu_ref install)可以重建。"
         elif [ -f "$PLIST_PATH" ]; then
             _status_row "开机自启" "已写入但未加载" warn
-            style_out dim "  打开菜单选 1（安装 / 修复）可以重建。"
+            style_out dim "  打开菜单$(menu_ref install)可以重建。"
         else
             _status_row "开机自启" "未启用" warn
-            style_out dim "  打开菜单选 1（安装 / 修复）可以启用。"
+            style_out dim "  打开菜单$(menu_ref install)可以启用。"
         fi
     fi
     if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then
         _status_row "代理变量" "值不是合法地址（$_cur）" warn
-        style_out dim "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
+        style_out dim "  多半是别的工具改写成了半个地址。$(menu_ref install)会按当前代理重写一遍。"
     elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
         _status_row "代理变量" "指向的端口已不在（$_cur）" warn
         style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
@@ -878,20 +878,20 @@ show_status() {
         if [ -n "$_cur_port" ] && [ -n "$_port" ] && [ "$_cur_port" != "$_port" ]; then
             # 代理在别的端口上活着：跟着它走就对了
             style_out dim "  变量里是旧端口 $_cur_port，翻墙代理现在在 $_port。"
-            style_out dim "  监控在跑的话几秒内会自己跟过去；想立刻跟上就选 1（安装 / 修复）。"
+            style_out dim "  监控在跑的话几秒内会自己跟过去；想立刻跟上就$(menu_ref install)。"
         elif [ -z "$_port" ]; then
             # 代理根本没在跑：没有可跟的目标，那就是该清掉
             style_out dim "  翻墙代理现在没在跑，所以这个地址已经没用了。"
-            style_out dim "  监控在跑的话几秒内会把它清掉；想立刻清掉就选 1（安装 / 修复）。"
+            style_out dim "  监控在跑的话几秒内会把它清掉；想立刻清掉就$(menu_ref install)。"
         else
             # 端口解析不出来（极少见），只给通用说法，不编具体原因
             style_out dim "  这个地址已经连不上了（多半是刚换过端口）。"
-            style_out dim "  监控在跑的话几秒内会自己跟上；想立刻跟上就选 1（安装 / 修复）。"
+            style_out dim "  监控在跑的话几秒内会自己跟上；想立刻跟上就$(menu_ref install)。"
         fi
     elif [ -n "$_cur" ] && [ -z "$_m" ]; then
         _status_row "代理变量" "已注入（$_cur），但没人维护" warn
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
-        style_out dim "  打开菜单选 1 恢复监控；或选 7 一键恢复，把这批变量一并清掉。"
+        style_out dim "  打开$(menu_ref install)恢复监控；或$(menu_ref uninstall)，把这批变量一并清掉。"
     elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是使用者自己停的）。补一句桥接，否则会被判定"坏了"。
@@ -906,29 +906,29 @@ show_status() {
         unpaired)
             _status_row "终端同步" "配置文件里的标记不成对，未改动它" warn
             if [ -n "$_ts_badline" ]; then
-                style_out dim "  删掉配置文件里孤立的那行标记（第 $_ts_badline 行）再选 1。"
+                style_out dim "  删掉配置文件里孤立的那行标记（第 $_ts_badline 行）再$(menu_ref install)。"
             else
-                style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再选 1。"
+                style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再$(menu_ref install)。"
             fi ;;
         stale)
             _status_row "终端同步" "同步块是旧版本的" warn
             # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
-            style_out dim "  这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。" ;;
+            style_out dim "  这不影响用，只是那段代码旧了；打开$(menu_ref install)会更新它。" ;;
         missing)
             _status_row "终端同步" "配置文件里没有同步块" warn
-            style_out dim "  打开菜单选 1 可以写入。" ;;
+            style_out dim "  打开$(menu_ref install)可以写入。" ;;
         *)
             # 走到这里说明判定端又加了新状态而这里没跟上。静默跳过不行：
             # 上面的问题清单会说"终端同步没生效"，而往下整屏找不到"终端同步"
             # 四个字——用户被指向一个不存在的提示。Windows 侧真发生过一次
             # （State 叫 nohost、switch 处理的是 unknown，恰好错位）。
             _status_row "终端同步" "状态未知（$_ts_state）" warn
-            style_out dim "  打开菜单选 1（安装 / 修复）重写一次。" ;;
+            style_out dim "  打开菜单$(menu_ref install)重写一次。" ;;
     esac
     if [ "$_upd_prog" = "1" ]; then
         _status_row "上次更新" "没有完成（覆盖过程中断）" warn
         style_out dim "  程序文件可能新旧混合，某些功能会静默失效。"
-        style_out dim "  打开菜单选 1（安装 / 修复）重做一次即可。"
+        style_out dim "  打开菜单$(menu_ref install)重做一次即可。"
     fi
     if [ "$_sp_bad" = "1" ]; then
         _status_row "系统代理" "疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）。" warn
@@ -1000,7 +1000,7 @@ show_status() {
     fi
     if [ -z "$_vc" ]; then
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        _status_row "版本" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以选 3 立刻查）" dim
+        _status_row "版本" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以$(menu_ref update)立刻查）" dim
     else
         REMOTE_VERSION="$_vc"
         REMOTE_TAG="v$_vc"
@@ -1019,7 +1019,7 @@ show_status() {
         elif is_source_copy; then
             _state="源码包（更新入口会先确认用途再动手）"; _role="warn"
         elif [ -z "$_local_ver" ]; then
-            _state="可打开菜单选 3（检查更新）升级"; _role="warn"
+            _state="可打开菜单$(menu_ref update)升级"; _role="warn"
         else
             _newer=$(compare_versions "$_local_ver" "$REMOTE_VERSION" || true)
             if [ "$_newer" -gt 0 ] 2>/dev/null; then
@@ -1027,7 +1027,7 @@ show_status() {
             else
                 _older=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
                 if [ "$_older" -gt 0 ] 2>/dev/null; then
-                    _state="发现新版 $REMOTE_TAG，选 3（检查更新）即可升级"; _role="warn"
+                    _state="发现新版 $REMOTE_TAG，$(menu_ref update)即可升级"; _role="warn"
                 else
                     _state="已是最新"; _role="dim"
                 fi
@@ -1326,6 +1326,11 @@ _proj_issue_url() {
 }
 
 
+# 帮助正文住在 `cat <<'TOPIC'` 里——**单引号 heredoc，一个变量都不展开**。
+# 所以这一段里的编号与名字只能写字面量，不能用 $(menu_ref ...)：
+# 写了就会原样打印成 "$(menu_ref install)"，比写错数字更糟（用户看到的是代码）。
+# 代价是这一段会与菜单表各自维护，于是门禁 15 核对这里出现的「选 N（名字）」
+# 与菜单表逐项一致——写死的部分由门禁兜住，而不是靠人记得。
 _help_topic_body() {
     case "$1" in
     1) cat <<'TOPIC'
@@ -1409,7 +1414,7 @@ t 所以它们开起来就能拿到代理，不需要额外做一个启动器。
 h 如果你确实遇到某个程序还是翻不了墙
 t 先在终端里用同一条命令试：够说明问题的是那个程序自己，不是这个工具。
 c HTTPS_PROXY=$HTTPS_PROXY open -a "程序名"
-t 它自己带代理设置项的，直接填本工具的地址（菜单选 2 能看到）。
+t 它自己带代理设置项的，直接填本工具的地址（菜单选 2（查看状态）能看到）。
 h Windows 版才有「高级功能」
 t 那边的资源管理器拿不到登录之后才注入的值，必须给软件配一个启动器。
 t 这是平台差异，不是功能有没有做全。
@@ -1719,6 +1724,36 @@ MENU_ITEMS=(
     '8|问题反馈|出问题了，一键生成一份报告|支持|report'
     '0|退出|关掉这个窗口|退出|'
 )
+
+# 菜单编号/名字的唯一权威处就是上面那张表的第 1、2 列。散文里写"选 N（名字）"时
+# **一律从这张表取**，不许再写字面量——菜单项一旦重排，写死的数字就指向错的命令，
+# 那不是排版问题，是把人引到一个会改坏东西的动作上。
+#
+# 按第 5 列的动作名查，不按编号查：动作名是稳定的语义标识，编号只是它的显示形式。
+# 查不到时**大声失败**（非零退出 + stderr），不静默返回 0——返回 0 会渲染成
+# "选 0（退出）"，看着还挺像真的，而那正是最坏的一种误导。
+_menu_field_by_action() {
+    _mfb_want="$1"
+    _mfb_col="$2"
+    for _mfb_i in "${MENU_ITEMS[@]}"; do
+        if [ "$(printf '%s' "$_mfb_i" | cut -d'|' -f5)" = "$_mfb_want" ]; then
+            printf '%s' "$(printf '%s' "$_mfb_i" | cut -d'|' -f"$_mfb_col")"
+            return 0
+        fi
+    done
+    printf '没有动作名为 %s 的菜单项\n' "$_mfb_want" >&2
+    return 1
+}
+menu_key() { _menu_field_by_action "$1" 1; }
+menu_name() { _menu_field_by_action "$1" 2; }
+
+# 拼出用户看到的那一小段："选 2（查看状态）"。编号与名字都来自同一张表，
+# 于是重排或改名时屏幕上的提示会自己跟上。
+menu_ref() {
+    _mr_k=$(menu_key "$1") || return 1
+    _mr_n=$(menu_name "$1") || return 1
+    printf '选 %s（%s）' "$_mr_k" "$_mr_n"
+}
 
 # 分组顺序从表里按首次出现推导，不再写死数组：加一个分组只改表。
 # 打印与分派读同一份顺序。写死会在"表里有、数组里没有"时静默漏印一项，

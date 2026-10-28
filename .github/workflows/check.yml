@@ -1892,6 +1892,39 @@ jobs:
             }
           }
 
+          # Mac 帮助正文住在 `cat <<'TOPIC'` 里——单引号 heredoc 不展开，
+          # 所以那里的「选 N（名字）」只能写字面量，不能派生。写死的部分必须由门禁兜住：
+          # 逐项核对它出现的编号与名字，与菜单表里那一项完全一致。
+          # 只查 heredoc 段内的行，段外的提示都已经是 $(menu_ref ...)，不受这条约束。
+          #
+          # 表必须从 `MENU_ITEMS=(` 里取，不能全局扫 `'N|名字|`：
+          # 帮助主题表也是同一种形状，"1|用处|"与"1|安装 / 修复|"会同时命中，
+          # 于是核对时拿主题名去比菜单名，必然假红。
+          $menuBlock = [regex]::Match($sh, '(?s)MENU_ITEMS=\((.*?)\r?\n\)')
+          if (-not $menuBlock.Success) { Write-Host 'Mac 侧读不到菜单表（MENU_ITEMS）'; $fail = 1 }
+          $macMenuRows = @([regex]::Matches($menuBlock.Groups[1].Value, "(?m)^\s*'(\d+)\|([^|]+)\|") | ForEach-Object { @{ Key = $_.Groups[1].Value; Name = $_.Groups[2].Value } })
+          if ($macMenuRows.Count -eq 0) { Write-Host 'Mac 侧菜单表是空的，无法核对帮助正文里的菜单编号'; $fail = 1 }
+          $inTopic = $false
+          $lnNo = 0
+          foreach ($line in ($sh -split "`n")) {
+            $lnNo++
+            if ($line -match "cat <<'TOPIC'") { $inTopic = $true; continue }
+            if ($inTopic -and $line -match '^\s*TOPIC\s*$') { $inTopic = $false; continue }
+            if (-not $inTopic) { continue }
+            foreach ($mm in [regex]::Matches($line, '选 (\d+)（([^）]+)）')) {
+              $wantKey = $mm.Groups[1].Value
+              $wantName = $mm.Groups[2].Value
+              $hit = $macMenuRows | Where-Object { $_.Key -eq $wantKey } | Select-Object -First 1
+              if (-not $hit) {
+                Write-Host ("mac/lib/ops.sh:{0} 帮助正文写了「选 {1}」，但菜单里没有编号 {1} 的项" -f $lnNo, $wantKey)
+                $fail = 1
+              } elseif ($hit.Name -ne $wantName) {
+                Write-Host ("mac/lib/ops.sh:{0} 帮助正文写的是「选 {1}（{2}）」，而菜单表里编号 {1} 是「{3}」" -f $lnNo, $wantKey, $wantName, $hit.Name)
+                $fail = 1
+              }
+            }
+          }
+
           if ($fail) { exit 1 }
           Write-Host '两侧帮助与菜单结构一致'
 
