@@ -168,6 +168,18 @@ jobs:
           # 就一起指着旧包，后面的自校验会（正确地）拒绝。补漏重跑也必须能纠正这一点。
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG 已存在：上传（覆盖）两个资产，刷新发版说明，并标成最新。"
+            # 草稿态必须先发布出来，否则 --latest 会被 422 拒（"Latest release cannot be
+            # draft or prerelease"）。草稿是怎么来的：**标签被删过**——GitHub 会把关联的
+            # Release 退回草稿，因为已发布态要求它有标签。删标签重发是这个项目允许的
+            # （版本号还没送出去时），所以这条路径必须能走通，不能要求人先手动点发布。
+            # 编辑必须打到 /releases/<id>：带 tags/<tag> 的那条只支持 GET，拿它 PATCH 会 404。
+            # 布尔值用 -F 传，发出去一定是 JSON 的 false，不随 gh 版本变。
+            # --latest 只能加在非草稿上，所以发布与标注要分两步。
+            if [ "$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null)" = "true" ]; then
+              echo "Release $TAG 处于草稿态（标签曾被删除）：先发布，再挂资产与标注最新。"
+              RID="$(gh api "repos/{owner}/{repo}/releases/tags/$TAG" -q .id)"
+              gh api -X PATCH "repos/{owner}/{repo}/releases/$RID" -F draft=false >/dev/null
+            fi
             gh release upload "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz --clobber
             gh release edit "$TAG" --notes-file "release-notes/$TAG.md" --title "$TAG" --latest
           else
