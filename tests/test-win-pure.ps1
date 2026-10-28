@@ -2016,6 +2016,31 @@ try {
 }
 
 # ------------------------------------------------------------------------------
+# [2g] 快照写入的成败必须能传出去
+# ------------------------------------------------------------------------------
+# 这份快照是**其它所有归属判据的输入**：记不下来说明卸载时还原不回用户的原值。
+# 原来整个函数体包在 try{}catch{} 里、逐项写还带 SilentlyContinue，
+# 于是"记下了"与"没记下"长得一模一样，安装入口也就无从如实报告。
+# 这里钉住两条：记下了返回 0；已经有了也返回 0（幂等，不算失败）。
+if ($env:OS -eq 'Windows_NT') {
+    $snapBak = Get-PrevEnvRegKeyPath
+    try {
+        Remove-Item -LiteralPath $snapBak -Recurse -Force -ErrorAction SilentlyContinue
+        $rc1 = $null
+        try { $rc1 = Snapshot-PrevEnv -FirstInstall:$true } catch { $rc1 = 'threw' }
+        Assert-Eq '快照：写成了返回 0（不是"抛异常"也不是空值）' 0 $rc1
+        Assert-Eq '快照：写完成后键确实在' $true (Test-RegKey $snapBak)
+        $rc2 = $null
+        try { $rc2 = Snapshot-PrevEnv -FirstInstall:$false } catch { $rc2 = 'threw' }
+        Assert-Eq '快照：已经存在时返回 0（幂等，不是失败）' 0 $rc2
+    } finally {
+        Remove-Item -LiteralPath $snapBak -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} else {
+    Write-Host '  SKIP 快照写入成败（本机没有注册表）'
+}
+
+# ------------------------------------------------------------------------------
 # [11] 注册表判断：文件系统那套对 HKCU:\ 永远说"不存在"
 # ------------------------------------------------------------------------------
 # 照着 Test-Item 判"键在不在"，已存在的键会被当成不存在，下一步 New-Item -Force 就把键

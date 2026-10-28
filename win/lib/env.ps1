@@ -486,13 +486,20 @@ function Test-IsOurOwnedValue([string]$Name, [string]$Value) {
 # 注意：不用 Volatile Environment 做"会话级"优化——它是未文档化机制，语义不保证；持久化即 HKCU 本体。
 # 类型也要留底：原值若是 REG_EXPAND_SZ（含 %引用%），按 REG_SZ 写回会提前展开、腐化用户配置。
 # 所以读未展开值、存类型，还原时按原类型写回。
+#
+# 返回值必须被调用方消费：这份快照是**其它所有归属判据的输入**。
+# 记不下来时，清理侧会把本机地址一律当成"装前没有"（Test-SnapshotRecorded 的 $false 分支），
+# 而用户真实存在的原值就再也还原不回去了。安装时唯一该喊出来的话，恰恰是它不说。
+#   0 = 已经记过了（幂等跳过），或本来就没有原值可记——都不是失败
+#   1 = 想记却没记成
 function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
     try {
-        if (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue) { return }
+        if (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue) { return 0 }
         # 父键按需建；子键不带 -Force——注册表上的 -Force 是"清空重建"，不是"已存在就跳过"。
         if (-not (Test-RegKey (Get-ScriptPathRegKeyPath))) { New-Item -Path (Get-ScriptPathRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null }
         New-Item -Path (Get-PrevEnvRegKeyPath) -ErrorAction Stop | Out-Null
         $envKey = Get-Item -LiteralPath (Get-UserEnvKeyPath) -ErrorAction SilentlyContinue
+        $failed = $false
         foreach ($n in $ProxyVarNames) {
             $raw = $null
             $kind = "String"
@@ -504,10 +511,15 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
             }
             if ($null -eq $raw) { continue }
             if (Test-SnapshotSkip $n $raw $FirstInstall) { continue }
-            Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name $n -Value $raw -ErrorAction SilentlyContinue
-            Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction SilentlyContinue
+            # 逐项记成败：这两步原来都是 SilentlyContinue，于是"记下了"与"没记下"长得一样。
+            try {
+                Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name $n -Value $raw -ErrorAction Stop
+                Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name ("{0}__Kind" -f $n) -Value $kind -ErrorAction Stop
+            } catch { $failed = $true }
         }
-    } catch {}
+        if ($failed) { return 1 }
+        return 0
+    } catch { return 1 }
 }
 
 # 卸载时按快照还原用户原值，还原完删掉快照键。无快照时什么都不做。

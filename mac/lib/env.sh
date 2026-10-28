@@ -272,12 +272,20 @@ snapshot_prev_env() {
         _cur=$(launchctl getenv NODE_USE_ENV_PROXY 2>/dev/null || echo "")
         snapshot_skip_value NODE_USE_ENV_PROXY "$_cur" "$_sn_first" && _cur=""
         printf '%s\t%s\n' "NODE_USE_ENV_PROXY" "$_cur"
-    } > "$_sntmp" 2>/dev/null && mv "$_sntmp" "$PREV_ENV" 2>/dev/null || rm -f "$_sntmp" 2>/dev/null || true
+    } > "$_sntmp" 2>/dev/null
+    # 成败由**复读**决定，不由"我执行过 mv"决定：原来那条链 `... && mv || rm -f || true`
+    # 会让 mv 失败也以 0 退出，于是调用方以为记下了、实际什么都没记。
+    # 这份快照是其它所有归属判据的输入，记不下来的后果是卸载时还原不回用户的原值。
+    _sn_ok=1
+    if [ -s "$_sntmp" ] && mv "$_sntmp" "$PREV_ENV" 2>/dev/null && [ -f "$PREV_ENV" ]; then
+        _sn_ok=0
+    fi
+    rm -f "$_sntmp" 2>/dev/null || true
     # 快照里是用户**原来**的代理地址，可能带账号密码（http://user:pass@host:port）。
     # 默认权限（同 umask，通常 0644）是同机其他用户都能读——凭据就这么漏出去了。
     # 收紧到 0600：只有自己能读。
     [ -f "$PREV_ENV" ] && chmod 600 "$PREV_ENV" 2>/dev/null || true
-    return 0
+    return "$_sn_ok"
 }
 
 # 卸载时按快照还原用户原值，还原完删掉快照。无快照时什么都不做。

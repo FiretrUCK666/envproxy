@@ -41,7 +41,10 @@ function Install-EnvProxy {
     # 先快照用户原值，再动任何东西：监控一启动就会在几秒内自愈、把代理变量写进去，
     # 那时再快照，存下的就是"我们写下的值"而不是用户原值，卸载还原会留下我们的条目。
     # （快照只记一次；已经存在时这里是无副作用的空操作。）
-    Snapshot-PrevEnv -FirstInstall:$firstInstall
+    # 成败要收下来：这份快照是**其它所有归属判据的输入**，记不下来说明卸载时
+    # 还原不回用户的配置——那是安装时最该喊出来的一句话，不能只是安静地过去。
+    $snapshotOk = $true
+    try { if ((Snapshot-PrevEnv -FirstInstall:$firstInstall) -ne 0) { $snapshotOk = $false } } catch { $snapshotOk = $false }
     # 装没装上由返回值决定，不由"我调用过启动"决定（与自启动项读回复检同一条规矩）。
     # 这一步在慢机器上可能花一两秒，先说一声，别让屏幕静止不动。
     Write-Styled 'dim' "[2/4] 正在启动后台监控……"
@@ -77,6 +80,12 @@ function Install-EnvProxy {
         Write-Styled 'warn' "      再打开一次菜单选 1（安装 / 修复）重试；仍然不行请反馈。"
     } else {
         Write-Styled 'ok' "[3/4] 环境变量：已按当前状态校正"
+    }
+    # 快照没记下就要说出来：它决定"卸载时能不能还原你原来的配置"。
+    # 不说的话，用户卸载后发现自己原来的公司代理没了，而安装时屏幕上一切正常。
+    if (-not $snapshotOk) {
+        Write-Styled 'warn' "      没能记下你原来的代理设置（写入被拦住），卸载时可能还原不回来。"
+        Write-Styled 'warn' "      如果原本自己设过代理，请先抄一份；再点一次菜单选 1 重试。"
     }
     # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
     # 失败不阻断安装（其余三件事已经做成），但必须如实说清原因，不许报成功。

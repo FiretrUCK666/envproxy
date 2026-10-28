@@ -23,7 +23,10 @@ install_envproxy() {
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
     if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
-    snapshot_prev_env "$_first" || true
+    # 成败要收下来：这份快照是**其它所有归属判据的输入**，记不下来的话，
+    # 卸载时就还原不回用户的配置——那是安装时最该喊出来的一句话。
+    _snapshot_ok=1
+    if ! snapshot_prev_env "$_first"; then _snapshot_ok=0; fi
     style_out text "[1/4] 正在写开机自启……"
     if set_autorun; then
         style_out ok "[1/4] 开机自启动：已写入"
@@ -61,6 +64,12 @@ install_envproxy() {
     else
         # 读不出来 ≠ 没有代理：这一轮什么都没改，如实说明（与 Windows 侧同口径）。
         style_out warn "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
+    fi
+    # 快照没记下就要说出来：它决定"卸载时能不能还原你原来的配置"。
+    # 不说的话，用户卸载后发现自己原来的公司代理没了，而安装时屏幕上一切正常。
+    if [ "$_snapshot_ok" = "0" ]; then
+        style_out warn "      没能记下你原来的代理设置（写入被拦住），卸载时可能还原不回来。"
+        style_out warn "      如果原本自己设过代理，请先抄一份；再点一次菜单选 1 重试。"
     fi
     style_out text "[4/4] 正在写终端配置……"
     if insert_shell_hooks; then
