@@ -468,11 +468,22 @@ function Test-IsOurOwnedValue([string]$Name, [string]$Value) {
         if (-not $k) { return $false }
         $rec = $k.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         if ($null -eq $rec) { return $false }
+        # 空值/单空白的"当前值"永远不算我们的。
+        #
+        # 没有这条时，NO_PROXY 会走下面的逐项比对：空值拆出来的条目集是空的，
+        # 「每一项都在我们记下的那份里」对空集恒真，于是返回 true。后果不是显示问题——
+        # Test-ProxyVarsPresent 拿它当"该不该清理"的门槛，于是变量**已经清空**了
+        # 仍然被判成"还有我们的痕迹"，清理函数去删又删不到东西，回读确认依旧为真，
+        # 最后 Invoke-EnvStateWrite 报 1（写失败）——一个干净的直连状态被报成故障。
+        # 归属记录必须与"现在有没有值"一起看：记录只说明我们写过什么，不说明现在还在。
+        if ([string]::IsNullOrWhiteSpace($Value)) { return $false }
         if ($Name -eq "NO_PROXY") {
             # NO_PROXY 是"逐项合并"的：只有当前值里每一项都还在我们记下的那份里，
             # 才说明整份都是我们写的。多出来的条目是使用者自己加的，那就不是我们的。
             $recSet = Get-NormalizedNoProxyEntries ([string]$rec)
-            foreach ($e in (Get-NormalizedNoProxyEntries $Value)) {
+            $curEntries = Get-NormalizedNoProxyEntries $Value
+            if (-not $curEntries -or $curEntries.Count -eq 0) { return $false }
+            foreach ($e in $curEntries) {
                 if (-not ($recSet -contains $e)) { return $false }
             }
             return $true

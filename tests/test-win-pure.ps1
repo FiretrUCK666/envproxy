@@ -233,6 +233,17 @@ Assert-Eq 'foreign no_proxy does not' $false (Test-IsOwnedProxyValue 'NO_PROXY' 
 Assert-Eq 'node flag 1 counts' $true (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '1')
 Assert-Eq 'node flag other does not' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '0')
 Assert-Eq 'empty counts as nothing' $false (Test-IsOwnedProxyValue 'HTTP_PROXY' '')
+# NO_PROXY 为空也必须算"没有痕迹"。
+#
+# 这条原来漏了：NO_PROXY 走的是"逐项比对"而不是整值相等，而空值拆出来的条目集是
+# 空集，「每一项都在我们记下的那份里」对空集**恒真**，于是它返回 true。
+# 后果不是一个显示问题：Test-ProxyVarsPresent 拿它当清理门槛，变量已经清空仍被判成
+# "还有我们的痕迹"，清理函数删不到东西、回读确认依旧为真，最后 Invoke-EnvStateWrite
+# 报 1——一个干净的直连状态被报成"写失败"，而屏幕提示用户"可能被杀软拦住了"。
+# CI 的 ubuntu 作业正是因为这条红的（那边注册表不可写，空值路径必被走到）。
+Assert-Eq 'empty NO_PROXY counts as nothing' $false (Test-IsOwnedProxyValue 'NO_PROXY' '')
+Assert-Eq 'whitespace NO_PROXY counts as nothing' $false (Test-IsOwnedProxyValue 'NO_PROXY' '   ')
+Assert-Eq 'empty node flag counts as nothing' $false (Test-IsOwnedProxyValue 'NODE_USE_ENV_PROXY' '')
 
 # 归属判定的第二层：安装快照里本来就记着的值，哪怕长得像我们的，也永远是使用者的。
 # 没有这一层，用户自己写的 NO_PROXY=localhost、或自挂的 mitmproxy（127.0.0.1:8080）
@@ -333,8 +344,15 @@ foreach ($bad in @('on:', 'garbage', 'on:abc', 'on:0', 'on:70000', 'on:-1')) {
     try { $ar = Apply-State $bad } catch { $ar = 'threw' }
     Assert-Eq ("Apply-State 对畸形串不抛异常：" + $bad) $false $ar
 }
-# 合法输入必须放行（off 与 unknown 不动变量，返回 0 = 没有失败）
-foreach ($good in @('off', 'unknown', '')) {
+# 合法输入必须放行：unknown 与空串在拿锁**之前**就返回 0，不碰注册表。
+# 这两个可以放心测。
+#
+# 'off' **不在这里测**：它真的会去删 HKCU\Environment 里的变量。这台机器上如果
+# 后台监控正在跑（每 2-3 秒重写一次），测试删掉、监控写回，断言就会随机变红；
+# 而在没有注册表的平台（CI 的 ubuntu 作业跑同一份文件）它必然失败。
+# 原来是把它一起塞进这个循环的，于是"按平台看行为"的随机红被当成平台差异查了很久。
+# off 的行为改在【隔离的注册表沙箱】里验证——见下面 [2g] 之后的 off 用例。
+foreach ($good in @('unknown', '')) {
     $r = $null
     try { $r = Invoke-EnvStateWrite $good '' '' } catch { $r = 'threw' }
     Assert-Eq ("合法状态串放行：" + $good) 0 $r
@@ -2043,6 +2061,45 @@ if ($env:OS -eq 'Windows_NT') {
     }
 } else {
     Write-Host '  SKIP 快照写入成败（本机没有注册表）'
+}
+
+# ------------------------------------------------------------------------------
+# [2h] off 态写入：在**隔离的注册表沙箱**里验，不碰真实环境变量
+# ------------------------------------------------------------------------------
+# 为什么单独一段：其它地方测 off 会真的删 HKCU\Environment 里的变量。
+# 这台机器上后台监控每 2-3 秒重写一次，测试删掉、监控写回，断言就随机变红；
+# 而在没有注册表的平台上它必然失败（CI 的 ubuntu 作业跑同一份文件）。
+# 所以把落点临时指到沙箱子键，只验"判据对不对"，不碰使用者的真实设置。
+if ($env:OS -eq 'Windows_NT') {
+    $__savedEnvKey = $UserEnvSubKey
+    try {
+        $UserEnvSubKey = 'Software\EnvProxy\__offstate'
+        Remove-Item -LiteralPath (Get-RegPath $UserEnvSubKey) -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -Path (Get-UserEnvKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null
+
+        # 空环境：没有我们的痕迹 -> off 是"没事可做"，必须是 0 而不是失败。
+        # 这条曾经是红的：空 NO_PROXY 在逐项比对里"每一项都在"对空集恒真，
+        # 于是被判成"还有我们的痕迹"，删又删不到，最后报 1——
+        # 一个干净的直连状态被报成写失败，提示还叫用户去查杀软。
+        $r0 = $null
+        try { $r0 = Invoke-EnvStateWrite 'off' '' '' } catch { $r0 = 'threw' }
+        Assert-Eq 'off：空环境判为没有痕迹（返回 0，不是失败）' 0 $r0
+        Assert-Eq 'off：空环境的 NO_PROXY 不算我们的' $false (Test-IsOwnedProxyValue 'NO_PROXY' '')
+        Assert-Eq 'off：空环境的 NO_PROXY（空白）不算我们的' $false (Test-IsOwnedProxyValue 'NO_PROXY' '   ')
+
+        # 沙箱里放一个我们写下的值 -> 应当被认领并清掉，且返回 0。
+        Set-ItemProperty -Path (Get-UserEnvKeyPath) -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:7078' -ErrorAction SilentlyContinue
+        Set-ItemProperty -Path (Get-UserEnvKeyPath) -Name 'NO_PROXY'   -Value 'localhost,127.0.0.1,::1' -ErrorAction SilentlyContinue
+        Assert-Eq 'off：沙箱里我们自己写的 NO_PROXY 算我们的' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,127.0.0.1,::1')
+        $r1 = $null
+        try { $r1 = Invoke-EnvStateWrite 'off' '' '' } catch { $r1 = 'threw' }
+        Assert-Eq 'off：清掉自己写的值之后返回 0' 0 $r1
+    } finally {
+        Remove-Item -LiteralPath (Get-RegPath 'Software\EnvProxy\__offstate') -Recurse -Force -ErrorAction SilentlyContinue
+        $UserEnvSubKey = $__savedEnvKey
+    }
+} else {
+    Write-Host '  SKIP off 态写入（本机没有注册表）'
 }
 
 # ------------------------------------------------------------------------------
