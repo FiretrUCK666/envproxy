@@ -217,7 +217,15 @@ uninstall_envproxy() {
     # Mac 侧写变量无 Win 式进程内写锁：靠前面先停监控把竞态窗口收到最小（单实例文件锁另保安装互斥）。
     remove_user_env_vars
     # 按安装时的快照还用户原值（若有），还完删掉快照。
-    restore_prev_env || true
+    # 成败要收下来：还原没写成时**不能**照常往下清账（下面会 rm 掉 prev.env），
+    # 否则用户原值和唯一副本一起消失，而卸载还提示他"手动删"——
+    # 数据已经丢了，处置建议却指向"再删一次"。这种情况停下来，让用户先手动处理。
+    if ! restore_prev_env; then
+        style_out warn "[未完成] 你原来的代理设置没能写回去（可能被安全软件或权限拦住了）。"
+        style_out warn "        备份还留着（$PREV_ENV），没有再删任何东西。"
+        style_out warn "        请先手动把原来的设置加回去，再点一次菜单选 7（一键恢复）收尾。"
+        return 1
+    fi
     # launchd 的两个重定向文件（StandardOutPath/StandardErrorPath）是运行时管道，不是黑匣子：
     # 一律清掉，"恢复到安装前的状态"才成立。唯一的黑匣子是 monitor/monitor.log，
     # 它的去留由上面那次询问决定。

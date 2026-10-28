@@ -207,7 +207,17 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         if ($null -ne $bv) { $restoredWant[$n] = [string]$bv }
     }
     # 先按快照还用户原值，再清注册表键（快照键在该键之下，顺序不能反）。
-    Restore-PrevEnv
+    # 成败要收下来：还原没写成时**不能**照常删掉整棵键，否则用户原值和唯一副本
+    # 一起消失，而卸载还提示他"照上面列出的位置手动删"——数据已经丢了，
+    # 处置建议却指向"再删一次"。这种情况停下来，让用户先手动处理。
+    $restoreOk = $true
+    try { if ((Restore-PrevEnv) -ne 0) { $restoreOk = $false } } catch { $restoreOk = $false }
+    if (-not $restoreOk) {
+        Write-Styled 'warn' "[未完成] 你原来的代理设置没能写回去（可能被杀软或组策略拦住了）。"
+        Write-Styled 'warn' "        备份还留着，没有再删任何东西。请先手动把原来的设置加回去，"
+        Write-Styled 'warn' "        再点一次菜单选 7（一键恢复）收尾。"
+        return
+    }
     # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
     Broadcast-EnvironmentChange
     Remove-Item -LiteralPath (Get-ScriptPathRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue

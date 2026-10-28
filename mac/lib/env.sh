@@ -78,19 +78,22 @@ set_user_env_vars() {
     # 与上面写 owned.env 用**同一张表、同一套取值规则**：手抄一份的话，新增变量时
     # 上面那个循环会自动跟上、下面这份不会，于是 owned.env 里有记录、launchctl 里没值，
     # 而归属判定认为"这是我们的"、同步检查认为"不齐"，两个结论互相矛盾。
+    # launchctl 那一路的成败单独记下来：它在无 GUI 会话里必然失败，不该阻断安装，
+    # 但失败意味着 Dock/Spotlight 启动的 App 拿不到代理——那件事必须有地方说出来。
+    ENVPROXY_LAUNCHCTL_FAILED=0
     for _v in $PROXY_VAR_NAMES; do
         case "$_v" in
-            NO_PROXY|no_proxy) launchctl setenv "$_v" "$_np" 2>/dev/null || true ;;
-            NODE_USE_ENV_PROXY) launchctl setenv "$_v" "1" 2>/dev/null || true ;;
-            *) launchctl setenv "$_v" "$_http" 2>/dev/null || true ;;
+            NO_PROXY|no_proxy) launchctl setenv "$_v" "$_np" 2>/dev/null || ENVPROXY_LAUNCHCTL_FAILED=1 ;;
+            NODE_USE_ENV_PROXY) launchctl setenv "$_v" "1" 2>/dev/null || ENVPROXY_LAUNCHCTL_FAILED=1 ;;
+            *) launchctl setenv "$_v" "$_http" 2>/dev/null || ENVPROXY_LAUNCHCTL_FAILED=1 ;;
         esac
     done
     # 写没写成由**复读**决定，不由"我执行了 mv"决定。
     # 上面每一处 `|| true` 都是必要的容错（launchctl 在无 GUI 会话里必然失败，
     # 而终端路才是主路），但它们把"两个文件一个都没写出来"这种真故障也一起吞了。
     # 复读判据只问一件事：终端路的两份文件（当前值 + 归属记录）在不在、有没有内容。
-    # 这是真正会让人连不上网的那条路；launchctl 那条缺失只影响 Dock 启动的 App，
-    # 由状态页的终端同步那项单独体现，不在这里混为一谈。
+    # launchctl 的成败由 ENVPROXY_LAUNCHCTL_FAILED 带出去，谁要显示谁去读——
+    # 不写"状态页会体现"这种没人兑现的承诺（它原来就从不读 launchctl）。
     [ -s "$PROXY_ENV" ] && [ -s "$OWNED_ENV" ]
 }
 
@@ -162,7 +165,20 @@ write_off_sentinel() {
         # 末行恒真：source 这个文件必须返回 0。zsh 的 hook 里一旦返回非零，
         # 后面的 precmd 钩子（主题、补全等）会全部不执行。
         printf 'true\n'
-    } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
+    } > "$_tmp" 2>/dev/null
+    # 成败由**复读**决定，不由"我执行过 mv"决定：原来那条链 `... && mv || rm -f || true`
+    # 在 mv 失败时也让整行以 0 退出，于是调用方以为写成了。
+    # 写不成的后果正好与工具的目标相反：proxy.env 还是上一份 on 态内容，
+    # 已开着的窗口每次回车就把那个死端口**重新 export 一遍**，而不是清掉它。
+    _wos_ok=1
+    if [ -s "$_tmp" ] && mv "$_tmp" "$PROXY_ENV" 2>/dev/null && [ -f "$PROXY_ENV" ]; then
+        # 再确认落盘的确实是 off 哨兵，而不是半截文件。
+        case "$(sed -n '1p' "$PROXY_ENV" 2>/dev/null)" in
+            '# envproxy-state: off') _wos_ok=0 ;;
+        esac
+    fi
+    rm -f "$_tmp" 2>/dev/null || true
+    return "$_wos_ok"
 }
 
 # 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
@@ -291,6 +307,10 @@ snapshot_prev_env() {
 # 卸载时按快照还原用户原值，还原完删掉快照。无快照时什么都不做。
 restore_prev_env() {
     [ -f "$PREV_ENV" ] || return 0
+    # 清账的前提是**还原成功了**。原来无论成败都 rm 掉快照，而 launchctl 那一步是
+    # `|| true`——写不进去时用户原值和唯一副本一起消失，卸载还提示他"手动删"。
+    # 数据已经丢了，处置建议却指向"再删一次"。
+    _rpe_failed=0
     while IFS='	' read -r _k _v; do
         [ -n "$_k" ] || continue
         # 快照里这一条如果就是"我们写下过的那个值"，它从来不是使用者的原值——
@@ -300,9 +320,11 @@ restore_prev_env() {
         # 这条判断在还原侧做，所以**已经存在的坏快照也会被自愈**，不用等用户重装。
         _rpe_owned=$(awk -F'	' -v k="$_k" '$1 == k { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
         if [ -n "$_rpe_owned" ] && [ "$_rpe_owned" = "$_v" ]; then continue; fi
-        if [ -n "$_v" ]; then launchctl setenv "$_k" "$_v" 2>/dev/null || true
-        else launchctl unsetenv "$_k" 2>/dev/null || true; fi
-    done < "$PREV_ENV" 2>/dev/null || true
+        if [ -n "$_v" ]; then launchctl setenv "$_k" "$_v" 2>/dev/null || _rpe_failed=1
+        else launchctl unsetenv "$_k" 2>/dev/null || _rpe_failed=1; fi
+    done < "$PREV_ENV" 2>/dev/null || _rpe_failed=1
+    # 还有没写回去的就留着快照，下次再来；写不成的结论要传上去让卸载如实报告。
+    [ "$_rpe_failed" = "0" ] || return 1
     rm -f "$PREV_ENV" 2>/dev/null || true
     return 0
 }
@@ -360,10 +382,14 @@ remove_user_env_vars() {
     if [ "$_node" = "1" ]; then launchctl unsetenv NODE_USE_ENV_PROXY 2>/dev/null || true; fi
     # 文件这一步必须放在"读完 launchctl"之后：write_off_sentinel 要读旧文件里的端口当守卫值，
     # 而它会把文件整个改写掉。先改后读就只剩空文件、守卫值丢了。
+    # 成败要传出去：哨兵没写成时 proxy.env 还是 on 态内容，已开窗口每次回车都会
+    # 把死端口重新 export 一遍——那正是"敲回车就跟上"的反面，而且屏幕上看不出来。
+    _rmv_file_ok=0
     if [ "$_rmv_mode" = "sentinel" ]; then
-        write_off_sentinel
+        write_off_sentinel || _rmv_file_ok=1
     else
         rm -f "$PROXY_ENV" 2>/dev/null || true
+        [ -f "$PROXY_ENV" ] && _rmv_file_ok=1
     fi
     for _v in $PROXY_ADDR_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
@@ -371,6 +397,7 @@ remove_user_env_vars() {
         is_owned_proxy_value "$_cur" || continue
         launchctl unsetenv "$_v" 2>/dev/null || true
     done
+    return "$_rmv_file_ok"
 }
 
 # 我们该持有的那套变量现在还有没有痕迹：proxy.env 与 launchctl 任一路在就算在。

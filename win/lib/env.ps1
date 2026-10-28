@@ -524,10 +524,17 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
 
 # 卸载时按快照还原用户原值，还原完删掉快照键。无快照时什么都不做。
 # 按快照时的原类型写回：REG_EXPAND_SZ 的原值若按 REG_SZ 写回，里面的 %引用% 会被提前展开。
+#
+# 清账的前提是**还原成功了**。原来无论成败都无条件删快照，而 ExpandString 那一支
+# 写回用的是 SilentlyContinue——组策略/杀软拦住写入时，用户原值和唯一的副本一起消失，
+# 卸载还提示他"照上面列出的位置手动删"。数据已经丢了，处置建议却指向"再删一次"。
+#   0 = 还原完成（或本来就没有快照可还）
+#   1 = 有值没能写回去——快照**保留**，下一次卸载/修复还能再试
 function Restore-PrevEnv {
     try {
-        if (-not (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue)) { return }
+        if (-not (Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction SilentlyContinue)) { return 0 }
         $plain = @{}
+        $failed = @()
         foreach ($n in $ProxyVarNames) {
             $bak = Get-PrevEnvRaw $n
             # 快照里这一条如果就是"我们写下过的那个值"，它从来不是使用者的原值——
@@ -539,16 +546,26 @@ function Restore-PrevEnv {
             if ($null -ne $bak) {
                 $kindName = Get-PrevEnvRaw ("{0}__Kind" -f $n)
                 if ($kindName -eq "ExpandString") {
-                    Set-ItemProperty -Path (Get-UserEnvKeyPath) -Name $n -Value $bak -Type ExpandString -ErrorAction SilentlyContinue
+                    try {
+                        Set-ItemProperty -Path (Get-UserEnvKeyPath) -Name $n -Value $bak -Type ExpandString -ErrorAction Stop
+                    } catch { $failed += $n }
                 } else {
                     $plain[$n] = $bak
                 }
             }
         }
         # 非 ExpandString 的那些一次性写回：来源明确是"字符串"，不必再猜原类型。
-        if ($plain.Count -gt 0) { Write-UserEnvValues -Values $plain }
+        if ($plain.Count -gt 0) {
+            try { Write-UserEnvValues -Values $plain } catch { $failed += $plain.Keys }
+        }
+        # 账不能先清：还有没写回去的就留着快照，下次再来。
+        if ($failed.Count -gt 0) {
+            try { Write-MonitorLog ("卸载还原没写成，快照先留着下次再试：" + ($failed -join ', ')) } catch {}
+            return 1
+        }
         Remove-Item -LiteralPath (Get-PrevEnvRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
-    } catch {}
+        return 0
+    } catch { return 1 }
 }
 
 # 拿 EnvProxyApplyState 这把跨进程锁，按状态把变量表写一次，然后广播（幂等）。
