@@ -830,17 +830,17 @@ function Show-RelayPage {
                 $nextPaint = $sw.ElapsedMilliseconds + $StatusRefreshIntervalMs
             }
             $k = Wait-ScreenKey -Milliseconds $ScreenPollMs
-            # 退出判据必须**和屏幕上写的话一致**。
+            # 退出判据必须**和屏幕上写的话一致**：这一屏写着"看完按回车返回"，
+            # 而 Wait-ScreenKey 只把 Esc / 0 / q 当 Quit，回车回的是 CR 字符。
+            # 所以这里直接认回车（CR / LF），再加上与别处一致的 Quit / Error。
             #
-            # 这一屏写着"看完按回车返回"，而 Wait-ScreenKey 只把 Esc / 0 / q 当 Quit，
-            # 回车返回的是 CR 字符——既不等于 Quit 也不等于 Error，于是循环继续：
-            # 用户读完了、按了回车，屏幕上毫无变化。他会以为卡住、再按几次，
-            # 最后只能去点窗口右上角的关闭按钮。那正是这一屏最不该出现的死路。
-            #
-            # 所以直接认回车（CR / LF），再加上与别处一致的 Esc / 0 / q（返回 Quit）。
-            if ($k -eq "Error") { break }
-            if ($k -eq "Quit") { break }
-            if ($k -eq "" -or $k -eq "`r" -or $k -eq "`n") { break }
+            # **空串不是按键。** Wait-ScreenKey 等满一个轮询周期、没等到键时
+            # 返回的是空串——把它当退出，等于"画完一帧就自己走人"：
+            # 实测就是这一屏闪一下退回上一级菜单，用户以为点坏了。
+            # 空串必须继续循环，这是它与状态页唯一不同的地方（状态页不需要认回车）。
+            if ($k -eq 'Error') { break }
+            if ($k -eq 'Quit') { break }
+            if ($k -eq "`r" -or $k -eq "`n") { break }
         }
     } finally {
         Exit-Screen

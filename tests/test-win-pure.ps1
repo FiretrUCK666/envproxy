@@ -3131,6 +3131,25 @@ Assert-Eq '按键：读键失败时不会立即返回空转' $false ([bool]([reg
 Assert-Eq '按键：有放弃阈值常量' $true ($ScreenKeyFailLimit -gt 0)
 Assert-Eq '按键：功能键（空字符）不当成输入返回' $true ([bool]([regex]::IsMatch($wsChunk, 'if \(\$c\)')))
 
+# 3b. 轮询超时的空串不是按键，任何循环都不许把它当退出。
+#     曾经：中继页写着"看完按回车返回"，退出判据写成 if ($k -eq "") { break }，
+#     而 Wait-ScreenKey 等满一个轮询周期、没等到键时返回的正是一个空串。
+#     结果这一屏画完一帧就自己退出，用户看到的是"点进去闪一下又退回上级菜单"。
+#     判据据此收紧：Wait-ScreenKey 的返回语义里，空串 == 没有按键。
+$wsReturnsEmpty = [bool]([regex]::IsMatch($wsChunk, "return\s+'"))
+Assert-Eq '按键：等满超时明确返回空串（调用方据此区分没按键）' $true $wsReturnsEmpty
+# 两个屏幕循环都不许把空串当退出。
+# 判据取「$k 与空串比较」这一具体形态，而不是笼统搜 break——
+# 笼统搜会把正常分支也算进去。
+foreach ($pair in @(@('win/lib/ops.ps1', '状态页'), @('win/lib/shortcut.ps1', '中继页'))) {
+    $src2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) $pair[0]))
+    $badEmpty = 0
+    foreach ($m in [regex]::Matches($src2, '\$k\s+-eq\s+(\S+)')) {
+        $rhs = $m.Groups[1].Value.TrimEnd(')', '"').TrimStart('(', '"', "'")
+        if ($rhs -eq '') { $badEmpty++ }
+    }
+    Assert-Eq ('按键：' + $pair[1] + ' 不把空串当退出') 0 $badEmpty
+}
 # 4. 画屏门槛必须按真实帧尺寸判，不能只看固定最小宽高
 #    曾经：固定 40 列放行，而帧里有 82 列的日志行 → 折行 → 绝对定位全错位。
 Assert-Eq '画屏：Test-CanDrawScreen 支持按帧宽判' $true ([bool]([regex]::IsMatch($bsSrc, 'function Test-CanDrawScreen\(\[int\]\$NeedLines = 0, \[int\]\$NeedWidth = 0\)')))
