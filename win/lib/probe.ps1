@@ -750,8 +750,9 @@ function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path, [stri
         # 防御：CONNECT 式响应（"Connection Established"）不是 GET 请求的合法响应，
         # 说明对方不是真实转发代理（可能是残留进程/异常程序）→ 判定节点断
         if ($resp -match "Connection Established") { return $false }
-        # 204 / 200 / 3xx = 节点通；502/504/超时/拒绝 = 节点断（内核可能仍活着）
-        # 判据只有一个地方（Test-EndpointStatus），按端点自己声明的期望值判。
+        # 按端点自己声明的期望值判（判据只有 Test-EndpointStatus 一处）：
+        # /generate_204 类只认 204，跨域段兜底端点只认 3xx——**裸 200 不算通**，
+        # 那是强制门户劫持的典型应答。502/504/超时/拒绝 = 节点断（内核可能仍活着）。
         $m = [regex]::Match($resp, "^\s*HTTP/1\.[01]\s+(\d{3})")
         if (-not $m.Success) { return $false }
         return (Test-EndpointStatus ([int]$m.Groups[1].Value) $Expect)

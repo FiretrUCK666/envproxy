@@ -400,7 +400,7 @@ function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
 # "删得掉但门槛没让它删"的残留（半代理）。
 function Test-ProxyVarsPresent {
     foreach ($n in $ProxyVarNames) {
-        # 必须用**不展开**的读法，与写入端（Write-EnvProxyValues）和删除端
+        # 必须用**不展开**的读法，与写入端（Sync-UserEnvVars）和删除端
         # （Remove-UserEnvVars）同一套。用 GetEnvironmentVariable 读出来是展开后的字面
         # 路径（例如 NO_PROXY=%USERPROFILE%,… 会变成 C:\Users\…），形状判据对不上 →
         # 这个变量被判成"没痕迹" → 这里返回假 → 30 轮自愈不会清理它，off 态残留永久留着。

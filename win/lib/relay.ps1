@@ -92,26 +92,6 @@ function Get-RelayPort {
     } catch { return $null }
 }
 
-# 挑一个可用的端口：从默认值开始，占用就顺延。
-# 返回 @{ Port = n; Ok = $true } 或 @{ Port = 0; Ok = $false }。
-function Select-RelayPort {
-    for ($i = 0; $i -lt $RelayPortScanSpan; $i++) {
-        $candidate = $RelayDefaultPort + $i
-        if ($candidate -gt 65535) { break }
-        $listener = $null
-        try {
-            $listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $candidate)
-            $listener.Start()
-            return @{ Port = $candidate; Ok = $true }
-        } catch {
-            # 这个端口被占了：试下一个
-        } finally {
-            if ($listener) { try { $listener.Stop() } catch {} }
-        }
-    }
-    return @{ Port = 0; Ok = $false }
-}
-
 # 中继转发器的实现（**在内存里编译**，不落盘、不引依赖）。
 #
 # 用 Add-Type 而不是纯 PowerShell 写：这件事要求"一个客户端连接对应两条 socket

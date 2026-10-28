@@ -1904,7 +1904,8 @@ function Get-HelpTopics {
                 'h 想彻底删掉它',
                 't 菜单选 7（一键恢复）。会问你要不要留日志。',
                 'h 不开菜单也能用（写脚本、远程连过来的时候）',
-                'r 开关|-Install -Status -Stop -Uninstall -Update -Help -Menu -Report',
+                'r 日常|-Install -Status -Stop -Uninstall -Update',
+                'r 其它|-Help -Menu -Advanced -Report',
                 'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记'
             )
         }

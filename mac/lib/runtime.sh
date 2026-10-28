@@ -18,7 +18,7 @@ VERSION_CACHE="$MONITOR_DIR/version.cache"
 SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
 SNAPSHOT_KEYS="written round pid state prev_state pending_state pending_count port_enumeration port_reason vars_match apply_result log_tail"
 # 三档阈值，与 Windows 侧同值同语义（那边是 $SnapshotFreshSec / $SnapshotUsableSec /
-# $SnapshotStaleSec，门禁 6 核对两侧数值一致）：
+# $SnapshotStaleSec，门禁 15 核对新鲜与过旧两档的数值一致）：
 #   <= 10 秒：新鲜，当作当前状态直接说；
 #   <= 60 秒：过了新鲜线，屏幕上要补一句"（N 秒前的判断）"；
 #   <= 240 秒：仍然是最近的判断，但要明说"可能已不是现在的情况"；

@@ -148,7 +148,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 | 模板（安装时生成到固定位置的） | `win\locator.ps1`、`mac\locator.sh`、`mac\prompt-sync.sh`；win 的 Git Bash 同步脚本内嵌在 `runtime` 层的 `Get-PromptSyncContent` | 定位器生成到固定位置（win 是 `%LOCALAPPDATA%\EnvProxy\launcher.ps1`，mac 是 `~/.envproxy/`）后按日志活跃度选新位置；同步脚本让每次提示符重读状态（内容比对自愈）。**win 的 `.sh` 不随包发**：包校验器按"不得比最老客户端宽松"取扩展名集合，而只要还有用户停在只认 `.ps1/.cmd/.command` 的旧版，多一个 `.sh` 就会让他们的更新被自己拒收。内嵌的代价是语法检查看不见它，门禁 1 把模板抽出来单独 `bash -n` |
 | 在线更新 | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读，动手只在更新入口（默认 N 确认、非交互不等待）；其余见「关键不变量」 |
 | 菜单入口（壳，无逻辑） | 每端 1 个：`win\打开菜单.cmd` / `mac\打开菜单.command` | 直调入口的菜单开关/子命令；菜单纯分派；根下只放用户直接用的入口，其余进 `lib\` |
-| 运行时状态 | `win\monitor\` / `mac\monitor\`（各跟自家核心） | 脚本 `mkdir -p` 自建、**不入库**；`stop.flag` 为临时信号，用后即删；`state.snapshot` 是后台每轮写下的结论；`report-*.txt` 是问题反馈生成的报告，卸载不删（用户要拿去发） |
+| 运行时状态 | `win\monitor\` / `mac\monitor\`（各跟自家核心） | 脚本 `mkdir -p` 自建、**不入库**；`stop.flag` 为临时信号，用后即删；`state.snapshot` 是后台每轮写下的结论；`report-*.txt` 是问题反馈的报告，默认卸载不删，`--purge` 随目录清 |
 | 回归自检 | `tests\test-win-pure.ps1` + `mac\test-mac-pure.sh`（由 `mac\envproxy.sh self-test` 加载） | 纯函数与沙箱回归，门禁 10 调用。mac 侧那份必须在安装包里（`self-test` 是文档写明的子命令），且**必须放在 `mac\` 直属**：包校验器只放行平台目录直接下级的脚本，放进子目录会让每一版更新都被自己的校验器拒收 |
 
 新增模块时同步更新本表；机制细节以代码注释为准，不复述。

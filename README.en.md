@@ -587,7 +587,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 
 The items in `win\monitor\` are local runtime state. Deleting them is harmless (the background program recreates them) and does not touch the program files.
 
-Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted).
+Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted by default). Only an explicit "delete the logs too" wipes the whole `monitor` folder, reports included.
 
 `~\.envproxy\` contains **exactly one file, `prompt-sync.sh`**. Anything else appearing there means something other than this tool wrote it — uninstall names each one and reports it, but does not delete it for you (it may be yours).
 
@@ -730,7 +730,7 @@ The items in `mac/monitor/` are local runtime state. Deleting them is harmless (
 
 **`proxy.env`, `owned.env` and `prev.env` are macOS-only**: Windows never writes them and does not recognise them. The Windows `~\.envproxy\` holds only `prompt-sync.sh`.
 
-**The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted).
+**The project folder can be moved anywhere**: it is located again at the next login, and a backup folder is never picked up by mistake. Uninstalling removes all of the above, keeping only the `monitor.log` you chose to keep and any `report-*.txt` you generated (those are yours to send on, so they are not deleted by default). Only an explicit "delete the logs too" wipes the whole `monitor` folder, reports included.
 
 #### What each button actually removes
 
