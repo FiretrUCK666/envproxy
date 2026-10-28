@@ -446,17 +446,30 @@ jobs:
           try {
             $sub = Join-Path $tmp 'pkg'
             New-Item -ItemType Directory -Path $sub -Force | Out-Null
-            $dst = Join-Path $sub 'win'
-            New-Item -ItemType Directory -Path $dst -Force | Out-Null
-            # monitor/ 是本机运行时状态、永不进包，拼包时必须排除——否则测的不是用户会收到的东西。
-            Copy-Item -Path 'win/*' -Destination $dst -Recurse -Force
-            Remove-Item -LiteralPath (Join-Path $dst 'monitor') -Recurse -Force -ErrorAction SilentlyContinue
-            Copy-Item -Path 'VERSION' -Destination $sub -Force
+            # 必须用 **git archive** 造包，不能拷工作树。
+            # 这条门禁存在的全部理由就是"真实产物不能被自己的校验器拒收"，
+            # 而真实产物与工作树的差别恰好就是 export-ignore 属性、未提交文件、
+            # 属性驱动的换行归一——拷工作树等于把要验的那一层整个跳过。
+            # 历史证据：漏收 prompt-sync.sh 那次事故，拷工作树的版本一路绿。
+            #
+            # 用 zip 而不是 tar：中文文件名（win/打开菜单.cmd）在这条链路里必须逐字节保留。
+            # zip 由 git 自己写、由 .NET 自己读，两头都不经系统的 tar 命令行——实测 GNU tar
+            # 解包会按本地代码页解释 UTF-8 名，出来成了"鎵撳紑鑿滃崟.cmd"，
+            # 于是校验器报"缺少 win\打开菜单.cmd"，那是假红。
+            $zip = Join-Path $tmp 'p.zip'
+            & git archive --format=zip -o $zip HEAD
+            if ($LASTEXITCODE -ne 0) { Write-Host 'win：git archive 打包失败'; exit 1 }
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $sub)
+            # monitor/ 从不入库，所以归档里本来就不该有它——有就说明 .gitignore 破了。
+            if (Test-Path -LiteralPath (Join-Path $sub 'win/monitor')) {
+              Write-Host 'win：归档里出现了 win/monitor——运行时目录不该入库'; exit 1
+            }
 
             # 「必须发出去」的最小清单。只声明"不要发什么"是不够的：那份清单自己就是标准，
             # 误加一行就等于少发一个文件——包和清单两边永远一致、永远绿。
-            # 判据取 export-ignore 属性本身，不取"文件在不在包里"：后者与"有没有提交"耦合，
-            # 新增文件还没 commit 时必然不在 HEAD 的包里，那是正常中间状态，不该红。
+            # 判据取导出后**文件真的在包里**：归档就是 HEAD 的内容，不存在
+            # "还没 commit 所以不在包里"那种中间状态，于是可以直接验结果。
             # 库清单直接取入口声明的那一份（唯一权威处），不在这里另抄。
             # **不能靠点源来读 $CoreLibs**：它定义在入口 win/envproxy.ps1 里，不在 base.ps1。
             # 点源 base.ps1 拿到的 $CoreLibs 是空的，循环一次都不跑——清单里少了全部库，
@@ -474,18 +487,17 @@ jobs:
             foreach ($lib in $CoreLibs) { [void]$must.Add(('win/lib/{0}.ps1' -f $lib)) }
             $bad = @()
             foreach ($m in $must) {
-              $v = & git check-attr export-ignore -- $m 2>$null
-              if ($v -match ': export-ignore: set') { $bad += $m }
+              if (-not (Test-Path -LiteralPath (Join-Path $sub $m))) { $bad += $m }
             }
             if ($bad.Count -gt 0) {
-              Write-Host ('win：这些文件必须随包发出去，却被标成了 export-ignore -> ' + ($bad -join ', '))
+              Write-Host ('win：这些文件必须随包发出去，却不在 git archive 的产物里 -> ' + ($bad -join ', '))
               exit 1
             }
 
             . (Join-Path (Get-Location) 'win/lib/package.ps1')
             try {
               $null = Test-Package -Root $sub -Platform 'win' -WantVersion $ver
-              Write-Host 'win：必须清单未被排除，且拼包通过运行时校验器'
+              Write-Host 'win：git archive 产出的真包通过运行时校验器'
             } catch {
               Write-Host ('win：分包被运行时校验器拒绝 -> ' + $_.Exception.Message)
               exit 1
@@ -502,26 +514,29 @@ jobs:
           tmp=$(mktemp -d "${TMPDIR:-/tmp}/pkgate.XXXXXX") || { echo "临时目录建不出来"; exit 1; }
           trap 'rm -rf "$tmp"' EXIT
           mkdir -p "$tmp/pkg"
-          cp -R mac "$tmp/pkg/mac"
-          rm -rf "$tmp/pkg/mac/monitor"
-          cp VERSION "$tmp/pkg/VERSION"
+          # 必须用 **git archive** 造包，不能拷工作树。
+          # 这条门禁存在的全部理由就是"真实产物不能被自己的校验器拒收"，
+          # 而真实产物与工作树的差别恰好就是 export-ignore 属性、未提交文件、
+          # 属性驱动的换行归一——拷工作树等于把要验的那一层整个跳过。
+          # 历史证据：漏收 prompt-sync.sh 那次事故，拷工作树的版本一路绿。
+          git archive --format=tar HEAD | tar -xf - -C "$tmp/pkg"
+          # monitor/ 从不入库，所以归档里本来就不该有它——有就说明 .gitignore 破了。
+          if [ -d "$tmp/pkg/mac/monitor" ]; then
+              echo "mac：归档里出现了 mac/monitor——运行时目录不该入库"; exit 1
+          fi
 
-          # 「必须发出去」的最小清单。判据取 export-ignore 属性本身，不取"文件在不在包里"：
-          # 后者与"有没有提交"耦合，新增文件还没 commit 时必然不在 HEAD 的包里。
+          # 「必须发出去」的最小清单。判据取导出后**文件真的在包里**：
+          # 归档就是 HEAD 的内容，不存在"还没 commit 所以不在包里"那种中间状态。
           declared=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//')
           bad=""
           for m in mac/envproxy.sh mac/locator.sh mac/prompt-sync.sh mac/test-mac-pure.sh VERSION; do
-              case "$(git check-attr export-ignore -- "$m" 2>/dev/null)" in
-                  *"export-ignore: set"*) bad="$bad $m" ;;
-              esac
+              [ -f "$tmp/pkg/$m" ] || bad="$bad $m"
           done
           for lib in $declared; do
-              case "$(git check-attr export-ignore -- "mac/lib/$lib.sh" 2>/dev/null)" in
-                  *"export-ignore: set"*) bad="$bad mac/lib/$lib.sh" ;;
-              esac
+              [ -f "$tmp/pkg/mac/lib/$lib.sh" ] || bad="$bad mac/lib/$lib.sh"
           done
           if [ -n "$bad" ]; then
-              echo "mac：这些文件必须随包发出去，却被标成了 export-ignore ->$bad"
+              echo "mac：这些文件必须随包发出去，却不在 git archive 的产物里 ->$bad"
               exit 1
           fi
 
@@ -532,7 +547,7 @@ jobs:
               echo "mac：分包被运行时校验器拒绝"
               exit 1
           fi
-          echo "mac：必须清单未被排除，且拼包通过运行时校验器"
+          echo "mac：git archive 产出的真包通过运行时校验器"
 
       - name: 门禁 5：文档一致性
         shell: pwsh
