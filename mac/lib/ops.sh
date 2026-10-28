@@ -1341,17 +1341,20 @@ TOPIC
     3) cat <<'TOPIC'
 h 一、让这个窗口一直不翻墙
 rc zsh / bash|export ENVPROXY_TERM=off
-t 下一次回到提示符时生效。你自己设的值（比如公司代理）不会被删。
-w 别只 unset 一个拼写：mac 上大写和小写是两个变量，各写一份。
-t 只清大写的话，小写那份还在，curl 照样用代理——两个都要清。
-h 二、改回自动跟随
-rc zsh / bash|unset ENVPROXY_TERM
-h 三、让这个窗口用公司的代理
-t 先做上面第一节，再设地址。顺序反了等于没设。地址换成公司给的：
+t 下次回到提示符才生效，别的窗口照旧跟着翻墙软件走。
+w 别只 unset 一个拼写：mac 上大写小写是两个变量，各清一份。
+h 二、让这个窗口用公司的代理
+t 公司代理和自动跟随只能选一个。先做第一节再设地址（反了会被盖掉），
+t 地址端口问公司 IT 要，不是翻墙软件那个：
 rc zsh / bash|export HTTPS_PROXY=http://你的地址:端口
-t 想确认现在用不用代理，敲这个（有值 = 用，空的 = 不用）：
-rc zsh / bash|echo $HTTPS_PROXY
-t 地址和端口问公司 IT 要。注意这不是翻墙软件那个端口，别去那儿找。
+t 够 git、curl、npm 用。有个程序还是不认，就在同一个窗口
+t 把地址再告诉它一次：把上面那行的 HTTPS_PROXY 换成 ALL_PROXY。
+t Node 的联网还要多一个 NODE_USE_ENV_PROXY=1。
+h 三、改回自动跟随
+t 把那个 ENVPROXY_TERM 清掉即可（前两节的反操作）：
+rc zsh / bash|unset ENVPROXY_TERM
+t 改回来后公司地址会被翻墙代理盖掉——那是对的，表示回到自动；
+t 地址没被删，只是不再用它。
 t fish 不支持这些配置文件，上面的开关对它无效。
 TOPIC
     ;;

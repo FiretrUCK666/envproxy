@@ -213,25 +213,18 @@ If the proxy app is running and you see nothing, this window has not caught up y
 
 ### 3.2 Pin this window to a direct connection / go back to automatic
 
-**Pin this window to a direct connection**
+**Keep this one window off the proxy.** Only this window is affected; the others still follow the proxy app.
 
-To keep **this one window** off the proxy, set a switch inside it.
+| Window | Set this switch |
+|---|---|
+| PowerShell | `$env:ENVPROXY_TERM = 'off'` |
+| Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` |
+| cmd | No such switch; see below |
 
-**PowerShell**
+A variable set on a command line takes effect at the **next prompt**, not on that same line.
 
-```
-$env:ENVPROXY_TERM = 'off'
-```
-
-**Git Bash / Mac Terminal**
-
-```
-export ENVPROXY_TERM=off
-```
-
-Once the switch is set, the proxy variables in that window are cleared at the next prompt, and it stays direct from then on (a command run on the same line still sees the old values).
-
-**cmd has no such switch** (it has no prompt hook), so clear the five variables yourself. One per line:
+**cmd has no prompt hook, so clear the five variables yourself.** One per line (a single line also works,
+but leave no spaces around `&`: a space makes the value a single space, and the proxy keeps working):
 
 ```
 set HTTP_PROXY=
@@ -241,15 +234,9 @@ set NO_PROXY=
 set NODE_USE_ENV_PROXY=
 ```
 
-All on one line also works:
-
-```
-set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
-```
-
-Leave no spaces around `&`. A space makes the value a single space instead of empty, and the proxy keeps working.
-
-**Do not use `unset HTTP_PROXY ...`**: the hook writes the lower-case spellings (`http_proxy` and friends) into Git Bash. Unsetting the upper-case one leaves the lower-case one behind, and curl in Git Bash honours it — so you would still be going through the proxy. The next prompt puts them all back too. The switch above is the only real takeover.
+**Do not use `unset HTTP_PROXY`.** In Git Bash the hook writes the lower-case spellings (`http_proxy` and friends);
+unsetting the upper-case one leaves them behind, curl still honours them, and the next prompt writes them back.
+The switch above is the only real takeover.
 
 **Confirm it took:**
 
@@ -259,55 +246,33 @@ Leave no spaces around `&`. A space makes the value a single space instead of em
 | cmd | `set HTTPS_PROXY` | Same as above |
 | Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
 
-The variables clear at the next prompt, so do not check on the same command line.
+**Going back to following the proxy app:**
 
----
-
-**Going back to following the proxy app**
-
-| Window | Command |
-|---|---|
-| PowerShell | `Remove-Item Env:ENVPROXY_TERM` |
-| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` |
-| cmd | Reopen the window |
-
-These changes only live in that window. Close it and they are gone.
-
-**Confirm it took:**
-
-| Window | Type this | What success looks like |
+| Window | Do this | What success looks like |
 |---|---|---|
-| PowerShell | `$env:HTTPS_PROXY` | A value means it follows the proxy app again |
-| cmd | `set HTTPS_PROXY` | Same as above |
-| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+| PowerShell | `Remove-Item Env:ENVPROXY_TERM` | At the next prompt `$env:HTTPS_PROXY` has a value |
+| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | At the next prompt `echo $HTTPS_PROXY` has a value |
+| cmd | Reopen the window | — |
 
 Still empty while the proxy app is running means the monitor is not running: pick 1 (Install / repair) in the menu.
 
+These changes only live in that window. Close it and they are gone.
+
 ### 3.3 Send this window through a corporate proxy
 
-Two steps, **in this order**: pin to direct in 3.2 first, then set the address. Without stopping auto-follow, the next change the proxy app makes overwrites the address you just set.
+A corporate proxy and auto-follow are **mutually exclusive**; pick one.
 
-Replace `your-host:port` with what your company gave you — ask IT; they usually hand you a proxy setup note. This is **not** the local proxy app's port, so do not go looking there.
+**Setting it up:**
 
-**PowerShell**:
+| Window | Step 1: take over | Step 2: set the address |
+|---|---|---|
+| PowerShell | `$env:ENVPROXY_TERM = 'off'` | `$env:HTTPS_PROXY = 'http://your-host:port'` |
+| Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` | `export HTTPS_PROXY=http://your-host:port` |
+| cmd | Clear the variables as in 3.2 | `set HTTPS_PROXY=http://your-host:port` |
 
-```
-$env:HTTPS_PROXY = 'http://your-host:port'
-```
+**The order matters.** Without taking over first, the next change the proxy app makes overwrites the address you just set.
 
-**cmd**:
-
-```
-set HTTPS_PROXY=http://your-host:port
-```
-
-**Git Bash / Mac**:
-
-```
-export HTTPS_PROXY=http://your-host:port
-```
-
-Values you set are never deleted — a corporate proxy, a capture tool, another port all stay as they are, as long as they differ from what we wrote.
+Replace `your-host:port` with what your company gave you — ask IT. This is **not** the proxy app's port, so do not go looking there.
 
 **Confirm it took:**
 
@@ -317,8 +282,28 @@ Values you set are never deleted — a corporate proxy, a capture tool, another 
 | cmd | `set HTTPS_PROXY` | Same as above |
 | Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
 
-Seeing the proxy app's own port instead means step 3.2 did not take: go back and redo it.
+Seeing the `127.0.0.1` address instead means step 1 did not take: go back and redo it.
 
+**Going back to following the proxy app:**
+
+| Window | Do this | What success looks like |
+|---|---|---|
+| PowerShell | `Remove-Item Env:ENVPROXY_TERM` | At the next prompt the address is the proxy app's again |
+| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | At the next prompt the address is the proxy app's again |
+| cmd | Reopen the window | — |
+
+After that, the corporate address you set is overwritten by the proxy app's — **that is correct**, it means the window
+is back on auto. Your address was not deleted; this window just stops using it.
+
+**Should `ALL_PROXY` and `NODE_USE_ENV_PROXY` be set too?** Depends on what your tools read:
+
+| What you use | Is `HTTPS_PROXY` enough |
+|---|---|
+| git / curl / pip / npm (most tools) | Yes |
+| Tools that only read `ALL_PROXY` | No — also set `ALL_PROXY=your-host:port` |
+| Node.js fetch and friends | No — also set `NODE_USE_ENV_PROXY=1` |
+
+If unsure, set all three the same way as above.
 ### 3.4 Make one command skip the proxy
 
 Tools differ, and there is no single universal command.
