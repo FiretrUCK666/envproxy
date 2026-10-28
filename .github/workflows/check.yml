@@ -321,12 +321,25 @@ jobs:
           # CI 跑在 Linux 上不会踩到，但本地在 Windows 上就没法复跑这条门禁了。
           $entries = @(Push-Location $tmp; try { & tar -tf 'envproxy-shipset.tar' } finally { Pop-Location })
           $tops = @($entries | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
-          $expect = @('LICENSE','README.en.md','README.md','VERSION','assets','mac','release-notes','win')
-          $diff = Compare-Object $expect $tops
+          # 顶层集合从**仓库自身派生**：仓库里所有未被 export-ignore 的顶层条目。
+          # 原来这里写死 8 个名字，而同一个门禁下面又按 .gitattributes 派生一次——
+          # 同一份规则两处实现，改一处忘另一处就是"新增顶层目录时门禁说不对、但指不出该改哪"。
+          # 派生之后，新增一个随包发出的顶层目录不需要动门禁；把一个内部目录标成
+          # export-ignore 也不需要。门禁只回答一件事：包里的顶层集合 == 仓库的导出顶层集合。
+          #
+          # 必须容忍**目录形式**（/.github/ 带尾斜杠）——.gitattributes 里顶层目录就是那样写的，
+          # 只匹配 "/名字空格" 会把它们漏掉，于是预期集合里多出 .github 与 tests、门禁假红。
+          $ignAll = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)/?\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
+          $repoTop = @(Get-ChildItem -Force | Where-Object {
+              $_.Name -ne '.git' -and -not ($ignAll -contains $_.Name)
+            } | ForEach-Object { $_.Name } | Sort-Object -Unique)
+          $diff = Compare-Object $repoTop $tops
           if ($diff) {
-            Write-Host '安装包顶层内容与预期不一致（左侧=预期，右侧=实际）：'
+            Write-Host '安装包顶层内容与「仓库导出集」不一致（左侧=预期，右侧=实际）：'
             $diff | ForEach-Object { Write-Host ("  {0} {1}" -f $_.SideIndicator, $_.InputObject) }
-            Write-Host '新增仓库内部文件时，在 .gitattributes 里补 export-ignore；改动安装包内容时同步 README 第 8 节与本表。'
+            Write-Host '注意：预期的左侧是从工作区的顶层条目减去 .gitattributes 里的 export-ignore 得来的。'
+            Write-Host '若右侧（包）多了东西：新增仓库内部文件时忘了补 export-ignore。'
+            Write-Host '若左侧（工作区）多了东西：那个顶层文件/目录还没提交，或该进包却没进。'
             exit 1
           }
           $bad = @($entries | Where-Object { $_ -match '^(win|mac)/monitor/' })
