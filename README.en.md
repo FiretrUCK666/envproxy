@@ -262,17 +262,23 @@ These changes only live in that window. Close it and they are gone.
 
 A corporate proxy and auto-follow are **mutually exclusive**; pick one.
 
-**Setting it up:**
+**Step 1: take over. Step 2: set the address. The order matters.**
 
-| Window | Step 1: take over | Step 2: set the address |
+| Window | Step 1 | Step 2 |
 |---|---|---|
 | PowerShell | `$env:ENVPROXY_TERM = 'off'` | `$env:HTTPS_PROXY = 'http://your-host:port'` |
 | Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` | `export HTTPS_PROXY=http://your-host:port` |
-| cmd | Clear the variables as in 3.2 | `set HTTPS_PROXY=http://your-host:port` |
+| cmd | Clear those 5 variables (full line below) | `set HTTPS_PROXY=http://your-host:port` |
 
-**The order matters.** Without taking over first, the next change the proxy app makes overwrites the address you just set.
+**The cmd clearing command (copy this whole line):**
 
-Replace `your-host:port` with what your company gave you — ask IT. This is **not** the proxy app's port, so do not go looking there.
+```
+set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
+```
+
+Skip the takeover and the next change the proxy app makes overwrites the address you just set.
+
+Replace `your-host:port` with what your company gave you — ask IT. This is **not** the proxy app's port.
 
 **Confirm it took:**
 
@@ -284,7 +290,26 @@ Replace `your-host:port` with what your company gave you — ask IT. This is **n
 
 Seeing the `127.0.0.1` address instead means step 1 did not take: go back and redo it.
 
-**Going back to following the proxy app:**
+**Some programs ignore that one; add one more line**
+
+Most tools (git, curl, pip, npm) are fine with `HTTPS_PROXY`.
+The rest need `ALL_PROXY` — **copy the whole line below**, it complements the line above; you need both.
+
+| Window | Copy this whole line |
+|---|---|
+| PowerShell | `$env:ALL_PROXY = 'http://your-host:port'; $env:NODE_USE_ENV_PROXY = '1'` |
+| Git Bash / Mac Terminal | `export ALL_PROXY=http://your-host:port; export NODE_USE_ENV_PROXY=1` |
+| cmd | `set ALL_PROXY=http://your-host:port&set NODE_USE_ENV_PROXY=1` |
+
+**Confirm the extra one took:**
+
+| Window | Type this | What success looks like |
+|---|---|---|
+| PowerShell | `$env:ALL_PROXY` | A value means it took |
+| cmd | `set ALL_PROXY` | Same as above |
+| Git Bash / Mac Terminal | `echo $ALL_PROXY` | Same as above |
+
+**Going back to following the proxy app (undoes everything above)**
 
 | Window | Do this | What success looks like |
 |---|---|---|
@@ -292,18 +317,9 @@ Seeing the `127.0.0.1` address instead means step 1 did not take: go back and re
 | Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | At the next prompt the address is the proxy app's again |
 | cmd | Reopen the window | — |
 
-After that, the corporate address you set is overwritten by the proxy app's — **that is correct**, it means the window
-is back on auto. Your address was not deleted; this window just stops using it.
+After that, the corporate address you set is overwritten by the proxy app's — **that is correct**,
+it means the window is back on auto. Your address was not deleted; this window just stops using it.
 
-**Should `ALL_PROXY` and `NODE_USE_ENV_PROXY` be set too?** Depends on what your tools read:
-
-| What you use | Is `HTTPS_PROXY` enough |
-|---|---|
-| git / curl / pip / npm (most tools) | Yes |
-| Tools that only read `ALL_PROXY` | No — also set `ALL_PROXY=your-host:port` |
-| Node.js fetch and friends | No — also set `NODE_USE_ENV_PROXY=1` |
-
-If unsure, set all three the same way as above.
 ### 3.4 Make one command skip the proxy
 
 Tools differ, and there is no single universal command.
