@@ -322,9 +322,25 @@ function Test-OwnedProxyShape([string]$Name, [string]$Value) {
 # 读不出来时唯一安全的处置是"不动"。
 function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     try {
-        if (-not (Test-RegKey (Get-PrevEnvRegKeyPath))) { return $false }
+        if (-not (Test-RegKey (Get-PrevEnvRegKeyPath))) {
+            # 快照键整个不存在——这里有两件**结果相反**的事，必须分开：
+            #   装过（机器上有安装记录）却没快照：只可能是"装前本机就没这个名字"，
+            #     所以现在这个本机值是我们写的 -> 返回 $false（我们写的）。
+            #   从没装过：这个本机代理是使用者自己挂的 mitmproxy/跳板，
+            #     没有任何证据指向我们 -> 返回 $null（不知道，一个都不动）。
+            # 折叠成 $false 的后果是：在一台从没装过的机器上点一次"停止"，
+            # 就把使用者自己设的本机代理删掉，而且没有快照可以还原。
+            # 判据用安装记录（ScriptPath），与安装侧判断"首次安装"用的是同一处事实。
+            if (-not (Test-HasInstallRecord)) { return $null }
+            return $false
+        }
         $raw = Get-PrevEnvRaw $Name
-        if ($null -eq $raw) { return $false }
+        if ($null -eq $raw) {
+            # 快照键在、但没有这个名字：**键本身就是安装记录**（只有安装时才建它），
+            # 所以这是"装前本机就没有它" -> 现在这个值是我们写的。保持 $false。
+            # 只有"键整个不存在"才需要拿安装记录来区分，见上面的分支。
+            return $false
+        }
         # 判据是「快照里**记过这个名字**」，不是「值恰好相等」。
         #
         # 判据必须是"这个名字在快照里出现过"，不是"值相等"。按值相等是这样坏的：
@@ -356,10 +372,23 @@ function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     }
 }
 
-# 第 3 层：到底该不该回收。形状像、且快照里没有它，才是我们写下的。
+# 第 3 层：到底该不该回收。形状像、且**不是我们写的那个值**，才是我们写下的。
 # 判据与 Remove-UserEnvVars 必须同一套，否则会出现"删得掉但门槛没让它删"的残留。
 # 快照读不出来时返回 $false（= 不认领），调用方据此跳过这个变量一个都不动。
 function Test-IsOwnedProxyValue([string]$Name, [string]$Value) {
+    # 归属记录里逐字记着这个值 = 一定是我们自己写下的，先于形状与快照判定。
+    #
+    # 为什么这第一条必须在最前面：快照只记「这个名字在装之前出现过」，它答不了
+    # 「现在这个值还是不是他的」。而"装前有、装后被我们覆盖"是最常见的情形
+    # （企业代理、旧工具残留、上一版卸载没清干净，都长这样）。少了这一条，
+    # 名字一旦进快照就永久算"他的"，我们注入的值再也收不回来：
+    # 三个地址变量留在死端口上，NO_PROXY/NODE 却照删，成为更难查的半套变量，
+    # 而提示符钩子还会每开一个窗口就重新注入一次。
+    #
+    # 判据落在值上，所以 mitmproxy 那条保护不受影响：用户自己起在 :8080 的
+    # 本机代理与记录里的 :7078 不相等，落到下面照旧判成他的。
+    # 与 Test-SnapshotSkip 用的是同一条最硬证据，也与 Restore-PrevEnv 的还原判据同源。
+    if (Test-IsOurOwnedValue $Name $Value) { return $true }
     if (-not (Test-OwnedProxyShape $Name $Value)) { return $false }
     $recorded = Test-SnapshotRecorded $Name $Value
     if ($null -eq $recorded) { return $false }

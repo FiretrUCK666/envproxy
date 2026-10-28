@@ -84,12 +84,24 @@ function Get-OwnedRegSubKey { return (Get-RegSubKeyPath $OwnedRegSubKey) }
 # 与注册表落点同理：做成可替换的，自检才能把 install 那条真实路径跑一遍
 # 而不往使用者家目录写字。默认值就是真实位置，正常安装行为一个字节不变。
 $ToolHomeDirName = '.envproxy'
-function Get-ToolHomeDir { return (Join-Path ([string]$env:USERPROFILE) $ToolHomeDirName) }
+$ToolHomeDirOverride = ''
+function Get-ToolHomeDir {
+    if ($ToolHomeDirOverride) { return $ToolHomeDirOverride }
+    return (Join-Path ([string]$env:USERPROFILE) $ToolHomeDirName)
+}
 
 # 镜像文件 terminal.env 住在 %LOCALAPPDATA%\EnvProxy（给 Git Bash 的钩子读）。
 # 同样可替换：它是安装与状态翻转都会写的文件，自检不该写进使用者真实的那一份。
 # 顶层取值必须加载期安全：CI 会在 Linux 上点源本文件，那里没有 LocalApplicationData。
+#
+# 可替换靠的是 $InstallDirOverride，不是"把函数整个重定义掉"——
+# 与四个注册表子键同一个做法：改的是落点取值，不是绕开取值的那段逻辑。
+# 没有这条覆盖时，自检直接写进使用者真实的安装目录，症状是随机红：
+# 真实安装的监控每轮都会把 relay.port 重写成它自己的端口，正好落在
+# 自检写完、子进程读回来之间，「另一个进程读得到中继端口」就会拿到 17099。
+$InstallDirOverride = ''
 function Get-InstallDir {
+    if ($InstallDirOverride) { return $InstallDirOverride }
     $base = [Environment]::GetFolderPath('LocalApplicationData')
     if (-not $base) { $base = [System.IO.Path]::GetTempPath() }
     return (Join-Path $base 'EnvProxy')
@@ -98,6 +110,22 @@ function Get-UserEnvKeyPath { return (Get-RegPath $UserEnvSubKey) }
 function Get-OwnedRegKeyPath { return (Get-RegPath $OwnedRegSubKey) }
 function Get-PrevEnvRegKeyPath { return (Get-RegPath $PrevEnvSubKey) }
 function Get-ScriptPathRegKeyPath { return (Get-RegPath $ScriptPathRegSubKey) }
+
+# 这台机器上有没有本工具的安装记录（安装时写下的入口路径）。
+#
+# 它回答的是「我们在这台机器上装过吗」，用来区分两个后果相反的场景：
+# 装过但本机没有某个代理变量 = 装前就没有 = 现在这个本机地址是我们写的，可以回收；
+# 从没装过 = 那个本机地址是使用者自己挂的（mitmproxy、内网跳板），一字节都不许动。
+#
+# 判据只能有一处：安装侧判断"首次安装"（ops 层）用的就是这一条事实，
+# 两处各写一份的话，会出现"安装以为是首次、清理以为装过"的分叉，
+# 表现就是使用者自己设的本机代理被当成我们的残留删掉，且无快照可还原。
+function Test-HasInstallRecord {
+    try {
+        $v = (Get-ItemProperty -LiteralPath (Get-ScriptPathRegKeyPath) -Name 'ScriptPath' -ErrorAction SilentlyContinue).ScriptPath
+        return [bool]$v
+    } catch { return $false }
+}
 # 变量名一律用规范大写拼写；一张表同时是「注入清单」与「删除清单」，两者不可能再漂移。
 #
 # DIVERGE(Win): Windows 的环境命名空间大小写不敏感（注册表 HKCU\Environment 尤其如此），

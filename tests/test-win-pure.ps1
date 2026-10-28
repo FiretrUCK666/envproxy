@@ -60,6 +60,25 @@ if ($env:OS -eq 'Windows_NT') {
     New-Item -Path (Get-UserEnvKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null
 }
 
+# 安装目录隔离：relay.port / terminal.env / launchers\ 都住在 Get-InstallDir() 下，
+# 默认是使用者真实的 %LOCALAPPDATA%\EnvProxy。不隔离的后果不是"脏一点"，
+# 而是**用例结论取决于本机装没装、监控在不在跑**：
+#   「另一个进程读得到中继端口」这条要的是"自检写下的端口，子进程读回来还是它"，
+#   而真实安装的监控每轮都在把 relay.port 重写成自己的端口。两者抢同一个文件，
+#   于是这条用例随机红、随机绿——同一份提交在本机过、在 CI 挂（或反过来）。
+# 这与注册表那四个子键是同一件事：把**落点**换掉，跑的是真逻辑。
+$script:SavedInstallDir = $InstallDirOverride
+$script:SavedToolHomeDir = $ToolHomeDirOverride
+$script:TestInstallDir = Join-Path ([System.IO.Path]::GetTempPath()) ('envproxy_testhome_' + [guid]::NewGuid().ToString('N').Substring(0,8))
+$InstallDirOverride = $script:TestInstallDir
+$ToolHomeDirOverride = (Join-Path $script:TestInstallDir '.envproxy')
+if (-not (Test-Path -LiteralPath $script:TestInstallDir)) {
+    New-Item -ItemType Directory -Path $script:TestInstallDir -Force | Out-Null
+}
+# $LauncherDir 在 runtime 层加载时就算好了，改 override 追不上它，这里直接对齐。
+$script:SavedLauncherDir = $LauncherDir
+$LauncherDir = $script:TestInstallDir
+
 # 日志隔离：把 $LogFile 换到临时目录，绝不写进仓库里的 win\monitor\monitor.log。
 #
 # 为什么必须有这一步：有些用例要走"枚举失败 / 状态 unknown"这条真实路径，
@@ -235,6 +254,31 @@ if ($env:OS -eq 'Windows_NT') {
         # 否则门槛判定「不用清」，回收函数却照样删掉其中几项——两个判据各说各话。
         Assert-Eq '掺了默认项的混合值算我们写的' $true (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost,127.0.0.1,::1')
         Assert-Eq '全在快照里的值算使用者的' $false (Test-IsOwnedProxyValue 'NO_PROXY' 'localhost')
+
+        # ------------------------------------------------------------------
+        # 快照里有这个名字、但当前值**已经是我们注入的那个**——必须判成我们的。
+        #
+        # 这是本项目最贵的一类错，因为它的形状最普通：装之前用户本来就有
+        # HTTP_PROXY（企业代理、旧工具残留都长这样），快照于是记下了这个名字。
+        # 之后我们把它覆盖成 127.0.0.1:<翻墙端口>。关代理时若按"名字在快照里
+        # 就算他的"来判断，我们注入的值就永远删不掉：
+        #   - 三个地址变量继续指向死端口，git/curl/npm 全部 ECONNREFUSED；
+        #   - 而 NO_PROXY/NODE_USE_ENV_PROXY 没有快照条目，照样被删——
+        #     于是连 localhost 都要往死代理送，成为更难查的"半套变量"；
+        #   - PowerShell 提示符钩子读注册表看到值还在，每开一个窗口就再注入一次；
+        #   - 屏幕上还打"已删除代理变量，恢复直连"。
+        # 判据必须落在**值**上：当前值等于我们记下的那个 → 就是我们的，与快照无关。
+        # ------------------------------------------------------------------
+        New-Item -Path (Get-OwnedRegKeyPath) -Force -ErrorAction SilentlyContinue | Out-Null
+        Set-ItemProperty -Path (Get-OwnedRegKeyPath) -Name 'HTTP_PROXY' -Value 'http://127.0.0.1:7078' -ErrorAction SilentlyContinue
+        Assert-Eq '快照记着名字、但值是我们注入的 -> 仍是我们的（必须回收）' $true `
+            (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7078')
+        Assert-Eq '同一情形下用户自己的另一个端点仍不许动' $false `
+            (Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:8080')
+        # 清理门槛也必须跟着认：它是同一个判据的调用方，两处各说各话就是"半代理"的来源。
+        Assert-Eq '清理门槛与归属判据同一套（门槛必须看到我们的值）' $true `
+            ([bool](Test-IsOwnedProxyValue 'HTTP_PROXY' 'http://127.0.0.1:7078'))
+        Remove-Item -LiteralPath (Get-OwnedRegKeyPath) -Recurse -Force -ErrorAction SilentlyContinue
     } finally {
         Remove-Item -LiteralPath $bakKey -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -302,7 +346,7 @@ Write-Host '[2e] the mirror file has a self-heal path'
 # 用户看到的是 git/curl 全部 ECONNREFUSED 而错误里没有本工具的名字。
 # 曾经它只在 Apply-State（状态翻转）里写，30 轮自愈那条路不写，
 # 于是"删掉就再也回不来"。这条钉住"自愈也能重建"。
-$mirrorPath = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "EnvProxy\terminal.env"
+$mirrorPath = Join-Path (Get-InstallDir) "terminal.env"
 $mirrorBak = $null
 if (Test-Path $mirrorPath) { $mirrorBak = Get-Content $mirrorPath -Raw -ErrorAction SilentlyContinue }
 try {
@@ -1678,6 +1722,10 @@ if (Test-RelayType) {
 `$ErrorActionPreference='Stop'
 `$ScriptDir='$ScriptDir'
 foreach (`$n in @('base','probe','env','runtime','relay')) { . (Join-Path (Join-Path `$ScriptDir 'lib') "`$n.ps1") }
+# 安装目录的沙箱必须跟着子进程走：它重新点源库，override 回到空，
+# 于是会去读使用者**真实** %LOCALAPPDATA%\EnvProxy\relay.port——那正是这条用例
+# 要证明"跨进程读得到"的那个文件，读错一份就等于没测。
+`$InstallDirOverride = '$($script:TestInstallDir -replace "'", "''")'
 `$s = Get-RelayStatus
 Write-Output ("{0}|{1}|{2}" -f `$s.Running, `$s.Port, `$s.Upstream)
 "@
@@ -3275,6 +3323,17 @@ if ($env:OS -eq 'Windows_NT' -and $script:SavedRegSandbox) {
         $ScriptPathRegSubKey = $script:SavedRegSandbox.ScriptPathReg
     } catch {}
 }
+
+# 安装目录沙箱：复原 override、删掉临时目录。
+# 顺序与注册表那段同理：先把落点指回真实位置，再删沙箱，免得清理本身打到沙箱。
+try {
+    $InstallDirOverride = $script:SavedInstallDir
+    $ToolHomeDirOverride = $script:SavedToolHomeDir
+    if ($null -ne $script:SavedLauncherDir) { $LauncherDir = $script:SavedLauncherDir }
+    if ($script:TestInstallDir -and (Test-Path -LiteralPath $script:TestInstallDir)) {
+        Remove-Item -LiteralPath $script:TestInstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+} catch {}
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

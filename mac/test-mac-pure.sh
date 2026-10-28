@@ -398,10 +398,25 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     echo "[2] 合并与归属"
     _selftest_assert_eq "补默认项、留用户条目" "localhost,127.0.0.1,::1,example.com" "$(merge_no_proxy 'localhost,example.com,::1' "$DEFAULT_NO_PROXY")"
     _selftest_assert_eq "含单引号条目丢弃" "localhost,127.0.0.1,::1,ok.example" "$(merge_no_proxy "ok.example,a'b" "$DEFAULT_NO_PROXY")"
+    # 「装了才认领」与「这值是不是本机地址」是两件独立的事实，各自要有用例。
+    # 先造安装记录：下面这两条测的是"装好之后的注入值归我们回收"；
+    # 没有安装记录时它会被正确判成"不知道"，那是紧接着单独测的另一件事。
+    if [ ! -f "$PATH_CONF" ]; then printf '%s\n' "$SCRIPT_PATH" > "$PATH_CONF" 2>/dev/null || true; fi
     if is_owned_proxy_value "http://127.0.0.1:7890"; then _o1=1; else _o1=0; fi
     if is_owned_proxy_value "http://corp:8080"; then _o2=1; else _o2=0; fi
     _selftest_assert_eq "本机地址算我们的" "1" "$_o1"
     _selftest_assert_eq "公司地址不算我们的" "0" "$_o2"
+    # 没有安装记录 = 这台机器从没装过本工具：那个本机代理是使用者自己挂的
+    # （mitmproxy、内网跳板都长这样），一个字节都不许动。
+    # 少了这条，在一台从没装过的机器上执行 stop 就会删掉他的配置，且无快照可还原。
+    if [ -f "$PATH_CONF" ]; then
+        _nr_bak="$PATH_CONF.bak_$$"
+        if mv "$PATH_CONF" "$_nr_bak" 2>/dev/null; then
+            if is_owned_proxy_value "http://127.0.0.1:7890"; then _nr=1; else _nr=0; fi
+            mv "$_nr_bak" "$PATH_CONF" 2>/dev/null || true
+            _selftest_assert_eq "没有安装记录时不认领本机地址（那是使用者自己挂的）" "0" "$_nr"
+        fi
+    fi
     # 快照文件存在、但一个代理变量都没读出内容 = 这份快照不可用（截断 / 权限 / 格式坏）。
     # 此时不许认领：认错了会把这个本机地址删掉，而那可能正是使用者自己挂的 mitmproxy；
     # 不认领最多多留一个值（下一轮还会再判）。两个方向的代价不对称。
