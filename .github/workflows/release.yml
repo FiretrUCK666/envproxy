@@ -163,21 +163,23 @@ jobs:
       - name: 建 Release 并挂安装包（幂等：已存在则补齐资产）
         run: |
           TAG="${{ inputs.tag != '' && inputs.tag || github.ref_name }}"
+          # 判断"Release 在不在"必须走 API，不能用 `gh release view`：
+          # 那个命令**看不到草稿**。而标签被删过时 GitHub 会把关联的 Release 退回草稿
+          # （已发布态要求它有标签），于是 view 返回"不存在"、这里错走 create 分支、
+          # 撞上同名 Release 报 already_exists——删标签重发就永远卡在这一步。
+          # 这是本项目允许的路径（版本号还没送出去时），所以判据必须能看见草稿。
+          RID="$(gh api "repos/{owner}/{repo}/releases/tags/$TAG" -q .id 2>/dev/null || true)"
           # --latest 不能省：Release 已存在时走的是 upload + edit 那条路，而 edit 不会把
           # 这个版本标成最新——"最新"仍停在旧版上，README 的 releases/latest 直链与更新入口
           # 就一起指着旧包，后面的自校验会（正确地）拒绝。补漏重跑也必须能纠正这一点。
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG 已存在：上传（覆盖）两个资产，刷新发版说明，并标成最新。"
+          if [ -n "$RID" ]; then
+            echo "Release $TAG 已存在（id=$RID）：上传（覆盖）两个资产，刷新发版说明，并标成最新。"
             # 草稿态必须先发布出来，否则 --latest 会被 422 拒（"Latest release cannot be
-            # draft or prerelease"）。草稿是怎么来的：**标签被删过**——GitHub 会把关联的
-            # Release 退回草稿，因为已发布态要求它有标签。删标签重发是这个项目允许的
-            # （版本号还没送出去时），所以这条路径必须能走通，不能要求人先手动点发布。
-            # 编辑必须打到 /releases/<id>：带 tags/<tag> 的那条只支持 GET，拿它 PATCH 会 404。
-            # 布尔值用 -F 传，发出去一定是 JSON 的 false，不随 gh 版本变。
+            # draft or prerelease"）。编辑必须打到 /releases/<id>：带 tags/<tag> 的那条
+            # 只支持 GET，拿它 PATCH 会 404。布尔值用 -F 传，发出去一定是 JSON 的 false。
             # --latest 只能加在非草稿上，所以发布与标注要分两步。
-            if [ "$(gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null)" = "true" ]; then
+            if [ "$(gh api "repos/{owner}/{repo}/releases/$RID" -q .draft)" = "true" ]; then
               echo "Release $TAG 处于草稿态（标签曾被删除）：先发布，再挂资产与标注最新。"
-              RID="$(gh api "repos/{owner}/{repo}/releases/tags/$TAG" -q .id)"
               gh api -X PATCH "repos/{owner}/{repo}/releases/$RID" -F draft=false >/dev/null
             fi
             gh release upload "$TAG" dist/EnvProxy-win.zip dist/EnvProxy-mac.tar.gz --clobber
