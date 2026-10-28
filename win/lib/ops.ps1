@@ -508,22 +508,22 @@ function Format-StatusLines($st) {
         $mpid = 0
         try { $mpid = [int]$st.Monitor.ProcessId } catch { $mpid = 0 }
         if ($mpid -gt 0) {
-            & $row '监控进程' ('运行中 (PID {0})' -f $mpid) 'ok'
+            & $row $StatusLabels.Monitor ('运行中 (PID {0})' -f $mpid) 'ok'
         } else {
             # 心跳判活拿不到 PID：如实说"在写心跳"，不编一个号
-            & $row '监控进程' '运行中（心跳正常）' 'ok'
+            & $row $StatusLabels.Monitor '运行中（心跳正常）' 'ok'
         }
     } elseif ($st.StopIntent) {
-        & $row '监控进程' '按你的选择停着' 'dim'
+        & $row $StatusLabels.Monitor '按你的选择停着' 'dim'
     } elseif ($st.NeverInstalled) {
-        & $row '监控进程' '还没安装' 'dim'
+        & $row $StatusLabels.Monitor '还没安装' 'dim'
     } else {
-        & $row '监控进程' '不在了（可能被结束任务关掉或崩溃）' 'warn'
+        & $row $StatusLabels.Monitor '不在了（可能被结束任务关掉或崩溃）' 'warn'
     }
 
     # 自启
-    if ($st.AutoRunOk) { & $row '开机自启' '已启用' 'ok' }
-    else { & $row '开机自启' '没生效' 'warn' }
+    if ($st.AutoRunOk) { & $row $StatusLabels.AutoRun '已启用' 'ok' }
+    else { & $row $StatusLabels.AutoRun '没生效' 'warn' }
 
     # 翻墙代理
     #
@@ -555,7 +555,7 @@ function Format-StatusLines($st) {
                 $pending = ('  · 正在确认：{0}' -f $what)
             }
         }
-        & $row '翻墙代理' ('已开启（本地端口 {0} 监听中）' -f $st.Port) 'ok' ($ageNote + $pending)
+        & $row $StatusLabels.Proxy ('已开启（本地端口 {0} 监听中）' -f $st.Port) 'ok' ($ageNote + $pending)
     } elseif ($st.PortUnknown) {
         # 直接取值：$st 是 [ordered] 字典，缺键时取值是 $null、不会抛。
         # 不要用 PSObject.Properties.Name -contains 判断键存在——对字典它返回的是
@@ -564,9 +564,9 @@ function Format-StatusLines($st) {
         # 唯一的线索。
         $why = ''
         if ($st.PortEnumerationReason) { $why = '：' + $st.PortEnumerationReason }
-        & $row '翻墙代理' ('这一轮没读到端口，无法判断' + $why) 'warn'
+        & $row $StatusLabels.Proxy ('这一轮没读到端口，无法判断' + $why) 'warn'
     } else {
-        & $row '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
+        & $row $StatusLabels.Proxy '未检测到（当前无翻墙代理在运行）' 'dim'
     }
 
     # ---- 第三组：代理变量（紧跟"翻墙代理"，两者是一件事的两端） ----
@@ -577,9 +577,9 @@ function Format-StatusLines($st) {
     # 顺序是有意的：代理变量必须紧跟翻墙代理，它们讲的是同一条链路的两端；
     # 终端同步排在最后，它只关系"已开的窗口跟不跟得上"，与链路本身无关。
     if ($st.ProxyValue -and $st.ProxyAlive) {
-        & $row '代理变量' ('已注入 ({0})' -f $st.ProxyValue) 'ok'
+        & $row $StatusLabels.Vars ('已注入 ({0})' -f $st.ProxyValue) 'ok'
     } elseif ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
-        & $row '代理变量' ('指向的端口已不在（{0}）' -f $st.ProxyValue) 'warn'
+        & $row $StatusLabels.Vars ('指向的端口已不在（{0}）' -f $st.ProxyValue) 'warn'
         $op = 0
         if ($st.ProxyPort) { $op = [int]$st.ProxyPort }
         if ($op -gt 0 -and $st.Port -and $op -ne [int]$st.Port) {
@@ -589,9 +589,9 @@ function Format-StatusLines($st) {
             & $line '  翻墙代理现在没在跑，所以这个地址已经没用了。' 'dim'
         }
     } elseif ($st.ProxyValue) {
-        & $row '代理变量' ('值不是合法地址（{0}）' -f $st.ProxyValue) 'warn'
+        & $row $StatusLabels.Vars ('值不是合法地址（{0}）' -f $st.ProxyValue) 'warn'
     } else {
-        & $row '代理变量' '无（直连状态）' 'dim'
+        & $row $StatusLabels.Vars '无（直连状态）' 'dim'
     }
 
 
@@ -600,12 +600,12 @@ function Format-StatusLines($st) {
     # 屏幕上的行数不一样，而缺的正好是"怎么办"那句。
     # 用户报"信息对不上"时，查的人会以为是缓存问题，实际是两份代码。
     if ($st.UpdateInProgress) {
-        & $row '上次更新' '没有完成（覆盖过程中断）' 'warn'
+        & $row $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         & $line '  程序文件可能新旧混合，某些功能会静默失效。' 'dim'
         & $line '  打开菜单选 1（安装 / 修复）重做一次即可。' 'dim'
     }
     if ($st.SysProxy) {
-        & $row '系统代理' ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
+        & $row $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
         & $line '  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。' 'dim'
     }
     # ---- 第四组：终端同步 ----
@@ -614,14 +614,14 @@ function Format-StatusLines($st) {
     if ($st.TermSync) {
         $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
         $role = if ($tt.Bad) { 'warn' } else { 'ok' }
-        & $row '终端同步' $tt.Text $role
+        & $row $StatusLabels.TermSync $tt.Text $role
         if ($tt.Hint) {
             foreach ($h in @($tt.Hint -split "`n")) {
                 if ($h) { & $line ('  ' + $h) 'dim' }
             }
         }
     } else {
-        & $row '终端同步' '状态未知' 'dim'
+        & $row $StatusLabels.TermSync '状态未知' 'dim'
     }
 
     # ---- 第四组之二：固定入口（只在真的建过走代理的图标时才出现）----
@@ -634,9 +634,9 @@ function Format-StatusLines($st) {
         try { $rs = Get-RelayStatus } catch {}
         & $line '' '' 'text'
         if ($rs -and $rs.Running) {
-            & $row '高级功能' ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
+            & $row $StatusLabels.Advanced ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
-            & $row '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
+            & $row $StatusLabels.Advanced ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
     }
     # 版本（与上面的状态分组分开：那是当前状态，这是软件版本）
@@ -645,7 +645,7 @@ function Format-StatusLines($st) {
     # 于是静态页说"开发副本"、实时帧说"已是最新"，同一台机器两句话。
     & $line '' '' 'text'
     $vt = Get-VersionText $st
-    & $row '版本' $vt.Text $vt.Role
+    & $row $StatusLabels.Version $vt.Text $vt.Role
 
     # 日志尾
     #
@@ -1206,7 +1206,7 @@ function Show-StatusSnapshot($st) {
     # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
     $m = $st.Monitor
     if (-not $m) {
-        Write-StatusRow '监控进程' '未运行' 'warn'
+        Write-StatusRow $StatusLabels.Monitor '未运行' 'warn'
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
         # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
@@ -1232,25 +1232,25 @@ function Show-StatusSnapshot($st) {
     }
     if (-not $st.AutoRunOk) {
         if ($st.AutoRunRaw) {
-            Write-StatusRow '开机自启' '记录还在，但启动文件已不存在（登录时不会启动）' 'warn'
+            Write-StatusRow $StatusLabels.AutoRun '记录还在，但启动文件已不存在（登录时不会启动）' 'warn'
             Write-Styled 'dim' ("  记录指向：{0}" -f $(if ($st.AutoRunLauncher) { $st.AutoRunLauncher } else { $st.AutoRunRaw }))
         } else {
-            Write-StatusRow '开机自启' '未启用' 'warn'
+            Write-StatusRow $StatusLabels.AutoRun '未启用' 'warn'
         }
         Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以重建。"
     }
     if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
-        Write-StatusRow '代理变量' '无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）' 'dim'
+        Write-StatusRow $StatusLabels.Vars '无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）' 'dim'
     } elseif ($st.ProxyValue -and $null -eq $st.ProxyAlive) {
         # 值在，但不是个能解析的地址。与"端口已不在"分开说：那个等监控自愈就行，
         # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
         # 不许落绿字"已注入"——那等于告诉用户一切正常。
-        Write-StatusRow '代理变量' ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
+        Write-StatusRow $StatusLabels.Vars ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
-        Write-StatusRow '代理变量' ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
+        Write-StatusRow $StatusLabels.Vars ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
         # 这一屏最容易被读成"工具坏了"：翻墙代理明明是开着的，代理变量却说端口不在。
         # 实情是**它俩指向的不是同一个端口**——换了端口、变量还停在旧的那个上。
@@ -1273,7 +1273,7 @@ function Show-StatusSnapshot($st) {
             Write-Styled 'dim' '  监控在跑的话几秒内会自己跟上；想立刻跟上就选 1（安装 / 修复）。'
         }
     } elseif ($st.ProxyValue -and -not $m) {
-        Write-StatusRow '代理变量' ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
+        Write-StatusRow $StatusLabels.Vars ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
         Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
         Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 7 一键恢复，把这批变量一并清掉。"
     }
@@ -1281,7 +1281,7 @@ function Show-StatusSnapshot($st) {
         # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。
         $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
         if ($tt.Text -ne '已生效（已开着的窗口敲回车即跟上）') {
-            Write-StatusRow '终端同步' $tt.Text 'warn'
+            Write-StatusRow $StatusLabels.TermSync $tt.Text 'warn'
             if ($tt.Hint) {
                 foreach ($h in @($tt.Hint -split "`n")) {
                     if ($h) { Write-Styled 'dim' ('  ' + $h) }
@@ -1290,12 +1290,12 @@ function Show-StatusSnapshot($st) {
         }
     }
     if ($st.UpdateInProgress) {
-        Write-StatusRow '上次更新' '没有完成（覆盖过程中断）' 'warn'
+        Write-StatusRow $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
         Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重做一次即可。"
     }
     if ($st.SysProxy) {
-        Write-StatusRow '系统代理' ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
+        Write-StatusRow $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
         # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
         Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
@@ -1307,35 +1307,35 @@ function Show-StatusSnapshot($st) {
     # 终端同步（已开的窗口跟不跟得上）。组内紧凑、组间留白。
     # 空行只在"前一组确实印了东西"时才补，避免连着两个空行。
     $printedGroup = $false
-    if ($m) { Write-StatusRow '监控进程' ("运行中 (PID {0})" -f $m.ProcessId) 'ok'; $printedGroup = $true }
-    if ($st.AutoRunOk) { Write-StatusRow '开机自启' '已启用' 'ok'; $printedGroup = $true }
+    if ($m) { Write-StatusRow $StatusLabels.Monitor ("运行中 (PID {0})" -f $m.ProcessId) 'ok'; $printedGroup = $true }
+    if ($st.AutoRunOk) { Write-StatusRow $StatusLabels.AutoRun '已启用' 'ok'; $printedGroup = $true }
 
     if ($st.Port -or $st.PortUnknown -or $st.ProxyValue) {
         if ($printedGroup) { Write-Host '' }
     }
     if ($st.Port) {
-        Write-StatusRow '翻墙代理' ("已开启（本地端口 {0} 监听中）" -f $st.Port) 'ok'
+        Write-StatusRow $StatusLabels.Proxy ("已开启（本地端口 {0} 监听中）" -f $st.Port) 'ok'
     } elseif ($st.PortUnknown) {
-        Write-StatusRow '翻墙代理' '这一轮没读到本机端口，无法判断（正常，会自动重试）' 'warn'
+        Write-StatusRow $StatusLabels.Proxy '这一轮没读到本机端口，无法判断（正常，会自动重试）' 'warn'
     } else {
-        Write-StatusRow '翻墙代理' '未检测到（当前无翻墙代理在运行）' 'dim'
+        Write-StatusRow $StatusLabels.Proxy '未检测到（当前无翻墙代理在运行）' 'dim'
     }
     # 代理变量只有"已注入且活着"这一种情况才进参考区；
     # 指向死端口、没人维护、翻墙在跑但工具停用这三种都已在上面说过，
     # 这里再打一遍就是同一件事说两次，读者会以为有两处不同的问题。
     if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
-        Write-StatusRow '代理变量' ("已注入 ({0})" -f $st.ProxyValue) 'ok'
+        Write-StatusRow $StatusLabels.Vars ("已注入 ({0})" -f $st.ProxyValue) 'ok'
     } elseif (-not $st.ProxyValue -and -not $st.Port) {
         # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
         # 少了 -not $st.Port 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
         # 同时命中：同一屏里"代理变量"出现两次，一次说"已停用"、一次说"直连"，
         # 用户会以为有两处不同的设置要处理（实测复现过）。
         # 判据必须是**完整**的：有代理在跑就不该说"直连"，那是两件事。
-        Write-StatusRow '代理变量' '无（直连状态）' 'dim'
+        Write-StatusRow $StatusLabels.Vars '无（直连状态）' 'dim'
     }
     if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
         Write-Host ''
-        Write-StatusRow '终端同步' '已生效（已开着的窗口敲回车即跟上）' 'ok'
+        Write-StatusRow $StatusLabels.TermSync '已生效（已开着的窗口敲回车即跟上）' 'ok'
     }
     # ---- 固定入口（只在真的建过走代理的图标时才出现）----
     # 措辞与实时帧逐字相同：两版是同一屏的两种刷新方式，改一处必须改另一处。
@@ -1349,9 +1349,9 @@ function Show-StatusSnapshot($st) {
         try { $rs = Get-RelayStatus } catch {}
         Write-Host ''
         if ($rs -and $rs.Running) {
-            Write-StatusRow '高级功能' ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
+            Write-StatusRow $StatusLabels.Advanced ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
-            Write-StatusRow '高级功能' ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
+            Write-StatusRow $StatusLabels.Advanced ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
     }
 
@@ -1369,7 +1369,7 @@ function Show-StatusSnapshot($st) {
 #   还没有    → 说明为什么还没有（监控没在跑 / 刚装上），并给出主动查的办法
 function Show-VersionLines($st) {
     $vt = Get-VersionText $st
-    Write-StatusRow '版本' $vt.Text $vt.Role
+    Write-StatusRow $StatusLabels.Version $vt.Text $vt.Role
 }
 
 # 版本那一行说的是什么——**唯一实现**，静态页与实时帧都从这里取。

@@ -261,6 +261,27 @@ $StyleMap = [ordered]@{
 }
 $StyleRoles = @($StyleMap.Keys)
 
+# 状态页的行标签。**唯一权威处**：两个渲染器（实时帧 Format-StatusLines 与静态页
+# Show-StatusSnapshot）都从这里取，不许再写字面量。
+#
+# 为什么值得单独一张表：这两份渲染器本来就是同一屏的两种刷新方式，而标签是它们
+# 必须逐字相同的那部分。各写一份的后果不是"排版不一样"——是同一台机器上按回车看
+# 和等它自己刷新，看到的是两个不同的产品名。注释里反复说"改一处必须改另一处"，
+# 但靠人记；表一建，改名只改这里，漏改在屏幕上立即可见。
+#
+# 标签本身不随状态变化（只有右侧内容按 ok/warn/dim 上色），所以它们是常量而非变量。
+$StatusLabels = [ordered]@{
+    Monitor   = '监控进程'
+    AutoRun   = '开机自启'
+    Proxy     = '翻墙代理'
+    Vars      = '代理变量'
+    LastUpdate= '上次更新'
+    SysProxy  = '系统代理'
+    TermSync  = '终端同步'
+    Advanced  = '高级功能'
+    Version   = '版本'
+}
+
 # 角色 -> 颜色名。没声明的角色一律按 none（不写颜色），不报错也不乱猜。
 function Get-StyleColorName([string]$Role) {
     if ($StyleMap.Contains($Role)) { return [string]$StyleMap[$Role] }

@@ -1080,14 +1080,19 @@ Assert-Eq 'an empty reason falls back to unreachable' 'network' (Select-UpdateFa
 # 于是"代理变量 : 无（直连状态）"整行变灰，标签也跟着灰——用户最先看的恰恰是标签。
 # 状态好的行整行绿、状态无的行整行灰，扫一眼只看到"有的绿有的灰"，分不清哪段是名字。
 # 这条断言钉住"标签用 key"这个结构，改回整行同色就红。
-$labelRoles = @()
-$src = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '../win/lib/ops.ps1'))
-# 状态页里每个标签都必须经 Write-StatusRow 输出（它会用 key 上色）
-foreach ($lbl in @('监控进程', '开机自启', '翻墙代理', '终端同步', '代理变量', '版本')) {
-    $inRow = [regex]::IsMatch($src, "Write-StatusRow '" + $lbl + "'")
-    $inBare = [regex]::IsMatch($src, "Write-Styled '\w+' ""?" + $lbl + " : ")
+# 状态页里每个标签都必须经 Write-StatusRow 输出（它会用 key 上色）。
+# 标签值从 $StatusLabels 表取（唯一权威处），源码里查的是"用它做行标签"这件事：
+#   ① 静态页必须出现 `Write-StatusRow $StatusLabels.X`；
+#   ② 表里的每个键都必须真的被渲染器用到——只建表不接线等于没建。
+$srcLive = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '../win/lib/ops.ps1'))
+foreach ($k in @('Monitor', 'AutoRun', 'Proxy', 'TermSync', 'Vars', 'Version')) {
+    $lbl = [string]$StatusLabels[$k]
+    $inRow = [regex]::IsMatch($srcLive, 'Write-StatusRow \$StatusLabels\.' + $k + '\b')
+    $inBare = [regex]::IsMatch($srcLive, "Write-Styled '\w+' ""?" + [regex]::Escape($lbl) + " : ")
     Assert-Eq ('status row uses the split renderer: ' + $lbl) $true $inRow
     Assert-Eq ('status label is not painted by the whole-line colour: ' + $lbl) $false $inBare
+    $used = [regex]::IsMatch($srcLive, '\$StatusLabels\.' + $k + '\b')
+    Assert-Eq ('status label is actually used by a renderer: ' + $lbl) $true $used
 }
 
 # 回环判据：与 Mac 侧 is_loopback_url 同一张表、同一批结论（两侧各跑一遍，门禁 10 互比）。
