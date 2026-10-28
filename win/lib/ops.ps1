@@ -32,7 +32,7 @@ function Install-EnvProxy {
         Write-Styled 'ok' "[1/4] 开机自启动：已写入"
     } else {
         Write-Styled 'warn' "[1/4] 开机自启动：没写成。可能被杀软或组策略拦住了。"
-        Write-Styled 'warn' "      请检查杀软拦截，或再打开一次菜单选 1（安装 / 修复）；仍然不行就把它加进白名单。"
+        Write-Styled 'warn' "      请检查杀软拦截，或再打开一次菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）；仍然不行就把它加进白名单。"
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
@@ -77,7 +77,7 @@ function Install-EnvProxy {
     } elseif (-not $appliedOk) {
         # 写失败必须如实说，不能说"已校正"——用户会以为在走代理，实际是半套变量。
         Write-Styled 'warn' "[3/4] 环境变量：没写进去。可能被杀软或组策略拦住了。"
-        Write-Styled 'warn' "      再打开一次菜单选 1（安装 / 修复）重试；仍然不行请反馈。"
+        Write-Styled 'warn' "      再打开一次菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）重试；仍然不行请反馈。"
     } else {
         Write-Styled 'ok' "[3/4] 环境变量：已按当前状态校正"
     }
@@ -126,10 +126,10 @@ function Install-EnvProxy {
         @('新开的终端 / 程序', '自动就是对的，什么都不用做。', ''),
         @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。', ''),
         @('装之前就开着的窗口', '重开一个，或者手动加载一次', ''),
-        @('', '菜单选 4（帮助）第 2 条，各种终端都有现成命令。', ''),
+        @('', "菜单选 $(Get-MenuKey 'Help')（$(Get-MenuName 'Help')）第 2 条，各种终端都有现成命令。", ''),
         @('想让某个窗口一直不翻墙', '在它里面执行', "`$env:ENVPROXY_TERM = 'off'"),
         @('改回跟着翻墙软件走', '在它里面执行', 'Remove-Item Env:ENVPROXY_TERM'),
-        @('忘了怎么用', '菜单选 4（帮助）。', '')
+        @('忘了怎么用', "菜单选 $(Get-MenuKey 'Help')（$(Get-MenuName 'Help')）。", '')
     )
     $tipW = 0
     foreach ($r in $tipRows) {
@@ -178,7 +178,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     } else {
         # 没有可交互的控制台：不能问，也不能替用户答应。
         Write-Styled 'warn' "这里没法问你要不要卸载（没有可交互的控制台），所以什么都不会做。"
-        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 7（一键恢复）；"
+        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）（一键恢复）；"
         Write-Styled 'dim' "  或者确认无误后加 -Yes：envproxy.ps1 -Uninstall -Yes"
         return
     }
@@ -215,7 +215,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     if (-not $restoreOk) {
         Write-Styled 'warn' "[未完成] 你原来的代理设置没能写回去（可能被杀软或组策略拦住了）。"
         Write-Styled 'warn' "        备份还留着，没有再删任何东西。请先手动把原来的设置加回去，"
-        Write-Styled 'warn' "        再点一次菜单选 7（一键恢复）收尾。"
+        Write-Styled 'warn' "        再点一次菜单选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）（一键恢复）收尾。"
         return
     }
     # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
@@ -454,7 +454,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     } else {
         Write-Styled 'warn' "[未完成] 这几处没清干净："
         foreach ($d in $dirty) { Write-Styled 'warn' ("        - " + $d) }
-        Write-Styled 'warn' "        再打开菜单选 7（一键恢复）试一次；还不行就照上面列出的位置手动删。"
+        Write-Styled 'warn' "        再打开菜单选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）（一键恢复）试一次；还不行就照上面列出的位置手动删。"
     }
 }
 
@@ -602,7 +602,7 @@ function Format-StatusLines($st) {
     if ($st.UpdateInProgress) {
         & $row $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         & $line '  程序文件可能新旧混合，某些功能会静默失效。' 'dim'
-        & $line '  打开菜单选 1（安装 / 修复）重做一次即可。' 'dim'
+        & $line "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）重做一次即可。" 'dim'
     }
     if ($st.SysProxy) {
         & $row $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
@@ -720,7 +720,7 @@ function Get-TermSyncText([string]$State, $Sync) {
             # 走到这里说明 Get-TerminalSyncState 又加了新状态而这张表没跟上。
             # 必须打印出来：问题清单会说"终端同步没生效"，而整屏找不到那四个字，
             # 用户被指向一个不存在的提示（真发生过：State 叫 nohost、switch 处理 unknown）。
-            return @{ Text = ('状态未知（' + $State + '）'); Hint = '打开菜单选 1（安装 / 修复）重写一次。'; Bad = $true }
+            return @{ Text = ('状态未知（' + $State + '）'); Hint = "打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）重写一次。"; Bad = $true }
         }
     }
 }
@@ -987,7 +987,7 @@ function New-ProblemReport {
     Write-Host ''
     if (-not $saved) {
         Write-Styled 'warn' '报告生成失败：两个位置都写不进去。'
-        Write-Styled 'dim' '  可以先把菜单选 2（查看状态）的截图发给对方。'
+        Write-Styled 'dim' "  可以先把菜单选 $(Get-MenuKey 'Status')（$(Get-MenuName 'Status')）的截图发给对方。"
         # 退出码是这条命令唯一能被程序读懂的结论，说"成功"而实际失败是谎报。
         # 与 mac 侧同一套语义（那边 report 分支 return 1）。AGENTS 规定：1 = 失败。
         $script:ReportExitCode = 1
@@ -1196,7 +1196,7 @@ function Show-StatusSnapshot($st) {
     } elseif ($st.NeverInstalled) {
         # 从没装过：三件"没生效"都是同一个事实（还没装），
         # 说成"有 3 项要注意"会让第一次打开的人以为机器有三处毛病。
-        Write-Styled 'dim' "还没开始用。打开菜单选 1（安装 / 修复）就能装上。"
+        Write-Styled 'dim' "还没开始用。打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）就能装上。"
     } else {
         Write-Styled 'warn' ("有 {0} 项要注意：" -f $problems.Count)
         foreach ($p in $problems) { Write-Styled 'warn' ("  - " + $p) }
@@ -1218,16 +1218,16 @@ function Show-StatusSnapshot($st) {
             } else {
                 # 两个问题叠在一起时必须说清是两个：点过停止 + 自启记录也坏了。
                 Write-Styled 'warn' "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
-                Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以一起修好。"
+                Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）可以一起修好。"
             }
         } elseif ($st.NeverInstalled) {
             # 从没装过：这不是问题，是起点。用"崩溃/被结束任务"描述它，
             # 第一次打开的人会以为自己的机器出了事（"我明明没装过"）。
             Write-Styled 'dim' "  （还没装过。装上之后它会自己常驻，不用你管）"
-            Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）开始使用。"
+            Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）开始使用。"
         } else {
             Write-Styled 'warn' "  （不是点了停止，是进程不在了：可能被结束任务关掉，或崩溃）"
-            Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以让它重新跑起来。"
+            Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）可以让它重新跑起来。"
         }
     }
     if (-not $st.AutoRunOk) {
@@ -1237,7 +1237,7 @@ function Show-StatusSnapshot($st) {
         } else {
             Write-StatusRow $StatusLabels.AutoRun '未启用' 'warn'
         }
-        Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）可以重建。"
+        Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）可以重建。"
     }
     if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
@@ -1248,7 +1248,7 @@ function Show-StatusSnapshot($st) {
         # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
         # 不许落绿字"已注入"——那等于告诉用户一切正常。
         Write-StatusRow $StatusLabels.Vars ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
-        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 1（安装 / 修复）会按当前代理重写一遍。"
+        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）会按当前代理重写一遍。"
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
         Write-StatusRow $StatusLabels.Vars ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
@@ -1262,15 +1262,15 @@ function Show-StatusSnapshot($st) {
         if ($oldPort -and $st.Port -and $oldPort -ne [int]$st.Port) {
             # 代理在别的端口上活着：跟着它走就对了
             Write-Styled 'dim' ("  变量里是旧端口 {0}，翻墙代理现在在 {1}。" -f $oldPort, $st.Port)
-            Write-Styled 'dim' '  监控在跑的话几秒内会自己跟过去；想立刻跟上就选 1（安装 / 修复）。'
+            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟过去；想立刻跟上就选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）。"
         } elseif (-not $st.Port) {
             # 代理根本没在跑：没有可跟的目标，那就是该清掉
             Write-Styled 'dim' '  翻墙代理现在没在跑，所以这个地址已经没用了。'
-            Write-Styled 'dim' '  监控在跑的话几秒内会把它清掉；想立刻清掉就选 1（安装 / 修复）。'
+            Write-Styled 'dim' "  监控在跑的话几秒内会把它清掉；想立刻清掉就选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）。"
         } else {
             # 端口解析不出来（极少见），只给通用说法，不编具体原因
             Write-Styled 'dim' '  这个地址已经连不上了（多半是刚换过端口）。'
-            Write-Styled 'dim' '  监控在跑的话几秒内会自己跟上；想立刻跟上就选 1（安装 / 修复）。'
+            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟上；想立刻跟上就选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）。"
         }
     } elseif ($st.ProxyValue -and -not $m) {
         Write-StatusRow $StatusLabels.Vars ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
@@ -1292,7 +1292,7 @@ function Show-StatusSnapshot($st) {
     if ($st.UpdateInProgress) {
         Write-StatusRow $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
-        Write-Styled 'dim' "  打开菜单选 1（安装 / 修复）重做一次即可。"
+        Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）重做一次即可。"
     }
     if ($st.SysProxy) {
         Write-StatusRow $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
@@ -1402,11 +1402,11 @@ function Get-VersionText($st) {
     } elseif (Test-SourceCopy) {
         $state = "源码包（更新入口会先确认用途再动手）"; $role = 'warn'
     } elseif (-not $localVer) {
-        $state = "可打开菜单选 3（检查更新）升级"; $role = 'warn'
+        $state = "可打开菜单选 $(Get-MenuKey 'Update')（$(Get-MenuName 'Update')）（检查更新）升级"; $role = 'warn'
     } elseif ((Compare-Versions $localVer $remote.Version) -gt 0) {
         $state = "本地版本比最新发布版新"; $role = 'dim'
     } elseif ((Compare-Versions $remote.Version $localVer) -gt 0) {
-        $state = ("发现新版 {0}，选 3（检查更新）即可升级" -f $remote.Tag); $role = 'warn'
+        $state = ("发现新版 {0}，选 $(Get-MenuKey 'Update')（$(Get-MenuName 'Update')）（检查更新）即可升级" -f $remote.Tag); $role = 'warn'
     } else {
         $state = "已是最新"; $role = 'dim'
     }
@@ -1487,6 +1487,33 @@ $MenuItems = @(
     @{ Key = "8"; Name = "问题反馈";   Switch = "Report";    Group = "支持"; Hint = "出问题了，一键生成一份报告" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出"; Hint = "关掉这个窗口" }
 )
+
+# 菜单编号的唯一权威处就是上面那张表的 Key 列。散文里写"选 N"时**一律从这张表取**。
+#
+# 为什么值得一个函数：用户在状态页、帮助、错误提示里看到的"选 N（某某）"有几十处，
+# 而菜单项一旦重排（加一项、挪一组），写死的数字就全部指向错的命令——
+# 那不是排版问题，是把人引到一个会改坏东西的动作上（"安装 / 修复"指到"一键恢复"）。
+# 靠人记"改了菜单要全局搜一遍数字"是不可靠的：数字在中文句子里，搜 2 会撞上别的 2。
+#
+# 按 Switch 名字找，不按编号找：Switch 是稳定的语义标识，编号只是它的显示形式。
+# 查不到时**大声失败**，不静默返回 0——静默返回 0 会渲染成"选 0（退出）"，
+# 看着还挺像真的，而那正是最坏的一种误导。
+function Get-MenuKey([string]$Switch) {
+    foreach ($mi in $MenuItems) {
+        if ($mi.Switch -eq $Switch) { return [string]$mi.Key }
+    }
+    throw ("菜单里没有 Switch 为 {0} 的项——提示文案用到了不存在的命令名" -f $Switch)
+}
+
+# 菜单项显示名，同样从那张表取。提示写"选 N（名字）"时，名字也一并派生：
+# 只派生编号的话，菜单项一改名，屏幕上就剩一串光秃秃的编号，
+# 用户还得回头翻菜单才知道那是干什么的——"选 1" 远不如"选 1（安装 / 修复）"能读。
+function Get-MenuName([string]$Switch) {
+    foreach ($mi in $MenuItems) {
+        if ($mi.Switch -eq $Switch) { return [string]$mi.Name }
+    }
+    throw ("菜单里没有 Switch 为 {0} 的项——提示文案用到了不存在的命令名" -f $Switch)
+}
 
 # 菜单里名字那一列要按最长的自动对齐：写死宽度会在改文案后错位，
 # 而错位的表格正是"看起来乱"的主要来源。
@@ -1914,17 +1941,17 @@ function Get-HelpTopics {
                 'rc Git Bash|echo $HTTPS_PROXY',
                 'b ',
                 'i 2. 看菜单最上面那行写的什么',
-                't2 写「未运行」就选 1（安装 / 修复）。',
+                "t2 写「未运行」就选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）。",
                 'i 3. 两个常见误会',
                 't2 npm 只认 HTTPS_PROXY，不认 HTTP_PROXY；你自己清过它就不走了。',
                 't2 「翻墙代理」有、「代理变量」无 = 翻墙软件在跑、这个工具被停了，不是坏了。',
                 'h 还是不行：把问题报上去',
-                't 菜单选 8（问题反馈）。它先问你四句话，再自动补上这台机器的情况，',
+                "t 菜单选 $(Get-MenuKey 'Report')（$(Get-MenuName 'Report')）。它先问你四句话，再自动补上这台机器的情况，",
                 't 存成一个文件、把路径复制好。你不用找日志，也不用敲命令。',
                 't 然后把文件内容贴到这里（本项目只在这里收问题）：',
                 ('i ' + $HelpProjIssue),
                 'h 想彻底删掉它',
-                't 菜单选 7（一键恢复）。会问你要不要留日志。',
+                "t 菜单选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）。会问你要不要留日志。",
                 'h 不开菜单也能用（写脚本、远程连过来的时候）',
                 'r 日常|-Install -Status -Stop -Uninstall -Update',
                 'r 其它|-Help -Menu -Advanced -Report',
