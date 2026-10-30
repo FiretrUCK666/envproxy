@@ -13,6 +13,7 @@ PREV_ENV="$ENVPROXY_HOME/prev.env"
 # 读已存在的 NO_PROXY（终端路取自 proxy.env，GUI 路取自 launchctl）。
 # 带参数则读指定变量名，不带则读大写那份，供合并用。
 get_existing_no_proxy() {
+    local _name _v
     _name="${1:-NO_PROXY}"
     _v=""
     if [ -f "$PROXY_ENV" ]; then
@@ -23,6 +24,7 @@ get_existing_no_proxy() {
 }
 
 get_current_proxy_port() {
+    local _line
     [ -f "$PROXY_ENV" ] || return 1
     _line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
     [ -n "$_line" ] || return 1
@@ -34,6 +36,7 @@ get_current_proxy_port() {
 }
 
 set_user_env_vars() {
+    local _http _np _npq _otmp _port _tmp
     # DIVERGE(Mac): 写 9 个变量——5 个规范拼写再加 4 个小写拼写。macOS 的变量名真大小写敏感，
     #   有的工具只认小写；Windows 的命名空间大小写不敏感，写小写只会互相覆盖，所以那边只写 5 个。
     # DIVERGE(Mac): 双路写入——终端读 ~/.envproxy/proxy.env（由 shell hook 加载），
@@ -109,6 +112,7 @@ set_user_env_vars() {
 #   - 他从没让我们写过（文件里没有可解析的端口，整段退化成 no-op）
 # 判断权全在 monitor 侧（它有完整的归属判据与快照），hook 侧只"照做"，不猜。
 write_off_sentinel() {
+    local _oh _onode _onp _tmp _wos_ok
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
     # 守卫值来自 owned.env（on 态写下的那份），**不从 proxy.env 反推**：
     # 第二次进 off 时 proxy.env 已经是哨兵、没有 export 行，反推必然为空，
@@ -184,6 +188,7 @@ write_off_sentinel() {
 # 整套变量是否都已就位（幂等判据不看单项）：只看代理地址会让"地址对、别的变量漂移"的
 # 半代理状态永远无人纠正。返回 0 = 已就位（无需动手）。
 env_vars_in_sync() {
+    local _http _np _npq _port
     _port="$1"
     [ -f "$PROXY_ENV" ] || return 1
     # 与写入端同源：判"已就位"用的地址必须就是当初写下去的那个。
@@ -241,6 +246,7 @@ env_vars_in_sync() {
 # 以及 NODE_USE_ENV_PROXY=1，都是使用者自己的配置。把它们当我们的跳过，
 # 卸载时会被删掉又无从还原——用了几年的手设配置就这么凭空没了。
 snapshot_skip_value() {
+    local _ssv_owned
     [ -n "$2" ] || return 1
     # 归属记录里逐字记着这个值 = 这就是我们自己写下的，永远不是使用者的原值。
     # 这一条必须排在"首次安装"之前，因为它比那个推断更硬：
@@ -267,6 +273,7 @@ snapshot_skip_value() {
 # 安装时快照原值（只记一次）：卸载时按快照还原，用户原来的配置不丢。
 # 重装/升级时代理正开着，我们上次写下的值不能当成使用者的（见 snapshot_skip_value）。
 snapshot_prev_env() {
+    local _sn_first _sn_ok _sntmp
     _sn_first="${1:-0}"
     [ -f "$PREV_ENV" ] && return 0
     mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
@@ -306,6 +313,7 @@ snapshot_prev_env() {
 
 # 卸载时按快照还原用户原值，还原完删掉快照。无快照时什么都不做。
 restore_prev_env() {
+    local _rpe_failed
     [ -f "$PREV_ENV" ] || return 0
     # 清账的前提是**还原成功了**。原来无论成败都 rm 掉快照，而 launchctl 那一步是
     # `|| true`——写不进去时用户原值和唯一副本一起消失，卸载还提示他"手动删"。
@@ -344,6 +352,7 @@ classify_no_proxy_entry() {
     return 2
 }
 remove_user_env_vars() {
+    local _node _rmv_file_ok _rmv_mode
     # 只回收**本工具自己写下的**东西。
     #
     # 参数 $1 = "sentinel" 时，proxy.env 不删而是改写成"守卫式 unset"（见 write_off_sentinel）：
@@ -441,6 +450,7 @@ proxy_vars_present() {
 
 # 幂等：整套变量都已就位就什么都不做（只看单项会让"地址对、别的漂移"的半代理状态无人纠正）
 apply_state() {
+    local _state
     # "unknown" = 这一轮不知道（端口枚举失败），不是"不在翻墙"。绝不能拿它写变量。
     case "${1:-}" in
         ""|unknown) return 0 ;;

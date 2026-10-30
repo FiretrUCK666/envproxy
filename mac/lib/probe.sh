@@ -16,6 +16,7 @@ PROBE_TMP_PREFIX="envproxy_probe_"
 # 判据是修改时间而不是创建时间：目录里的文件被改过就说明它还在用。
 # 与 update 层的 remove_stale_update_temp 同一套做法（那边清 envproxy_update.*）。
 probe_clean_stale_temp() {
+    local _pct_base _pct_now
     _pct_base="${TMPDIR:-/tmp}"
     [ -d "$_pct_base" ] || return 0
     _pct_now=$(date +%s 2>/dev/null || echo 0)
@@ -83,6 +84,7 @@ CHECK_ENDPOINTS=(
 # 取第 N 个端点（1 起）的某一字段：1=主机 2=路径 3=期望应答。
 # 越界返回空串（调用方据此判"这一轮没有可用端点"，不用先数长度）。
 check_endpoint_field() {
+    local _cef_field _cef_i _cef_want
     _cef_want="$1"
     _cef_field="$2"
     _cef_i=0
@@ -133,6 +135,7 @@ _MONO_READY=0
 # 注释承诺"每轮至多一次 fork"，代码里 mono_tick 被 $( ) 包着，缓存从没生效过。
 # 现在改成"调用方直接调它（不包 $( )），之后一律用 monotonic_now 取"。
 mono_tick() {
+    local _mn
     _mn=""
     if command -v perl >/dev/null 2>&1; then
         _mn=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%d", clock_gettime(CLOCK_MONOTONIC)' 2>/dev/null)
@@ -197,6 +200,7 @@ NODE_IDLE_RESET_SEC=30
 # 间隔永远钉在快速档——实测 3600 秒探测次数是承诺值的 2.5 倍。
 # 结果进 $NODE_PROBE_INTERVAL（本侧 bash 3.2 无 $(...) 之外的方便返回手段，统一走全局）。
 node_probe_interval() {
+    local _np_fail
     _np_fail="$1"; _np_thr="$2"; _np_until="$3"; _np_now="$4"; _np_steady="$5"; _np_fast="$6"
     if [ "$_np_fail" -gt 0 ] && [ "$_np_fail" -lt "$_np_thr" ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
     if [ "$_np_now" -lt "$_np_until" ]; then NODE_PROBE_INTERVAL="$_np_fast"; return 0; fi
@@ -207,6 +211,7 @@ node_probe_interval() {
 # 用"首次失败时刻"算时长而不是累加间隔——间隔会随上面那个函数变化，累加会漂。
 # 结论进 $NODE_VERDICT（0 = 还不算断，1 = 可以判断）。
 node_verdict() {
+    local _nv_fail
     _nv_fail="$1"; _nv_span="$2"; _nv_thr="$3"; _nv_dwell="$4"
     if [ "$_nv_fail" -ge "$_nv_thr" ] && [ "$_nv_span" -ge "$_nv_dwell" ]; then
         NODE_VERDICT=1
@@ -240,6 +245,7 @@ NC_HAS_G=""
 # 后果不是少一次降级，而是：第一次握手走 curl（对），之后全部退回 nc -G（错）→ 握手永远失败
 # → 候选集永远为空 → 工具彻底失效，而且不报任何错。这正是这段能力探测本来要防的事。
 nc_supports_G() {
+    local _ncg_err
     case "$NC_HAS_G" in
         1) return 0 ;;
         0) return 1 ;;
@@ -306,6 +312,7 @@ test_http_proxy() {
 # 终端里每条命令 ECONNREFUSED，而状态页显示"已注入、正常"——比检测不到更糟。
 # 结果放进 $PROXY_URL_HIT（不 printf：$( ) 是子 shell，全局赋值出不来）。
 proxy_url_for_port() {
+    local _pufp_addr
     _pufp_addr=""
     for _pufp_a in $LOOPBACK_PROBES; do
         if _handshake_at "$_pufp_a" "$1"; then _pufp_addr="$_pufp_a"; break; fi
@@ -321,6 +328,7 @@ proxy_url_for_port() {
 # 批量探测 worker（参数展开在父进程完成，避免后台子 shell 闭包竞态）。
 # 握手判据只有 test_http_proxy 一处，这里直接复用，不重复写正则。
 _probe_proxy_one() {
+    local _pp
     _pp="$1"; _dir="$2"
     if test_http_proxy "$_pp"; then
         # 每个 worker 写自己专属的结果文件：并行写同一文件会截断拼接，
@@ -331,6 +339,7 @@ _probe_proxy_one() {
 
 # 并行批量 CONNECT 探测：多个端口同时握手，~2 秒内出结果
 test_http_proxy_batch() {
+    local _bdir _hit _i
     [ $# -eq 0 ] && return 1
     _bdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}found.XXXXXX" 2>/dev/null) || return 1
     for _p in "$@"; do
@@ -369,6 +378,7 @@ test_http_proxy_batch() {
 # 判据（读不出来 ≠ 没有端口）与上层语义两侧完全一致，只是实现手段受平台限制。
 # 代价是 mac 每轮要多起一次进程；换来的是同一个三态结论（找到 / 真没有 / 读不出来）。
 get_listening_ports() {
+    local _glp_ns _glp_out _glp_raw _glp_rc _glp_sure
     # lsof 优先。退出码 1 = 没有匹配的进程（这是正常结果，不是读不出来），
     # 127 = 命令不存在或跑不起来（这才是读不出来）。
     _glp_raw=$(lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null)
@@ -411,6 +421,7 @@ get_listening_ports() {
 # 解析只用一次 awk：pid→comm 映射与监听行匹配在同一次扫描里完成，
 # 不再对每一行各起 awk/grep/head（原来每行 6–7 个进程，空转时最费电的就是它）。
 get_suspect_ports() {
+    local _lsofout _psmap _suspect
     _psmap=$(mktemp "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}ps.XXXXXX" 2>/dev/null) || return 0
     _lsofout=$(mktemp "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}lsof.XXXXXX" 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
     ps -ax -o pid=,comm= 2>/dev/null | tr '[:upper:]' '[:lower:]' > "$_psmap" 2>/dev/null || true
@@ -469,6 +480,7 @@ get_suspect_ports() {
 #   不让本函数自己去读：那要调 env 层的 get_current_proxy_port，于是 probe 依赖 env、
 #   env 又依赖 probe 的端口函数，形成环。探测层不该知道"变量存在哪、怎么读"。
 get_in_use_proxy_port() {
+    local _giu_cands _giu_first _giu_known _giu_rc
     _giu_known="${1:-}"
     case "$_giu_known" in
         ''|*[!0-9]*) ;;
@@ -493,6 +505,7 @@ get_in_use_proxy_port() {
 }
 
 find_candidate_ports() {
+    local _cands _full _ports _rc
     _full="$1"
     _cands=""
     # 端口枚举读不出来时直接失败返回：调用方据此知道"这一轮不知道"，
@@ -554,6 +567,7 @@ test_endpoint_status() {
 }
 
 test_single_endpoint() {
+    local _code _first _out _port _px
     _port="$1"; _host="$2"; _path="$3"; _expect="${4:-204}"
     # 走哪个回环地址由调用方算好放在 $EP_PROXY_URL 里（每个端口探一次，不是每个端点探一次）。
     # 不设时退回 127.0.0.1：只绑 ::1 的代理在 IPv4 上连不上，写死会让端点探测对它永远失败。
@@ -571,6 +585,7 @@ test_single_endpoint() {
 }
 
 _probe_endpoint_one() {
+    local _port
     _port="$1"; _h="$2"; _pa="$3"; _idx="$4"; _dir="$5"; _exp="$6"
     if test_single_endpoint "$_port" "$_h" "$_pa" "$_exp"; then
         printf '%s' "$_idx" > "$_dir/win" 2>/dev/null || true
@@ -578,6 +593,7 @@ _probe_endpoint_one() {
 }
 
 test_real_connectivity() {
+    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited
     _port="$1"
     # 先定下这个端口该走哪个回环地址（只算一次，下面所有端点共用）。
     # 只绑 ::1 的代理在 IPv4 上主动拒绝——不在这里定，下面每个端点都会连错地址。
@@ -636,6 +652,7 @@ test_real_connectivity() {
 # Mac 侧单槽。换端口时把失败计数与起点一起清零（见下面那处），否则上一个端口留下的
 # 失败起点会让新端口的 dwell 立刻满足——那条差异就从"可能早判几秒"收窄成"不成立"。
 test_node_alive() {
+    local _idle _now _port
     _port="$1"; _force="${2:-0}"
     # 每轮开头刷新一次单调读数（一次 fork），本轮其余判定点复用。
     mono_tick            # 本轮刷新一次（不包 $( )，否则全局缓存出不来）
@@ -698,6 +715,7 @@ test_node_alive() {
 CONFIRM_HIT=""
 
 confirm_candidate_port() {
+    local _cands
     _cands="$1"; _pref="$2"
     CONFIRM_HIT=""
     [ -n "$_cands" ] || return 0
@@ -716,6 +734,7 @@ confirm_candidate_port() {
 
 # 当前真实状态（有状态：直接调用，结果进 $CURRENT_STATE，禁止 $(...) 包裹）
 get_current_state() {
+    local _cands _just_lost _rc _sig_changed
     ROUND=$((ROUND + 1))
     if [ -n "$CACHED_PORT" ]; then
         if test_port_listening "$CACHED_PORT"; then
