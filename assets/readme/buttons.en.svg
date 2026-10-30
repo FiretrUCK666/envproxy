@@ -18,8 +18,8 @@
     <text x="367.5" y="162" font-size="22" fill="#94A6BE" textLength="110.9" lengthAdjust="spacing">read-only</text>
     <g data-cx="519.4"><path d="M512.4 152 H526.4 M519.4 148 V162 M512.4 158 H526.4" fill="none" stroke="#C7D3E3" stroke-width="2.6" stroke-linecap="round"/></g>
     <text x="546.4" y="162" font-size="22" fill="#94A6BE" textLength="271" lengthAdjust="spacing">depends on proxy state</text>
-    <g data-cx="845.4"><path d="M839.4 150 L843.4 154 L851.4 145" fill="none" stroke="#34D399" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M839.4 162 H851.4" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/></g>
-    <text x="866.4" y="162" font-size="22" fill="#94A6BE" textLength="139" lengthAdjust="spacing">kept or cleared</text>
+    <g data-cx="858.4"><path d="M852.4 150 L856.4 154 L864.4 145" fill="none" stroke="#34D399" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M852.4 162 H864.4" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/></g>
+    <text x="885.4" y="162" font-size="22" fill="#94A6BE" textLength="139" lengthAdjust="spacing">kept or cleared</text>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">

@@ -19,7 +19,7 @@
     <g data-cx="449"><path d="M442 152 H456 M449 148 V162 M442 158 H456" fill="none" stroke="#C7D3E3" stroke-width="2.6" stroke-linecap="round"/></g>
     <text x="476" y="162" font-size="22" fill="#94A6BE" textLength="198" lengthAdjust="spacing">看当前有没有在翻墙</text>
     <g data-cx="715"><path d="M709 150 L713 154 L721 145" fill="none" stroke="#34D399" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M709 162 H721" fill="none" stroke="#94A6BE" stroke-width="2.6" stroke-linecap="round"/></g>
-    <text x="736" y="162" font-size="22" fill="#94A6BE" textLength="110" lengthAdjust="spacing">保留或清掉</text>
+    <text x="742" y="162" font-size="22" fill="#94A6BE" textLength="110" lengthAdjust="spacing">保留或清掉</text>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">

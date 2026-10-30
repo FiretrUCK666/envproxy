@@ -78,7 +78,7 @@ If something goes wrong, open the menu and pick **`1 Install / Repair`**. It fix
 
 Open the menu and pick **`3 Check for updates`**. It reports the latest version number and what changed, and installs only after you agree.
 
-- **Updating does not need the proxy running**: most networks connect as they are. If it reports it cannot connect, toggle your proxy app once and retry.
+- **Updating does not need the proxy running**: most networks connect as they are. If it reports it cannot connect, first make sure the network itself works (open a familiar web page), then retry.
 - **Checksums are verified before installing**: they are compared before installation, and nothing is installed if they do not match. A broken install is more trouble than no install. When an older release carries no checksum, or the file was just downloaded and antivirus still holds it open, this step is skipped and the install continues.
 - **Only program files are replaced**: your files, logs and the run markers in `monitor\` are left alone. The monitor restarts on the new code afterwards.
 
@@ -87,7 +87,7 @@ Open the menu and pick **`3 Check for updates`**. It reports the latest version 
 Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes the number you pick to the real program; it does not modify any file itself.
 
 > **The menu and the program output are in Chinese.** This table gives the exact label you will see
-> on screen first, then its English meaning: **`6 停止监控`** means **Stop the monitor**.
+> on screen first, then its English meaning: **`6 停止监控`** means **Stop monitoring**.
 > The number is what you type; the label is what you will be looking at.
 
 | Menu item | What it does | What it affects |
@@ -100,7 +100,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **Advanced** | | |
 | **5 Advanced** (`高级功能`) | Windows only: a blocked-site shortcut | One new icon only |
 | **Upkeep** | | |
-| **6 Stop the monitor** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
+| **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
 | **Support** | | |
 | **8 Problem report** (`问题反馈`) | Something is wrong | One report file |
@@ -367,7 +367,7 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Check for updates | `-Update` | `update` |
 | Help | `-Help` | `help` |
 | Advanced (Windows only) | `-Advanced` | — |
-| Stop the monitor | `-Stop` | `stop` |
+| Stop monitoring | `-Stop` | `stop` |
 | Full restore | `-Uninstall` | `uninstall` |
 | Problem report | `-Report` | `report` |
 | Open the menu | `-Menu` | `menu` |
@@ -482,7 +482,7 @@ Removing your variables by mistake costs more than waiting a little. After a con
 | `NO_PROXY` | `localhost,127.0.0.1,::1` | Local addresses bypass the proxy |
 | `NODE_USE_ENV_PROXY` | `1` | Makes newer Node tools read the proxy from the environment |
 
-Windows gets 5, macOS gets 9 (the same 5 plus lowercase spellings). Windows variable names are case-insensitive, so a lowercase entry only overwrites the same one; macOS treats each case separately and some tools read only lowercase.
+Windows gets 5, macOS gets 9 (the same 5, plus a lowercase spelling of the 3 address entries and of the exception list `NO_PROXY`; `NODE_USE_ENV_PROXY` is a switch, so it has no lowercase form). Windows variable names are case-insensitive, so a lowercase entry only overwrites the same one; macOS treats each case separately and some tools read only lowercase.
 
 <details>
 <summary>Why these settings are what they are (does not affect usage, expand to read)</summary>
@@ -663,7 +663,7 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 ### 12.3 Menu (same as Windows)
 
-The behaviour and what each item affects are the same as Windows, including `4 Help` and `0 Quit`. **One number differs**: `5 Advanced` exists on Windows only, so 5 is empty on Mac while `6 Stop monitoring` and `7 Restore everything` keep the same numbers as Windows. The gap is deliberate: the same action should be the same number on both machines. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, including `4 Help` and `0 Quit`. **One number differs**: `5 Advanced` exists on Windows only, so 5 is empty on Mac while `6 Stop monitoring` and `7 Full restore` keep the same numbers as Windows. The gap is deliberate: the same action should be the same number on both machines. Pressing Enter directly means show status.
 
 ### 12.4 What is in the `mac` folder
 
@@ -740,13 +740,13 @@ The three actions differ a lot in force. Read before clicking:
 |---|---|---|
 | `6 Stop monitoring` | the process and its pid file | every other file |
 | `1 Install / repair` | nothing; overwrites our own files | your config and logs |
-| `7 Restore everything` | all we wrote | the `monitor.log` you kept |
+| `7 Full restore` | all we wrote | the `monitor.log` you kept |
 
 What each one means in practice:
 
 - **Stop monitoring** switches nothing automatically until the next login, which brings it back. To have it back now, click `1`.
 - **Install / repair** loads the latest code and repairs a broken start-at-login item.
-- **Restore everything** returns the machine to the never-installed state, with no reboot needed. Anything you put in `~/.envproxy/` yourself is left alone.
+- **Full restore** returns the machine to the never-installed state, with no reboot needed. Anything you put in `~/.envproxy/` yourself is left alone.
 
 
 One rule applies to all three: `~/.envproxy/` is only removed when it is empty. If you keep something of your own there (notes, say), the folder survives uninstalling - only our files are gone.
