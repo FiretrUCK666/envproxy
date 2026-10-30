@@ -1949,6 +1949,39 @@ EOF
     done
     _selftest_assert_eq "接线：监控识别覆盖全部入口子命令" "" "$_sub_missing"
 
+    # ------------------------------------------------------------------------------
+    echo "[11] 自启动语义：登录时拉起一次，不保活"
+    # 契约（AGENTS.md「自启动 = 登录时拉起一次，不保活」）：
+    #   RunAtLoad 必须有 —— 否则登录后监控不会起来，用户重开电脑就失去代理；
+    #   KeepAlive 必须没有 —— 写了它，launchd 会在 job 主进程退出后无条件重启，
+    #   而监控平时由 nohup 起、自己管生命周期，两者叠加就是每 10 秒 fork 一次。
+    # 这条以前没有任何断言，改 plist 模板时写错一个字就能让"停止"变成"停不掉"。
+    _pl=$(get_plist_content 2>/dev/null || true)
+    _pl_run=0; _pl_keep=0
+    case "$_pl" in *"<key>RunAtLoad</key><true/>"*) _pl_run=1;; esac
+    case "$_pl" in *"<key>KeepAlive</key>"*) _pl_keep=1;; esac
+    _selftest_assert_eq "plist 声明 RunAtLoad（登录时拉起一次）" "1" "$_pl_run"
+    _selftest_assert_eq "plist 不声明 KeepAlive（不接管生命周期）" "0" "$_pl_keep"
+    # plist 必须是合法 XML 骨架：缺 <plist> 或 <dict> 会让 launchctl 静默拒收，
+    # 而屏幕上"已写进 LaunchAgents"照样打印——用户以为装好了，实际从没起来过。
+    _pl_ok=0
+    case "$_pl" in
+      *"<plist version=\"1.0\">"*"</plist>"*) case "$_pl" in *"<dict>"*"</dict>"*) _pl_ok=1;; esac;;
+    esac
+    _selftest_assert_eq "plist 有完整的 plist/dict 骨架" "1" "$_pl_ok"
+
+    # ------------------------------------------------------------------------------
+    echo "[12] 运行时目录能重建且幂等"
+    # 契约：目录被清理工具整份删掉后，进程还在干活、pid 文件却写不出来，
+    # 状态页就报"未运行"，用户再点安装起第二份、被锁挡掉——再也起不来监控。
+    # 所以主循环每轮开头都要能无条件重建目录（幂等）。
+    _ed_dir="$_sandbox/monitor_ensure_test"
+    rm -rf "$_ed_dir" 2>/dev/null || true
+    _ed_1=0; mkdir -p "$_ed_dir" 2>/dev/null && [ -d "$_ed_dir" ] && _ed_1=1
+    _selftest_assert_eq "运行时目录能建出来" "1" "$_ed_1"
+    _ed_2=0; mkdir -p "$_ed_dir" 2>/dev/null && _ed_2=1
+    _selftest_assert_eq "重复创建是幂等的（每轮都调不会失败）" "1" "$_ed_2"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面

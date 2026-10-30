@@ -93,7 +93,13 @@ jobs:
           done
           # 入口声明的库清单必须与 lib/ 实际内容一致：加库忘改入口、删库留空壳、改名漏一处都拦住。
           # 比的是集合（都排序后比），不比顺序——入口里的顺序是加载依赖顺序，不必等于字母序。
-          declared=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//' | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
+          # 库清单只从入口那一行读一次，后面两种形态都从它派生：
+          #   _libs    —— 原样（空格分隔），供 for 循环遍历；
+          #   declared —— 排序后的空格分隔串，供"比集合"用。
+          # 原来这两处各写一遍 grep+sed：同一份正则出现两次，改一处漏一处就会
+          # 一边用新清单、一边用旧清单，门禁自己先漂移了。
+          _libs=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//')
+          declared=$(printf '%s\n' "$_libs" | tr ' ' '\n' | sort | tr '\n' ' ' | sed 's/ $//')
           actual=$(ls mac/lib/*.sh 2>/dev/null | sed 's|^mac/lib/||; s|\.sh$||' | sort | tr '\n' ' ' | sed 's/ $//')
           if [ "$declared" != "$actual" ]; then
             echo "入口声明的库清单与 lib/ 实际内容不一致"
@@ -116,7 +122,6 @@ jobs:
           # 真正的危害只有一个：A 调 B、B 又调 A。那时两边都靠运行时按名解析活着，
           # 单独读任何一个文件都看不出它需要什么，改动一处会在另一处炸。
           # 所以这条门禁**只对闭环失败**，反向调用如实列出、供人判断。
-          _libs=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//')
           _tmpd=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_dep.XXXXXX") || _tmpd=""
           if [ -n "$_tmpd" ]; then
             # 建边表：_l -> _o 表示 _l 的代码里引用了 _o 定义的函数。

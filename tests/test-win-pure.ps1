@@ -3491,6 +3491,52 @@ if ($env:OS -eq 'Windows_NT' -and $script:SavedRegSandbox) {
     } catch {}
 }
 
+Write-Host '[22] Monitor directory self-heals and stays idempotent'
+# 契约：monitor\ 被清理工具整份删掉后，进程还在干活、pid 文件却写不出来，
+# 状态页报"未运行"，用户再点安装起第二份、被锁挡掉——再也起不来监控。
+# 所以主循环每轮开头都要能无条件重建（幂等）。
+$monDirBak = $MonitorDir
+try {
+    $MonitorDir = Join-Path ([System.IO.Path]::GetTempPath()) ('ep_mondir_' + [guid]::NewGuid().ToString('N').Substring(0,8))
+    if (Test-Path -LiteralPath $MonitorDir) { Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue }
+    Ensure-MonitorDir
+    Assert-Eq 'Ensure-MonitorDir 能把目录建出来' $true (Test-Path -LiteralPath $MonitorDir)
+    # 再调一次不抛错、目录还在（主循环每轮都调，第二次就失败等于每轮报错）
+    $secondOk = $true
+    try { Ensure-MonitorDir } catch { $secondOk = $false }
+    Assert-Eq '重复创建是幂等的（不抛错）' $true $secondOk
+    Assert-Eq '重复创建后目录仍在' $true (Test-Path -LiteralPath $MonitorDir)
+} finally {
+    if ($MonitorDir -and (Test-Path -LiteralPath $MonitorDir)) { Remove-Item -LiteralPath $MonitorDir -Recurse -Force -ErrorAction SilentlyContinue }
+    $MonitorDir = $monDirBak
+    $null = Ensure-MonitorPaths
+}
+
+Write-Host '[23] Operation lock name is per-user and complete'
+# 契约（AGENTS.md「安装、更新、卸载、停止共用一把操作锁」）：
+#   ① 必须在 Global\ 命名空间：多个账户各装一份时互不干扰；
+#   ② 必须带当前用户 SID 后缀：同一台机器上别人的锁不能拦住我；
+#   ③ 基本名不同的必须是两把锁（拿错锁等于没锁）。
+# 这条以前没断言：Name 拼错一个字符，两处就各拿各的锁，并发破坏无人拦截。
+$lockA = Get-MutexName 'EnvProxyInstallOp'
+$lockB = Get-MutexName 'EnvProxyApplyState'
+$mySid = ''
+try { $mySid = [string][System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {}
+Assert-Eq '锁名带 Global\ 前缀' $true ($lockA.StartsWith('Global\'))
+Assert-Eq '锁名带当前用户 SID' $true ($mySid.Length -gt 0 -and $lockA.Contains($mySid))
+Assert-Eq '不同的基本名是两把不同的锁' $true ($lockA -ne $lockB)
+Assert-Eq '同一基本名两次调用得到同一个名字（可复现）' $lockA (Get-MutexName 'EnvProxyInstallOp')
+# 真拿一次锁、再放掉：名字拼错或命名空间不可用时这里会失败，
+# 而那时"安装/更新/卸载互斥"整个机制都是假的。
+$lockOk = $false
+$lk = $null
+try {
+    $lk = New-Object System.Threading.Mutex($false, $lockA)
+    $lockOk = $lk.WaitOne(5000)
+} catch { $lockOk = $false }
+Assert-Eq '这把锁真能拿到（名称与命名空间有效）' $true $lockOk
+if ($lk) { try { if ($lockOk) { $lk.ReleaseMutex() } } catch {}; try { $lk.Dispose() } catch {} }
+
 # 安装目录沙箱：复原 override、删掉临时目录。
 # 顺序与注册表那段同理：先把落点指回真实位置，再删沙箱，免得清理本身打到沙箱。
 try {
