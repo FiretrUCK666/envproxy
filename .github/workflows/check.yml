@@ -56,8 +56,19 @@ jobs:
           fi
           # 壳↔核心：.command 直调入口，用的子命令必须在核心分派里；
           # mac/ 根下只留入口与定位器模板，多出来的 .sh 就是没回家的传话层。
+          #
+          # 判据分两步，缺一不可：
+          #   ① 只在**非注释行**里找调用。注释里同样会出现 "bash mac/envproxy.sh menu"
+          #      这种句子（打开菜单.command 第 2 行的帮助提示就是），把它算成调用的话，
+          #      真调用被删光、只剩注释，门禁照样绿——双击菜单静默失效而 CI 全过。
+          #   ② 非注释命中必须 ≥1。一个调用都没找到的壳不是"没问题"，是壳坏了。
           for f in mac/*.command; do
-            for cmd in $(grep -oE 'envproxy\.sh [a-z-]+' "$f" | awk '{print $2}'); do
+            _calls=$(grep -vE '^[[:space:]]*#' "$f" | grep -oE 'envproxy\.sh [a-z-]+' | awk '{print $2}' | sort -u)
+            if [ -z "$_calls" ]; then
+              echo "$f 没有任何真正（非注释）调用 envproxy.sh 的行：双击它不会做任何事"
+              fail=1
+            fi
+            for cmd in $_calls; do
               if ! grep -qE "^[[:space:]]*$cmd\)" mac/envproxy.sh; then
                 echo "$f 用的子命令 $cmd 在核心分派里没有"
                 fail=1
@@ -97,6 +108,108 @@ jobs:
               *envproxy*) echo "$f 文件名含 envproxy，会与定位器/单实例识别冲突"; fail=1;;
             esac
           done
+          # 依赖方向：判据是**不许有闭环**，不是"不许反向调用"。
+          #
+          # 为什么改判据：反向调用本身是正常的。日志是横切能力（任何层都要写）、
+          # 编排层要调实现层（ops 调 shortcut、runtime 调 relay）——这些方向看着"逆序"，
+          # 但没有第二条边回到起点，构不成环，也不会让"谁先用谁"变成靠加载顺序维持的巧合。
+          # 真正的危害只有一个：A 调 B、B 又调 A。那时两边都靠运行时按名解析活着，
+          # 单独读任何一个文件都看不出它需要什么，改动一处会在另一处炸。
+          # 所以这条门禁**只对闭环失败**，反向调用如实列出、供人判断。
+          _libs=$(grep -oE '^CORE_LIBS="[^"]*"' mac/envproxy.sh | sed 's/^CORE_LIBS="//; s/"$//')
+          _tmpd=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_dep.XXXXXX") || _tmpd=""
+          if [ -n "$_tmpd" ]; then
+            # 建边表：_l -> _o 表示 _l 的代码里引用了 _o 定义的函数。
+            # **两个方向都要记**：只记"后加载的库调先加载的"会把真环看漏——
+            # A->B 记了、B->A 因为方向上是"正向"没记，闭环就永远判不出来。
+            : > "$_tmpd/edges"
+            for _l in $_libs; do
+              for _o in $_libs; do
+                [ "$_l" = "$_o" ] && continue
+                for _fn in $(grep -oE '^[a-z_][a-z0-9_]*\(\)' "mac/lib/$_o.sh" 2>/dev/null | sed 's/()//'); do
+                  if grep -vE '^[[:space:]]*#' "mac/lib/$_l.sh" 2>/dev/null | grep -qE "(^|[^a-z_])${_fn}([^a-z_]|\$)"; then
+                    echo "$_l $_o $_fn" >> "$_tmpd/edges"
+                  fi
+                done
+              done
+            done
+            # 闭环 = 存在 A->B 且 B->A。
+            # 去重：A->B 与 B->A 会各命中一次，用"排序后的库名对"（一个词，用 | 连）当键，
+            # 每组只报一次。**不要用 set -- 拆词**：库名会被 shell 按空白重新切分，
+            # `env runtime` 会变成 `envruntime` 这种拼接错误。
+            # 闭环 = 任意长度的有向环（A->B->A 与 A->B->C->A 一样有害）。
+            #
+            # 为什么不能只判两节点：原来只比"A->B 且 B->A"，于是
+            # runtime->update->ops->runtime 这种三节点环一条都报不出来，
+            # 而它同样是"单独读任何一份文件都看不出它依赖什么"。门禁给的安全感是假的。
+            # 这里改用 DFS 找任意长度的环：从每个起点沿边走，走回起点就报一个环。
+            # 库的数量是个位数，深度限制 12 只是防御，不用上 Tarjan。
+            # **不用 `<(...)` 进程替换**：bash 3.2 没有它（项目的老平台底线），
+            # 一律走临时文件。
+            cut -d' ' -f1,2 "$_tmpd/edges" | sort -u > "$_tmpd/pairs"
+            cut -d' ' -f1 "$_tmpd/pairs" | sort -u > "$_tmpd/nodes"
+            : > "$_tmpd/cycles"
+            while read -r _start; do
+              [ -n "$_start" ] || continue
+              awk -v start="$_start" '
+                { adj[$1] = adj[$1] " " $2 }
+                END {
+                  path[0] = start; onpath[start] = 1
+                  if (dfs(start, 0) == 0) exit
+                }
+                function dfs(u, depth,   arr, i, cnt, v, s, k) {
+                  if (depth > 12) return 0
+                  cnt = split(adj[u], arr, " ")
+                  for (i = 1; i <= cnt; i++) {
+                    v = arr[i]
+                    if (v == start) {
+                      s = start
+                      for (k = 1; k <= depth; k++) s = s "->" path[k]
+                      print s
+                      return 1
+                    }
+                    if (onpath[v]) continue
+                    onpath[v] = 1; path[depth + 1] = v
+                    if (dfs(v, depth + 1) == 1) return 1
+                    delete onpath[v]
+                  }
+                  return 0
+                }
+              ' "$_tmpd/pairs" >> "$_tmpd/cycles"
+            done < "$_tmpd/nodes"
+            sort -u "$_tmpd/cycles" > "$_tmpd/cycles_raw"
+            # 同一个环会从环上每个起点各走一遍，于是被写成 A->B->C、B->C->A、C->A->B 三条。
+            # 规范化：把环转成"从字典序最小的节点开始"的写法，再按环长去重。
+            # 这样同一个环只报一次，报出来的形状也与从哪起步无关。
+            : > "$_tmpd/cycles_u"
+            while read -r _cyc; do
+              [ -n "$_cyc" ] || continue
+              printf '%s\n' "$_cyc" | awk -F'->' '
+                {
+                  n = NF
+                  # 找字典序最小的下标
+                  mi = 1
+                  for (i = 2; i <= n; i++) if ($i < $mi) mi = i
+                  s = $mi
+                  for (k = 1; k < n; k++) { j = mi + k; if (j > n) j = j - n; s = s "->" $j }
+                  print s "->" $mi
+                }
+              ' >> "$_tmpd/cycles_u"
+            done < "$_tmpd/cycles_raw"
+            sort -u "$_tmpd/cycles_u" > "$_tmpd/cycles_final"
+            while read -r _cyc; do
+              [ -n "$_cyc" ] || continue
+              echo "库之间存在循环依赖：$_cyc"
+              fail=1
+            done < "$_tmpd/cycles_final"
+            # 反向调用只列出来，不判失败——它们是理解加载顺序的线索。
+            _rev=$(awk '{print $1" -> "$2}' "$_tmpd/edges" | sort -u | wc -l | tr -d ' ')
+            if [ "$_rev" -gt 0 ]; then
+              echo "（提示）跨层反向调用 $_rev 条，不成环、不阻断："
+              awk '{print "    "$1".sh -> "$2".sh ("$3")"}' "$_tmpd/edges" | sort -u
+            fi
+            rm -rf "$_tmpd" 2>/dev/null || true
+          fi
           # 库不得自行推算"我在哪"：库里的 "$0" 与 $BASH_SOURCE 指的是库文件自己，拿它当入口路径
           # 会去启动一个跑不起来的文件（装完没有监控、日志里连一行都不会有），要用入口发布的
           # SCRIPT_DIR / SCRIPT_PATH。只认带引号的 "$0"——awk 程序里的裸 $0 是"当前记录"，不算；
@@ -151,6 +264,13 @@ jobs:
         run: |
           # 目录级：入口与 lib\ 下的每一个 .ps1 都单独解析（点源方案里，坏一个库等于整个程序起不来）
           $psFiles = @(Get-ChildItem 'win' -Filter *.ps1 -File -Recurse)
+          # 空集必须判失败，不能当成"没有文件要查"悄悄放行：
+          # 目录被改名、筛选条件写错、路径换了分隔符，都会让 $psFiles 变空，
+          # 而循环体一次都不跑时这一步退出码是 0 —— 门禁看起来通过，实际什么都没验。
+          if ($psFiles.Count -eq 0) {
+            Write-Host '门禁 2：win 下没有找到任何 .ps1，无法验证语法（路径或筛选条件有问题）'
+            exit 1
+          }
           foreach ($f in $psFiles) {
             $tokens = $null; $errs = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$errs) | Out-Null
@@ -202,13 +322,120 @@ jobs:
           # 库清单一致：入口声明的 $CoreLibs 必须与 lib\ 实际内容完全一致
           $entryText = Get-Content 'win/envproxy.ps1' -Raw -Encoding UTF8
           $declaredRaw = [regex]::Match($entryText, '\$CoreLibs\s*=\s*@\(([^)]*)\)').Groups[1].Value
-          $declared = @([regex]::Matches($declaredRaw, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+          # 两份：$declared 排序后用来比集合（顺序无关），$declaredOrder 保留入口里的原始顺序。
+          # 为什么要两份：下面的依赖方向检查要的是**加载顺序**，而 $declared 排过序——
+          # 拿字母序当加载顺序，下标全错，报出来的反向依赖清单既会漏报也会误报。
+          $declaredOrder = @([regex]::Matches($declaredRaw, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+          $declared = @($declaredOrder | Sort-Object)
           $actual = @(Get-ChildItem 'win\lib' -Filter *.ps1 -File | ForEach-Object { $_.BaseName } | Sort-Object)
           if (($declared -join ',') -ne ($actual -join ',')) {
             Write-Host '入口声明的库清单与 lib\ 实际内容不一致'
             Write-Host ("  入口声明: {0}" -f ($declared -join ' '))
             Write-Host ("  实际文件: {0}" -f ($actual -join ' '))
             exit 1
+          }
+          # 依赖方向：判据是**不许有闭环**，不是"不许反向调用"（与 mac 侧同一套）。
+          #
+          # 反向调用本身是正常的：日志是横切能力（任何层都要写）、
+          # 编排层要调实现层（ops 调 shortcut、runtime 调 relay 起停固定入口）——
+          # 这些方向看着"逆序"，但没有第二条边回到起点，构不成环，
+          # 也不会让"谁先用谁"变成靠加载顺序 + 运行时按名解析维持的巧合。
+          #
+          # 真正的危害只有一个：**A 调 B、B 又调 A**。那时单独读任何一份文件都看不出
+          # 它依赖什么，改动一处会在另一处炸。实际踩过两次：
+          #   probe 调 env 的 Get-EnvProxyValue，env 又调 probe 的地址函数（已下沉到 base 修掉）；
+          #   update 调 ops 的 Install-EnvProxy，ops 又调 update 的版本函数。
+          # 所以这条门禁**只对闭环失败**，反向调用如实列出、供人判断顺序。
+          $order = @($declaredOrder)   # 入口里的原始顺序 = 加载顺序（不是字母序）
+          $defOwner = @{}
+          foreach ($libName in $order) {
+            $libPath = "win/lib/$libName.ps1"
+            if (-not (Test-Path $libPath)) { continue }
+            foreach ($m in [regex]::Matches((Get-Content $libPath -Raw -Encoding UTF8), '(?m)^function\s+([A-Za-z0-9_\-]+)')) {
+              $defOwner[$m.Groups[1].Value] = $libName
+            }
+          }
+          # 建边表：edges["A|B"] = 被引用的函数名列表（A 的代码里引用了 B 定义的函数）。
+          # **两个方向的边都要记**：只记"反向"（后加载的库调先加载的）会把真环看漏——
+          # A->B 记了、B->A 因为方向上是"正向"没记，闭环就永远判不出来。
+          # 方向只用来决定"这条要不要当提示列出来"，不该影响环的判定。
+          $edges = @{}
+          foreach ($libName in $order) {
+            $libPath = "win/lib/$libName.ps1"
+            if (-not (Test-Path $libPath)) { continue }
+            $src = Get-Content $libPath -Raw -Encoding UTF8
+            # 只看代码，不看注释：注释里会写"早先这里调了 X"这种说明，算进去就永久红。
+            $codeOnly = (@($src -split "`n" | Where-Object { $_.Trim() -notmatch '^#' }) -join "`n")
+            foreach ($fn in $defOwner.Keys) {
+              $owner = $defOwner[$fn]
+              if ($owner -eq $libName) { continue }
+              if ($codeOnly -notmatch ('\b' + [regex]::Escape($fn) + '\b')) { continue }
+              $k = "$libName|$owner"
+              if (-not $edges.ContainsKey($k)) { $edges[$k] = @() }
+              $edges[$k] += $fn
+            }
+          }
+          # 闭环 = **任意长度**的有向环（A->B->A 与 A->B->C->A 一样有害）。
+          #
+          # 为什么不能只判两节点：原来只比"A->B 且 B->A"，于是
+          # runtime->update->ops->runtime 这种三节点环一条都报不出来，
+          # 而它同样是"单独读任何一份文件都看不出它依赖什么"。门禁给的安全感是假的。
+          # 这里从每个库出发做 DFS，走回起点就记一个环（库只有个位数，不必上 Tarjan）。
+          $adj = @{}
+          foreach ($k in $edges.Keys) {
+            $parts = $k -split '\|'
+            if (-not $adj.ContainsKey($parts[0])) { $adj[$parts[0]] = @() }
+            $adj[$parts[0]] += $parts[1]
+          }
+          $cycles = @()
+          foreach ($start in $adj.Keys) {
+            $stack = New-Object System.Collections.Stack
+            $stack.Push(@($start))
+            while ($stack.Count -gt 0) {
+              $path = $stack.Pop()
+              $last = $path[-1]
+              if (-not $adj.ContainsKey($last)) { continue }
+              foreach ($nxt in $adj[$last]) {
+                if ($nxt -eq $start) {
+                  # 规范化：从字典序最小的节点开始写，同一个环只报一次
+                  $ring = @($path)
+                  $minIdx = 0
+                  for ($q = 1; $q -lt $ring.Count; $q++) { if ([string]::CompareOrdinal($ring[$q], $ring[$minIdx]) -lt 0) { $minIdx = $q } }
+                  $rot = @()
+                  for ($q = 0; $q -lt $ring.Count; $q++) { $rot += $ring[(($minIdx + $q) % $ring.Count)] }
+                  $cycles += (($rot -join '->') + '->' + $rot[0])
+                  continue
+                }
+                if ($path -contains $nxt) { continue }
+                $stack.Push(@($path + $nxt))
+              }
+            }
+          }
+          $cycles = @($cycles | Sort-Object -Unique)
+          if ($cycles.Count) {
+            Write-Host '库之间存在循环依赖：'
+            foreach ($c in $cycles) {
+              Write-Host ("  " + $c)
+              # 逐条边列出"是哪几个函数把两层连起来的"，否则只知道有环、不知道该动哪里
+              $names = $c -split '->'
+              for ($q = 0; $q -lt $names.Count - 1; $q++) {
+                $k = $names[$q] + '|' + $names[$q + 1]
+                if ($edges.ContainsKey($k)) {
+                  Write-Host ("      {0}.ps1 -> {1}.ps1 : {2}" -f $names[$q], $names[$q + 1], (($edges[$k] | Sort-Object -Unique) -join ', '))
+                }
+              }
+            }
+            Write-Host '  修法：把纯函数下沉到 base，或让调用方把能力注入进来（如 -StopMonitor），把环打开。'
+            # 这一步没有全局 exit $fail 收尾（其余分支各自 exit 1），所以必须当场退出。
+            exit 1
+          }
+          # 反向调用只列出来，不判失败——它们是理解加载顺序的线索。
+          if ($edges.Count) {
+            Write-Host ("（提示）跨层反向调用 {0} 条，不成环、不阻断：" -f $edges.Count)
+            foreach ($k in ($edges.Keys | Sort-Object)) {
+              $parts = $k -split '\|'
+              Write-Host ("    {0}.ps1 -> {1}.ps1 ({2})" -f $parts[0], $parts[1], (($edges[$k] | Sort-Object -Unique) -join ', '))
+            }
           }
           # 库文件名不得含 envproxy（监控进程按 -File "...envproxy.ps1" 识别身份，同名会被误认）
           foreach ($f in Get-ChildItem 'win\lib' -Filter *.ps1 -File) {
@@ -491,6 +718,11 @@ jobs:
             if (-not $coreLine) { Write-Host 'win：读不出口声明的库清单（$CoreLibs）'; exit 1 }
             $CoreLibs = @($coreLine -split ',' | ForEach-Object { $_.Trim().Trim('"').Trim("'") } | Where-Object { $_ })
             if ($CoreLibs.Count -eq 0) { Write-Host 'win：入口声明的库清单是空的'; exit 1 }
+            # 点源前先把 $ScriptDir 发布好——运行时里这个值由入口给出，这里没有入口，
+            # 不补的话 base 层会当成"位置未知"（惰性守卫会兜住），$MonitorDir 是空串。
+            # 本门禁眼下用不到那个路径，但让它跑在与运行时一致的环境里，
+            # 将来谁在这步之后用到它，就不会静默走错分支。
+            $ScriptDir = Join-Path (Get-Location) 'win'
             . (Join-Path (Get-Location) 'win/lib/base.ps1')
             $must = New-Object System.Collections.ArrayList
             [void]$must.Add('win/envproxy.ps1')
@@ -847,8 +1079,17 @@ jobs:
           # 选了一个未必是运行时那个的值。所以命中数必须恰好为 1，模棱两可就当场失败。
           function Grab([string]$text, [string]$pattern, [string]$label) {
             $ms = [regex]::Matches($text, $pattern)
-            if ($ms.Count -eq 0) { Write-Host ("找不到 " + $label); return $null }
-            if ($ms.Count -gt 1) { Write-Host ("语料里有多处匹配，无法确定权威值：" + $label + "（" + $ms.Count + " 处）"); return $null }
+            # 取不到就**当场判失败**，不把责任留给调用方。
+            #
+            # 为什么改在这里：原来只打印"找不到 X"就返回 $null，而调用方几乎都写成
+            # `if ($值 -and …)`——$null 让整条断言短路跳过，于是"常量被改名/挪走"
+            # 这种最该拦住的情况反而全绿（实测：把 $DefaultNoProxy 改名，门禁 6 仍报
+            # "契约常量与变量集通过"）。一处改、覆盖所有调用方，才是治本。
+            #
+            # 必须写 $script:fail：$fail 定义在脚本作用域，函数里裸写 $fail = 1
+            # 只会创建一个函数局部变量，外层读到的一直是 0——那会让门禁失效得更隐蔽。
+            if ($ms.Count -eq 0) { Write-Host ("找不到 " + $label); $script:fail = 1; return $null }
+            if ($ms.Count -gt 1) { Write-Host ("语料里有多处匹配，无法确定权威值：" + $label + "（" + $ms.Count + " 处）"); $script:fail = 1; return $null }
             return $ms[0].Groups[1].Value
           }
           # 变量集合：Windows 5 个全大写；macOS 9 个（含 4 个小写拼写）
@@ -1200,6 +1441,30 @@ jobs:
           $locText = Get-Content 'mac/locator.sh' -Raw -Encoding UTF8
           if ($locText -notmatch '_search_one "\$_r" 6') { Write-Host '定位器缺少用户目录搜索深度 6'; $fail = 1 }
           if ($locText -notmatch '_search_one "\$_vol" 4') { Write-Host '定位器缺少磁盘根搜索深度 4'; $fail = 1 }
+          # 判定用的时刻必须单调：任何"两时刻相减"都不许用墙上时钟。
+          # 墙上时钟被 NTP 校正、夏令时切换或休眠唤醒拨动后，向后跳会让截止时刻变成过去
+          # （这一轮提前结束、活着的端口被漏掉），向前跳会把失败计数清零。
+          # probe 层已经实现了 Get-MonotonicSeconds，判据一律走它。
+          # 只查 [DateTime]::UtcNow / ::Now 这两个"取墙上时钟做判断"的写法；
+          # Write-Text 之类记录时间戳的地方用它们是正当的，故按<b>做比较/算截止</b>的形状查。
+          $monoWin = @([regex]::Matches($ps, '\[DateTime\]::(UtcNow|Now)\s*\.\s*Add|\[DateTime\]::(UtcNow|Now)\s*-lt|\$\w+\s*-lt\s*\[DateTime\]::(UtcNow|Now)'))
+          if ($monoWin.Count) { Write-Host ("Win 侧用墙上时钟做比较/算截止（应改用 Get-MonotonicSeconds）：{0} 处" -f $monoWin.Count); $fail = 1 }
+          if ($ps -notmatch 'function\s+Get-MonotonicSeconds') { Write-Host 'Win 侧缺少 Get-MonotonicSeconds（单调钟的唯一来源）'; $fail = 1 }
+          # Windows 侧还要查 (Get-Date).AddSeconds / -lt (Get-Date) 这种写法：
+          # 只认 [DateTime]:: 会让 (Get-Date) 这一类整片漏过去（实测 4 处，0 命中）。
+          # 排除 `AddHours(-N)` 这类"拿当前时间去比文件 mtime"的用法：mtime 本身就是
+          # 墙上时间，清扫必须用同一把尺——这不是"忘了改"，是正确做法。
+          $monoWin2 = @([regex]::Matches($ps, '\(Get-Date\)\s*\.\s*Add(Sec|Milli)|\$\w+\s*-lt\s*\(Get-Date\)|\(Get-Date\)\s*-lt'))
+          if ($monoWin2.Count) { Write-Host ("Win 侧用 (Get-Date) 做比较/算截止（应改用 Get-MonotonicSeconds）：{0} 处" -f $monoWin2.Count); $fail = 1 }
+          # mac 侧同理：date +%s 是墙上时钟，判定用它就会随跳变失真。
+          # 不只查"函数还在"，还要查有没有人还在用墙上时钟做**截止比较**。
+          # 两个允许的例外，各有理由（不是"忘了改"）：
+          #   1) 清理临时物：比较的是文件 mtime，mtime 本身就是墙上时间，必须用同一把尺。
+          #   2) `read -t` 那种"等一个键"的计时起点：判定靠 read 的退出码，date 只用于量耗时。
+          # 所以判据是"date +%s 出现在算 deadline / while 比较里"，而不是"出现过 date +%s"。
+          if ($sh -notmatch 'monotonic_now') { Write-Host 'Mac 侧缺少 monotonic_now（单调钟的唯一来源）'; $fail = 1 }
+          $monoMac = @([regex]::Matches($sh, '_deadline=\$\(\(\s*\$\(date \+%s\)|while \[ "\$\(date \+%s\)" -lt'))
+          if ($monoMac.Count) { Write-Host ("Mac 侧用 date +%s 算截止/做循环比较（应改用 monotonic_now）：{0} 处" -f $monoMac.Count); $fail = 1 }
           # 判"断"双条件：次数由 $NodeFailThreshold 定，时长由 $NodeFailDwellSec 定，两者必须同现在 README。
           # 只钉次数的话，改了次数文档不动；只钉时长同理。两句一起断言才挡得住"改一个没改另一个"。
           $dwl = [int](Grab $ps '\$NodeFailDwellSec\s*=\s*(\d+)' 'Win 判"断"所需秒数')
@@ -1500,8 +1765,30 @@ jobs:
             @('get_status_snapshot', '(?s)get_status_snapshot\(\) \{(.*?)\n\}'),
             @('show_status',         '(?s)show_status\(\) \{(.*?)\n\}')
           )
-          $winNet = @('Get-RemoteVersion', 'Get-UpdateInfo', 'Get-ReleaseAssets', 'Invoke-WebRequest', 'Invoke-RestMethod')
-          $macNet = @('get_remote_version', 'get_update_info', 'fetch_update_file')
+          # 名单必须是**真实在用的联网入口**。曾经写的是 Get-UpdateInfo / Get-ReleaseAssets /
+          # Invoke-WebRequest / Invoke-RestMethod——四个都随重构消失了，名单却没人跟着改：
+          # 往状态页里塞一句 Invoke-UpdateText，门禁一处都不命中、照样全绿。
+          # 现在的判据有两条，缺一不可：
+          #   ① 名单里的每个名字必须在 update 层**真有定义**（下面对 $updateWin/$updateMac 比对），
+          #      名字一旦随重构消失，门禁自己先红，不会退化成空名单；
+          #   ② 状态页的任何一层里出现这些名字就红。
+          $winNet = @('Invoke-UpdateText', 'Save-UpdateFile', 'New-UpdateHttpClient',
+                      'Get-RemoteVersion', 'Get-RemoteVersionFrom', 'Invoke-InstallFinish')
+          $macNet = @('fetch_update_text', 'fetch_update_file', '_fetch_to_file', '_fetch_to_file_direct',
+                      'get_update_asset', 'get_remote_version', 'get_remote_version_from')
+          # ① 名单自校验：每个名字都得在 update 层源码里出现，否则就是"名单已死"。
+          $updateWin = (Get-Content 'win/lib/update.ps1' -Raw -Encoding UTF8)
+          $updateMac = (Get-Content 'mac/lib/update.sh' -Raw -Encoding UTF8)
+          foreach ($n in $winNet) {
+            if ($updateWin -notmatch ('function\s+' + [regex]::Escape($n) + '\b')) {
+              Write-Host ("联网名单里的 {0} 在 win/lib/update.ps1 里没有定义——名单已过时，请换成真实入口" -f $n); $fail = 1
+            }
+          }
+          foreach ($n in $macNet) {
+            if ($updateMac -notmatch ([regex]::Escape($n) + '\(\)\s*\{')) {
+              Write-Host ("联网名单里的 {0} 在 mac/lib/update.sh 里没有定义——名单已过时，请换成真实入口" -f $n); $fail = 1
+            }
+          }
           $foundAny = $false
           foreach ($layer in $statusLayersWin) {
             $m = [regex]::Match($ps, $layer[1])
@@ -1531,6 +1818,35 @@ jobs:
           if ($sh -notmatch 'write_version_cache\(\)') { Write-Host 'Mac 侧缺少 write_version_cache'; $fail = 1 }
           if ($ps -notmatch 'function Read-VersionCache') { Write-Host 'Win 侧缺少 Read-VersionCache'; $fail = 1 }
           if ($sh -notmatch 'read_version_cache\(\)') { Write-Host 'Mac 侧缺少 read_version_cache'; $fail = 1 }
+          # 只验"函数存在"是不够的：这条契约真正要防的是**状态页偷偷调它**。
+          # 函数还在、但被塞进 Get-StatusSnapshot 里，等于把联网搬了个地方，
+          # 而上面那四行一个都不会红。所以还要验"谁在调"：
+          #   写入方 = 监控主循环（runtime 层）；状态页（ops 层的状态函数）只许读。
+          $statusWin = Get-Content 'win/lib/ops.ps1' -Raw -Encoding UTF8
+          # 只看代码，不看注释：注释里会写"状态页不许联网（见 Write-VersionCache 的注释）"。
+          $statusWinCode = (@($statusWin -split "`n" | Where-Object { $_.Trim() -notmatch '^#' }) -join "`n")
+          if ($statusWinCode -match '\bWrite-VersionCache\b') {
+            Write-Host 'Win 侧状态页（ops 层）调用了 Write-VersionCache——状态页必须只读，写入方只能是监控'
+            $fail = 1
+          }
+          $statusMac = Get-Content 'mac/lib/ops.sh' -Raw -Encoding UTF8
+          $statusMacCode = (@($statusMac -split "`n" | Where-Object { $_.Trim() -notmatch '^#' }) -join "`n")
+          if ($statusMacCode -match '\bwrite_version_cache\b') {
+            Write-Host 'Mac 侧状态页（ops 层）调用了 write_version_cache——状态页必须只读，写入方只能是监控'
+            $fail = 1
+          }
+          # 反向也要验：监控主循环必须真的在刷新它（否则缓存永远不更新，状态页永远显示旧版本，
+          # 而上面几行照样全绿）。Win 在 runtime 主循环、Mac 在同一个 30 轮周期里。
+          $rtWin = Get-Content 'win/lib/runtime.ps1' -Raw -Encoding UTF8
+          if ($rtWin -notmatch '(?m)^\s*try \{ Write-VersionCache \}') {
+            Write-Host 'Win 侧监控主循环没有刷新版本缓存（状态页会永远显示旧版本）'
+            $fail = 1
+          }
+          $rtMac = Get-Content 'mac/lib/runtime.sh' -Raw -Encoding UTF8
+          if ($rtMac -notmatch '(?m)^\s*write_version_cache \|\| true') {
+            Write-Host 'Mac 侧监控主循环没有刷新版本缓存（状态页会永远显示旧版本）'
+            $fail = 1
+          }
 
           # e2) 新版准入必须查"能不能跑"，且必须在覆盖之前。
           #
@@ -1544,8 +1860,29 @@ jobs:
           $pkgWin = Get-Content 'win/lib/package.ps1' -Raw -Encoding UTF8
           $iSyntax = $pkgWin.IndexOf('Parser]::ParseFile')
           if ($iSyntax -lt 0) { Write-Host 'Win 侧 package 层没有语法准入'; $fail = 1 }
+          # 光"有语法检查"不够，还要在**覆盖之前**。只判 IndexOf >= 0 的话，
+          # 把语法检查挪到覆盖之后（那时坏包已经写进安装区了）也能全绿——
+          # 而这正是这条契约唯一的失效方式。
+          # 覆盖的入口是 Install-Package 的调用点：它必须晚于语法检查。
+          $updWin = Get-Content 'win/lib/update.ps1' -Raw -Encoding UTF8
+          $iCheck = $updWin.IndexOf('Test-Package')
+          $iOverwrite = $updWin.IndexOf('Install-Package -SrcRoot')
+          if ($iCheck -lt 0 -or $iOverwrite -lt 0) {
+            Write-Host 'Win 侧读不到"校验包"或"覆盖安装区"的调用点，无法核对先后'; $fail = 1
+          } elseif ($iCheck -gt $iOverwrite) {
+            Write-Host 'Win 侧覆盖安装区发生在校验之前（坏包会先被写进去）'; $fail = 1
+          }
           $pkgMac = Get-Content 'mac/lib/package.sh' -Raw -Encoding UTF8
           if ($pkgMac -notmatch 'bash -n') { Write-Host 'Mac 侧 package 层没有语法准入'; $fail = 1 }
+          # mac 侧同理：verify_package 必须早于 install_package。
+          $updMac = Get-Content 'mac/lib/update.sh' -Raw -Encoding UTF8
+          $iCheckMac = $updMac.IndexOf('verify_package')
+          $iOverwriteMac = $updMac.IndexOf('install_package ')
+          if ($iCheckMac -lt 0 -or $iOverwriteMac -lt 0) {
+            Write-Host 'Mac 侧读不到"校验包"或"覆盖安装区"的调用点，无法核对先后'; $fail = 1
+          } elseif ($iCheckMac -gt $iOverwriteMac) {
+            Write-Host 'Mac 侧覆盖安装区发生在校验之前（坏包会先被写进去）'; $fail = 1
+          }
 
           # e3) 覆盖安装区必须有"进行中"标记，且成功与回滚两条路都要撤掉它。
           # 没有标记时，"半新半旧的安装区"和"正常安装"事后长得一样：入口能起来、
@@ -1705,12 +2042,22 @@ jobs:
           # 所以改成"给定文件里，所有含中文的字符串字面量"：
           #   双引号/单引号括起来、里面有中日韩字符的那一段，就是给人看的话。
           # 代码里的变量名与正则不会有中文，常量表里的中文注释行已经先被 `#` 过滤掉。
-          $scan = @(
-            @('win/lib/ops.ps1',   'win'),
-            @('win/lib/base.ps1',  'win'),
-            @('mac/lib/ops.sh',    'mac'),
-            @('mac/lib/base.sh',   'mac')
-          )
+          # 扫哪些文件？**所有会打印用户可见文字的文件**，不是只扫两个"最像界面"的。
+          # 原来只扫 ops/base 四个文件，于是 env / runtime / update / probe / 入口里
+          # 的提示文案完全不在覆盖范围内——那些地方同样有"走代理""固定直连"这类机制词，
+          # 而且用户在出错时看到的恰恰是它们（update 的报错、env 的写失败、入口的 stop 提示）。
+          # 用目录枚举而不是逐个点名：新增库自动纳入，不会因为忘了加一行就漏掉整个文件。
+          # **不含自检脚本**：`tests\*.ps1` 与 `mac/test-mac-pure.sh` 里的中文是
+          # 测试断言的名字，只有维护者读，不是用户文案。它们的文件名不像测试，
+          # 但它俩确实是（由门禁 10 加载、不随包发），所以按名字显式排除。
+          $scan = @()
+          foreach ($f in @(Get-ChildItem 'win/lib/*.ps1') + @(Get-ChildItem 'win/*.ps1')) {
+            $scan += , @($f.FullName.Replace((Get-Location).Path + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/'), 'win')
+          }
+          foreach ($f in @(Get-ChildItem 'mac/lib/*.sh') + @(Get-ChildItem 'mac/*.sh')) {
+            if ($f.Name -eq 'test-mac-pure.sh') { continue }
+            $scan += , @($f.FullName.Replace((Get-Location).Path + [System.IO.Path]::DirectorySeparatorChar, '').Replace('\', '/'), 'mac')
+          }
           foreach ($s in $scan) {
             if (-not (Test-Path $s[0])) { continue }
             $lines = [System.IO.File]::ReadAllLines((Resolve-Path $s[0]).Path, [System.Text.Encoding]::UTF8)
@@ -1943,10 +2290,17 @@ jobs:
       - name: 门禁 7：AGENTS.md 体量上限
         shell: pwsh
         run: |
-          # 这份文件每次会话都注入上下文，必须有天花板。量的是 git 里的 blob，
-          # 不受检出时 LF/CRLF 影响，本地与 CI 结果一致。
+          # 这份文件每次会话都注入上下文，必须有天花板。
+          #
+          # 量什么：**工作区里这一份**，不是 HEAD 里那份。
+          # 原来量 HEAD:AGENTS.md，改完没提交时门禁看的是**上一版**——工作区已经撑到
+          # 57 KB，它仍然报"当前 55275 字节"并放行（实测过）。CI 里两者相等，
+          # 但本地跑门禁正是最需要拦住的时候。用 git hash-object -w 先把工作区这一份
+          # 写成 blob 再量，既能拿到"提交后会是多大"，也不受检出时 LF/CRLF 影响——
+          # 与原来量 blob 的口径完全一致，只是换成了正确的对象。
           $limit = 54 * 1024
-          $size = [int](git cat-file -s HEAD:AGENTS.md)
+          $blob = (git hash-object -w -- AGENTS.md).Trim()
+          $size = [int](git cat-file -s $blob)
           Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（54 KB）" -f $size, $limit)
           if ($size -gt $limit) {
             Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
@@ -1995,9 +2349,19 @@ jobs:
           }
           # 文字不许越出画布右侧。英文标题比中文长，同样的 x 起点会顶出去，
           # 被裁掉的部分在浏览器里直接看不见——不报错，只是少了字。
+          #
+          # 宽度公式**只准有这一份**。曾经这里一份（ASCII 0.5）、下面的按钮图另有一份
+          # Get-TextW（ASCII 0.55），同一张图的中英两版按不同比例量，于是"中文版放行、
+          # 英文版报溢出"或反过来，全看走的是哪一段代码。ASCII 取 0.55 是保守侧：
+          # 宁可把接近边缘的判出来，也不要让真溢出的漏过去。
+          $AsciiWidthRatio = 0.55
+          $CjkWidthRatio   = 1.0
+          $CjkWidthThreshold = 0x2E80
           function Measure-TextWidth([string]$s, [double]$size) {
             $w = 0.0
-            foreach ($ch in $s.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.5 } }
+            foreach ($ch in $s.ToCharArray()) {
+              if ([int]$ch -gt $CjkWidthThreshold) { $w += $CjkWidthRatio } else { $w += $AsciiWidthRatio }
+            }
             return $w * $size
           }
           foreach ($f in $svgs) {
@@ -2131,11 +2495,8 @@ jobs:
               return $box
             }
 
-          function Get-TextW([string]$s, [double]$size) {
-            $w = 0.0
-            foreach ($ch in $s.ToCharArray()) { if ([int]$ch -gt 0x2E80) { $w += 1.0 } else { $w += 0.55 } }
-            return $w * $size
-          }
+          # 宽度公式已统一到上面的 Measure-TextWidth（本段原来另有一份 Get-TextW，
+          # ASCII 按 0.55 算、上面按 0.5 算，同一张图两段代码量出的宽度不一样）。
           foreach ($f in $svgs) {
             $doc = [xml](Get-Content $f.FullName -Raw -Encoding UTF8)
             $lg = Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='legend']"
@@ -2143,9 +2504,12 @@ jobs:
             $nodes = @($lg.Node.ChildNodes | Where-Object { $_.NodeType -eq 'Element' })
             $iconCenters = @()
             $labelXs = @()
+            # 怎么分清"图标"和"标签"？按**元素种类**分，不按写死的 y 值分。
+            # 原来判据是 `$n.y -eq '126'`——图例排版一改（现在的标签 y 是 162），
+            # 一个标签都切不出来，于是这项检查永久失效，屏幕上却仍打印「配图一致性通过」。
+            # 元素种类是结构事实：text 就是标签，g[data-cx]/circle/rect 就是图标。
             foreach ($n in $nodes) {
-              if ($n.LocalName -eq 'text' -and $n.y -eq '126') { $labelXs += [double]$n.x }
-              elseif ($n.LocalName -eq 'text') { $iconCenters += [double]$n.x }
+              if ($n.LocalName -eq 'text') { $labelXs += [double]$n.x }
               elseif ($n.LocalName -eq 'circle') { $iconCenters += [double]$n.cx }
               elseif ($n.LocalName -eq 'rect') { $iconCenters += ([double]$n.x + [double]$n.width / 2) }
               elseif ($n.LocalName -eq 'g' -and $n.GetAttribute('data-cx')) {
@@ -2160,7 +2524,13 @@ jobs:
                 $iconCenters += $declared
               }
             }
-            if ($iconCenters.Count -ne $labelXs.Count -or $labelXs.Count -lt 2) { continue }
+            if ($iconCenters.Count -ne $labelXs.Count -or $labelXs.Count -lt 2) {
+              # 切不出图例结构不能"跳过就算过"：结构一变，垂直居中与间距这两项检查
+              # 就永久失效，而屏幕上仍打印「配图一致性通过」。判失败并要求人工确认。
+              Write-Host ("{0} 图例结构切不出来（图标 {1} 个 / 文字 {2} 个），图例对齐未校验" -f $f.Name, $iconCenters.Count, $labelXs.Count)
+              $fail = 1
+              continue
+            }
             # 图标 → 文字：应为同一常数
             $d1 = @()
             for ($i = 0; $i -lt $labelXs.Count; $i++) { $d1 += [math]::Round($labelXs[$i] - $iconCenters[$i], 1) }
@@ -2169,10 +2539,21 @@ jobs:
               $fail = 1
             }
             # 文字 → 下一图标：也应为同一常数
+            # 取标签同样按元素种类（text），不按写死的 y 值——这里原来也写着 y -eq '126'，
+            # 与上面同一处失效原因：$labels 为空 → $d2 为空 → 集合元素数不是 1 → 恒报缺陷。
+            #
+            # 宽度取 SVG 自己声明的 textLength，不自己估：
+            # 图里的每个 text 都带 textLength + lengthAdjust="spacing"，那是**排布的实际宽度**；
+            # 而 Measure-TextWidth 是按"ASCII 0.55 / CJK 1.0"估的，两套数必然对不上
+            # （中文标签估出来 40，实际 textLength 是 44），于是项间距永远算不成同一个常数，
+            # 明明对齐的图也报缺陷。声明了 textLength 就用它，没声明才退回估算。
             $d2 = @()
-            $labels = @($nodes | Where-Object { $_.LocalName -eq 'text' -and $_.y -eq '126' })
+            $labels = @($nodes | Where-Object { $_.LocalName -eq 'text' })
             for ($i = 0; $i -lt $labels.Count - 1; $i++) {
-              $right = [double]$labels[$i].x + (Get-TextW $labels[$i].InnerText 20)
+              $declLen = $labels[$i].GetAttribute('textLength')
+              if ($declLen) { $w = [double]$declLen }
+              else { $w = Measure-TextWidth $labels[$i].InnerText 20 }
+              $right = [double]$labels[$i].x + $w
               $d2 += [math]::Round($iconCenters[$i + 1] - $right, 0)
             }
             if (($d2 | Select-Object -Unique).Count -ne 1) {
@@ -2189,17 +2570,30 @@ jobs:
             # 行中心 = 两条相邻横线之间的中点。横线住在 row-lines 与 grid 两个组里，
             # 且「日常/维护」那条粗线也是行边界——把两组的横线都收进来再排序，天然就是
             # 每一行的上下边。不写死任何 y 值：改了行高这条判据自动跟上。
+            #
+            # 「这张图压根没有这个结构」与「有这个结构但切不出来」必须分开：
+            # 前者是设计自由度（不是每张配图都画卡片行线），无可校验，也不该报缺陷；
+            # 后者才是门禁该抓的（结构一改，行距检查会永久失效而屏幕仍说通过）。
+            # 判据：先看有没有这两组；一个都没有就跳过；有组却切不出线，才判失败。
             $lines = @()
+            $hasLineGroup = $false
             foreach ($gid in @('row-lines', 'grid')) {
               $g = Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='$gid']"
               if (-not $g) { continue }
+              $hasLineGroup = $true
               foreach ($p in $g.Node.ChildNodes) {
                 if ($p.LocalName -ne 'path') { continue }
                 foreach ($mm in [regex]::Matches([string]$p.d, 'M56 (\d+)H1144')) { $lines += [int]$mm.Groups[1].Value }
               }
             }
+            if (-not $hasLineGroup) { continue }
             $lines = @($lines | Sort-Object -Unique)
-            if ($lines.Count -lt 2) { continue }
+            if ($lines.Count -lt 2) {
+              # 有 row-lines/grid 组却切不出线：说明画法变了而这条判据没跟上，判失败要求人工确认。
+              Write-Host ("{0} 按钮图有行线组但切不出结构（{1} 条），卡片行距未校验" -f $f.Name, $lines.Count)
+              $fail = 1
+              continue
+            }
             # 行高不写死：表头那条带比数据行更高，而数据行的间距本身是设计自由度
             # （卡片可以做得更高、行距更松）。原来的「30-50 才算一行」把行距钉死，
             # 一旦有人把行距调宽，判据就把表头带当成唯一一行，报出一堆假缺陷。
@@ -2207,15 +2601,23 @@ jobs:
             # 只有等于它的那些带才算「行」。这样改行距不需要再动门禁。
             $gaps = @()
             for ($i = 0; $i -lt $lines.Count - 1; $i++) { $gaps += ($lines[$i + 1] - $lines[$i]) }
-            if ($gaps.Count -eq 0) { continue }
+            if ($gaps.Count -eq 0) {
+              Write-Host ("{0} 按钮图算不出任何行线间距，卡片行距未校验" -f $f.Name); $fail = 1; continue
+            }
             $rowH = ($gaps | Group-Object | Sort-Object Count -Descending | Select-Object -First 1).Name -as [int]
-            if (-not $rowH -or $rowH -le 0) { continue }
+            if (-not $rowH -or $rowH -le 0) {
+              Write-Host ("{0} 按钮图的行高推不出来（{1}），卡片行距未校验" -f $f.Name, $rowH); $fail = 1; continue
+            }
             $bands = @()
             for ($i = 0; $i -lt $lines.Count - 1; $i++) {
               $h = $lines[$i + 1] - $lines[$i]
               if ($h -eq $rowH) { $bands += ($lines[$i] + $h / 2) }
             }
-            if ($bands.Count -eq 0) { continue }
+            if ($bands.Count -eq 0) {
+              Write-Host ("{0} 按钮图找不到任何一行（行高 {1} 与实际间距对不上），行垂直居中未校验" -f $f.Name, $rowH)
+              $fail = 1
+              continue
+            }
             # 只量 #marks 的直接子元素：一个标记 = 一个元素，或者一个图标组。
             # 组内部的每段路径不单独参与判决（否则一个正负号会被当成三段分别判一次，判据就失真）。
             $markNodes = @((Select-Xml -Xml $doc -XPath "//*[local-name()='g' and @id='marks']").Node.ChildNodes |
