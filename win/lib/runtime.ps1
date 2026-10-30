@@ -617,13 +617,6 @@ function Write-TextAtomic([string]$Path, [string[]]$Lines) {
         # 各自实现一套的结果就是"写进去用 A 编码、读回来用 B 编码"——
         # 中文变问号、复检必然 verify-failed，而且症状看起来像"安装坏了"。
         $enc = Get-TextFileEncoding $Path
-        $hasBom = $false
-        if (Test-Path -LiteralPath $Path) {
-            try {
-                $old = [System.IO.File]::ReadAllBytes($Path)
-                $hasBom = ($old.Length -ge 3 -and $old[0] -eq 0xEF -and $old[1] -eq 0xBB -and $old[2] -eq 0xBF)
-            } catch {}
-        }
         # 行尾沿用原文件：WriteAllLines 固定用 Environment.NewLine，会把 LF 的 profile
         # 静默改成 CRLF（Windows 上）或把 CRLF 改成 LF（Linux 上）——两种都污染用户的
         # diff 和行尾约定。所以要探测原文件自己的行尾，而不是跟着运行平台走。
@@ -1313,7 +1306,10 @@ function Get-ProfileExecutionPolicyWarning {
 
 # 所有运行时文件集中放 monitor\ 子文件夹（log / pid / stop 标志），
 # 卸载时整目录删除，一个都不残留。
-$MonitorDir = Join-Path $ScriptDir "monitor"
+# 第一句必须先把两个路径落实：base 层的 $MonitorDir / $LogFile 是惰性的
+# （加载期不读 $ScriptDir，见那边的注释）。漏了这句，下面六个路径会算成
+# "monitor.pid" 这种相对路径——文件散到进程的当前目录去，卸载复检也找不到它们。
+$null = Ensure-MonitorPaths
 $PidFile    = Join-Path $MonitorDir "monitor.pid"
 # "是使用者主动停的"这个意图要落盘。监控进程被外部结束（任务管理器、崩溃）和用户点「停止」
 # 在事后完全无法区分：pid 没了、自启动还在，两种情况长得一模一样。
@@ -1340,9 +1336,6 @@ $HeartbeatMaxSec = 240
 
 $StopFlag   = Join-Path $MonitorDir "stop.flag"
 
-function Ensure-MonitorDir {
-    try { New-Item -Path $MonitorDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
-}
 
 # 监控进程的识别判据（唯一权威处，下面三处引用都指向它）：
 # 监控进程的特征 = 命令行以 -File "...envproxy.ps1" 结尾、且不带任何子命令。
@@ -1515,8 +1508,8 @@ function Start-Monitor([bool]$Force = $false) {
     # 启动完必须复查，判据是**监控自己写下的 pid 文件**：抢不到单实例互斥的子进程会安静退出，
     # 而它在退出前同样"命令行里带着本脚本"，只看进程存在就会把这种失败报成"已启动"。
     # 但也要给它足够时间：PowerShell 5.1 冷启动并加载全部库可能要好几秒，所以轮询而不是固定等。
-    $deadline = (Get-Date).AddSeconds(12)
-    while ((Get-Date) -lt $deadline) {
+    $deadline = (Get-MonotonicSeconds) + 12
+    while ((Get-MonotonicSeconds) -lt $deadline) {
         if (Get-MonitorProcessFromPidFile) { break }
         Start-Sleep -Milliseconds 400
     }
@@ -1569,8 +1562,8 @@ function Stop-Monitor {
         New-Item -Path $targetDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
         Write-Text -Path $targetFlag -Text "stop"
     } catch {}
-    $deadline = (Get-Date).AddSeconds(6)
-    while ((Get-Date) -lt $deadline) {
+    $deadline = (Get-MonotonicSeconds) + 6
+    while ((Get-MonotonicSeconds) -lt $deadline) {
         if (-not (Get-MonitorProcess)) { break }
         Start-Sleep -Milliseconds 300
     }
@@ -1622,39 +1615,7 @@ function Stop-Monitor {
 # ------------------------------------------------------------------------------
 # 5. 日志（只记状态翻转，不刷屏；超过 $LogMaxBytes 自动截断）
 # ------------------------------------------------------------------------------
-$LogFile = Join-Path $MonitorDir "monitor.log"
 
-function Write-MonitorLog([string]$msg) {
-    try {
-        Ensure-MonitorDir
-        # 时间戳必须用固定区域性：Get-Date -Format 受当前区域设置影响，
-        # 泰语（th-TH）下写成佛历年份（实测 "2569-10-22"），阿拉伯语写回历（"1448-05-11"）。
-        # 日志是给人对时间用的，年份错位会让整条线索作废。mac 侧 date 输出本就是数字，这边对齐它。
-        $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
-        $line = "{0}  {1}" -f $stamp, $msg
-        # 共享写模式（FileShare.ReadWrite）：多进程追加写入互不阻塞，零锁脆弱点。
-        # 改用共享文件流后，任何进程（含监控自身截断）互不阻塞，零锁脆弱点。
-        $fs = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Append,
-            [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
-        try {
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + "`r`n")
-            $fs.Write($bytes, 0, $bytes.Length)
-        } finally { $fs.Dispose() }
-        # 体积上限：超过 $LogMaxBytes 截断为最近 $LogTailLines 行（黑匣子保留近期窗口，永远不会无限增长）
-        # 截断同样用共享模式；万一失败（极端外部锁），静默跳过、下次再试——绝不中断监控
-        # 注意：读取必须显式 UTF8 —— 默认按 ANSI 读会乱码，且截断时把乱码写回损坏日志
-        $fi = New-Object System.IO.FileInfo($LogFile)
-        if ($fi.Exists -and $fi.Length -gt $LogMaxBytes) {
-            $keep = [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last $LogTailLines
-            $fs2 = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Create,
-                [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
-            try {
-                $bytes2 = [System.Text.Encoding]::UTF8.GetBytes(($keep -join "`r`n") + "`r`n")
-                $fs2.Write($bytes2, 0, $bytes2.Length)
-            } finally { $fs2.Dispose() }
-        }
-    } catch {}
-}
 
 # ------------------------------------------------------------------------------
 # 6. 监控主循环（事件驱动 + 多轮确认去抖，无频繁写操作）
@@ -1696,7 +1657,7 @@ function Run-MonitorLoop {
             if ($why) {
                 Write-MonitorLog ("固定入口没能启动（不影响使用）：" + $why)
             } else {
-                Write-MonitorLog "固定入口没能启动（不影响使用：走代理的图标会退回直读当前代理）"
+                Write-MonitorLog "固定入口没能启动（不影响使用：桌面图标的可用状态会按每次打开时的实际情况判断）"
             }
         }
     } catch {

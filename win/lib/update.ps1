@@ -17,7 +17,6 @@
 #     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 #   读版本时开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；
 #   覆盖文件这条路上，git 副本一律不参与。
-$UpdateRepoDefault = "FiretrUCK666/envproxy"
 
 # 更新源表：有序，逐个尝试，第一个能给出"可用的新版本安装包"的胜出。
 # 每项声明五件事：
@@ -39,9 +38,6 @@ $UpdateRepoDefault = "FiretrUCK666/envproxy"
 # （同一台机器实测过连续 5 次下载超时），而 api.github.com 稳定可达（实测 200 / 0.2s）。
 # API 的资产端点回 302 到 release-assets 的 CDN 域名，那条链在同类网络里也通。
 # 所以先走 API 资产端点，再退回直连下载——两条都失败才算这个源不可用。
-$UpdateSourceTable = @(
-    @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; ApiRepo = "https://api.github.com/repos/@@"; }
-)
 
 # ------------------------------------------------------------------------------
 # 失败原因分类：把"为什么不行"从一堆布尔量变成一个明确的值
@@ -100,7 +96,7 @@ function Get-UpdateFailureMessage([string]$Kind, [string]$SourceName) {
         }
         "network" {
             return ("连不上 {0}（超时或连接被拒）。" -f $SourceName) +
-                "可以打开翻墙软件让请求走代理再试一次，或稍后重试。"
+                "可以先确认能正常上网（打开常用的网页试一试），再重试一次；也可以稍后再试。"
         }
         "bad-content" {
             return ("从 {0} 拿回来的东西没法用（下载的内容不完整、被中间网络改写，或这一版里安装包的信息有问题）。" -f $SourceName) +
@@ -151,21 +147,7 @@ function Select-UpdateFailureKind([string[]]$Kinds) {
     return $distinct[0]
 }
 
-# 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
-function Test-DevCopy {
-    $root = Split-Path -Parent $ScriptDir
-    return (Test-Item (Join-Path $root ".git"))
-}
 
-# 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
-# 现在网页上下载的包已不再含这些文件，见 README 第 8 节）。
-# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
-# 传参则判指定目录（自检用），不传判安装根。
-function Test-SourceCopy {
-    param([string]$Root = "")
-    if (-not $Root) { $Root = Split-Path -Parent $ScriptDir }
-    return ((-not (Test-Item (Join-Path $Root ".git"))) -and (Test-Item (Join-Path $Root ".github")))
-}
 
 # 源码包转安装包：删掉源码专用文件（清单从 .gitattributes 的排除表实时读，不是写死的）。
 # 调用方保证安装根有效且用户已确认；删完下次更新不再问。
@@ -199,68 +181,8 @@ function Remove-SourceOnlyFiles([string]$Root) {
     } catch {}
 }
 
-# 从 git 远程地址里取出 "owner/repo"（纯函数）。
-# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
-# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
-# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
-# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
-# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
-# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
-# 主机不是 GitHub 时返回空串，让调用方退回内置默认：换了个远端（本地镜像、别的托管）
-# 不该让查询地址继续指着那个主机，也不该报成"发布方没给包"。
-function Get-RepoIdFromRemoteUrl([string]$Url) {
-    if (-not $Url) { return "" }
-    $u = $Url.Trim()
-    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠，
-    # 后面就只剩一种分隔符。只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
-    $u = $u -replace '^([^/]+@[^/:]+):', '$1/'
-    $u = $u -replace '[?#].*$', ''
-    $u = $u.TrimEnd('/')
-    $u = $u -replace '\.git$', ''
-    $parts = @($u -split '[/\\]' | Where-Object { $_ -ne '' })
-    if ($parts.Count -lt 3) { return "" }
-    $hostPart = $parts[$parts.Count - 3] -replace '^.*@', ''
-    $hostPart = $hostPart -replace ':[0-9]+$', ''
-    if ($hostPart -ne 'github.com' -and $hostPart -notlike '*.github.com') { return "" }
-    $owner = $parts[$parts.Count - 2]
-    $repo = $parts[$parts.Count - 1]
-    if (-not $owner -or -not $repo) { return "" }
-    return ("{0}/{1}" -f $owner, $repo)
-}
 
-function Get-UpdateRepo {
-    if (Test-DevCopy) {
-        $root = Split-Path -Parent $ScriptDir
-        try {
-            $url = (git -C $root config --get remote.origin.url 2>$null)
-            $id = Get-RepoIdFromRemoteUrl $url
-            if ($id) { return $id }
-        } catch {}
-    }
-    return $UpdateRepoDefault
-}
 
-# 项目对外地址的唯一来源：主页、提问题的地方、看新版本的地方。
-#
-# 为什么从官网源的 Base 派生，而不是各写一份：地址换了只改 $UpdateSourceTable 那一行，
-# 帮助、报告、关于页全都跟着变。各写一份的结果是"帮助里还指着旧仓库"——
-# 用户点了打不开，也没有任何报错告诉他为什么。
-# 取不到仓库标识时返回空串，调用方据此不显示地址（宁可不说，也不能给个错地址）。
-function Get-ProjectUrls {
-    $repo = Get-UpdateRepo
-    if (-not $repo) { return [pscustomobject]@{ Repo = ''; Home = ''; Issues = ''; Releases = '' } }
-    $src = $UpdateSourceTable[0]
-    # Base 形如 https://github.com/@@，@@ 是仓库标识的占位符。
-    # 变量名不能叫 $home：$HOME 是 PowerShell 的自动变量，而变量名不区分大小写，
-    # 赋值会被它吃掉，"主页"于是变成用户的家目录（实测过一次）。
-    $baseUrl = ([string]$src.Base).Replace('@@', $repo)
-    return [pscustomobject]@{
-        Repo     = $repo
-        Home     = $baseUrl
-        Issues   = ($baseUrl + '/issues/new')
-        Releases = ($baseUrl + '/releases')
-    }
-}
 
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
@@ -280,15 +202,6 @@ function Get-UpdateSources {
     return ,$out
 }
 
-function Get-LocalVersion {
-    try {
-        $root = Split-Path -Parent $ScriptDir
-        $vf = Join-Path $root "VERSION"
-        # 直接读、用异常判不存在：先 Test-Path 再读是两套语义，含 [ ] 时前者会撒谎。
-        return ((Read-Text $vf).Trim())
-    } catch {}
-    return ""
-}
 
 # 带代理兜底的 HTTPS 取文本：先直连，失败且本地代理 active 时经代理重试一次。
 # DIVERGE(Win): Mac 侧 curl 自动继承环境变量代理，单次调用叠加直连回退即可；
@@ -714,9 +627,14 @@ function Test-AssetDigest([string]$Path, [string]$Digest) {
 function Save-UpdateFile([string]$Url, [string]$DestFile, [hashtable]$Headers = @{}) {
     $r = Save-UpdateFileVia $Url $DestFile "" $Headers
     if ($r -eq "ok") { return "ok" }
-    # 走代理只在"网络连不上"时才有意义：缺包/配额/服务端错误换个出口也是同样结果，
-    # 重试只是白等一遍。代理本身是本机的另一个出口，连接失败换条路可能就通了。
-    if ($r -eq "network") {
+    # 换不换出口由 Test-RetryWithProxy 一处判定，不在这里另写一套。
+    #
+    # 原来这里是 `if ($r -eq "network")`，而同文件的 Test-RetryWithProxy 明确把 quota
+    # 也算进来（那条注释写着"之前只让 network 重试，于是配额用尽这种最该换出口的情况
+    # 反而不换"）——两套判据并存，结果就是：403 + X-RateLimit-Remaining: 0 时
+    # Windows 侧直接失败，而 mac 侧（用同一个判据）换个出口就成功了。同一个版本、
+    # 同一条网络，两端给出不同结果，用户只会觉得"Windows 版坏了"。
+    if (Test-RetryWithProxy $r) {
         $port = $null
         try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
         if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
@@ -943,7 +861,7 @@ function Test-InstallRootMonitor([string]$Root) {
     return $false
 }
 
-function Update-EnvProxy([bool]$AutoYes = $false) {
+function Update-EnvProxy([bool]$AutoYes = $false, [scriptblock]$StopMonitor = $null, [scriptblock]$InstallFinish = $null) {
     $script:UpdateExitCode = 0
     Write-Styled 'title' "======== EnvProxy 检查更新 ========"
     $local = Get-LocalVersion
@@ -1062,17 +980,73 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         # 停监控 → 覆盖安装区（跳过 monitor 保日志；全部文件一次覆盖到位）→ 用安装根新脚本收尾
         # → 交给**新版本**的自己收尾。整段失败会回滚，安装区不会半新半旧。
         Write-Styled 'title' "正在安装新版（保留日志，原监控先停）..."
-        try { Stop-Monitor } catch {}
+        # 停监控由**调用方注入**，本层不认识 runtime：否则 update 调 runtime 的 Stop-Monitor、
+        # runtime 又调 update 的 Get-RemoteVersion（刷版本缓存），两层互为依赖，
+        # 单独读任何一份文件都看不出它需要什么。注入方是入口——它本来就同时持有两侧，
+        # 也是唯一知道"现在该不该停"的地方。没注入时不静默跳过：那会让覆盖撞上占用。
+        if ($StopMonitor) {
+            try { & $StopMonitor } catch {}
+        } else {
+            Write-Styled 'warn' '内部提示：更新未收到「停监控」能力，覆盖前请自行确认监控已停。'
+        }
         $root = Split-Path -Parent $ScriptDir
+        # 先把上一次调用可能留下的结论清掉：这是进程内变量，不复位的话
+        # 这次如果走的是"备份没建起来"那条路，就会读到上一轮的 'complete'。
+        $script:LastInstallRollback = ''
+        $script:LastInstallRollbackBackup = ''
         try {
             # 全部文件一次覆盖到位，包含正在执行的这个核心脚本：PowerShell 启动时已把整份脚本读进
             # 内存，之后覆盖文件不影响本次运行。只同步本平台目录与共享文件，另一平台目录不动。
             # 任何一步失败会整体回滚。
             Install-Package -SrcRoot $extractDir -ProjectRoot $root -Stage $extractDir -ShipDirs @("win", "release-notes", "assets")
         } catch {
-            Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
-            Write-Styled 'warn' "已恢复原状，正在重启监控..."
-            try { Install-EnvProxy | Out-Null } catch {}
+            # 覆盖失败时要分清两件事，它们对用户的含义完全相反：
+            #   untouched = 覆盖一个文件都没动（备份阶段就失败了）→ 安装区还是原样
+            #   complete  = 覆盖动过、失败后回滚完全成功      → "已恢复原状"是真话
+            #   partial   = 覆盖动过、回滚没做成                → 必须说"半新半旧"并保住备份
+            # else 落到 partial 是刻意的：只有明确知道"没动过 / 已回滚"时才敢报好消息，
+            # 其余一律按最坏说——把"半新半旧"错报成"已恢复原状"，用户会当它没事继续用。
+            $rollback = if ($script:LastInstallRollback) { $script:LastInstallRollback } else { 'partial' }
+            if ($rollback -eq 'untouched') {
+                Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
+                Write-Styled 'warn' "未做任何改动（安装区还是原样），正在重启监控..."
+            } elseif ($rollback -eq 'complete') {
+                Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
+                Write-Styled 'warn' "已恢复原状，正在重启监控..."
+            } else {
+                Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)
+                Write-Styled 'warn' "**安装区可能半新半旧**（回滚未能完成），下面这份备份是唯一的还原依据。"
+                # 备份必须搬出临时目录：finally 会删掉整个 $extractDir。
+                $keepBak = Join-Path (Split-Path -Parent $root) ("envproxy-backup-partial-" + ($Remote.Version -replace '[^0-9A-Za-z._-]','_'))
+                $srcBak = if ($script:LastInstallRollbackBackup) { $script:LastInstallRollbackBackup } else { Join-Path $extractDir "backup" }
+                $kept = $false
+                if (Test-Item $srcBak) {
+                    try {
+                        if (Test-Item $keepBak) { Remove-ItemSafe $keepBak }
+                        Copy-Item -LiteralPath $srcBak -Destination $keepBak -Recurse -Force -ErrorAction Stop
+                        $kept = $true
+                    } catch { $kept = $false }
+                }
+                if ($kept) {
+                    Write-Styled 'dim' ("  备份已保留到：" + $keepBak)
+                    Write-Styled 'dim' "  把里面的文件拷回安装目录，即可回到更新前的状态。"
+                } else {
+                    Write-Styled 'warn' "  备份也没能保留下来，请到 Releases 页面重新下载安装包覆盖一次。"
+                }
+            }
+            # 重装由**调用方注入**，本层不认识 ops：否则 update 调 ops 的 Install-EnvProxy，
+        # ops 又调 runtime 的 Stop-Monitor，runtime 又调 update 的 Get-RemoteVersion——
+        # 三个库首尾相接成一个环（任意长度都要当环看，不是只有 A<->B 才算）。
+        # 注入方是入口：它本来就同时持有所有层。
+        try {
+            if ($InstallFinish) { & $InstallFinish | Out-Null }
+            else { Write-Styled 'warn' '内部提示：更新未收到「重装」能力，请手动打开菜单选一次安装 / 修复。' }
+        } catch {
+                # 重启安装失败要留痕：原来这里 catch {} 吞掉，"已恢复原状"后面跟着的
+                # "正在重启监控"可能根本没发生，用户却以为监控已经回来了。
+                try { Write-MonitorLog ("更新失败后重新安装也失败了：" + $_.Exception.Message) } catch {}
+                Write-Styled 'warn' "重启监控失败：请打开菜单选一次「安装 / 修复」。"
+            }
             $script:UpdateExitCode = 1
             return
         }
@@ -1092,8 +1066,10 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
         if (-not $finishRan) {
             Write-Styled 'dim' "收尾子进程没有在限时内结束，正在复核安装根里的监控。"
         }
-        $deadline = (Get-Date).AddSeconds(15)
-        while ((Get-Date) -lt $deadline) {
+        # 截止用单调钟（理由见 runtime 层同款等待）：墙上时钟往回拨会让这一轮提前放弃，
+        # 把"正在正常启动的监控"误报成起不来。
+        $deadline = (Get-MonotonicSeconds) + 15
+        while ((Get-MonotonicSeconds) -lt $deadline) {
             if (Test-InstallRootMonitor $root) { $ok = $true; break }
             Start-Sleep -Milliseconds 500
         }
@@ -1126,7 +1102,6 @@ function Update-EnvProxy([bool]$AutoYes = $false) {
                     Write-Styled 'dim' "  实在修不好时，把里面的文件拷回安装目录即可回到更新前的状态。"
                 } catch {}
             }
-            $script:KeptBackupPath = $keepBak
         }
     } catch {
         Write-Styled 'warn' ("更新失败：{0}" -f $_.Exception.Message)

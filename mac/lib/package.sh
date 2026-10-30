@@ -126,6 +126,10 @@ install_package() {
     _pdest="$2"
     _pstage="${3:-}"
     _pship="${4:-mac release-notes assets}"
+    # 回滚未完成时留下的备份路径（空 = 没有 / 不需要）。
+    # 必须**先初始化**：本脚本跑在 set -u 下，回滚成功那条路不会赋值它，
+    # 调用方再去读就会 "unbound variable" 把整个更新流程打断在收尾之前。
+    INSTALL_PARTIAL_BACKUP=""
     # 目的地校验（第二道）：目标必须已经是一个安装根。调用方进门时已验过一次，
     # 这里是给"函数被别处直接调用"留的底线——后面的删除循环只认这个结论。
     if [ ! -f "$_pdest/mac/envproxy.sh" ] || [ ! -f "$_pdest/VERSION" ]; then
@@ -312,10 +316,29 @@ install_package() {
             if [ -s "$_pbad" ]; then
                 echo "更新失败：写入安装区失败，且回滚未完成——以下文件没能还原："
                 sed 's/^/    /' "$_pbad"
+                # 回滚没做成时，备份是唯一的回退抓手，而它正躺在 $_pstage/backup 里，
+                # 调用方（update.sh 的 finally）接下来会把整个 $_pstage 删掉。
+                # 所以搬到安装根旁的具名目录，并把路径交出去（调用方据此提示用户去哪找）。
+                _pkeep="$(dirname "$_pdest")/envproxy-backup-partial"
+                if [ -d "$_pstage/backup" ]; then
+                    rm -rf "$_pkeep" 2>/dev/null || true
+                    if cp -R "$_pstage/backup" "$_pkeep" 2>/dev/null; then
+                        INSTALL_PARTIAL_BACKUP="$_pkeep"
+                        echo "覆盖前的文件已保留到：$_pkeep"
+                        echo "把它里面的文件拷回安装目录，即可回到更新前的状态。"
+                    else
+                        INSTALL_PARTIAL_BACKUP=""
+                        echo "备份也没能保留下来：请到 Releases 页面重新下载安装包覆盖一次。"
+                    fi
+                fi
                 echo "请到 Releases 页面重新下载安装包，解压后覆盖这个文件夹（或在菜单里选 安装 / 修复）。"
+                # 标记**故意不删**：安装区确实还是半新半旧，这条警报是真的。
+                # 它将在下一次成功的「安装 / 修复」收尾时被清掉（见 ops.sh 收尾那一步）。
                 rm -f "$_pbad" 2>/dev/null || true
             else
                 echo "更新失败：写入安装区失败，已回滚到更新前的状态。"
+                # 回滚完整成功 = 安装区已回到更新前，标记不能再留（留着就是假警报）。
+                rm -f "$_pmark" 2>/dev/null || true
             fi
         else
             echo "更新失败：文件写入失败。请打开菜单选「安装 / 修复」后重试。"

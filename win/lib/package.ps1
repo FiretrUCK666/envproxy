@@ -188,12 +188,27 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
     #
     # 所以覆盖前写一个标记、成功后删掉。入口发现它就在状态页报出来。
     # 与 stopped.intent 是同一个手法：用落盘意图区分两类事后长相相同的情况。
+    #
+    # 这两项是"这次覆盖走到哪一步"的结论，供调用方决定该说什么话、该不该保住备份。
+    # 三态，含义不同，绝不许混用：
+    #   untouched = 覆盖一个文件都没动（备份阶段就失败了）→ 可以说"未做任何改动"
+    #   complete  = 覆盖动过、失败后回滚完全成功      → 可以说"已恢复原状"
+    #   partial   = 覆盖动过、回滚没做成                → 必须说"半新半旧"并保住备份
+    # 初值是 untouched：备份阶段在 try 之外，那里失败时下面的 catch 根本不会跑，
+    # 留着初值才是对的——那时安装区确实一个字节都没变。
+    $script:LastInstallRollback = 'untouched'
+    $script:LastInstallRollbackBackup = ''
     $marker = Join-Path $ProjectRoot ("{0}\monitor\update.inprogress" -f $(if ($ShipDirs -contains "win") { "win" } else { "mac" }))
-    try {
-        $mdir = Split-Path -Parent $marker
-        if (-not (Test-Item $mdir)) { New-Item -Path $mdir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
-        Write-Text -Path $marker -Text ((Get-Date).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture))
-    } catch {}
+    # 标记**不在这里写**——要等备份做完、真要动手覆盖的那一刻才写。
+    #
+    # 原来写在这（备份之前），于是有三条路会把它留在盘上而没有任何人去清：
+    #   ① 备份失败（Copy-Item -ErrorAction Stop，在 try 之外）→ 直接上抛，标记没人删；
+    #   ② 回滚未完成 → 下面 throw 抢在"回滚成功才清标记"那一行之前；
+    #   ③ 连 $Stage 都没传、备份压根没建 → 同上。
+    # 留下的后果不是"多一个文件"：状态页读到它就永久报"上次更新没完成，选 1 重做一次"
+    # （ops.ps1 的 UpdateInProgress 判断），而"重做一次"走的还是这条路，照样清不掉——
+    # 用户唯一出路是卸载。备份做完再写，① ③ 就不再有标记；② 由 partial 分支自己负责清。
+    #
     # 覆盖前后各做一件事，都是为了让"更新到一半失败"不留残局：
     #   覆盖前——把四个程序目录 + 根目录那几个随包文件备份到本次更新的临时目录；
     #   覆盖中——任何一步失败就整体回滚到备份（安装区回到更新前），然后把异常抛给调用方。
@@ -227,6 +242,14 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             $src = Join-Path $ProjectRoot $rel
             if (Test-Item $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $backup $rel) -Force -ErrorAction Stop }
         }
+        # 备份齐了、马上要动安装区了——这时候才写"更新进行中"。
+        # 此刻起任何中断都会留下新旧混合的安装区，标记正是给那种情况用的；
+        # 而在此之前失败（上面的备份）安装区一个字节都没动，不该留下这个标记。
+        try {
+            $mdir = Split-Path -Parent $marker
+            if (-not (Test-Item $mdir)) { New-Item -Path $mdir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null }
+            Write-Text -Path $marker -Text ((Get-Date).ToString("o", [System.Globalization.CultureInfo]::InvariantCulture))
+        } catch {}
     }
     try {
         $removed = 0
@@ -282,6 +305,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         # 覆盖全部成功：撤掉"更新进行中"标记。
         # 留着它会让状态页一直报"上次更新没完成，程序文件可能新旧混合"——那是假警报。
         try { if (Test-Item $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue } } catch {}
+        $script:LastInstallRollback = 'ok'
     } catch {
         if ($backup -and (Test-Item $backup)) {
             # 回滚用"逐文件覆盖回去 + 删掉新增文件"，不用"删整个目录再搬回"：
@@ -319,34 +343,60 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             # 回滚也要复读：上面的复制都带 SilentlyContinue，不回读就敢说"已回滚"是假话。
             # 实测过：入口文件被占用时，VERSION 会先写成新版本、旧入口留在原地，
             # 于是更新入口认为本地比线上新，用户从此收不到任何新版本。
+            #
+            # 复读本身也可能抛（文件正被占着时 Get-Sha256Hex 打不开它）。一旦这里抛出去，
+            # 整个 catch 会中断在"回滚做没做成"还没结论的地方——外面既拿不到状态、
+            # 也拿不到备份路径，只能把"半新半旧"错报成"没动过"。
+            # 所以复读的每一步都必须自己兜住异常：抛不出来，结论才留得下。
             $notBack = @()
             foreach ($d in $effShip) {
                 $bakD = Join-Path $backup $d
                 if (-not (Test-Item $bakD)) { continue }
                 foreach ($f in (Get-ChildItem -LiteralPath $bakD -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-                    $rel = $f.FullName.Substring($bakD.Length).TrimStart('\')
-                    if ($rel -like 'monitor\*') { continue }
-                    $cur = Join-Path (Join-Path $ProjectRoot $d) $rel
-                    if (-not (Test-Item $cur)) { $notBack += ("{0}\{1}" -f $d, $rel); continue }
-                    if ((Get-Sha256Hex $f.FullName) -ne (Get-Sha256Hex $cur)) { $notBack += ("{0}\{1}" -f $d, $rel) }
+                    try {
+                        $rel = $f.FullName.Substring($bakD.Length).TrimStart('\')
+                        if ($rel -like 'monitor\*') { continue }
+                        $cur = Join-Path (Join-Path $ProjectRoot $d) $rel
+                        if (-not (Test-Item $cur)) { $notBack += ("{0}\{1}" -f $d, $rel); continue }
+                        if ((Get-Sha256Hex $f.FullName) -ne (Get-Sha256Hex $cur)) { $notBack += ("{0}\{1}" -f $d, $rel) }
+                    } catch {
+                        # 读不出来就当作"没能还原"——把"我不知道"说成"已经还原了"才是谎报。
+                        $notBack += ("{0}\{1}" -f $d, $f.Name)
+                    }
                 }
             }
             foreach ($rel in $pkg.Values) {
                 if ($rel -match '\\') { continue }
                 $bakFile = Join-Path $backup $rel
                 if (-not (Test-Item $bakFile)) { continue }
-                $curFile = Join-Path $ProjectRoot $rel
-                if (-not (Test-Item $curFile)) { $notBack += $rel; continue }
-                if ((Get-Sha256Hex $bakFile) -ne (Get-Sha256Hex $curFile)) { $notBack += $rel }
+                try {
+                    $curFile = Join-Path $ProjectRoot $rel
+                    if (-not (Test-Item $curFile)) { $notBack += $rel; continue }
+                    if ((Get-Sha256Hex $bakFile) -ne (Get-Sha256Hex $curFile)) { $notBack += $rel }
+                } catch {
+                    $notBack += $rel
+                }
             }
             if ($notBack.Count) {
+                # 回滚没做成：安装区现在半新半旧，**备份是唯一的回退抓手**。
+                # 这里只报告事实（状态 + 清单 + 备份位置），不把备份搬走也不删——
+                # 搬去哪、怎么告诉用户，是调用方（update 层）的事，它才知道安装根在哪、
+                # 临时目录什么时候会被清掉。
+                $script:LastInstallRollback = 'partial'
+                $script:LastInstallRollbackBackup = $backup
                 throw ("安装区写入失败，且回滚未完成——以下文件没能还原：{0}。请到 Releases 页面手动下载安装包覆盖一次。" -f (($notBack | Select-Object -First 6) -join '；'))
             }
             # 回滚成功 = 安装区已经回到更新前，不再处于"半新半旧"，标记要撤掉，
             # 否则下一次启动会白报一次"上次更新没完成"。
+            $script:LastInstallRollback = 'complete'
+            $script:LastInstallRollbackBackup = ''
             try { if (Test-Item $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue } } catch {}
             throw ("安装区写入失败，已回滚到更新前的状态：{0}" -f $_.Exception.Message)
         }
+        # 走到这里说明 $Stage 给了、但备份目录没建起来（建目录被拦、盘满、权限）。
+        # 覆盖还没动手（备份在 try 之前），安装区一个字节都没变——标记也没写过
+        # （标记同样在备份之后才写），所以这里既不用删标记、也不用报"半新半旧"。
+        # 状态保持 untouched：这是"什么都没改"的准确描述。
         throw
     }
 }

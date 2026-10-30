@@ -227,31 +227,48 @@ if ($usageError) {
 }
 if ($Update) {
     $opMutex = Exit-IfOpBusy
-    Update-EnvProxy -AutoYes:$Yes
+    # "停监控"由这里注入：update 层不该认识 runtime（否则两层互为依赖）。
+    # 入口同时持有两侧，是唯一适合把这两件事接起来的地方。
+# 「停监控」与「重装」都由这里注入：update 层不认识 runtime / ops，
+# 否则三条边会首尾相接成环（build 门禁现在能检出任意长度的环）。
+    Update-EnvProxy -AutoYes:$Yes -StopMonitor { Stop-Monitor } -InstallFinish { Install-EnvProxy }
     # 退出码如实反映结果：计划任务、CI 靠它判断更新成功没有。
     exit $script:UpdateExitCode
 }
 if ($Install) {
     $opMutex = Exit-IfOpBusy
-    Install-EnvProxy
-    return
+    # 退出码如实反映结果：脚本里 `envproxy.ps1 -Install` 之后要靠它判断成没成。
+    # 只 return 0 的话，"监控没起来"这种明确失败在退出码上等于成功。
+    # 取最后一个元素再转 int：PowerShell 的函数会把未被接住的输出一起返回，
+    # 那时拿到的是数组，而 `exit 数组` 会被压成 0（把失败说成成功）。
+    $code = @(Install-EnvProxy)[-1]
+    exit ([int]$code)
 }
 if ($Uninstall) {
     $opMutex = Exit-IfOpBusy
-    Uninstall-EnvProxy -Purge:$Purge -Yes:$Yes
-    return
+    $code = @(Uninstall-EnvProxy -Purge:$Purge -Yes:$Yes)[-1]
+    exit ([int]$code)
 }
 if ($Stop) {
     $opMutex = Exit-IfOpBusy
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" }
     Stop-Monitor
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
-    $null = Apply-State "off"
-    Write-Styled 'title' "代理变量已清除，当前恢复直连。"
+    # 返回值必须接住：它写不成时 proxy 变量还在，屏幕上说"已清除"就是假话。
+    # 与 mac 侧 stop 分支同一套判据（那边接 stop_monitor 与 remove_user_env_vars 两个码）。
+    $varsOk = [bool](Apply-State "off")
+    if ($varsOk) {
+        Write-Styled 'title' "代理变量已清除，当前恢复直连。"
+    } else {
+        Write-Styled 'warn' "[未完成] 代理变量没能清除干净（可能被杀软或权限拦住）。"
+        Write-Styled 'warn' "      已经开着的窗口每次回到提示符，仍会把旧代理地址重新设上——它们看起来还连着一个已经不存在的端口。"
+        Write-Styled 'warn' "      先解决拦截问题，再重跑一次停止；或者直接用一键恢复。"
+    }
     # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
     # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
     # 与其让人以为"工具坏了"，不如说清楚。
     Write-Styled 'dim' "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。"
+    if (-not $varsOk) { exit 1 }
     return
 }
 if ($Status) {

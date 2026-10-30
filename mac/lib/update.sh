@@ -6,7 +6,8 @@
 # 更新源：分平台安装包资产（见第 9 节），按源表逐源尝试。
 # 开发副本（安装根有 .git）的只读版本检查跟自己的 git remote 走，
 # 覆盖文件这条路上 git 副本一律不参与。
-UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
+# UPDATE_REPO_DEFAULT 住在 base 层：get_update_repo 在那里，而 ops 层的帮助页
+# 也要用它拼地址。两处各写一份，改一处就漂移（改完只剩一处定义）。
 
 # 更新源表：每行一条
 #   "<标识来源> <显示名> <优先路径> <Api> <Web> <下载前缀> <API 前缀>"，有序，逐个尝试，
@@ -23,8 +24,6 @@ UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
 #           而 api.github.com 稳定可达（实测 200 / 0.2s），所以 API 在前、直连兜底。
 
 
-UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@ https://api.github.com/repos/@@'
-
 # ------------------------------------------------------------------------------
 # 9. 在线更新（检查更新 + 一键升级；状态显示只读，动手只在这里）
 # ------------------------------------------------------------------------------
@@ -39,22 +38,8 @@ UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/release
 #       自己改代码就一个字节都不动），拿不到输入时按后者；
 #     两个都没有 = 安装副本 → 下载安装包、校验、覆盖安装区。
 
-get_project_root() {
-    dirname "$SCRIPT_DIR"
-}
 
-is_dev_copy() {
-    [ -e "$(get_project_root)/.git" ]
-}
 
-# 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
-# 现在网页上下载的包已不再含这些文件，见 README 第 8 节）。
-# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
-# 传参则判指定目录（自检用），不传判安装根。
-is_source_copy() {
-    _sr="${1:-$(get_project_root)}"
-    [ ! -e "$_sr/.git" ] && [ -d "$_sr/.github" ]
-}
 
 # 源码包转安装包：删掉源码专用文件（清单从 .gitattributes 的排除表实时读，不是写死的）。
 # 调用方保证安装根有效且用户已确认；删完下次更新不再问。
@@ -78,63 +63,9 @@ clean_source_files() {
     return 0
 }
 
-get_local_version() {
-    _vf="$(get_project_root)/VERSION"
-    [ -f "$_vf" ] || return 1
-    tr -d ' \t\r\n' < "$_vf" 2>/dev/null
-}
 
-# 从 git 远程地址里取出 "owner/repo"（纯函数）。
-# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
-# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
-# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
-# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
-# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
-# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
-# 主机不是 GitHub 时输出空串，让调用方退回内置默认。
-repo_id_from_remote_url() {
-    [ -n "$1" ] || return 0
-    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠。
-    # 只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
-    printf '%s' "$1" \
-        | sed -E 's#^([^/]+@[^/:]+):#\1/#; s#[?#].*$##; s#/+$##; s#\.git$##' \
-        | awk -F/ '{
-              n = NF
-              if (n < 3) exit
-              host = $(n - 2)
-              sub(/^.*@/, "", host)
-              sub(/:[0-9]+$/, "", host)
-              if (host != "github.com" && host !~ /[.]github[.]com$/) exit
-              if ($(n - 1) == "" || $n == "") exit
-              printf "%s/%s", $(n - 1), $n
-          }'
-}
 
-# 开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；安装副本用内置默认。
-get_update_repo() {
-    if is_dev_copy && command -v git >/dev/null 2>&1; then
-        _u=$(git -C "$(get_project_root)" config --get remote.origin.url 2>/dev/null || true)
-        _r=$(repo_id_from_remote_url "$_u")
-        if [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
-    fi
-    printf '%s' "$UPDATE_REPO_DEFAULT"
-}
 
-# 项目对外地址：主页、提问题的地方。与 Windows 侧 Get-ProjectUrls 同形。
-#
-# 从官网源的 Base 派生而不是各写一份：地址换了只改 UPDATE_SOURCE_TABLE 那一行，
-# 帮助、报告全跟着变。各写一份的结果是"帮助里还指着旧仓库"，用户点了打不开，
-# 也没有任何报错告诉他为什么。
-get_project_home() {
-    _gph_repo=$(get_update_repo)
-    [ -n "$_gph_repo" ] || return 1
-    printf "https://github.com/%s" "$_gph_repo"
-}
-
-get_project_issues() {
-    _gpi_home=$(get_project_home) || return 1
-    printf "%s/issues/new" "$_gpi_home"
-}
 
 # 这一源的仓库标识从哪里取：环境事实——开发副本跟自己的 git remote 走
 # （fork 后看得见自己仓库的 Release），安装副本用内置默认。
@@ -173,8 +104,7 @@ fetch_update_text() {
     _ftt_code=$(printf '%s' "$_ftt_out" | tail -n 1)
     _ftt_why=$(update_failure_kind "$_ftt_code" "$(_fetch_rate_remaining "$_ftt_h")")
     if retry_with_other_exit "$_ftt_why" && ! is_loopback_url "$1"; then
-        _ftt_out2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null)
+        _ftt_out2=$(curl_direct -fsSL --max-time 8 --noproxy '*' -A "EnvProxyUpdate" -D "$_ftt_h" -w '\n%{http_code}' "$1" 2>/dev/null)
         [ $? -eq 0 ] && { printf '%s' "$_ftt_out2"; return 0; }
         # 两次都没成：交给挑选规则决定报哪一次，不许后一次直接盖掉前一次。
         # 第一次是 quota（配额用尽，等一小时）、第二次是 server（对方故障）时，
@@ -276,7 +206,7 @@ update_failure_message() {
             printf '%s 服务端出错（HTTP 5xx 或请求被拒）。这通常是对方临时故障，过一会儿重试就好。' "$_ufm_src"
             ;;
         network)
-            printf '连不上 %s（超时或连接被拒）。可以打开翻墙软件让请求走代理再试一次，或稍后重试。' "$_ufm_src"
+            printf '连不上 %s（超时或连接被拒）。可以先确认能正常上网（打开常用的网页试一试），再重试一次；也可以稍后再试。' "$_ufm_src"
             ;;
         bad-content)
             printf '从 %s 拿回来的东西没法用（下载的内容不完整、被中间网络改写，或这一版里安装包的信息有问题）。请重试一次，或到 Releases 页面手动下载安装包。' "$_ufm_src"
@@ -582,11 +512,9 @@ _fetch_to_file() {
 _fetch_to_file_direct() {
     if [ -n "${2:-}" ] && ! valid_request_header "$2"; then printf '%s' ""; return 0; fi
     if [ -n "$2" ]; then
-        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl -fsSL --max-time 60 --noproxy '*' -D "$1.headers" -A "EnvProxyUpdate" -H "$2" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+        curl_direct -fsSL --max-time 60 --noproxy '*' -D "$1.headers" -A "EnvProxyUpdate" -H "$2" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
     else
-        env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl -fsSL --max-time 60 --noproxy '*' -D "$1.headers" -A "EnvProxyUpdate" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
+        curl_direct -fsSL --max-time 60 --noproxy '*' -D "$1.headers" -A "EnvProxyUpdate" -o "$1" -w '%{http_code}' "$3" 2>/dev/null
     fi
 }
 
@@ -750,8 +678,7 @@ get_tag_from_web() {
     _gtw_out=$(curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
     # 只有"换出口可能有用"时才退直连；给出确定结论（400/404/5xx）就不必再罚一次。
     if [ -z "$_gtw_out" ] || _gtw_retry_needed "$_gtw_out"; then
-        _gtw_out2=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
+        _gtw_out2=$(curl_direct -sI -o /dev/null -D "$_gtw_h" -w '%{http_code} %{redirect_url}' --max-time 8 --noproxy '*' -A "EnvProxyUpdate" "$1" 2>/dev/null || true)
         [ -n "$_gtw_out2" ] && _gtw_out="$_gtw_out2"
     fi
     case "$_gtw_out" in
@@ -1028,7 +955,6 @@ update_envproxy() {
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
         # 两者必须分开走：合并成一条路会谎报成"已取消"，而且退出码是 0。
         # 报错信息也要吃掉：重定向失败发生在 2>/dev/null 生效之前，会原样漏到屏幕上。
-        _ans_ok=1
         if ! _ask_human; then
             printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             return 1
@@ -1059,13 +985,9 @@ update_envproxy() {
     # 非交互环境（没有能提问的终端）：问不到人，就别白下一个包。
     # 先问再下载：反过来会白烧一次 GitHub 配额和一份安装包。
     if [ "$_yes" != "1" ]; then
-        # 判据与真正提问时用的是同一件事：能不能打开控制台。
-        # 只看"文件存在"（-r /dev/tty）不够：文件在却打不开时会漏过去，
-        # 于是先下载再发现问不到人——白烧一次配额和一份安装包。
-        _ui_tty=0
-        # 判据与真正提问时同一件事：能不能打开控制台。探测放子 shell 里静默失败。
-        if ( : < /dev/tty ) 2>/dev/null; then _ui_tty=1; fi
-        if [ $_ui_tty -eq 0 ]; then
+        # 判据走 _can_ask_human 一处：它已经是"能不能打开控制台"的唯一实现
+        # （只看 -r /dev/tty 不够——文件在却打不开时会漏过去，于是先下载再发现问不到人）。
+        if ! _can_ask_human; then
             style_out warn "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
             style_out warn "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
             return 1
@@ -1221,7 +1143,6 @@ _ENVPROXY_PKG_
         _ans=""
         # 读失败（没有控制终端、没权限）与"用户答否"是两件事：
         # 前者是"没法提问"（退出码 1），后者是"用户不更新"（退出码 0）。
-        _ans_ok=1
         if ! _ask_human; then
             printf '%s\n' "没法提问：读不到你的回答，未做任何改动。" >&2
             rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
@@ -1247,8 +1168,14 @@ _ENVPROXY_PKG_
     style_out dim "正在安装新版（保留日志）..."
     if ! install_package "$_exdir" "$_uroot" "$_exdir" "mac release-notes assets"; then
         rm -f "$_tgz" "$_tgz.headers" 2>/dev/null || true
+        # 结论由 install_package 自己打（它知道回滚到底成没成）：
+        # 「已回滚到更新前的状态」与「回滚未完成」是两件事，后者还额外打印了备份路径。
+        # 这里**不许再补一句"已回滚"**——原来那一句是无条件的，回滚没做成时它会把
+        # 最需要用户动手的那种失败说成"没事了"。
+        if [ -n "${INSTALL_PARTIAL_BACKUP:-}" ]; then
+            style_out warn "备份在：$INSTALL_PARTIAL_BACKUP"
+        fi
         rm -rf "$_exdir" 2>/dev/null || true
-        style_out warn "安装区已回滚（覆盖前监控没停，不需要恢复）。"
         return 1
     fi
     style_out dim "正在停止旧监控..."
@@ -1262,7 +1189,15 @@ _ENVPROXY_PKG_
     trap - EXIT
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
         style_out warn "收尾没走完，正在按当前文件重启监控..."
-        install_envproxy >/dev/null 2>&1 || true
+        # 重装由**调用方注入**（UPDATE_INSTALL_FINISH），本层不认识 ops：
+# 否则 update 调 ops 的 install_envproxy、ops 调 runtime 的 stop_monitor、
+# runtime 又调 update 的 get_remote_version——三个库首尾相接成环。
+# 注入方是入口：它本来就同时持有所有层。没注入时如实说一句，不静默跳过。
+    if [ -n "${UPDATE_INSTALL_FINISH:-}" ]; then
+        "$UPDATE_INSTALL_FINISH" >/dev/null 2>&1 || true
+    else
+        style_out dim "内部提示：更新未收到「重装」能力，请手动打开菜单选一次安装 / 修复。"
+    fi
         style_out text "如果状态仍不对，请打开菜单选一次「安装 / 修复」。"
     fi
     rm -rf "$_exdir" 2>/dev/null || true

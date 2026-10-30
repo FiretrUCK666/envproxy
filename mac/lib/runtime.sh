@@ -2,7 +2,10 @@
 #  runtime.sh — 运行时层：日志、监控进程、监控主循环、自启动定位器、shell 集成
 #  路径常量依赖入口先设好的 SCRIPT_DIR；本层不得自行推算脚本目录。
 # ------------------------------------------------------------------------------
-MONITOR_DIR="$SCRIPT_DIR/monitor"
+# 第一句必须先把 MONITOR_DIR / LOG_FILE 落实：它们在 base 层是惰性的
+# （加载期不读 SCRIPT_DIR，见那边的注释）。漏了这句，下面几个路径会算成
+# "/monitor.pid" 这种缺了前缀的错值——文件写到文件系统根上，卸载复检也找不到。
+ensure_monitor_paths || true
 PID_FILE="$MONITOR_DIR/monitor.pid"
 STOP_FLAG="$MONITOR_DIR/stop.flag"
 # 停止意图标记：与 Windows 侧 stopped.intent 同一手法、同一条理由。
@@ -28,8 +31,7 @@ SNAPSHOT_KEYS="written round pid state prev_state pending_state pending_count po
 SNAPSHOT_FRESH_SEC=10
 SNAPSHOT_USABLE_SEC=60
 SNAPSHOT_STALE_SEC=240
-LOG_FILE="$MONITOR_DIR/monitor.log"
-PATH_CONF="$ENVPROXY_HOME/path.conf"
+# PATH_CONF 住在 base 层（它只由 ENVPROXY_HOME 派生，而 base 层的 has_install_record 要读它）。
 LOCATOR_PATH="$ENVPROXY_HOME/locator.sh"
 PLIST_LABEL="com.envproxy.monitor"
 # 测试可覆盖安装位置与自启动位置（自检时指向沙箱，不碰真实 HOME）。
@@ -148,15 +150,6 @@ read_state_snapshot() {
     return 0
 }
 
-log_msg() {
-    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-    printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE" 2>/dev/null || return 0
-    _size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
-    _size=$(printf '%s' "$_size" | tr -cd '0-9')
-    if [ -n "$_size" ] && [ "$_size" -gt "$LOG_MAX_BYTES" ] 2>/dev/null; then
-        tail -n "$LOG_TAIL_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || rm -f "$LOG_FILE.tmp" 2>/dev/null || true
-    fi
-}
 
 # ------------------------------------------------------------------------------
 # 5. 自启动（LaunchAgent + 固定定位器；文件夹可任意移动）
@@ -409,7 +402,11 @@ _hook_marker_present() {
 repair_hook_markers() {
     _rhm_fixed=0
     _rhm_failed=0
-    for _rc in $(rc_zsh_files) $(rc_bash_files); do
+    # 按行读而不是 `for x in $(...)`：后者靠词拆分，安装路径含空格就会被拆坏，
+    # 结果是某个 rc 文件被跳过、hook 没摘干净。here-doc 而不是管道：
+    # 管道会起子 shell，里面改的计数传不回来。
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         [ -f "$_rc" ] || continue
         # 只处理"确有标记但不成对"的文件；成对的与完全没装的都不碰。
         _rhm_s=0; _rhm_e=0
@@ -437,7 +434,10 @@ repair_hook_markers() {
             echo "  没能修好：$_rc" >&2
         fi
         rm -f "$_rhm_tmp" 2>/dev/null || true
-    done
+    done <<EOF
+$(rc_zsh_files)
+$(rc_bash_files)
+EOF
     if [ "$_rhm_fixed" = "0" ] && [ "$_rhm_failed" = "0" ]; then
         echo "没有需要修的：所有配置文件里的标记都是成对的。"
         return 0
@@ -448,20 +448,27 @@ repair_hook_markers() {
 }
 
 insert_shell_hooks() {
-    for _rc in $(rc_zsh_files); do
+    # 按行读（理由同 repair_hook_markers 那一处：路径含空格时 for-in-$( ) 会被拆坏）。
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         touch "$_rc" 2>/dev/null || continue
         _normalize_hook_block "$_rc" || true
         if ! _hook_marker_present "$_rc" "$HOOK_START"; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
-    done
-    for _rc in $(rc_bash_files); do
+    done <<EOF
+$(rc_zsh_files)
+EOF
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         [ -f "$_rc" ] || continue
         _normalize_hook_block "$_rc" || true
         if ! _hook_marker_present "$_rc" "$HOOK_START"; then
             printf '\n%s\n%s\n%s\n' "$HOOK_START" "$HOOK_LINE" "$HOOK_END" >> "$_rc" 2>/dev/null || true
         fi
-    done
+    done <<EOF
+$(rc_bash_files)
+EOF
     # 落点判据：两个 zsh 落点至少一个有完整 hook 块，否则终端路不通。
     for _rc in "$HOME/.zshenv" "$HOME/.zshrc"; do
         if _hook_block_paired "$_rc" 2>/dev/null && _hook_marker_present "$_rc" "$HOOK_LINE"; then
@@ -603,7 +610,8 @@ remove_shell_hooks() {
     # 名单用 base 层那一份（rc_check_files）：状态页、安装、卸载三处必须同一个来源，
     # 各写一份必然漂移——曾经状态页只看 .zshrc 系列、安装实际写 .zshenv，
     # 只装了 .zshenv 的用户状态页会错报"没有同步块"。
-    for _rc in $(rc_check_files); do
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         [ -f "$_rc" ] || continue
         # 卸载是"恢复原状"，安装前快照到此已经用过（或本来就该丢）：
         # 留着它只会让家目录多出一堆 .envproxy.bak，而屏幕上还印着"已恢复到安装前的状态"。
@@ -631,13 +639,18 @@ remove_shell_hooks() {
             fi
         fi
         rm -f "$_tmp" 2>/dev/null || true
-    done
+    done <<EOF
+$(rc_check_files)
+EOF
     # 早期版本可能在别的落点写过块（.zprofile/.zlogin），那些文件不在写入名单里，
     # 但同样要清干净它们的 .bak，否则家目录里会孤零零留一份备份。
-    for _rc in $(rc_check_files); do
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         [ -e "$_rc.envproxy.bak" ] || continue
         rm -f "$_rc.envproxy.bak" 2>/dev/null || true
-    done
+    done <<EOF
+$(rc_check_files)
+EOF
 }
 
 # 状态对齐：判出状态才动手，判不出就什么都不做。
@@ -755,8 +768,12 @@ start_monitor() {
     disown 2>/dev/null || true
     # 复检判据是 pid 文件（监控拿到单实例锁之后才写）。冷启动要几秒，所以轮询而不是固定等待：
     # 固定等待既可能把"其实起来了"误报成失败，也可能放过那个正在抢锁失败的进程。
-    _deadline=$(( $(date +%s) + 12 ))
-    while [ "$(date +%s)" -lt "$_deadline" ]; do
+    # 截止用单调钟：墙上时钟被 NTP 校正或休眠唤醒往回拨一下，截止时刻就落到了过去，
+    # 这一轮会立刻放弃等待，把"正在正常启动的监控"误报成起不来。
+    monotonic_now; _deadline=$(( MONO_NOW + 12 ))
+    while :; do
+        monotonic_now
+        [ "$MONO_NOW" -lt "$_deadline" ] || break
         get_monitor_pid_from_file >/dev/null 2>&1 && break
         sleep 0.4
     done
@@ -826,11 +843,15 @@ stop_monitor() {
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     printf 'user\n' > "$STOP_INTENT" 2>/dev/null || true
     # 定论由复读决定，不由"我发了停止信号"决定：进程还在就不能报"已停止"。
+    # 退出码也必须跟着这个结论走——原来两支都只是 echo，函数隐式返回 0，
+    # 于是 `stop_monitor || 记失败` 的守卫永远不会触发：屏幕说"未能停止"，
+    # 脚本里的 `envproxy.sh stop && 下一步` 却照常往下走。
     if [ -n "$(get_monitor_pid || true)" ]; then
         echo "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
-    else
-        echo "监控进程已停止。"
+        return 1
     fi
+    echo "监控进程已停止。"
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -1047,6 +1068,9 @@ run_monitor_loop() {
         if [ $_repair -ge 30 ]; then
             _repair=0
             repair_autorun || true
+            # 探测层的中断残留（Ctrl-C / 被杀 / 断电时来不及删的临时目录）。
+            # 挂在这个周期里而不是每轮：它只是清扫，与正确性无关，不该占热路径。
+            probe_clean_stale_temp || true
             # 版本号缓存：状态页要显示"是不是最新版"，而它自己不许联网——
             # 否则每次"查看状态"都要等一次外网往返（离线/限流时白等）。
             # 写缓存的是监控（它本来就写文件），状态页只读。

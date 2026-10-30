@@ -28,6 +28,8 @@
 
 # 快捷方式文件名后缀。放进名字而不是"另存到别的目录"，是为了在任务栏和开始
 # 菜单里一眼分辨：同一个程序的两个图标各自身份明确，用户不会点错。
+# 用户会在桌面和开始菜单里逐字看到它，换成别的说法就对不上了。
+# @explain 「走代理」「固定直连」都是图标的显示名（走代理 / 固定直连 两种图标），不是解释机制
 $ProxyShortcutSuffix = '（走代理）'
 
 # 启动脚本里那一行「它服务的程序是哪个」的标记名。写与读共用这一个常量：
@@ -398,7 +400,8 @@ function New-ProxyShortcut {
         # 工作目录照原样传：很多程序靠它找自己的资源文件，改成别处会打不开。
         $lnk.WorkingDirectory = $WorkingDirectory
         $lnk.IconLocation = $TargetPath + ',0'
-        $lnk.Description = ('通过 EnvProxy 走代理启动：' + $Name)
+        # @explain 「走代理」是产品的固定叫法（图标名的一部分），不是解释机制；快捷方式的属性里就显示这行字。
+$lnk.Description = ('通过 EnvProxy 走代理启动：' + $Name)
         $lnk.WindowStyle = 1
         $lnk.Save()
     } catch {
@@ -693,7 +696,8 @@ function Get-AdvancedPageLines {
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  能做什么' },
         @{ Role='blank';   Text='' },
-        @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
+        # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
+            @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
         @{ Role='item';    Text='    2  管理已建的                 看状态、删掉不要的' },
         @{ Role='item';    Text='    3  查看中继                   图标用的那个固定地址，现在怎么样' },
         @{ Role='blank';   Text='' },
@@ -1134,7 +1138,8 @@ function Invoke-ManageProxyShortcuts {
         $recs = @(Get-ProxyShortcutRecords)
         $orphans = @(Get-OrphanProxyLaunchers)
         Clear-Screen
-        Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
+        # @explain 「管理走代理的快捷方式」是这个页面的名字（与菜单项同一个名字），不是解释机制。
+Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
         Write-Host ''
         if ($recs.Count -eq 0 -and $orphans.Count -eq 0) {
             Write-Styled 'dim' '  还没有建过。先回上一页选 1 建一个。'

@@ -21,17 +21,24 @@ install_envproxy() {
     echo ""
     # 首次安装的判据要在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
-    if [ -f "$PATH_CONF" ]; then _first=0; else _first=1; fi
+    # 判据走 base 层的 has_install_record（那条事实的唯一权威处），不在这里内联。
+    if has_install_record; then _first=0; else _first=1; fi
     # 先快照用户原值：之后卸载时按它还原，覆盖前留底。
     # 成败要收下来：这份快照是**其它所有归属判据的输入**，记不下来的话，
     # 卸载时就还原不回用户的配置——那是安装时最该喊出来的一句话。
     _snapshot_ok=1
     if ! snapshot_prev_env "$_first"; then _snapshot_ok=0; fi
     style_out text "[1/4] 正在写开机自启……"
+    # 四步里哪几步真的做成了，要一路记到函数末尾：入口靠这个退出码判断
+    # 「这次安装到底成没成」，脚本里写 `envproxy.sh install && ...` 的人也靠它。
+    # 原来这个函数无条件 return 0，于是"监控没起来""变量写不进去"这类
+    # 明确的失败在退出码上是看不见的——用户只能靠肉眼读屏幕。
+    _inst_ok=0
     if set_autorun; then
         style_out ok "[1/4] 开机自启动：已写入"
     else
         style_out warn "[1/4] 开机自启动：写入失败，请检查 ~/Library/LaunchAgents 是否可写"
+        _inst_ok=1
     fi
     # 编号必须与 Windows 侧同一含义（自启 → 监控 → 变量 → 终端同步）。
     # 早先两端 [2/4] 和 [3/4] 各指另一件事，用户按编号念给客服或照 README 对照排查时，
@@ -44,6 +51,7 @@ install_envproxy() {
         style_out ok "[2/4] 监控进程：已启动"
     else
         style_out warn "[2/4] 监控进程：未能确认运行，原因见上面那两行"
+        _inst_ok=1
     fi
     update_path_record
     # 枚举失败时这一轮是"不知道"：不动环境变量（与监控主循环同一条规则）。
@@ -61,6 +69,7 @@ install_envproxy() {
     elif [ "$_asr" = "2" ]; then
         style_out warn "[3/4] 环境变量：写不进去（$ENVPROXY_HOME 不可写，或磁盘已满）。"
         style_out dim "      检查一下这个目录的权限和剩余空间，然后重跑一次安装。"
+        _inst_ok=1
     else
         # 读不出来 ≠ 没有代理：这一轮什么都没改，如实说明（与 Windows 侧同口径）。
         style_out warn "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
@@ -76,6 +85,7 @@ install_envproxy() {
         style_out ok "[4/4] 终端同步：已在终端的启动配置里写入（zsh/bash，新开终端生效；fish 不支持）"
     else
         style_out warn "[4/4] 终端同步：写入失败，请检查 ~/.zshenv 是否可写"
+        _inst_ok=1
     fi
     echo ""
     # 联网对比版本要一两秒：先说一声，别让最后这一步又变成静默等待。
@@ -91,7 +101,15 @@ install_envproxy() {
     echo ""
     # 左边那一列按最长条目补齐，不靠手敲空格：改一个字就整列歪掉，
     # 而"歪一格"这种事只有人眼看得出来。与 Windows 侧同一套做法。
-    style_out ok "装好了。之后怎么用："
+    # 有步骤没做成时不许说"装好了"——那是这台机器上最容易被当成"已经没事了"的一句话。
+    if [ "$_inst_ok" = "0" ]; then
+        style_out ok "装好了。之后怎么用："
+    else
+        style_out warn "装是装了，但有步骤没做成（见上面带「失败 / 未能」的那几行）。"
+        style_out warn "先把它们解决掉，再点一次菜单$(menu_ref install)重跑；否则某些功能会时好时坏。"
+        echo ""
+        style_out dim "之后怎么用："
+    fi
     # 每一行三格：左列标签（暗）/ 右列说明（正文色）/ 要照抄的命令（命令色）。
     # 整行一个颜色就没有层次：用户看不出哪一段能复制。命令单独列一格，
     # 而不是靠正则从整行里认——"在它里面执行  export ..." 开头不是命令，
@@ -131,6 +149,10 @@ install_envproxy() {
     _tip_row "$_tip_a4" "在它里面执行" "export ENVPROXY_TERM=off"
     _tip_row "$_tip_a5" "在它里面执行" "unset ENVPROXY_TERM"
     _tip_row "$_tip_a6" "菜单$(menu_ref help)。" ""
+    # 退出码如实反映这次安装成没成：入口靠它，脚本里 `install && ...` 也靠它。
+    # 不能像原来那样靠"最后一条命令"隐式决定——最后一条是 printf，永远是 0，
+    # 于是这条路上的每一次失败在退出码上都等于成功。
+    return "$_inst_ok"
 }
 
 # 卸载时要清掉的运行时文件清单——**删除与复检的唯一来源**。
@@ -206,7 +228,13 @@ uninstall_envproxy() {
         # 原来删除列了 7 个、复检一个都没查：删失败（权限、被占用、杀软锁住）时
         # 仍然报"[完成] 电脑已恢复到安装前的状态"，而重装后状态页会读到上一份的
         # version.cache / state.snapshot——正是上面那段注释自己点名的后果，只是没人验。
-        rm -f $(monitor_runtime_files) 2>/dev/null || true
+        # 按行读、逐个删，不用 `rm -f $(monitor_runtime_files)`：
+        # 后者靠**词拆分**把清单拆成参数，而安装路径里完全可能有空格（"我的 工具"），
+        # 于是一个文件被拆成两段、两段都不存在，rm -f 静默成功——卸载看着完成，文件还在。
+        # monitor_runtime_files 本来就是按行输出的（printf '%s\n'），这里就该按行消费。
+        monitor_runtime_files 2>/dev/null | while IFS= read -r _urf; do
+            [ -n "$_urf" ] && rm -f "$_urf" 2>/dev/null
+        done || true
         rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
             rmdir "$MONITOR_DIR" 2>/dev/null || true
@@ -263,9 +291,14 @@ EOF_RUNTIME_FILES
     if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
     # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
-    for _rc in $(rc_check_files); do
+    # 按行读而不是 `for x in $(...)`：后者靠词拆分，路径含空格就会被拆坏。
+    # 用 here-doc 而不是管道：管道会起子 shell，里面改的 _dirty 传不回来。
+    while IFS= read -r _rc; do
+        [ -n "$_rc" ] || continue
         if _hook_marker_present "$_rc" "$HOOK_START"; then _dirty="$_dirty 终端同步的配置块还在（$_rc）；"; break; fi
-    done
+    done <<EOF
+$(rc_check_files)
+EOF
     if proxy_vars_present 2>/dev/null; then _dirty="$_dirty 代理变量仍在；"; fi
     if [ -n "$(get_monitor_pid || true)" ]; then _dirty="$_dirty 监控进程仍在；"; fi
     if [ $_remove_log -eq 1 ] && [ -f "$LOG_FILE" ]; then _dirty="$_dirty 历史日志未能删除；"; fi
@@ -281,6 +314,10 @@ EOF_RUNTIME_FILES
         style_out warn "[未完成] 这几处没清干净："
         style_out warn "        $_dirty"
         style_out warn "        再跑一次 uninstall 试一次；还不行就照上面列出的位置手动删。"
+        # 退出码必须跟着结论走：只打印"[未完成]"而返回 0，
+        # 脚本里的 `envproxy.sh uninstall && 认为已卸干净` 就成立——屏幕上说没清完、
+        # 退出码说成功了，两个信号互相矛盾，调用方只会信后者。
+        return 1
     fi
 }
 
@@ -304,8 +341,7 @@ _port_alive() {
     # 整行注释丢弃、续行到此结束，后面的参数变成一条独立命令去执行——
     # 实测 curl 只收到前四个参数、URL 全丢，报 "no URL specified"，
     # 于是判断永远是"死了"，状态页每次都打印假警告。
-    if env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-        curl --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
+    if curl_direct --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
         --noproxy '' -p -x "http://$_pa_addr:$_pa_port" "http://127.0.0.1:9/" 2>/dev/null; then
         return 0
     fi
@@ -385,7 +421,9 @@ get_status_snapshot() {
         # 曾经是"拿到 1 之后再调一次 find_candidate_ports 去分辨"，而那个函数内部
         # 本身就是一次全端口 lsof+ps+CONNECT——于是没有代理的机器上，每 2 秒刷新的
         # 状态页要跑两轮全扫。三态在源头分开，这里一次即可。
-        _p=$(get_in_use_proxy_port)
+        # 注入的端口由这里读好再传进去：probe 层只管探测，不该反过来调 env 层的读值函数
+        # （那会让 probe 依赖 env、env 又依赖 probe 的端口函数，形成环）。
+        _p=$(get_in_use_proxy_port "$(get_current_proxy_port 2>/dev/null || echo "")")
         _p_rc=$?
         case "$_p_rc" in
             0) _port="$_p" ;;
@@ -401,7 +439,9 @@ get_status_snapshot() {
     _ts_unpaired=0
     _ts_stale=0
     _ts_badline=""
-    for _ts_p in $(rc_check_files); do
+    # 按行读而不是 for-in-$( )：后者靠词拆分，路径含空格会被拆坏。
+    while IFS= read -r _ts_p; do
+        [ -n "$_ts_p" ] || continue
         [ -f "$_ts_p" ] || continue
         # 先看有没有我们的标记：连标记都没有的文件不是「不成对」，是「没装过」，不计数。
         _ts_has_s=0
@@ -425,7 +465,9 @@ get_status_snapshot() {
             # 与 Windows 侧 stale 同一口径（安装会按当前版本重写，不用用户动手）。
             _ts_stale=$((_ts_stale + 1))
         fi
-    done
+    done <<EOF
+$(rc_check_files)
+EOF
     if [ "$_ts_hits" -gt 0 ]; then
         _ts_state="ok"
     elif [ "$_ts_unpaired" -gt 0 ]; then
@@ -713,11 +755,11 @@ EOF
 
     _ssl_prev=""
     _ssl_next=0
-    _ssl_now=$(date +%s)
+    monotonic_now; _ssl_now=$MONO_NOW
     # Ctrl+C 也要恢复光标：不恢复的话用户下次看到的是一台"没有光标"的终端。
     trap 'exit_screen; trap - INT; return 130' INT
     while :; do
-        _ssl_now=$(date +%s)
+        monotonic_now; _ssl_now=$MONO_NOW
         if [ "$_ssl_now" -ge "$_ssl_next" ]; then
             # 渲染失败就保留上一帧：状态页是"看一眼"用的，不该被一帧失败踢出去。
             # 与 Windows 侧同一处理（那边两个调用各包一层 try）。
@@ -765,7 +807,8 @@ show_status() {
     # 用途是避免把"从没装过"说成"崩溃/被强制退出"：后者是故障语气，
     # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
     # 必须算在结论行**之前**：结论行要用它。
-    if [ -f "$PATH_CONF" ]; then _never_installed=0; else _never_installed=1; fi
+    # 与安装侧同一个判据（base 层 has_install_record）：内联一份就是第二个真相。
+    if has_install_record; then _never_installed=0; else _never_installed=1; fi
     _pb=""
     if [ -z "$_m" ]; then
         if [ -f "$STOP_INTENT" ]; then _pb="$_pb监控按你的选择停着
@@ -1530,13 +1573,11 @@ _help_apply_spacing() {
     _hs_all=$(cat)
     # 先拆成数组（macOS 自带 bash 3.2 没有 mapfile，用 while read 累加）
     _hs_i=0
-    _hs_code=""
     while IFS= read -r _hs_l; do
         _hs_c=${_hs_l%% *}
         if ! _help_code_valid "$_hs_c"; then _hs_c="t"; fi
         # 手写的空行一律丢掉，空行只由下面按结构补
         [ "$_hs_c" = "b" ] && continue
-        _hs_code="$_hs_code $_hs_c"
         _hs_i=$((_hs_i + 1))
         eval "_hs_line$_hs_i=\$_hs_l"
     done <<EOF

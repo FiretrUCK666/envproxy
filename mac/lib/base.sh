@@ -8,6 +8,143 @@
 # ------------------------------------------------------------------------------
 
 ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"
+# 安装记录（只有安装时写、卸载时删）。住在 base 而不是 runtime：
+# base 层的 has_install_record 要读它，而 base 先于 runtime 加载——
+# 放在 runtime 会让"装过没装过"在 base 层被读成"没装过"（空路径 → [ -f "" ] 为假），
+# 于是首次安装判据永远成立，使用者自己设的本机代理会被当成本工具残留删掉。
+# 它只由 ENVPROXY_HOME 派生，天然属于这一层。
+PATH_CONF="$ENVPROXY_HOME/path.conf"
+
+# 运行时目录与日志文件：住在 base 而不是 runtime，理由是 log_msg 必须在这里。
+# 写日志是横切能力：env / probe / runtime 三层都要写，任何一层都不该"反过来"
+# 依赖另一层去拿它。
+#
+# **但派生它的 SCRIPT_DIR 只有入口才有**（契约：只有入口能回答"这个程序在哪里"）。
+# 在加载期就算，等于让 base 层依赖一个自己还没有的值：单独 `. ./mac/lib/base.sh`
+# 时直接报 `SCRIPT_DIR: unbound variable`（set -u 下当场崩）。
+# 这里改成**惰性**：两个变量只在 SCRIPT_DIR 已经存在时立刻算好（正常运行时
+# 入口早就发布过了，行为与以前完全一致）；否则留空，由 ensure_monitor_paths
+# 在真正需要路径的地方现算。
+if [ -n "${SCRIPT_DIR:-}" ]; then
+    MONITOR_DIR="$SCRIPT_DIR/monitor"
+    LOG_FILE="$MONITOR_DIR/monitor.log"
+fi
+
+# 幂等地补上两个路径变量。SCRIPT_DIR 还没有时什么都不做并返回 1——
+# 调用方那时也不该用到路径（库里任何函数被调用时，入口必然已经发布过位置）。
+ensure_monitor_paths() {
+    if [ -n "${MONITOR_DIR:-}" ] && [ -n "${LOG_FILE:-}" ]; then return 0; fi
+    [ -n "${SCRIPT_DIR:-}" ] || return 1
+    MONITOR_DIR="$SCRIPT_DIR/monitor"
+    LOG_FILE="$MONITOR_DIR/monitor.log"
+    return 0
+}
+
+# 写一行监控日志（带时间戳），并在超过上限时截尾。
+# 放在 base 层是为了断开一条真环：probe/env 要写日志 → runtime；runtime 又要读
+# env 的变量状态、probe 的判定结论 → 回到 probe/env。三层互相依赖时，
+# 单独读任何一份文件都看不出它需要什么，改动一处会在另一处炸。
+log_msg() {
+    ensure_monitor_paths || return 0
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE" 2>/dev/null || return 0
+    _size=$(stat -f%z "$LOG_FILE" 2>/dev/null || stat -c%s "$LOG_FILE" 2>/dev/null || wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+    _size=$(printf '%s' "$_size" | tr -cd '0-9')
+    if [ -n "$_size" ] && [ "$_size" -gt "$LOG_MAX_BYTES" ] 2>/dev/null; then
+        tail -n "$LOG_TAIL_LINES" "$LOG_FILE" > "$LOG_FILE.tmp" 2>/dev/null && mv "$LOG_FILE.tmp" "$LOG_FILE" 2>/dev/null || rm -f "$LOG_FILE.tmp" 2>/dev/null || true
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# 2. 安装根与项目身份（纯查询，不联网、不写文件）
+# ------------------------------------------------------------------------------
+# 为什么这一组住在 base：它们只回答"这是哪个目录、这是哪个仓库"，
+# 是 update / ops / 帮助页共同的输入。原来它们住在 update 层，ops 要用就得反向引用，
+# update 又要调 ops 的安装收尾——于是两层互相依赖，谁也不能单独读懂。
+# 判定"是不是开发副本"是环境事实，与"要不要更新"是两件事，不该绑在一起。
+# 调用方传目录则判该目录（自检用），不传就判安装根。
+UPDATE_REPO_DEFAULT="FiretrUCK666/envproxy"
+# 更新源表：每行一条，字段依次是 Id / Name / Preferred / Api / Web / Base / ApiRepo。
+# @@ 是仓库标识的占位符，**加源 = 表里加一行**，不改代码逻辑。
+# 住在 base 而不是 update：两侧同层，且 get_project_home 这类"项目地址"函数
+# 也要从这里派生——放上层会让 base 反过来引用 update（加载顺序一旦变了就静默失效）。
+UPDATE_SOURCE_TABLE='official GitHub Api https://api.github.com/repos/@@/releases/latest https://github.com/@@/releases/latest https://github.com/@@ https://api.github.com/repos/@@'
+
+get_project_root() {
+    dirname "$SCRIPT_DIR"
+}
+
+is_dev_copy() {
+    [ -e "$(get_project_root)/.git" ]
+}
+
+# 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
+# 现在网页上下载的包已不再含这些文件，见 README 第 8 节）。
+# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
+# 传参则判指定目录（自检用），不传判安装根。
+is_source_copy() {
+    _sr="${1:-$(get_project_root)}"
+    [ ! -e "$_sr/.git" ] && [ -d "$_sr/.github" ]
+}
+
+# 从 git 远程地址里取出 "owner/repo"（纯函数）。
+# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
+# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
+# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
+# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
+# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
+# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
+# 主机不是 GitHub 时输出空串，让调用方退回内置默认。
+repo_id_from_remote_url() {
+    [ -n "$1" ] || return 0
+    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠。
+    # 只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
+    printf '%s' "$1" \
+        | sed -E 's#^([^/]+@[^/:]+):#\1/#; s#[?#].*$##; s#/+$##; s#\.git$##' \
+        | awk -F/ '{
+              n = NF
+              if (n < 3) exit
+              host = $(n - 2)
+              sub(/^.*@/, "", host)
+              sub(/:[0-9]+$/, "", host)
+              if (host != "github.com" && host !~ /[.]github[.]com$/) exit
+              if ($(n - 1) == "" || $n == "") exit
+              printf "%s/%s", $(n - 1), $n
+          }'
+}
+
+# 开发副本跟自己的 git remote 走（fork 后看得到自己仓库的 Release）；安装副本用内置默认。
+get_update_repo() {
+    if is_dev_copy && command -v git >/dev/null 2>&1; then
+        _u=$(git -C "$(get_project_root)" config --get remote.origin.url 2>/dev/null || true)
+        _r=$(repo_id_from_remote_url "$_u")
+        if [ -n "$_r" ]; then printf '%s' "$_r"; return 0; fi
+    fi
+    printf '%s' "$UPDATE_REPO_DEFAULT"
+}
+
+# 项目对外地址：主页、提问题的地方。与 Windows 侧 Get-ProjectUrls 同形。
+#
+# 从官网源的 Base 派生而不是各写一份：地址换了只改 UPDATE_SOURCE_TABLE 那一行，
+# 帮助、报告全跟着变。各写一份的结果是"帮助里还指着旧仓库"，用户点了打不开，
+# 也没有任何报错告诉他为什么。
+get_project_home() {
+    _gph_repo=$(get_update_repo)
+    [ -n "$_gph_repo" ] || return 1
+    printf "https://github.com/%s" "$_gph_repo"
+}
+
+get_project_issues() {
+    _gpi_home=$(get_project_home) || return 1
+    printf "%s/issues/new" "$_gpi_home"
+}
+# 本地版本号：读安装根的 VERSION。读不到就失败（不是返回空串——
+# 空串会被上层当成"版本是空的"，比较结果全错，还会报"已是最新"）。
+get_local_version() {
+    _vf="$(get_project_root)/VERSION"
+    [ -f "$_vf" ] || return 1
+    tr -d ' \t\r\n' < "$_vf" 2>/dev/null
+}
 
 # ------------------------------------------------------------------------------
 # 2. 环境变量读写（终端路 proxy.env + GUI 路 launchctl，双路同进同退）
@@ -377,6 +514,40 @@ PROXY_ADDR_VAR_NAMES="HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY al
 # NO_PROXY 的两个拼写（值是例外清单，回收规则与地址变量不同）
 NO_PROXY_VAR_NAMES="NO_PROXY no_proxy"
 
+# 这台机器上装过没有——**唯一权威处**。判据是安装时写下的路径记录（PATH_CONF），
+# 它只在安装时写、卸载时删。
+#
+# 为什么必须只留一处：它决定"本机地址的代理变量算谁的"。安装侧当作首次安装时，
+# 那些值会被认成使用者自己的（不删）；状态页判断"还没装过"时，措辞是"按 1 就好"
+# 而不是故障语气。两处各写一份、演化时分叉，表现就是使用者自己设的 mitmproxy
+# 被当成本工具残留删掉，而且没有快照可还原。
+has_install_record() {
+    [ -f "$PATH_CONF" ]
+}
+
+# 直连调 curl：把本工具可能设置过的代理变量逐个从环境里摘掉，再执行 curl。
+#
+# 为什么要有这个包装：这些调用点的意图都是"绕过代理，直接连目标"（探测握手、
+# 取版本号、下载资产）。环境里挂着 HTTP_PROXY 时 curl 会悄悄走代理，于是
+# "直连"实际上是"又走了一遍代理"——症状是探测永远失败、更新永远连不上，
+# 而 curl 自己一声不吭。
+#
+# 原来这套 `-u HTTP_PROXY -u http_proxy …` 清单在手抄，全仓 7 处、彼此还不一致
+# （有一处多带了 NO_PROXY no_proxy，其余六处没有）。清单本来就该从 PROXY_VAR_NAMES
+# 一处派生：手抄的后果是漏一个拼写就"探测被用户自己的环境劫持"，
+# 而这是最难复现的一类失效。
+#
+# 用法：curl_direct <curl 的其余参数...>
+# 输出与返回码原样透传，调用方照常用管道接。
+curl_direct() {
+    _cd_args=""
+    for _cd_v in $PROXY_VAR_NAMES; do
+        _cd_args="$_cd_args -u $_cd_v"
+    done
+    # shellcheck disable=SC2086
+    env $_cd_args curl "$@"
+}
+
 # NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。
 # 环境变量是共享资源——用户自己加的例外（公司内网等）与别的工具写下的例外都必须留着，
 # 本工具只负责"本机地址一定直连"这一件事。
@@ -509,6 +680,17 @@ _in_list() {
 usage_error() {
     if [ "${USAGE_COMMAND_COUNT:-0}" -gt 1 ]; then
         printf '一次只给一个命令。'
+        return 1
+    fi
+    # "给了命令位、但归一化后是空" 是打错，不是"没给命令"。
+    #
+    # 这条针对光秃秃的横线：入口用 sed 's/^--*//; s/^-//' 剥前缀，于是
+    # `-`、`--`、`---` 全都变成空串，而 USAGE_COMMAND_COUNT 仍然是 1。
+    # 只判"命令 >1 个"的话，它会被当成一次合法的空命令，一路落到分派的 "" 分支
+    # ——那是**监控模式**：敲错一个横线，工具就在后台常驻起来，屏幕上没有任何报错。
+    # "没传参数"（COUNT=0）才是监控模式，两者不能压成同一个空串。
+    if [ "${USAGE_COMMAND_COUNT:-0}" -ge 1 ] && [ -z "${USAGE_COMMAND:-}" ]; then
+        printf '无法识别的参数：%s' "${USAGE_EXTRA:-（空）}"
         return 1
     fi
     if [ -n "${USAGE_EXTRA:-}" ]; then

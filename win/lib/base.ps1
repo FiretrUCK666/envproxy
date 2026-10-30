@@ -5,6 +5,182 @@
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
+# 安装根与项目身份（纯查询：不联网、不写文件）
+# ------------------------------------------------------------------------------
+# 为什么这一组住在 base：它们只回答「这是哪个目录、这是哪个仓库」，
+# 是 update / ops / 帮助页共同的输入。原来它们住在 update 层，
+# 于是 ops 要用就得反向引用 update，update 又要调 ops 的安装收尾——
+# 两层互相依赖，谁也不能单独读懂。判定「是不是开发副本」是环境事实，
+# 与「要不要更新」是两件事，不该绑在一起。
+
+# 项目地址的唯一来源：主页、提问题的地方、看新版本的地方都从这里派生。
+# 地址换了只改这一行，帮助页与报告页跟着变；各写一份的结果是
+# 「帮助里还指着旧仓库」，用户点了打不开，也没有任何报错告诉他为什么。
+$UpdateSourceTable = @(
+    @{ Id = "official"; Name = "GitHub"; Preferred = "Api"; Api = "https://api.github.com/repos/@@/releases/latest"; Web = "https://github.com/@@/releases/latest"; Base = "https://github.com/@@"; ApiRepo = "https://api.github.com/repos/@@"; }
+)
+$UpdateRepoDefault = "FiretrUCK666/envproxy"
+
+# 安装根有 .git（目录，或 worktree 的 .git 文件）= 开发副本。
+function Test-DevCopy {
+    $root = Split-Path -Parent $ScriptDir
+    return (Test-Item (Join-Path $root ".git"))
+}
+
+# 源码包：有 .github、无 .git（多见于删掉了 .git 的克隆，或很早以前下载的旧包；
+# 现在网页上下载的包已不再含这些文件，见 README 第 8 节）。
+# 安装包里永远没有 .github（打包配置排除），用户自己也不会建这个目录，认它零误伤。
+# 传参则判指定目录（自检用），不传判安装根。
+function Test-SourceCopy {
+    param([string]$Root = "")
+    if (-not $Root) { $Root = Split-Path -Parent $ScriptDir }
+    return ((-not (Test-Item (Join-Path $Root ".git"))) -and (Test-Item (Join-Path $Root ".github")))
+}
+
+# 从 git 远程地址里取出 "owner/repo"（纯函数）。
+# 认的写法一视同仁：https://github.com/owner/repo、git@github.com:owner/repo、
+# ssh://git@ssh.github.com:443/owner/repo——仓库标识永远是路径的最后两段，与协议、主机、
+# 端口、有没有 .git 后缀无关，所以按"最后两段"取，而不是按某一种写法的长相去套。
+# 不许用 ".*github\.com[:/]([^/]+)/([^/]+)" 这种贪婪正则：ssh://git@ssh.github.com:443/owner/repo
+# 里 github.com 后面紧跟的是端口，第一段就抓成了 443，仓库标识跟着变成 "443/owner"，
+# 查询地址全错，最后报出来的是"发布方没提供安装包，请手动下载"——把用户支到错的下一步。
+# 主机不是 GitHub 时返回空串，让调用方退回内置默认：换了个远端（本地镜像、别的托管）
+# 不该让查询地址继续指着那个主机，也不该报成"发布方没给包"。
+function Get-RepoIdFromRemoteUrl([string]$Url) {
+    if (-not $Url) { return "" }
+    $u = $Url.Trim()
+    # scp 写法 git@host:owner/repo 里主机与路径之间是冒号而不是斜杠，先换成斜杠，
+    # 后面就只剩一种分隔符。只认"@ 后面到第一个 : 之前没有斜杠"这一种，别误伤 ssh:// 里的端口。
+    $u = $u -replace '^([^/]+@[^/:]+):', '$1/'
+    $u = $u -replace '[?#].*$', ''
+    $u = $u.TrimEnd('/')
+    $u = $u -replace '\.git$', ''
+    $parts = @($u -split '[/\\]' | Where-Object { $_ -ne '' })
+    if ($parts.Count -lt 3) { return "" }
+    $hostPart = $parts[$parts.Count - 3] -replace '^.*@', ''
+    $hostPart = $hostPart -replace ':[0-9]+$', ''
+    if ($hostPart -ne 'github.com' -and $hostPart -notlike '*.github.com') { return "" }
+    $owner = $parts[$parts.Count - 2]
+    $repo = $parts[$parts.Count - 1]
+    if (-not $owner -or -not $repo) { return "" }
+    return ("{0}/{1}" -f $owner, $repo)
+}
+
+function Get-UpdateRepo {
+    if (Test-DevCopy) {
+        $root = Split-Path -Parent $ScriptDir
+        try {
+            $url = (git -C $root config --get remote.origin.url 2>$null)
+            $id = Get-RepoIdFromRemoteUrl $url
+            if ($id) { return $id }
+        } catch {}
+    }
+    return $UpdateRepoDefault
+}
+
+# 项目对外地址的唯一来源：主页、提问题的地方、看新版本的地方。
+#
+# 为什么从官网源的 Base 派生，而不是各写一份：地址换了只改 $UpdateSourceTable 那一行，
+# 帮助、报告、关于页全都跟着变。各写一份的结果是"帮助里还指着旧仓库"——
+# 用户点了打不开，也没有任何报错告诉他为什么。
+# 取不到仓库标识时返回空串，调用方据此不显示地址（宁可不说，也不能给个错地址）。
+function Get-ProjectUrls {
+    $repo = Get-UpdateRepo
+    if (-not $repo) { return [pscustomobject]@{ Repo = ''; Home = ''; Issues = ''; Releases = '' } }
+    $src = $UpdateSourceTable[0]
+    # Base 形如 https://github.com/@@，@@ 是仓库标识的占位符。
+    # 变量名不能叫 $home：$HOME 是 PowerShell 的自动变量，而变量名不区分大小写，
+    # 赋值会被它吃掉，"主页"于是变成用户的家目录（实测过一次）。
+    $baseUrl = ([string]$src.Base).Replace('@@', $repo)
+    return [pscustomobject]@{
+        Repo     = $repo
+        Home     = $baseUrl
+        Issues   = ($baseUrl + '/issues/new')
+        Releases = ($baseUrl + '/releases')
+    }
+}
+
+function Get-LocalVersion {
+    try {
+        $root = Split-Path -Parent $ScriptDir
+        $vf = Join-Path $root "VERSION"
+        # 直接读、用异常判不存在：先 Test-Path 再读是两套语义，含 [ ] 时前者会撒谎。
+        return ((Read-Text $vf).Trim())
+    } catch {}
+    return ""
+}
+
+# ------------------------------------------------------------------------------
+# 监控运行时目录与日志（日志是横切能力，住在最底层）
+# ------------------------------------------------------------------------------
+# 为什么这一组住在 base：写日志是横切能力——env / probe / runtime 三层都要写。
+# 原来 Write-MonitorLog 住在 runtime，于是 env 要写日志就得反向引用 runtime，
+# 而 runtime 又要读 env 的变量状态 —— 两层互相依赖，谁也不能单独读懂。
+#
+# **但派生它的 $ScriptDir 只有入口才有**（契约：只有入口能回答"这个程序在哪里"）。
+# 在加载期就算，等于让 base 层依赖一个自己还没有的值：单独点源 base.ps1 时
+# 直接抛 "无法将自变量绑定到参数 'Path'，因为它为 null"。这里改成**惰性**：
+# 所以：$ScriptDir 已经在时（正常运行）照旧立刻算好，行为与以前完全一致；
+# 还不在时留空，由 Ensure-MonitorPaths（幂等）在真正要用路径的地方补上。
+#
+# 为什么还留着 $MonitorDir / $LogFile 两个变量名：全仓三十多处引用它们，
+# 逐个改成函数调用是把一次结构修正变成一场大改，风险远大于收益。
+# **顺序约束**：任何在这个文件之外用 $MonitorDir / $LogFile 的代码，必须先调一次
+# Ensure-MonitorPaths（runtime 层就是这么做的），否则拿到空串会派生出相对路径。
+if ($ScriptDir) {
+    # 入口已经发布过位置（正常运行时走这条）：照旧立刻算好，行为与以前完全一致。
+    $MonitorDir = Join-Path $ScriptDir "monitor"
+    $LogFile = Join-Path $MonitorDir "monitor.log"
+}
+
+# 幂等地补上两个路径变量。$ScriptDir 还没有时**什么都不做并返回 $false**——
+# 调用方那时也不该用到路径（库里任何函数被调用时，入口必然已经发布过位置）。
+function Ensure-MonitorPaths {
+    if ($MonitorDir -and $LogFile) { return $true }
+    if (-not $ScriptDir) { return $false }
+    $script:MonitorDir = Join-Path $ScriptDir "monitor"
+    $script:LogFile = Join-Path $script:MonitorDir "monitor.log"
+    return $true
+}
+
+function Write-MonitorLog([string]$msg) {
+    try {
+        if (-not (Ensure-MonitorPaths)) { return }
+        Ensure-MonitorDir
+        # 时间戳必须用固定区域性：Get-Date -Format 受当前区域设置影响，
+        # 泰语（th-TH）下写成佛历年份（实测 "2569-10-22"），阿拉伯语写回历（"1448-05-11"）。
+        # 日志是给人对时间用的，年份错位会让整条线索作废。mac 侧 date 输出本就是数字，这边对齐它。
+        $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss", [System.Globalization.CultureInfo]::InvariantCulture)
+        $line = "{0}  {1}" -f $stamp, $msg
+        # 共享写模式（FileShare.ReadWrite）：多进程追加写入互不阻塞，零锁脆弱点。
+        # 改用共享文件流后，任何进程（含监控自身截断）互不阻塞，零锁脆弱点。
+        $fs = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Append,
+            [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($line + "`r`n")
+            $fs.Write($bytes, 0, $bytes.Length)
+        } finally { $fs.Dispose() }
+        # 体积上限：超过 $LogMaxBytes 截断为最近 $LogTailLines 行（黑匣子保留近期窗口，永远不会无限增长）
+        # 截断同样用共享模式；万一失败（极端外部锁），静默跳过、下次再试——绝不中断监控
+        # 注意：读取必须显式 UTF8 —— 默认按 ANSI 读会乱码，且截断时把乱码写回损坏日志
+        $fi = New-Object System.IO.FileInfo($LogFile)
+        if ($fi.Exists -and $fi.Length -gt $LogMaxBytes) {
+            $keep = [System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last $LogTailLines
+            $fs2 = [System.IO.File]::Open($LogFile, [System.IO.FileMode]::Create,
+                [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+            try {
+                $bytes2 = [System.Text.Encoding]::UTF8.GetBytes(($keep -join "`r`n") + "`r`n")
+                $fs2.Write($bytes2, 0, $bytes2.Length)
+            } finally { $fs2.Dispose() }
+        }
+    } catch {}
+}
+
+function Ensure-MonitorDir {
+    try { New-Item -Path $MonitorDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null } catch {}
+}
+
+# ------------------------------------------------------------------------------
 # 0.5 文件与路径的唯一入口（治本：所有读写都从这里走，内部一律 -LiteralPath）
 # 使用者能给安装文件夹改名，名字里可能出现 [ ] * ? 这类字符——在 PowerShell 里它们是通配符，
 # 直接用 Test-Path / Get-Content / Remove-Item 会出现"文件明明在、却说不存在"，甚至删错对象。
@@ -459,12 +635,6 @@ function Hide-ProxyCredential([string]$Text) {
     return [regex]::Replace($Text, '(?<=://)[^/@\s]+(?=@)', '***')
 }
 
-# 文件的 sha256（小写十六进制）。
-# 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
-# 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），
-# 模块自动加载就会挑中那个二进制模块并加载失败——命令直接"找不到"，
-# 不是报错而是静默缺失：校验值那一步会跟着塌掉。
-# 直接用 .NET 的 SHA256 自己算：任何环境都拿得到，不依赖模块自动加载。
 # 从一个**Windows 路径**里取文件名（不含扩展名）。
 #
 # 为什么不用 [System.IO.Path]::GetFileNameWithoutExtension：那个方法按**宿主平台**
@@ -493,6 +663,12 @@ function Get-PathExtension([string]$Path) {
     return ''
 }
 
+# 文件的 sha256（小写十六进制）。
+# 不用 Get-FileHash：它是 Microsoft.PowerShell.Utility 模块导出的命令，
+# 而 PSModulePath 里只要排着别的 PowerShell 版本的模块目录（常见于从 pwsh 7 里再开 5.1），
+# 模块自动加载就会挑中那个二进制模块并加载失败——命令直接"找不到"，
+# 不是报错而是静默缺失：校验值那一步会跟着塌掉。
+# 直接用 .NET 的 SHA256 自己算：任何环境都拿得到，不依赖模块自动加载。
 function Get-Sha256Hex([string]$Path) {
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
@@ -502,6 +678,38 @@ function Get-Sha256Hex([string]$Path) {
     $sb = New-Object System.Text.StringBuilder
     foreach ($b in $bytes) { [void]$sb.Append($b.ToString('x2')) }
     return $sb.ToString()
+}
+
+# ------------------------------------------------------------------------------
+# 代理地址的拼装与解析（纯字符串，不碰网络）
+# ------------------------------------------------------------------------------
+# 为什么住在 base 而不是 probe：这两件事是**纯字符串变换**，而 probe 是探测层
+# （它要真的连端口）。放在 probe 里会造出一个环——env 层要用它们，
+# 而 probe 层又反过来要用 env 层的 Get-EnvProxyValue，两边互相依赖，
+# 全靠入口里"probe 排在 env 前面 + 运行时按名解析"才没崩。
+# 下沉到 base 之后，依赖方向变成单向：base ← probe、base ← env。
+
+# 给已选定的地址拼代理 URL：IPv6 字面量要加方括号（URL 的写法要求）。
+function Get-ProxyUrlFor([string]$Address, [int]$Port) {
+    if ($Address -like "*:*") { return ("http://[{0}]:{1}" -f $Address, $Port) }
+    return ("http://{0}:{1}" -f $Address, $Port)
+}
+
+# 把代理 URL 拆成地址与端口。解析不出来返回 $null（调用方据此判"这不是个地址"）。
+function Split-ProxyUrl([string]$Url) {
+    if (-not $Url) { return $null }
+    try {
+        $u = [System.Uri]$Url
+        if ($u.Port -le 0) { return $null }
+        # Uri::Host 对 IPv6 返回带方括号的 "[::1]"（这是 URL 的写法），
+        # 而 IPAddress::Parse 要的是裸 "::1"。不剥掉方括号的话，IPv6 注入值
+        # 会在试连时解析失败、被静默判成"端口已死"——正是这条检查要防的那种错误结论。
+        $h = $u.Host
+        if ($h.StartsWith('[') -and $h.EndsWith(']')) { $h = $h.Substring(1, $h.Length - 2) }
+        return [pscustomobject]@{ Host = $h; Port = $u.Port }
+    } catch {
+        return $null
+    }
 }
 
 # ------------------------------------------------------------------------------
@@ -524,6 +732,13 @@ function Get-UsageError {
         [string[]]$Extra = @()
     )
     if ($CommandCount -gt 1) { return "一次只给一个命令。" }
+    # "给了命令位、但归一化后是空" 是打错，不是"没给命令"。
+    # Windows 侧走 [switch] 参数绑定，光秃秃的 `-` 到不了这里；但两端判据必须同形
+    # （门禁 10 拿同一批应答互比），而且入口若将来改成位置式解析就会用上这一条。
+    # mac 侧的同名判据见 base.sh 的 usage_error。
+    if ($CommandCount -ge 1 -and [string]::IsNullOrEmpty($Command)) {
+        return "无法识别的参数：（空）"
+    }
     if ($Extra.Count -gt 0) {
         # 空参数也要说清是哪里的空：直接拼出来会只剩一个冒号。
         $parts = foreach ($e in $Extra) { if ($e -eq "") { '""' } else { $e } }

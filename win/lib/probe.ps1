@@ -312,7 +312,10 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
     }
     if ($pending.Count -eq 0) { return $null }
     # 阶段 1：并发连接，统一截止 800ms（逐个 IsCompleted 轮询，无 64 句柄上限问题）
-    $deadline = [DateTime]::UtcNow.AddMilliseconds(800)
+    # 截止用**单调钟**，不用 [DateTime]::UtcNow：墙上时钟被 NTP 校正、夏令时或
+    # 休眠唤醒向后拨一下，截止时刻就成了过去，这一轮立刻提前结束——活着的端口被漏掉，
+    # 上层读到"这些端口上没有代理"。同文件 902 行那条"时刻一律用单调秒数"说的就是这件事。
+    $deadline = (Get-MonotonicSeconds) + 0.8
     do {
         $allDone = $true
         foreach ($item in $pending) {
@@ -320,7 +323,7 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
         }
         if ($allDone) { break }
         Start-Sleep -Milliseconds 20
-    } while ([DateTime]::UtcNow -lt $deadline)
+    } while ((Get-MonotonicSeconds) -lt $deadline)
     $connected = @()
     foreach ($item in $pending) {
         if (-not $item.Async.IsCompleted) { continue }
@@ -342,8 +345,9 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
     }
     $winner = $null
     $remain = @($reads)
-    $deadline = [DateTime]::UtcNow.AddMilliseconds(500)
-    while ($null -eq $winner -and $remain.Count -gt 0 -and ([DateTime]::UtcNow -lt $deadline)) {
+    # 同阶段 1：单调钟，不用墙上时钟（理由见上面那段的注释）。
+    $deadline = (Get-MonotonicSeconds) + 0.5
+    while ($null -eq $winner -and $remain.Count -gt 0 -and ((Get-MonotonicSeconds) -lt $deadline)) {
         $next = @()
         foreach ($r in $remain) {
             if ($r.Async.IsCompleted) {
@@ -546,13 +550,16 @@ function Get-ActiveProxyPort([bool]$FullScan = $true) {
 #      这里用 FullScan：状态页一年也点不了几次，"慢 1 秒"远比"说谎"便宜。
 #      fullScan 默认给 $true，调用方不必记得传。
 # 返回 $null 表示"确实没找到"，与"没读到"由 $script:PortEnumerationFailed 区分。
-function Get-InUseProxyPort([bool]$FullScan = $true) {
+# $InjectedUrl：当前注入的代理地址，由**调用方**读好传进来（env 层或 runtime 层）。
+#   为什么不让本函数自己去读：那要调 env 层的 Get-EnvProxyValue，于是 probe 依赖 env、
+#   env 又依赖 probe 的地址函数，形成环——全靠加载顺序才没崩。探测层不该知道
+#   "变量存在哪、怎么读"，那是 env 层的事；这里只要一个地址字符串。
+function Get-InUseProxyPort([bool]$FullScan = $true, [string]$InjectedUrl = '') {
     # 1) 先验注入值：它是我们写的，指向的就是"用户此刻在用的那个"。
     $known = $null
     try {
-        $val = Get-EnvProxyValue
-        if ($val) {
-            $parts = Split-ProxyUrl $val
+        if ($InjectedUrl) {
+            $parts = Split-ProxyUrl $InjectedUrl
             if ($parts -and $parts.Port -gt 0) { $known = [int]$parts.Port }
         }
     } catch {}
@@ -656,27 +663,9 @@ function Test-TcpAlive([string]$Address, [int]$Port, [int]$TimeoutMs = 800) {
 # 从注入值里取出主机与端口。返回一个含 Host / Port 两个字段的对象；解析不了返回 $null。
 # 不写正则：注入值有两种合法形态（http://127.0.0.1:p 与 http://[::1]:p），
 # 手写正则会漏掉 IPv6 那一种——实测状态页就是这样把整段活性检查跳过去的。
-function Split-ProxyUrl([string]$Url) {
-    if (-not $Url) { return $null }
-    try {
-        $u = [System.Uri]$Url
-        if ($u.Port -le 0) { return $null }
-        # Uri::Host 对 IPv6 返回带方括号的 "[::1]"（这是 URL 的写法），
-        # 而 IPAddress::Parse 要的是裸 "::1"。不剥掉方括号的话，IPv6 注入值
-        # 会在试连时解析失败、被静默判成"端口已死"——正是这条检查要防的那种错误结论。
-        $h = $u.Host
-        if ($h.StartsWith('[') -and $h.EndsWith(']')) { $h = $h.Substring(1, $h.Length - 2) }
-        return [pscustomobject]@{ Host = $h; Port = $u.Port }
-    } catch {
-        return $null
-    }
-}
-
-# 给已选定的回环地址拼代理 URL：IPv6 字面量要加方括号。
-function Get-ProxyUrlFor([string]$Address, [int]$Port) {
-    if ($Address -like "*:*") { return ("http://[{0}]:{1}" -f $Address, $Port) }
-    return ("http://{0}:{1}" -f $Address, $Port)
-}
+# Split-ProxyUrl 与 Get-ProxyUrlFor 已下沉到 base 层（纯字符串变换，不该住在探测层：
+# env 层要用它们，而 probe 又要用 env 层的 Get-EnvProxyValue，会形成环）。
+# 这里只保留真正需要联网的那个：它要现场试连，才知道该按哪个回环地址注入。
 
 # 这个端口该按哪个回环地址注入？现场探测，取第一个连得上的。
 #
@@ -810,8 +799,9 @@ function Test-RealConnectivity([int]$Port) {
             # 正文一个字节都不读，端点将来换成大响应也不会改变流量口径。
             try { $tasks[$i] = $client.GetAsync("http://$($e.Host)$($e.Path)", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead) } catch {}
         }
-        $deadline = [DateTime]::Now.AddSeconds(6)
-        while ($tasks.Count -gt 0 -and [DateTime]::Now -lt $deadline) {
+        # 这里同样是判定用的截止时刻，必须走单调钟（理由见批处理探测那段）。
+        $deadline = (Get-MonotonicSeconds) + 6
+        while ($tasks.Count -gt 0 -and ((Get-MonotonicSeconds) -lt $deadline)) {
             foreach ($k in @($tasks.Keys)) {
                 $t = $tasks[$k]
                 if ($t.IsCompleted) {

@@ -96,6 +96,16 @@ function Assert-Eq([string]$Name, $Want, $Have) {
     else { Write-Host ("  FAIL {0} (want [{1}] have [{2}])" -f $Name, $Want, $Have); $script:fails++ }
 }
 
+# 需要独占真实注册表的一段可以用它把断言整体静音。
+# 为什么要有：那种断言的前提是"这段时间里没有别人在改同一批变量"，
+# 拿不到互斥体就说明前提不成立——此时报 FAIL 是谎报（它测的是监控在写，
+# 不是我们的代码坏了）；报 PASS 也是谎报。唯一诚实的处置是明确说"跳过"。
+$script:AssertionMuted = $false
+function Assert-EqGated([string]$Name, $Want, $Have) {
+    if ($script:AssertionMuted) { Write-Host ("  SKIP {0}" -f $Name); return }
+    Assert-Eq $Name $Want $Have
+}
+
 # 大小写敏感的比较。`-eq` 对字符串不区分大小写，所以"校验值被归一成小写"
 # 这类契约用它断言等于没断言——实测把 Get-AssetFromJson 里的 .ToLower() 删掉，
 # 全部 digest 用例照样 PASS，而那正是两侧判决口径会分叉的地方
@@ -1302,7 +1312,7 @@ $msgNet = Get-UpdateFailureMessage 'network' 'GitHub'
 $msgLocal = Get-UpdateFailureMessage 'local' 'GitHub'
 Assert-Eq 'the missing-file advice points at manual download' '1' ([int]($msgMissing -match '手动下载'))
 Assert-Eq 'the quota advice says it clears with time' '1' ([int]($msgQuota -match '一小时|重试'))
-Assert-Eq 'the network advice points at the proxy' '1' ([int]($msgNet -match '代理'))
+Assert-Eq 'the network advice gives a next step' '1' ([int]($msgNet -match '重试'))
 Assert-Eq 'the local advice points at the disk' '1' ([int]($msgLocal -match '磁盘|权限'))
 $advices = @('missing', 'quota', 'server', 'network', 'bad-content', 'local') | ForEach-Object { Get-UpdateFailureMessage $_ 'GitHub' }
 Assert-Eq 'no advice claims success' '0' (@($advices | Where-Object { $_ -match '成功' }).Count)
@@ -2400,6 +2410,29 @@ Write-Host '[14] 终端同步：钩子的真实行为'
 if ($env:OS -ne 'Windows_NT') {
     Write-Host '  SKIP 这一步验证的是 Windows 注册表侧的钩子行为，非 Windows 平台跳过'
 } else {
+# 先拿"写用户变量"那把互斥体再动手。
+#
+# 为什么必须拿：这一段验的是**真实注册表**（沙箱键覆盖不了 Git Bash 钩子的行为），
+# 而在已安装的机器上，监控每 2–3 秒会做一次变量自愈——它写的是同一批真实变量。
+# 两边同时动手就是竞态：实测连跑四次得到 3 / 1 / 4 / 0 个失败，失败项每次都不一样，
+# 而且全都是"我们的值不见了"这类症状。一个会随机变红的测试等于没有测试——
+# 它一会让人去查不存在的 bug，一会又放过了真问题。
+# 拿锁之后监控会在 WaitOne 那里等，本段跑完释放，两边不再交叉。
+$hookGate = $null
+$hookHeld = $false
+try {
+    $hookGate = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyApplyState"))
+    $hookHeld = $hookGate.WaitOne(30000)
+} catch [System.Threading.AbandonedMutexException] {
+    # 上一个持有者没释放就死了，但锁已经交给本线程（与 env.ps1 同一条判断）。
+    $hookHeld = $true
+} catch {}
+if (-not $hookHeld) {
+    # 拿不到锁 = 监控正在写同一批真实变量，这一段的前提不成立。
+    # 明确跳过而不是给出可能失真的结论（FAIL 和 PASS 在这里都是假话）。
+    Write-Host '  SKIP 等不到变量锁（监控正在写），这一段整体跳过——避免给出失真的结论'
+    $script:AssertionMuted = $true
+}
 $hookSBox = Join-Path ([System.IO.Path]::GetTempPath()) ("ep_hook_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $hookSBox -Force -ErrorAction SilentlyContinue | Out-Null
 $hookFile = Join-Path $hookSBox 'hook.ps1'
@@ -2456,44 +2489,44 @@ try {
         $ok.Close()
     }
     . $hookFile
-    Assert-Eq '加载钩子后立刻注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    Assert-EqGated '加载钩子后立刻注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
     # 注意：不能用 "$null -ne $function:prompt" 判"包住了"——PowerShell 自带默认 prompt，
     # 那个表达式永远为真，把包装函数整行删掉也照样 PASS（实测如此）。
     # 真判据是我们自己的哨兵变量 + 真的调一次 prompt 看效果。
-    Assert-Eq '包装标记已置位（这是回车生效的机制）' $true $global:__EnvProxyPromptWrapped
-    Assert-Eq '原 prompt 已备份（用于链式调用）' $true ($null -ne $global:__EnvProxyPrevPrompt)
+    Assert-EqGated '包装标记已置位（这是回车生效的机制）' $true $global:__EnvProxyPromptWrapped
+    Assert-EqGated '原 prompt 已备份（用于链式调用）' $true ($null -ne $global:__EnvProxyPrevPrompt)
 
     # 真实路径：敲回车 = 宿主调用 prompt。这里手动调一次，走的是包装后的函数。
     foreach ($n in $ProxyVarNames) { Remove-Item "Env:$n" -ErrorAction SilentlyContinue }
     $null = prompt
-    Assert-Eq '敲回车（调 prompt）后拿到代理' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    Assert-EqGated '敲回车（调 prompt）后拿到代理' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
 
     # 代理关掉：monitor 清掉注册表里的值 -> 钩子把会话里"我们写过的"也清掉
     foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
     $null = prompt
-    Assert-Eq '代理关掉后回到提示符恢复直连' '' "$env:HTTPS_PROXY"
+    Assert-EqGated '代理关掉后回到提示符恢复直连' '' "$env:HTTPS_PROXY"
 
     # 用户自己设的值必须保留（README 的承诺，也是契约里最容易被破坏的一条）
     $env:HTTPS_PROXY = 'http://corp-proxy:8080'
     $null = prompt
-    Assert-Eq '用户自己的公司代理不被删' 'http://corp-proxy:8080' $env:HTTPS_PROXY
+    Assert-EqGated '用户自己的公司代理不被删' 'http://corp-proxy:8080' $env:HTTPS_PROXY
 
     $env:HTTPS_PROXY = 'http://127.0.0.1:8080'
     $null = prompt
-    Assert-Eq '用户自己的本机地址不被删' 'http://127.0.0.1:8080' $env:HTTPS_PROXY
+    Assert-EqGated '用户自己的本机地址不被删' 'http://127.0.0.1:8080' $env:HTTPS_PROXY
 
     # 逐窗口接管
     foreach ($n in $ProxyVarNames) { Set-RegValue $n $null }
     Set-RegValue 'HTTPS_PROXY' 'http://127.0.0.1:7078'
     Remove-Item Env:HTTPS_PROXY -ErrorAction SilentlyContinue
     $null = prompt
-    Assert-Eq '重新注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    Assert-EqGated '重新注入' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
     $env:ENVPROXY_TERM = 'off'
     $null = prompt
-    Assert-Eq '接管开关生效（固定直连）' '' "$env:HTTPS_PROXY"
+    Assert-EqGated '接管开关生效（固定直连）' '' "$env:HTTPS_PROXY"
     Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
     $null = prompt
-    Assert-Eq '放开接管开关后恢复自动' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    Assert-EqGated '放开接管开关后恢复自动' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
 
     # 归属边界：这几条决定"会不会误删使用者自己的代理"，是最难事后补救的一类。
     # 钩子的判据只有两条：注册表有值就注入；没有值但当前值等于归属记录里记的那个就清除。
@@ -2519,27 +2552,27 @@ try {
     Set-OwnedRecord 'http://127.0.0.1:7078'
     $env:HTTPS_PROXY = 'http://127.0.0.1:7078'
     $null = prompt
-    Assert-Eq '值等于记录值：清除' '' "$env:HTTPS_PROXY"
+    Assert-EqGated '值等于记录值：清除' '' "$env:HTTPS_PROXY"
 
     # (b) 有归属记录、但使用者改成了别的值 → 必须保住（不能按形状猜）
     $env:HTTPS_PROXY = 'http://corp-proxy:8080'
     $null = prompt
-    Assert-Eq '值不等于记录值：保住公司代理' 'http://corp-proxy:8080' $env:HTTPS_PROXY
+    Assert-EqGated '值不等于记录值：保住公司代理' 'http://corp-proxy:8080' $env:HTTPS_PROXY
 
     # (c) 有归属记录、使用者改成另一个本机端口 → 同样必须保住
     $env:HTTPS_PROXY = 'http://127.0.0.1:9090'
     $null = prompt
-    Assert-Eq '值不等于记录值：保住别的端口的本机代理' 'http://127.0.0.1:9090' $env:HTTPS_PROXY
+    Assert-EqGated '值不等于记录值：保住别的端口的本机代理' 'http://127.0.0.1:9090' $env:HTTPS_PROXY
 
     # (d) 没有归属记录 → 判不了，一个都不动
     if (Test-Path (Get-OwnedRegKeyPath)) { Remove-Item (Get-OwnedRegKeyPath) -Recurse -Force }
     $env:HTTPS_PROXY = 'http://127.0.0.1:7078'
     $null = prompt
-    Assert-Eq '无归属记录时不动任何值（判不了就不猜）' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
+    Assert-EqGated '无归属记录时不动任何值（判不了就不猜）' 'http://127.0.0.1:7078' $env:HTTPS_PROXY
 
     # (e) 快照保护住在 env.ps1 的注册表清理路径里，不在钩子里——直接断言那个判据，
     #     不能拿钩子的行为冒充它（钩子根本不读快照）。
-    Assert-Eq 'Test-IsOwnedProxyValue 是真实存在的判据' 'Function' (Get-Command Test-IsOwnedProxyValue -ErrorAction SilentlyContinue).CommandType
+    Assert-EqGated 'Test-IsOwnedProxyValue 是真实存在的判据' 'Function' (Get-Command Test-IsOwnedProxyValue -ErrorAction SilentlyContinue).CommandType
 
 } finally {
     foreach ($n in $ProxyVarNames) { Set-RegValue $n $savedEnv[$n] }
@@ -2579,6 +2612,12 @@ try {
     Remove-Item Env:ENVPROXY_TERM -ErrorAction SilentlyContinue
     Remove-Item Env:__EnvProxyPromptWrapped -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force $hookSBox -ErrorAction SilentlyContinue
+    # 还原做完之后才放锁：早放会让监控在"变量已改回、归属记录还没放回"的空窗里插进来，
+    # 读到一份不完整的记录，又变成另一种竞态。
+    if ($hookHeld -and $null -ne $hookGate) {
+        try { $hookGate.ReleaseMutex() } catch {}
+    }
+    if ($null -ne $hookGate) { try { $hookGate.Dispose() } catch {} }
 }
 }
 
@@ -3373,6 +3412,31 @@ Assert-Eq '卸载：清掉状态快照' $true ([bool]([regex]::IsMatch($unChunk,
 $stopChunk = Get-FunctionBody 'win/lib/runtime.ps1' 'Stop-Monitor'
 Assert-Eq '接线：Stop-Monitor 函数体取到了' $true ($stopChunk.Length -gt 0)
 Assert-Eq '停止：清掉状态快照' $true ([bool]([regex]::IsMatch($stopChunk, 'Remove-ItemSafe\s+\$StateSnapshotFile')))
+
+# 9b. 更新中断标记：写要在备份之后，清要有人清（与 mac 侧同一对断言同形）
+#     三条独立事实，删掉任何一条都会让用户卡在"永久报上次更新没完成"里：
+#       ① 安装收尾会清它（否则照状态页的指引重做一次也清不掉，唯一出路是卸载）；
+#       ② 写它必须在备份成功之后（否则备份阶段一失败就留下一个没人清的标记）；
+#       ③ 回滚完整成功时也要清它（否则安装区明明已经回到原样，警报还在）。
+$instBody = Get-FunctionBody 'win/lib/ops.ps1' 'Install-EnvProxy'
+Assert-Eq '接线：安装收尾会清更新中断标记' $true ([bool]([regex]::IsMatch($instBody, 'Remove-ItemSafe\s+\$UpdateInProgressFile|Remove-Item[^\r\n]*\$UpdateInProgressFile')))
+# ② 用行号比先后：写标记的那行必须晚于备份完成的那个循环。
+$pkgLines = Get-Content 'win/lib/package.ps1'
+$markerWriteLine = 0
+$backupDoneLine = 0
+for ($i = 0; $i -lt $pkgLines.Count; $i++) {
+    if ($pkgLines[$i] -match 'Write-Text\s+-Path\s+\$marker') { $markerWriteLine = $i + 1; break }
+}
+for ($i = 0; $i -lt $pkgLines.Count; $i++) {
+    if ($pkgLines[$i] -match 'Copy-Item -LiteralPath \$src -Destination \(Join-Path \$backup') { $backupDoneLine = $i + 1 }
+}
+Assert-Eq '接线：更新标记在备份成功之后才写' $true ($markerWriteLine -gt 0 -and $backupDoneLine -gt 0 -and $markerWriteLine -gt $backupDoneLine)
+# ③ 回滚完整成功那条路要清标记；partial 那条不许清（安装区确实还是半新半旧）。
+$pkgBody = Get-FunctionBody 'win/lib/package.ps1' 'Install-Package'
+Assert-Eq '接线：回滚完整成功会清更新中断标记' $true ([bool]([regex]::IsMatch($pkgBody, "LastInstallRollback = 'complete'[\s\S]{0,400}Remove-Item -LiteralPath \`$marker")))
+Assert-Eq '接线：回滚未完成时报告 partial 并交出备份路径' $true ([bool]([regex]::IsMatch($pkgBody, "LastInstallRollback = 'partial'[\s\S]{0,200}LastInstallRollbackBackup = \`$backup")))
+# 覆盖成功那条路必须有明确结论：没有 'ok' 的话调用方只能靠猜。
+Assert-Eq '接线：覆盖成功会报告 ok' $true ([bool]([regex]::IsMatch($pkgBody, "LastInstallRollback = 'ok'")))
 
 # 10. 端口枚举失败的原因必须能显示出来
 #     曾经：用 PSObject.Properties.Name -contains 判断键存在，对字典恒为假，

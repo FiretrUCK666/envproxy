@@ -9,6 +9,11 @@
 # ------------------------------------------------------------------------------
 function Install-EnvProxy {
     Write-Styled 'title' "======== EnvProxy 安装 ========"
+    # 四步里哪几步真的做成了，要一路记到函数末尾：入口靠这个值决定退出码，
+    # 脚本里写 `envproxy.ps1 -Install; if (Test-Succeeded) ...` 的人也靠它。
+    # 原来这个函数没有返回值，于是"监控没起来""变量写不进去"这类明确的失败
+    # 在退出码上是看不见的——用户只能靠肉眼读屏幕。与 mac 侧 _inst_ok 同一套语义。
+    $instOk = 0
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：接下来改的会是管理员这个账号的配置。日常使用请用普通终端重来一次。" }
     # 先说清楚要动什么、不动什么，再说"正在做"——安装要改四处系统设置，
     # 用户在按完编号之后得先知道会发生什么，而不是盯着静止的屏幕猜。
@@ -31,12 +36,16 @@ function Install-EnvProxy {
     if ($step1Ok) {
         Write-Styled 'ok' "[1/4] 开机自启动：已写入"
     } else {
+        $instOk = 1
         Write-Styled 'warn' "[1/4] 开机自启动：没写成。可能被杀软或组策略拦住了。"
         Write-Styled 'warn' "      请检查杀软拦截，或再打开一次菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）；仍然不行就把它加进白名单。"
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
-    $firstInstall = -not ((Get-ItemProperty (Get-ScriptPathRegKeyPath) -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
+    # 判据走 base 层的 Test-HasInstallRecord：那里是这条事实的**唯一权威处**，
+    # 内联一份的后果是两处演化时悄无声息地分叉，表现是"安装以为是首次、清理以为装过"，
+    # 于是使用者自己设的本机代理被当成我们的残留删掉，而且没有快照可还原。
+    $firstInstall = -not (Test-HasInstallRecord)
     Update-ScriptPathRecord
     # 先快照用户原值，再动任何东西：监控一启动就会在几秒内自愈、把代理变量写进去，
     # 那时再快照，存下的就是"我们写下的值"而不是用户原值，卸载还原会留下我们的条目。
@@ -53,6 +62,7 @@ function Install-EnvProxy {
     if ($step2Ok) {
         Write-Styled 'ok' "[2/4] 监控进程：已启动"
     } else {
+        $instOk = 1
         Write-Styled 'warn' "[2/4] 监控进程：未能确认运行，原因见下面那两行。"
     }
     # 立即对齐环境变量状态：有代理 → 注入；无代理 → 清理残留死变量
@@ -73,9 +83,11 @@ function Install-EnvProxy {
         # 端口枚举失败：这一轮不知道状态，一个变量都没动——不能说"已校正"。
         Write-Styled 'warn' "[3/4] 环境变量：这一轮没读到本机端口，所以没有改动任何设置（正常，会自动重试）。"
     } elseif ($state -eq "failed") {
+        $instOk = 1
         Write-Styled 'warn' "[3/4] 环境变量：这一步没做成，原因见上面那行。其余步骤不受影响。"
     } elseif (-not $appliedOk) {
         # 写失败必须如实说，不能说"已校正"——用户会以为在走代理，实际是半套变量。
+        $instOk = 1
         Write-Styled 'warn' "[3/4] 环境变量：没写进去。可能被杀软或组策略拦住了。"
         Write-Styled 'warn' "      再打开一次菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）重试；仍然不行请反馈。"
     } else {
@@ -97,10 +109,15 @@ function Install-EnvProxy {
         'current'    { Write-Styled 'ok' "[4/4] 终端同步：已是最新（PowerShell 与 Git Bash 都已在位）" }
         'no-profile' { Write-Styled 'warn' "[4/4] 终端同步：取不到 $PROFILE 路径，跳过（新窗口仍会生效）" }
         'unpaired'   {
+            # 标记不成对 = 这一项没做成，退出码要如实反映（否则屏幕说失败、程序说成功）。
+            $instOk = 1
             Write-Styled 'warn' "[4/4] 终端同步：配置文件里的标记不成对，未改动它（安全起见一个字节都没动）"
             Write-Styled 'dim' ("      " + $prof.Path)
         }
         default      {
+            # 同上：写入失败必须让退出码跟着变。'installed'/'current'/'no-profile' 不置位——
+            # 前两者是真做成了，'no-profile' 是取不到路径、新窗口仍然生效，不算失败。
+            $instOk = 1
             Write-Styled 'warn' ("[4/4] 终端同步：写入失败（" + $prof.Reason + "）")
             Write-Styled 'dim' ("      " + $prof.Path)
         }
@@ -109,6 +126,12 @@ function Install-EnvProxy {
     if ($polWarn) { Write-Styled 'warn' ("      " + $polWarn) }
     Start-Sleep -Seconds 1
     Write-Host ""
+    # 安装走到了收尾这一步，说明覆盖早就成功、文件全是新的——那条
+    # 「上次更新没有完成」的警报到此已经不成立，必须撤掉。
+    # 不撤的后果是死循环：状态页说「选 1 重做一次即可」，用户照做、覆盖也真的成功了，
+    # 可标记还在，屏幕上是同一句警告——一条自己都说错了怎么修的指引，比不提示更糟。
+    # 与 mac 侧 ops.sh 在同一位置做同一件事（那边是 show_status 之前 rm -f）。
+    try { if (Test-Item $UpdateInProgressFile) { Remove-ItemSafe $UpdateInProgressFile } } catch {}
     # 这里**不联网**：版本号取自监控写下的缓存（状态页只读、永不联网那条契约）。
     # 所以不能说"正在联网确认"——那是在描述一件不会发生的事，用户会以为
     # 网慢/被墙导致"检查失败"，而实际根本没发请求。
@@ -117,7 +140,15 @@ function Install-EnvProxy {
     Write-Host ""
     # 左边那一列用 Format-MenuCell 按最长的条目补齐，不靠手敲空格：
     # 手敲的话，改一个字就整列歪掉，而"歪一格"这种事只有人眼看得出来。
-    Write-Styled 'ok' "装好了。之后怎么用："
+    # 有步骤没做成时不许说"装好了"——那是这台机器上最容易被当成"已经没事了"的一句话。
+    if ($instOk -eq 0) {
+        Write-Styled 'ok' "装好了。之后怎么用："
+    } else {
+        Write-Styled 'warn' "装是装了，但有步骤没做成（见上面带「失败 / 未能 / 没写成」的那几行）。"
+        Write-Styled 'warn' "先把它们解决掉，再打开一次菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）重跑；否则某些功能会时好时坏。"
+        Write-Host ""
+        Write-Styled 'dim' "之后怎么用："
+    }
     # 每一行三格：左列标签 / 右列的说明 / 右列里那段能照抄的命令（没有就留空）。
     # 命令单独列一格、而不是靠正则从整行里认出来——认形状会错：
     # "在它里面执行  $env:ENVPROXY_TERM = 'off'" 开头不是命令，
@@ -144,6 +175,14 @@ function Install-EnvProxy {
         Write-Styled 'text' $r[1] -NoNewline
         if ($r[2]) { Write-Styled 'cmd' ('  ' + $r[2]) } else { Write-Host '' }
     }
+    # 退出码如实反映这次安装成没成：入口靠它，脚本里也靠它。
+    # 不能靠"最后一条命令"隐式决定——最后一条是 Write-Host，永远是成功。
+    #
+    # 只返回一个整数，不许让它变成数组：PowerShell 的函数会把**所有未被接住的输出**
+    # 一起返回，将来这里谁加一行裸调用（不是 Write-Host、也没赋值给变量），
+    # 返回值就成了 [那段输出, 0] 这样的数组，而 `exit $数组` 会被压成 0——
+    # 于是"装失败"静默变成"成功"。用 Out-Null 包住整条调用链，把这条缝隙焊死。
+    return [int]$instOk
 }
 
 function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
@@ -216,7 +255,12 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         Write-Styled 'warn' "[未完成] 你原来的代理设置没能写回去（可能被杀软或组策略拦住了）。"
         Write-Styled 'warn' "        备份还留着，没有再删任何东西。请先手动把原来的设置加回去，"
         Write-Styled 'warn' "        再点一次菜单选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）（一键恢复）收尾。"
-        return
+        # 必须显式返回 1：裸 return 返回 $null，而入口写的是 `exit ([int](...)[-1])`，
+        # [int]$null 等于 0——屏幕上打"[未完成]"，退出码却是成功。
+        # 这正是"用户原设置没还原、备份还留着"那种最需要人动手的情形，报成功最贵：
+        # 脚本里的 `-Uninstall; if ($?) { 删备份 }` 会把唯一一份备份也删掉。
+        # mac 侧同一分支写的就是 return 1（ops.sh 里 restore_prev_env 失败那条），两侧必须同形。
+        return 1
     }
     # 还完再广播一次：运行中的进程按旧环境块活着，不广播它们就继续走死代理——"无需重启"靠这一次广播。
     Broadcast-EnvironmentChange
@@ -455,7 +499,11 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         Write-Styled 'warn' "[未完成] 这几处没清干净："
         foreach ($d in $dirty) { Write-Styled 'warn' ("        - " + $d) }
         Write-Styled 'warn' "        再打开菜单选 $(Get-MenuKey 'Uninstall')（$(Get-MenuName 'Uninstall')）（一键恢复）试一次；还不行就照上面列出的位置手动删。"
+        # 退出码必须跟着结论走：只打印"[未完成]"而返回成功，
+        # 脚本里的"卸载成功就删备份"之类判断就会成立——屏幕说没清完、退出码说成功了。
+        return 1
     }
+    return 0
 }
 
 # 状态显示。
@@ -1081,7 +1129,11 @@ function Get-StatusSnapshot {
         $st.VarsMatch = [string]$st.Snapshot.VarsMatch
         $st.ApplyResult = [string]$st.Snapshot.ApplyResult
     } else {
-        $st.Port = Get-InUseProxyPort -FullScan:$true
+        # 注入的地址由这里读好再传进去：Get-InUseProxyPort 只管探测，
+        # 不该反过来去调 env 层的读值函数（那会让 probe 依赖 env、env 又依赖 probe）。
+        $injected = ''
+        try { $injected = [string](Get-EnvProxyValue) } catch { $injected = '' }
+        $st.Port = Get-InUseProxyPort -FullScan:$true -InjectedUrl $injected
         $st.PortUnknown = [bool]$script:PortEnumerationFailed
         try { $st.PortEnumerationReason = [string]$script:PortEnumerationReason } catch { $st.PortEnumerationReason = '' }
         # 没读到快照就没有这两个结论：留空串，不许假设成"一致 / 成功"。
@@ -1131,7 +1183,8 @@ function Get-StatusSnapshot {
     # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。
     # 用途是避免把"从没装过"说成"崩溃/被结束任务"：后者是故障语气，
     # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
-    $st.NeverInstalled = -not ((Get-ItemProperty (Get-ScriptPathRegKeyPath) -Name "ScriptPath" -ErrorAction SilentlyContinue).ScriptPath)
+    # 与安装侧同一个判据（base.ps1 的 Test-HasInstallRecord）：内联一份就是第二个真相。
+    $st.NeverInstalled = -not (Test-HasInstallRecord)
     $st.LocalVersion = Get-LocalVersion
     # 最新版本号来自**监控写下的缓存**，状态页自己绝不联网：
     # 否则每次"查看状态"都要等一次外网往返（离线/限流时是注定失败的等待）。
@@ -1454,7 +1507,11 @@ function Show-RecentLog {
     # 默认值比它小的话，最常见的那条日志每屏都被截成 "http://127.0.0.1:7…"，
     # 而截掉的恰好是端口号——排查时最想看的那个数字。
     $logW = 80
-    try { if (-not [Console]::IsOutputRedirected) { $logW = [Console]::WindowWidth - 2 } } catch {}
+    # 不在这里自己判 IsOutputRedirected：base 层 Test-CanDrawScreen / Get-ConsoleWidth
+    # 是"这个控制台能不能画屏、有多宽"的唯一判据，散着判必然漂移（base.ps1 里那句
+    # "已经有四处、散着判必然漂移"说的就是这件事）。用 Get-ConsoleWidth，
+    # 它在非终端下返回 0，这里再兜到下面的最小值。
+    try { $cw = Get-ConsoleWidth; if ($cw -gt 0) { $logW = $cw - 2 } } catch {}
     if ($logW -lt 40) { $logW = 40 }
     foreach ($logLine in ([System.IO.File]::ReadAllLines($LogFile, [System.Text.Encoding]::UTF8) | Select-Object -Last 3)) {
         $shown = $logLine
@@ -1697,13 +1754,6 @@ function Get-HelpRenderedLines([string[]]$Lines) {
     # 条目（i）的"从属行"：它自己的说明（t2）、命令（c/rc/r）、警告（w）。
     # 这些都是"属于上一条"的内容，不该与条目平级。
     $isItemChild = { param($c) $c -and ($c.Code -eq 't2' -or $c.Code -eq 'c' -or $c.Code -eq 'rc' -or $c.Code -eq 'r' -or $c.Code -eq 'w') }
-    # 一条目是否"带说明"：看它后面紧跟的那一行是不是从属行。
-    $itemHasChild = {
-        param($idx)
-        if ($idx -ge $n - 1) { return $false }
-        $nx = $parsed[$idx + 1]
-        return (& $isItemChild $nx)
-    }
     $spaced = @()
     $n = $parsed.Count
     for ($i = 0; $i -lt $n; $i++) {

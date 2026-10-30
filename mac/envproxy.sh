@@ -192,7 +192,7 @@ esac
 
 
 case "$_CMD_NORM" in
-    install) install_envproxy;;
+    install) install_envproxy; exit $?;;
     # stop 也要走哨兵模式：purge 会把 proxy.env 整个删掉，已开着的窗口下次回到提示符时
     # 读不到文件，就永远停在上一次的代理值上（契约：off 态写守卫式 unset，不删文件）。
     stop)
@@ -203,12 +203,33 @@ case "$_CMD_NORM" in
           if [ "$(id -u)" = "0" ]; then
               echo "当前是 root 身份：动的将是 root 的配置，日常使用请用普通终端重做一遍。" >&2
           fi
-          stop_monitor; remove_user_env_vars sentinel; echo "代理变量已清除，当前恢复直连。"
+          # 两个返回码都要接住再说结论。
+          # remove_user_env_vars 在哨兵写不成时会 return 1（见 env.sh 里 write_off_sentinel
+          # 那一段）：那时 proxy.env 还是 on 态内容，已开着的窗口每次回车都会把死端口
+          # 重新 export 一遍。原来这里把返回码全丢了、紧接着无条件打印"代理变量已清除"，
+          # 于是屏幕说"恢复直连"，实际每个窗口都在往一个死端口上连——最难查的一类假话。
+          _stop_mon_ok=0
+          _stop_vars_ok=0
+          stop_monitor || _stop_mon_ok=1
+          remove_user_env_vars sentinel || _stop_vars_ok=1
+          if [ "$_stop_vars_ok" = "0" ]; then
+              echo "代理变量已清除，当前恢复直连。"
+          else
+              echo "[未完成] 代理变量没能清除干净：写不进 $ENVPROXY_HOME（权限或磁盘空间）。" >&2
+              echo "已开着的窗口每次回到提示符，仍会把旧代理地址重新设上——它们看起来还连着一个已经不存在的端口。" >&2
+              echo "先解决那个目录的权限/空间，再重跑一次 stop；或者直接点一键恢复。" >&2
+          fi
+          if [ "$_stop_mon_ok" = "1" ]; then
+              echo "（监控进程也未能确认停止，见上面几行。）" >&2
+          fi
           # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
           # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
           # 与其让人以为"工具坏了"，不如说清楚。
-          echo "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。";;
-    uninstall) uninstall_envproxy "$_PURGE" "$_YES";;
+          echo "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。"
+          # 退出码如实反映：两件事里任一没做成就是失败。
+          if [ "$_stop_vars_ok" = "1" ] || [ "$_stop_mon_ok" = "1" ]; then exit 1; fi
+          exit 0;;
+    uninstall) uninstall_envproxy "$_PURGE" "$_YES"; exit $?;;
     # 交互终端里走实时刷新（自己动、不用按键）；重定向/无终端/窗口太小时
     # show_status_live 会自动退回一次性静态输出，两种情况都能走这里。
     status) show_status_live;;
@@ -216,7 +237,9 @@ case "$_CMD_NORM" in
     # 所以那个状态本来是死路：照文档重跑安装，每次都被拒绝。人明确说"我同意修"时要能修。
     repair-profile) repair_hook_markers; exit $?;;
     # 退出码要如实反映结果（计划任务、脚本靠它判断更新成功没有）。
-    update) update_envproxy "$_YES"; exit $?;;
+    # 「重装」由这里注入：update 层不认识 ops，否则 update→ops→runtime→update 成环。
+    # 入口同时持有所有层，是唯一适合把这条能力接起来的地方。
+    update) UPDATE_INSTALL_FINISH="install_envproxy" update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
     help) show_help;;
     # 退出码要如实反映结果：报告没写出来时说"成功"是谎报，

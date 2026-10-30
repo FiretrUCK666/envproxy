@@ -1706,7 +1706,10 @@ EOF
     _ufm_l=$(update_failure_message local GitHub)
     _selftest_assert_contains "提示：缺包要说手动下载" "手动下载" "$_ufm_m"
     _selftest_assert_contains "提示：配额要说会随时间恢复" "重试" "$_ufm_q"
-    _selftest_assert_contains "提示：连不上要说开代理" "代理" "$_ufm_n"
+    # 判据是"有没有给出下一步可做动作"，不是"有没有出现某个具体词"。
+    # 原来钉的是"必须含『代理』"——那会逼着文案写机制词，与门禁 14（面向用户不许用
+    # 机制词）直接冲突；正确的做法是钉用户能照做的动作，措辞怎么换都成立。
+    _selftest_assert_contains "提示：连不上要给出下一步动作" "重试" "$_ufm_n"
     _selftest_assert_contains "提示：本机问题要说磁盘与权限" "磁盘" "$_ufm_l"
     _selftest_assert_eq "提示：没有一种说法会声称成功" "0" "$(for _k in missing quota server network bad-content local; do update_failure_message "$_k" GitHub; done | grep -c '成功' || true)"
 
@@ -1778,6 +1781,12 @@ EOF
     _ue_check "status" 1 "yes" ""; _selftest_assert_eq "用法判定：--yes 跟着别的命令要拒" "1" "$?"
     _ue_check "status" 1 "" "--foo"; _selftest_assert_eq "用法判定：不认识的参数要拒" "1" "$?"
     _ue_check "install" 2 "" ""; _selftest_assert_eq "用法判定：一次给两个命令要拒" "1" "$?"
+    # 光秃秃的横线：入口用 sed 剥前缀，`-`/`--`/`---` 都会归一化成空串，
+    # 而命令个数仍是 1。不拒的话它会落到分派的 "" 分支——那是监控模式，
+    # 于是"敲错一个横线"变成"在后台起了个常驻进程"，屏幕上还没有任何报错。
+    _ue_check "" 1 "" ""; _selftest_assert_eq "用法判定：只有一个空命令要拒（不许当成监控模式）" "1" "$?"
+    # 对照：真没传参数（个数 0）必须继续放行，否则监控模式就彻底起不来了。
+    _ue_check "" 0 "" ""; _selftest_assert_eq "用法判定：真无参数仍放行（监控模式）" "0" "$?"
 
     # 带开关的一次性命令不能被当成监控：
     # 判据是脚本路径之后的第一个词，不是最后一个词。

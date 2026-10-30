@@ -3,6 +3,35 @@
 #  判决三层缺一不可；只做快筛的表不影响覆盖面。
 # ------------------------------------------------------------------------------
 
+# 本层创建的临时物前缀。创建与清扫必须用同一套前缀——
+# 这是"临时物的创建基址与清扫基址必须同一个"那条不变量的落实处。
+PROBE_TMP_PREFIX="envproxy_probe_"
+
+# 清掉超过一天以前留下的探测临时物。
+#
+# 为什么需要：本层有几处并发探测要落地（批量握手的结果目录、端点并发目录、
+# 进程表快照），正常路径各自会删，但被 Ctrl-C / 被杀 / 断电打断时来不及删。
+# macOS 的 /tmp 不会定期清理，于是一次中断留一个目录，日积月累。
+#
+# 判据是修改时间而不是创建时间：目录里的文件被改过就说明它还在用。
+# 与 update 层的 remove_stale_update_temp 同一套做法（那边清 envproxy_update.*）。
+probe_clean_stale_temp() {
+    _pct_base="${TMPDIR:-/tmp}"
+    [ -d "$_pct_base" ] || return 0
+    _pct_now=$(date +%s 2>/dev/null || echo 0)
+    [ "$_pct_now" -gt 0 ] 2>/dev/null || return 0
+    for _pct_p in "$_pct_base/$PROBE_TMP_PREFIX"*; do
+        [ -e "$_pct_p" ] || continue
+        _pct_m=$(stat -f '%m' "$_pct_p" 2>/dev/null || stat -c '%Y' "$_pct_p" 2>/dev/null || echo "")
+        [ -n "$_pct_m" ] || continue
+        [ "$_pct_now" -gt "$_pct_m" ] 2>/dev/null || continue
+        [ $((_pct_now - _pct_m)) -ge 86400 ] 2>/dev/null || continue
+        rm -rf "$_pct_p" 2>/dev/null || true
+    done
+    return 0
+}
+
+
 # 常见翻墙软件的默认本地代理端口（快速扫描用）。可自行增删。
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
 # 收录标准：能过 CONNECT 门、且可能拿去注入（http:// 方案）的口才值得收；
@@ -253,8 +282,7 @@ _handshake_at() {
         #                 语义正好相反——那样 curl 去连 127.0.0.1:9，必然失败，判据恒假）。
         #   -p            让 curl 用 CONNECT 建隧道。不加它，curl 对 http 目标发的是普通 GET，
         #                 于是"任何会回 200 的 HTTP 服务"都能通过握手门，判据就认错了东西。
-        _ha_resp=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy \
-            curl --disable -s -o /dev/null -D - --connect-timeout 1 --max-time 2 \
+        _ha_resp=$(curl_direct --disable -s -o /dev/null -D - --connect-timeout 1 --max-time 2 \
             --noproxy '' -p -x "http://$(url_host_for "$1"):$2" "http://127.0.0.1:9/" 2>/dev/null | head -n 1)
     fi
     # 状态码必须**整段**是 200：写成以 200 结尾会让 "2000"、"2001" 也匹配上。
@@ -304,7 +332,7 @@ _probe_proxy_one() {
 # 并行批量 CONNECT 探测：多个端口同时握手，~2 秒内出结果
 test_http_proxy_batch() {
     [ $# -eq 0 ] && return 1
-    _bdir=$(mktemp -d ${TMPDIR:-/tmp}/envproxy_found.XXXXXX 2>/dev/null) || return 1
+    _bdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}found.XXXXXX" 2>/dev/null) || return 1
     for _p in "$@"; do
         _probe_proxy_one "$_p" "$_bdir" &
     done
@@ -383,8 +411,8 @@ get_listening_ports() {
 # 解析只用一次 awk：pid→comm 映射与监听行匹配在同一次扫描里完成，
 # 不再对每一行各起 awk/grep/head（原来每行 6–7 个进程，空转时最费电的就是它）。
 get_suspect_ports() {
-    _psmap=$(mktemp ${TMPDIR:-/tmp}/envproxy_ps.XXXXXX 2>/dev/null) || return 0
-    _lsofout=$(mktemp ${TMPDIR:-/tmp}/envproxy_lsof.XXXXXX 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
+    _psmap=$(mktemp "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}ps.XXXXXX" 2>/dev/null) || return 0
+    _lsofout=$(mktemp "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}lsof.XXXXXX" 2>/dev/null) || { rm -f "$_psmap" 2>/dev/null || true; return 0; }
     ps -ax -o pid=,comm= 2>/dev/null | tr '[:upper:]' '[:lower:]' > "$_psmap" 2>/dev/null || true
     if ! lsof -a -PiTCP -sTCP:LISTEN -n -P 2>/dev/null > "$_lsofout"; then
         rm -f "$_psmap" "$_lsofout" 2>/dev/null || true
@@ -437,8 +465,11 @@ get_suspect_ports() {
 # 而 find_candidate_ports 内部本身就是一次全端口 lsof+ps+CONNECT。
 # 于是"没有代理"的机器上，状态页每 2 秒要跑**两轮**全扫。
 # 三态在源头分开，调用方一次即可——状态页是每 2 秒刷新的热路径。
+# $1（可选）：当前注入的代理端口，由**调用方**读好传进来。
+#   不让本函数自己去读：那要调 env 层的 get_current_proxy_port，于是 probe 依赖 env、
+#   env 又依赖 probe 的端口函数，形成环。探测层不该知道"变量存在哪、怎么读"。
 get_in_use_proxy_port() {
-    _giu_known=$(get_current_proxy_port 2>/dev/null || echo "")
+    _giu_known="${1:-}"
     case "$_giu_known" in
         ''|*[!0-9]*) ;;
         *)
@@ -528,8 +559,7 @@ test_single_endpoint() {
     # 不设时退回 127.0.0.1：只绑 ::1 的代理在 IPv4 上连不上，写死会让端点探测对它永远失败。
     _px="${EP_PROXY_URL:-http://127.0.0.1:$_port}"
     # --disable（= -q）：不读用户 ~/.curlrc——否则用户配过的 proxy 会劫持这次探测，判据作废。
-    _out=$(env -u HTTP_PROXY -u http_proxy -u HTTPS_PROXY -u https_proxy -u ALL_PROXY -u all_proxy -u NO_PROXY -u no_proxy \
-        curl --disable -s -D - -o /dev/null --head --connect-timeout 5 --max-time 6 -x "$_px" "http://$_host$_path" 2>/dev/null)
+    _out=$(curl_direct --disable -s -D - -o /dev/null --head --connect-timeout 5 --max-time 6 -x "$_px" "http://$_host$_path" 2>/dev/null)
     [ -n "$_out" ] || return 1
     printf '%s' "$_out" | grep -qi "Connection Established" && return 1
     _first=$(printf '%s' "$_out" | head -n 1)
@@ -562,7 +592,7 @@ test_real_connectivity() {
         && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}"; then
         return 0
     fi
-    _tmpdir=$(mktemp -d ${TMPDIR:-/tmp}/envproxy_conn.XXXXXX 2>/dev/null) || return 1
+    _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}conn.XXXXXX" 2>/dev/null) || return 1
     # 逐个按索引展开 host/path，避免后台闭包竞态（参数在父进程展开后传值）
     _idx=0
     _ep_n=0
