@@ -2855,7 +2855,17 @@ jobs:
           $macOut = & $bashPath mac/envproxy.sh self-test 2>&1
           $macRc = $LASTEXITCODE
           $macOut | Write-Host
-          if ($macRc -ne 0) { Write-Host ("Mac 功能自检失败，退出码 {0}" -f $macRc); exit 1 }
+          if ($macRc -ne 0) {
+            Write-Host ("Mac 功能自检失败，退出码 {0}" -f $macRc)
+            # 把失败行单独再打一遍：整段输出很长，失败那几行容易被冲走。
+            # 这一步只影响排查体验，不参与判定。
+            Write-Host '---- 失败项 ----'
+            @($macOut | Where-Object { $_ -match '^\s*FAIL|自检失败' }) | ForEach-Object { Write-Host $_ }
+            Write-Host '---- 环境 ----'
+            Write-Host ("bash: {0}" -f $bashPath)
+            try { Write-Host ("bash 版本: " + ((& $bashPath --version 2>&1 | Select-Object -First 1))) } catch {}
+            exit 1
+          }
           # 资产解析契约：同一个应答，两边必须给出同一个结论。
           # 文本层面的门禁看不出这种漂移：同一个应答，
           # 一边继续更新、一边说"这一版没提供安装包"（冤枉维护者）。

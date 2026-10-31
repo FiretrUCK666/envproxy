@@ -2141,8 +2141,14 @@ except Exception: pass
     esac
 
     # quick 档不采集握手，所以状态页永远不会误报这一档。
-    _q_hs=$(sysproxy_layers quick 2>/dev/null | head -1 | cut -f7)
-    _selftest_assert_eq "quick 档不采集握手（永远不会误报节点问题）" "" "$_q_hs"
+    # **不真的去调 sysproxy_layers**：那会调 networksetup 读使用者真实的系统代理，
+    # 自检不该碰它，而且没有网络服务的机器上（含 CI 的 Linux）返回空、断言会"假过"。
+    # 改成直接看源码里那条判断：只有非 quick 才采集。
+    _doc_src=$(cat "$SCRIPT_DIR/lib/doctor.sh" 2>/dev/null || echo "")
+    case "$_doc_src" in
+        *'_gspl_quick" != "quick"'*) _selftest_assert_eq "quick 档不采集握手（看源码判据）" "1" "1" ;;
+        *) _selftest_assert_eq "quick 档不采集握手（看源码判据）" "1" "0" ;;
+    esac
 
     echo "[17] 快照的握手字段与状态页提示"
     # ① 快照能往返，且**老快照不许被判损坏**（升级瞬间那份旧数据必须还能用）。
@@ -2154,23 +2160,24 @@ except Exception: pass
     read_state_snapshot
     _selftest_assert_eq "快照：握手字段能往返" "upstream-fail" "$SNAP_NODE_HANDSHAKE"
     _selftest_assert_eq "快照：状态是 ok" "ok" "$SNAP_STATUS"
-    # 老版本写的快照：没有这个字段
-    cat > "$_sn_file" <<'EPEOF'
-# envproxy-snapshot 1
-written=2026-10-31T10:00:00Z
-round=5
-pid=1234
-state=on:7078
-prev_state=off
-pending_state=
-pending_count=0
-port_enumeration=ok
-port_reason=
-vars_match=yes
-apply_result=ok
-log_tail=hi
-EPEOF
-    cp "$_sn_file" "$SNAPSHOT_FILE" 2>/dev/null || true
+    # 老版本写的快照：**没有** node_handshake 这个字段。
+    # 直接写到 SNAPSHOT_FILE，不经中间文件再 cp：多一步就多一个可能失败的地方，
+    # 而这一步要验的只是"读函数对缺字段的反应"，与文件怎么来的无关。
+    {
+        printf '%s\n' '# envproxy-snapshot 1'
+        printf '%s\n' "written=2026-10-31T10:00:00Z"
+        printf '%s\n' 'round=5'
+        printf '%s\n' 'pid=1234'
+        printf '%s\n' 'state=on:7078'
+        printf '%s\n' 'prev_state=off'
+        printf '%s\n' 'pending_state='
+        printf '%s\n' 'pending_count=0'
+        printf '%s\n' 'port_enumeration=ok'
+        printf '%s\n' 'port_reason='
+        printf '%s\n' 'vars_match=yes'
+        printf '%s\n' 'apply_result=ok'
+        printf '%s\n' 'log_tail=hi'
+    } > "$SNAPSHOT_FILE" 2>/dev/null
     read_state_snapshot
     _selftest_assert_eq "快照：老快照不被判损坏" "ok" "$SNAP_STATUS"
     _selftest_assert_eq "快照：缺字段读成「不知道」而不是「没问题」" "" "$SNAP_NODE_HANDSHAKE"
