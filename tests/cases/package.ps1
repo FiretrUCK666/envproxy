@@ -1,0 +1,158 @@
+﻿Write-Host '[5] atomic file copy (every package file goes through this)'
+$dir5 = New-TempDir 'envproxy_atomic_'
+$src5 = Join-Path $dir5 'from.ps1'
+$dst5 = Join-Path $dir5 'to.ps1'
+[System.IO.File]::WriteAllText($src5, "Write-Host 'one'`n", (New-Object System.Text.UTF8Encoding($true)))
+Copy-FileAtomic $src5 $dst5
+Assert-Eq 'copy creates the destination' $true (Test-Path -LiteralPath $dst5)
+Assert-Eq 'copy is byte exact' ((Get-Sha256Hex $src5)) ((Get-Sha256Hex $dst5))
+Assert-Eq 'copy keeps the BOM' 'EF-BB-BF' (([BitConverter]::ToString([System.IO.File]::ReadAllBytes($dst5)[0..2])))
+[System.IO.File]::WriteAllText($src5, "Write-Host 'two'`n", (New-Object System.Text.UTF8Encoding($false)))
+Copy-FileAtomic $src5 $dst5
+Assert-Eq 'overwrite replaces content exactly' ((Get-Sha256Hex $src5)) ((Get-Sha256Hex $dst5))
+Assert-Eq 'overwrite drops the old BOM' '57-72-69' (([BitConverter]::ToString([System.IO.File]::ReadAllBytes($dst5)[0..2])))
+Assert-Eq 'no temp file left behind' '0' (@(Get-ChildItem -LiteralPath $dir5 -Filter '*.envproxy-new*' -File).Count)
+$deep = Join-Path $dir5 'win\lib\base.ps1'
+Copy-FileAtomic $src5 $deep
+Assert-Eq 'missing parent directories are created' $true (Test-Path -LiteralPath $deep)
+Remove-Item -LiteralPath $dir5 -Recurse -Force
+
+Write-Host '[6] package structure verification'
+$pkg = New-TempDir 'envproxy_pkg_'
+$bomEnc = New-Object System.Text.UTF8Encoding($true)
+$plainEnc = New-Object System.Text.UTF8Encoding($false)
+Write-TestFile (Join-Path $pkg 'VERSION') '9.9.9'
+New-Item -Path (Join-Path $pkg 'win\lib'), (Join-Path $pkg 'mac') -ItemType Directory -Force | Out-Null
+# The package must be complete under the content-set rule: the entry declares its libraries,
+# and the platform folder may hold nothing beyond entry + menu + those libraries.
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), "# entry`n`$CoreLibs = @(`"base`", `"probe`")`n", $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\打开菜单.cmd'), "@echo off`n", $plainEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
+$threw = $false
+try { Test-Package $pkg '9.9.9' 'win' } catch { $threw = $true }
+Assert-Eq 'a well-formed package is accepted' $false $threw
+Assert-Throws 'version mismatch is rejected' { Test-Package $pkg '1.2.3' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $plainEnc)
+Assert-Throws 'a library without BOM is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\base.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!`r`n", $plainEnc)
+Assert-Throws 'a CRLF shell script is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
+Remove-Item -LiteralPath (Join-Path $pkg 'mac\envproxy.sh') -Force
+Assert-Eq 'a win split without the mac entry is accepted' $false $(try { Test-Package $pkg '9.9.9' 'win'; $false } catch { $true })
+[System.IO.File]::WriteAllText((Join-Path $pkg 'mac\envproxy.sh'), "#!/bin/bash`n", $plainEnc)
+Remove-Item -LiteralPath (Join-Path $pkg 'win\envproxy.ps1') -Force
+Assert-Throws 'a missing own-platform entry is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\envproxy.ps1'), "# entry`n`$CoreLibs = @(`"base`", `"probe`")`n", $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), ([char]0xFEFF).ToString(), $plainEnc)
+Assert-Throws 'a BOM-only truncated file is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '', $plainEnc)
+Assert-Throws 'a zero-byte script is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
+# A package missing one declared library, or carrying a file nobody declared, must be refused:
+# otherwise the overwrite step deletes the missing library as "stale" and still reports success.
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\probe.ps1') -Force
+Assert-Throws 'a package missing a declared library is rejected' { Test-Package $pkg '9.9.9' 'win' }
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\probe.ps1'), '# lib', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $pkg 'win\lib\backdoor.ps1'), '# lib', $bomEnc)
+Assert-Throws 'a package carrying an undeclared file is rejected' { Test-Package $pkg '9.9.9' 'win' }
+Remove-Item -LiteralPath (Join-Path $pkg 'win\lib\backdoor.ps1') -Force
+Remove-Item -LiteralPath $pkg -Recurse -Force
+
+Write-Host '[6b] scoped install (split onto legacy tree)'
+$leg = New-TempDir 'envproxy_scoped_'
+$spk = New-TempDir 'envproxy_split_'
+$stg = New-TempDir 'envproxy_stage_'
+New-Item -Path (Join-Path $leg 'win\lib'), (Join-Path $leg 'mac'), (Join-Path $leg 'release-notes') -ItemType Directory -Force | Out-Null
+New-Item -Path (Join-Path $spk 'win\lib'), (Join-Path $spk 'release-notes') -ItemType Directory -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $leg 'win\envproxy.ps1'), '# entry OLD', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $leg 'win\lib\base.ps1'), '# lib OLD', $bomEnc)
+Write-TestFile (Join-Path $leg 'win\old.cmd') 'stale'
+Write-TestFile (Join-Path $leg 'mac\envproxy.sh') "#!/bin/bash`n# mac OLD"
+Write-TestFile (Join-Path $leg 'mac\old.sh') 'stale'
+Write-TestFile (Join-Path $leg 'VERSION') '1.0.0'
+[System.IO.File]::WriteAllText((Join-Path $spk 'win\envproxy.ps1'), '# entry NEW', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $spk 'win\lib\base.ps1'), '# lib NEW', $bomEnc)
+Write-TestFile (Join-Path $spk 'release-notes\v9.md') 'notes'
+Write-TestFile (Join-Path $spk 'VERSION') '9.9.9'
+Install-Package -SrcRoot $spk -ProjectRoot $leg -Stage $stg -ShipDirs @('win', 'release-notes', 'assets')
+Assert-Eq 'scoped write updates own entry' '# entry NEW' ([System.IO.File]::ReadAllText((Join-Path $leg 'win\envproxy.ps1'), [System.Text.Encoding]::UTF8))
+Assert-Eq 'scoped delete removes own stale file' $false (Test-Path -LiteralPath (Join-Path $leg 'win\old.cmd'))
+Assert-Eq 'other platform entry untouched' "#!/bin/bash`n# mac OLD" (Get-Content -LiteralPath (Join-Path $leg 'mac\envproxy.sh') -Raw)
+Assert-Eq 'other platform stale file left alone' $true (Test-Path -LiteralPath (Join-Path $leg 'mac\old.sh'))
+Assert-Eq 'shared VERSION updated' '9.9.9' ((Get-Content -LiteralPath (Join-Path $leg 'VERSION') -Raw).Trim())
+# rollback: lock the destination entry, the write must fail and originals come back
+$fs = [System.IO.File]::Open((Join-Path $leg 'win\envproxy.ps1'), [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+$rbThrew = $false
+try { Install-Package -SrcRoot $spk -ProjectRoot $leg -Stage $stg -ShipDirs @('win', 'release-notes', 'assets') } catch { $rbThrew = $true }
+$fs.Close()
+Assert-Eq 'locked write fails loudly' $true $rbThrew
+Assert-Eq 'rollback restores entry' '# entry NEW' ([System.IO.File]::ReadAllText((Join-Path $leg 'win\envproxy.ps1'), [System.Text.Encoding]::UTF8))
+Remove-Item -LiteralPath $leg -Recurse -Force
+Remove-Item -LiteralPath $spk -Recurse -Force
+Remove-Item -LiteralPath $stg -Recurse -Force
+
+Write-Host '[7] the library set declared by the entry'
+# The entry is a thin loader: it owns the library list and nothing else. These assertions keep
+# that budget from eroding silently.
+$entryText = [System.IO.File]::ReadAllText((Join-Path $TestRoot 'win/envproxy.ps1'), [System.Text.Encoding]::UTF8)
+$declaredList = [regex]::Match($entryText, '\$CoreLibs\s*=\s*@\(([^)]*)\)').Groups[1].Value
+$declared = @([regex]::Matches($declaredList, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value } | Sort-Object)
+$actual = @(Get-ChildItem -LiteralPath (Join-Path $TestRoot 'win/lib') -Filter *.ps1 -File | ForEach-Object { $_.BaseName } | Sort-Object)
+Assert-Eq 'declared libraries match the lib folder' ($declared -join ',') ($actual -join ',')
+$empty = @($declared | Where-Object {
+    $p = Join-Path $TestRoot ("win/lib/{0}.ps1" -f $_)
+    ([regex]::Matches([System.IO.File]::ReadAllText($p, [System.Text.Encoding]::UTF8), '(?m)^function\s')).Count -eq 0
+})
+Assert-Eq 'every library defines at least one function' '0' ($empty.Count)
+Assert-Eq 'the entry stays a thin loader' $true (@([regex]::Matches($entryText, '(?m)^function\s')).Count -le 6)
+
+Write-Host '[8] autorun launcher command'
+# The command line written into the Run key has one source of truth; the installer's read-back
+# check and the self-heal comparison both compare against it, so its shape is an invariant.
+$cmd = Get-LauncherCommand
+Assert-Eq 'launcher command points at the launcher file' $true ($cmd -like ('*' + $LauncherPath + '*'))
+Assert-Eq 'launcher command hides the window' $true ($cmd -like '*WindowStyle Hidden*')
+Assert-Eq 'launcher command bypasses execution policy' $true ($cmd -like '*ExecutionPolicy Bypass*')
+
+Write-Host '[9] the monitor launch target'
+# The monitor is started from the entry script, and libraries must never answer "where am I" on
+# their own: inside a library $PSCommandPath / $PSScriptRoot point at the library file, so using
+# them as the entry path starts a file that cannot run on its own (no monitor, and no log line).
+$entryFile = Join-Path $TestRoot 'win/envproxy.ps1'
+Assert-Eq 'the entry publishes its own path' ((Get-Item -LiteralPath $entryFile).FullName) ((Get-Item -LiteralPath $ScriptPath).FullName)
+Assert-Eq 'the script directory derives from it' ((Get-Item -LiteralPath (Split-Path -Parent $entryFile)).FullName) ((Get-Item -LiteralPath $ScriptDir).FullName)
+$launch = @(Get-MonitorLaunchArgs)
+Assert-Eq 'launch args end with -File' '-File' $launch[-2]
+Assert-Eq 'launch args quote the entry path' ('"{0}"' -f (Get-Item -LiteralPath $entryFile).FullName) $launch[-1]
+Assert-Eq 'launch target is the entry, not a library' 'envproxy.ps1' (Split-Path -Leaf ($launch[-1].Trim('"')))
+Assert-Eq 'launch target exists' $true (Test-Path -LiteralPath ($launch[-1].Trim('"')))
+# Confirming a freshly started monitor judges by the pid file the monitor writes itself (it writes
+# it only after it owns the singleton). "Some process has this script on its command line" is not
+# enough: the process that just lost the singleton race looks like that for a moment too, and that
+# is how an installer came to print "started" while nothing was running.
+$dir9 = New-TempDir 'envproxy_pid_'
+$savedPidFile = $PidFile
+$PidFile = Join-Path $dir9 'monitor.pid'
+Assert-Eq 'no pid file is not a confirmed monitor' '' (Get-MonitorProcessFromPidFile)
+Write-TestFile $PidFile '999999'
+Assert-Eq 'a dead pid is not a confirmed monitor' '' (Get-MonitorProcessFromPidFile)
+$PidFile = $savedPidFile
+Remove-Item -LiteralPath $dir9 -Recurse -Force
+
+Write-Host '[10] judging a finished install'
+# The updater decides the finish step worked by reading the install root's pid file, never by the
+# child's exit code: PowerShell 5.1 cannot read ExitCode after Start-Process -PassThru (it returns
+# empty), so treating "unreadable" as failure makes every update run the fallback and tear down the
+# monitor it had just started.
+$root10 = New-TempDir 'envproxy_finish_'
+New-Item -Path (Join-Path $root10 'win\monitor') -ItemType Directory -Force | Out-Null
+Assert-Eq 'no pid file is not a finished install' $false (Test-InstallRootMonitor $root10)
+Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') '999999'
+Assert-Eq 'a dead pid is not a finished install' $false (Test-InstallRootMonitor $root10)
+Write-TestFile (Join-Path $root10 'win\monitor\monitor.pid') ([string]$PID)
+Assert-Eq 'a live non-monitor pid is not a finished install' $false (Test-InstallRootMonitor $root10)
+Remove-Item -LiteralPath $root10 -Recurse -Force
+
