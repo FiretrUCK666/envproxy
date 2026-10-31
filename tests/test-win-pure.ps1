@@ -3800,7 +3800,9 @@ foreach ($r in $segRows) {
 Assert-Eq 'advanced: cmd role is green' 'green' ([string]$StyleMap['cmd'])
 
 # ② 快照的 node_handshake 必须能往返，且**老快照不许被判损坏**。
-$snapFile = Join-Path $env:TEMP ('snaptest-' + [guid]::NewGuid().ToString('N') + '.txt')
+# 临时目录必须用 .NET 的 GetTempPath：Linux 上没有 $env:TEMP（那是 Windows 才有的变量），
+# Join-Path 收到 null 会让自检在这一步就崩掉——而那会被报成"快照功能坏了"，方向全错。
+$snapFile = Join-Path ([System.IO.Path]::GetTempPath()) ('snaptest-' + [guid]::NewGuid().ToString('N') + '.txt')
 $script:StateSnapshotFile = $snapFile
 Write-StateSnapshot -State 'on:7078' -PrevState 'off' -PendingState '' -PendingCount 0 `
     -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok' -NodeHandshake 'upstream-fail'

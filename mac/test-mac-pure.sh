@@ -2156,7 +2156,11 @@ except Exception: pass
     # 必须**跟着重算**，否则写到沙箱外，读的又是另一处——看起来像"字段丢了"。
     SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
     _sn_file="$_sandbox/snap-hs.txt"
+    # 断言前先把落点打出来：远端失败时，第一个要问的问题就是"它到底写到哪去了"。
+    # 不打这一行，排查只能靠猜。
+    [ -d "$MONITOR_DIR" ] || echo "  诊断：MONITOR_DIR 不存在 -> $MONITOR_DIR"
     write_state_snapshot "on:7078" "off" "" "0" "ok" "" "yes" "ok" "5" "1234" "upstream-fail"
+    [ -f "$SNAPSHOT_FILE" ] || echo "  诊断：快照没写出来 -> $SNAPSHOT_FILE"
     read_state_snapshot
     _selftest_assert_eq "快照：握手字段能往返" "upstream-fail" "$SNAP_NODE_HANDSHAKE"
     _selftest_assert_eq "快照：状态是 ok" "ok" "$SNAP_STATUS"
