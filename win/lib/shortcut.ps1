@@ -700,6 +700,7 @@ function Get-AdvancedPageLines {
             @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
         @{ Role='item';    Text='    2  管理已建的                 看状态、删掉不要的' },
         @{ Role='item';    Text='    3  查看中继                   图标用的那个固定地址，现在怎么样' },
+        @{ Role='item';    Text='    4  网络救援                   浏览器上不了网的时候，先来这里查一下' },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  要注意' },
         @{ Role='blank';   Text='' },
@@ -1288,10 +1289,126 @@ function Show-AdvancedMenu {
                 # 那会让用户按回车回到这一屏，再按一次才真的返回（多按一次、看不出所以然）。
                 Show-RelayPage
             }
+            '4' { Show-RescuePage }
             default {
-                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2、3，0 = 返回）')
+                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2、3、4，0 = 返回）')
                 Start-Sleep -Milliseconds 700
             }
         }
     }
+}
+
+# 网络救援页：查出问题 -> 说清 -> 问一句 -> 修 -> 回读 -> 报结果。
+#
+# 这一屏的读法是「先结论、后明细、最后动作」，与状态页同一套：
+# 用户打开它的时候心里只有一个问题「我这网到底怎么了」。
+# 与 Mac 侧同形（那边是 show_rescue_page），两平台同一件事必须同一句话。
+function Show-RescuePage {
+    Clear-Screen
+    Write-Styled 'title' '======== 网络救援 ========'
+    Write-Host ''
+
+    $layers = @(Get-SystemProxyLayers)
+    $fixable = @($layers | Where-Object { Test-SysProxyFixable $_.Kind })
+    $blocking = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Blocking })
+    $slowing = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Slowing })
+    $foreign = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Foreign })
+    $managed = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Managed })
+
+    # ---- 先给结论：这一屏最上面那句必须是「你现在是什么情况」 ----
+    if ($blocking.Count -gt 0) {
+        Write-Styled 'warn' '  查下来：浏览器被指到了一个已经关掉的程序上。'
+        Write-Styled 'dim'  '          所以网页打不开——线没断，是路指错了。'
+    } elseif ($slowing.Count -gt 0) {
+        Write-Styled 'warn' '  查下来：有个设置脚本指向已经关掉的程序。'
+        Write-Styled 'dim'  '          网页能开，但每次都要先等它几秒。'
+    } elseif ($fixable.Count -eq 0) {
+        Write-Styled 'ok' '  查下来：没发现问题，浏览器这边的设置是好的。'
+        if ($foreign.Count -gt 0) {
+            Write-Host ''
+            Write-Styled 'dim' '  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。'
+        }
+    }
+
+    # ---- 明细：能修的与不能动的分开列，不混在一起 ----
+    if ($fixable.Count -gt 0) {
+        Write-Host ''
+        Write-Styled 'heading' ("  能修的有 {0} 项：" -f $fixable.Count)
+        Write-Host ''
+        $label = @{ manual = '浏览器代理'; pac = '设置脚本'; winhttp = '系统下载'; }
+        foreach ($f in $fixable) {
+            $why = if ($f.Kind -eq $SysProxyKinds.Slowing) { '那个脚本已经不在了' } else { '那个程序已经不在了' }
+            Write-Styled 'text' ('    ' + $label[$f.Layer] + '  ' + $f.Url)
+            Write-Styled 'dim'  ('      ' + $why)
+        }
+    }
+    if ($foreign.Count -gt 0 -or $managed.Count -gt 0) {
+        Write-Host ''
+        Write-Styled 'heading' ("  不能动的 {0} 项：" -f ($foreign.Count + $managed.Count))
+        Write-Host ''
+        foreach ($f in $foreign) {
+            Write-Styled 'text' ('    浏览器代理  ' + $f.Url)
+            Write-Styled 'dim'  '      不是本机的地址，多半是公司或学校的，本工具不碰'
+        }
+        foreach ($f in $managed) {
+            Write-Styled 'text' '    浏览器代理'
+            Write-Styled 'dim'  '      这台电脑的设置由管理员统一管着，改了也会被改回去'
+        }
+    }
+
+    # ---- 动作 ----
+    Write-Host ''
+    if ($fixable.Count -eq 0) {
+        Write-Styled 'dim' '  按回车返回'
+        try { [void](Read-Host) } catch { return }
+        return
+    }
+    Write-Styled 'text' ("  输 y 回车 = 修好上面那 {0} 项（会先备份，能还原）" -f $fixable.Count)
+    Write-Styled 'dim'  '  输 r 回车 = 还原成上次修之前的样子'
+    Write-Styled 'dim'  '  直接回车 = 什么都不做，返回'
+    $ans = ''
+    try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
+    if ($ans -match '^(r|R)$') {
+        $ok = Restore-SystemProxyBackup
+        Write-Host ''
+        if ($ok) { Write-Styled 'ok' '  [完成] 已经改回上次修之前的样子。' }
+        else { Write-Styled 'warn' '  [未完成] 没有可还原的记录，或者没能改回去。' }
+        Write-Styled 'dim' '  按回车返回'
+        try { [void](Read-Host) } catch { }
+        return
+    }
+    if (-not ($ans -match '^(y|Y|yes|YES|是)$')) { return }
+
+    # 真动手。先备份再改，改完回读确认——三态结论各有各的说法，不许塌缩成一句「失败」。
+    $r = Repair-SystemProxy -IncludeWinHttp
+    Write-Host ''
+    switch ($r.Result) {
+        'fixed' {
+            Write-Styled 'ok' '  [完成] 修好了。'
+            Write-Styled 'dim' '  浏览器要是还打不开，把它关掉重开一次。'
+        }
+        'none' {
+            Write-Styled 'dim' '  查的时候还在，动手的时候已经没了（可能是你自己关掉了）。'
+        }
+        'nobackup' {
+            Write-Styled 'warn' '  [未完成] 备份写不下来，为了安全没有动任何设置。'
+            Write-Styled 'dim'  '  确认日志目录可写之后再来一次。'
+        }
+        default {
+            Write-Styled 'warn' '  [未完成] 没能改完。'
+            if ($r.Detail -eq 'needadmin') {
+                Write-Styled 'dim' '  还有一项要管理员才能改。用管理员身份打开终端，执行这一条：'
+                Write-Styled 'cmd' '    netsh winhttp reset proxy'
+            } else {
+                Write-Styled 'dim' '  可以再试一次；还不行就用主菜单的「问题反馈」生成一份报告。'
+            }
+        }
+    }
+    if ($r.Changed.Count -gt 0) {
+        Write-Host ''
+        Write-Styled 'dim' ('  改动的项：' + (@($r.Changed) -join '、'))
+    }
+    Write-Styled 'dim' '  按回车返回'
+    try { [void](Read-Host) } catch { }
+    return
 }

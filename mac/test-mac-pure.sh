@@ -1982,6 +1982,54 @@ EOF
     _ed_2=0; mkdir -p "$_ed_dir" 2>/dev/null && _ed_2=1
     _selftest_assert_eq "重复创建是幂等的（每轮都调不会失败）" "1" "$_ed_2"
 
+    echo "[13] 系统代理判据表（doctor）"
+    # 判据表就是「不能误删」这条底线的机械证明：只有"本机回环 + 端口不通"才允许修。
+    # 与 Windows 侧同一张表、同一批结论词（门禁 6 核对）。
+    _selftest_assert_eq "判据：压根没设代理" "clean" "$(sysproxy_verdict '' 0 unknown 0 manual)"
+    _selftest_assert_eq "判据：回环死端口可修（真断网）" "residue-blocking" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 dead 0 manual)"
+    _selftest_assert_eq "判据：回环活端口不动" "alive" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 alive 0 manual)"
+    _selftest_assert_eq "判据：localhost 也算回环" "residue-blocking" "$(sysproxy_verdict 'http://localhost:7890' 7890 dead 0 manual)"
+    _selftest_assert_eq "判据：方括号 IPv6 也算回环" "residue-blocking" "$(sysproxy_verdict 'http://[::1]:10808' 10808 dead 0 manual)"
+    _selftest_assert_eq "判据：PAC 死端口是卡不是断" "residue-slowing" "$(sysproxy_verdict 'http://127.0.0.1:7078/pac' 7078 dead 0 pac)"
+    _selftest_assert_eq "判据：公司代理永远不碰" "foreign" "$(sysproxy_verdict 'http://10.0.0.8:8080' 8080 dead 0 manual)"
+    _selftest_assert_eq "判据：域名代理永远不碰" "foreign" "$(sysproxy_verdict 'http://proxy.corp.com:3128' 3128 dead 0 manual)"
+    _selftest_assert_eq "判据：被策略管着优先于一切" "managed" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 dead 1 manual)"
+    _selftest_assert_eq "判据：说不清就不动" "foreign" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 unknown 0 manual)"
+    _k=0; sysproxy_fixable residue-blocking && _k=1
+    _selftest_assert_eq "可修：blocking" "1" "$_k"
+    _k=0; sysproxy_fixable residue-slowing && _k=1
+    _selftest_assert_eq "可修：slowing" "1" "$_k"
+    for _nk in alive foreign managed clean; do
+        _k=0; sysproxy_fixable "$_nk" && _k=1
+        _selftest_assert_eq "不可修：$_nk" "0" "$_k"
+    done
+
+    echo "[14] 网络救援的备份只写一次，且能读回"
+    # 「只写一次」是契约：每次覆盖就失效——用户第一次修之前的原样才是要还原的那个。
+    _bk_saved="$MONITOR_DIR"
+    MONITOR_DIR="$_sandbox/rescue_bak"
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    # 用替身顶掉真实的 networksetup：自检不该读也不该改使用者的系统代理设置。
+    networksetup() {
+        case "$1" in
+            -listallnetworkservices) printf 'An asterisk (*) denotes that a network service is disabled.\nWi-Fi\n' ;;
+            -getwebproxy) printf 'Enabled: Yes\nServer: 127.0.0.1\nPort: 7078\nAuthenticated Proxy Enabled: 0\n' ;;
+            -getsecurewebproxy|-getsocksfirewallproxy) printf 'Enabled: No\nServer: \nPort: 0\n' ;;
+            -getautoproxyurl) printf 'URL: (null)\nEnabled: No\n' ;;
+            *) return 0 ;;
+        esac
+    }
+    _bk_1=0; sysproxy_backup >/dev/null 2>&1 && _bk_1=1
+    _selftest_assert_eq "备份能写出来" "1" "$_bk_1"
+    _selftest_assert_eq "备份文件在" "1" "$([ -f "$MONITOR_DIR/doctor.bak" ] && echo 1 || echo 0)"
+    _bk_first=$(cat "$MONITOR_DIR/doctor.bak" 2>/dev/null)
+    printf 'Wi-Fi\tweb\tNo\t9.9.9.9\t1\n' > "$MONITOR_DIR/doctor.bak"
+    sysproxy_backup >/dev/null 2>&1
+    _bk_second=$(cat "$MONITOR_DIR/doctor.bak" 2>/dev/null)
+    _selftest_assert_eq "已有备份不被覆盖（只写一次）" "Wi-Fi	web	No	9.9.9.9	1" "$_bk_second"
+    unset -f networksetup 2>/dev/null || true
+    MONITOR_DIR="$_bk_saved"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面

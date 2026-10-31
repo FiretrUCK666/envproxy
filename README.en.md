@@ -98,7 +98,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | Windows only: a blocked-site shortcut | One new icon only |
+| **5 Advanced** (`高级功能`) | A blocked-site shortcut and network rescue (both platforms; contents differ) | Adds one new icon only; rescue touches nothing but the browser proxy setting, and backs it up first |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -123,6 +123,7 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | 4 | Make one command skip the proxy |
 | 5 | One program still cannot reach blocked sites |
 | 6 | Something is wrong: how to check, how to report |
+| 7 | No internet after closing the proxy app |
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
@@ -366,7 +367,7 @@ The menu is for double-clicking. When you write a script, or connect remotely wi
 | Show status | `-Status` | `status` |
 | Check for updates | `-Update` | `update` |
 | Help | `-Help` | `help` |
-| Advanced (Windows only) | `-Advanced` | — |
+| Advanced | `-Advanced` | `advanced` |
 | Stop monitoring | `-Stop` | `stop` |
 | Full restore | `-Uninstall` | `uninstall` |
 | Problem report | `-Report` | `report` |
@@ -579,6 +580,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `monitor.beat` | heartbeat: process id plus start time |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | state snapshot written by the background program; the status page only reads it |
+| | `doctor.bak` | what the browser proxy setting looked like before network rescue changed it, so it can be put back. Written only when a repair actually happens |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
@@ -663,7 +665,7 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 ### 12.3 Menu (same as Windows)
 
-The behaviour and what each item affects are the same as Windows, including `4 Help` and `0 Quit`. **One number differs**: `5 Advanced` exists on Windows only, so 5 is empty on Mac while `6 Stop monitoring` and `7 Full restore` keep the same numbers as Windows. The gap is deliberate: the same action should be the same number on both machines. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). `5 Advanced` exists on both platforms, but holds different things: Windows has "shortcut that goes through the proxy", "manage shortcuts", "view relay" and "network rescue"; Mac has only "network rescue" because programs launched from the Dock already see the proxy and need no launcher. Pressing Enter directly means show status.
 
 ### 12.4 What is in the `mac` folder
 
@@ -716,6 +718,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | verdict the background program writes every round; the status page only reads it |
+| | `doctor.bak` | what the browser proxy setting looked like before network rescue changed it, so it can be put back. Written only when a repair actually happens |
 | | `report-*.txt` | reports built by "Problem report"; open one before sending it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |

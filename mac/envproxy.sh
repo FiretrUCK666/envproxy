@@ -67,7 +67,8 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 # 所以 SCRIPT_DIR 由入口算好，各库一律用这个全局。
 LIB_DIR="$SCRIPT_DIR/lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib/ 实际内容一致。
-CORE_LIBS="base probe env runtime package update ops"
+# doctor 排在 ops 之前：菜单要调它给结论，而它自己不调界面。
+CORE_LIBS="base probe env runtime package update doctor ops"
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 _missing_lib=""
 for _lib_name in $CORE_LIBS; do
@@ -132,7 +133,7 @@ _usage_err=$(usage_error)
 _usage_rc=$?
 if [ $_usage_rc -ne 0 ]; then
     echo "$_usage_err" >&2
-    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile|report} [--purge] [--yes]" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes]" >&2
     exit 2
 fi
 
@@ -165,7 +166,7 @@ case "${OSTYPE:-}" in
         # report 也拦——它会往 mac/monitor/ 写报告文件，那不是"只读"。
         case "$_CMD_NORM" in
             help|self-test) : ;;
-            menu|install|stop|uninstall|status|update|repair-profile|report|'')
+            menu|install|stop|uninstall|status|update|advanced|repair-profile|report|'')
                 echo "这是 macOS 版，只能在 macOS 上运行（当前系统不是 macOS）。" >&2
                 echo "Windows 请用 win 目录里的 envproxy.ps1，或双击「打开菜单」。" >&2
                 exit 1
@@ -241,6 +242,9 @@ case "$_CMD_NORM" in
     # 入口同时持有所有层，是唯一适合把这条能力接起来的地方。
     update) UPDATE_INSTALL_FINISH="install_envproxy" update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
+    # 高级功能：与 Windows 侧同名同号的二级菜单。mac 这边只放「网络救援」
+    # （DIVERGE(Mac): 从 Dock 启动的程序本来就拿得到 launchctl 设的变量，不需要启动器）。
+    advanced) show_advanced_menu;;
     help) show_help;;
     # 退出码要如实反映结果：报告没写出来时说"成功"是谎报，
     # 脚本里 `envproxy.sh report && 发出去` 会拿着一份不存在的报告往下走。
@@ -264,6 +268,6 @@ case "$_CMD_NORM" in
         fi;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|self-test|repair-profile|report} [--purge] [--yes]"; exit 2;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes]"; exit 2;;
 esac
 fi

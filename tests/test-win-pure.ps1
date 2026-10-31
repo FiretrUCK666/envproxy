@@ -3569,5 +3569,64 @@ try {
     }
 } catch {}
 
+Write-Host '[24] System proxy verdict table (doctor)'
+# 判据表就是「不能误删」这条底线的机械证明：只有"本机回环 + 端口不通"才允许修。
+# 那张表一变，用户唯一的上网路径就可能被删掉——所以逐条钉死。
+Assert-Eq 'verdict: no proxy at all is clean' 'clean' (Get-SystemProxyVerdict -Url '' -Port 0)
+Assert-Eq 'verdict: dead loopback is fixable (blocking)' 'residue-blocking' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $false)
+Assert-Eq 'verdict: live loopback is left alone' 'alive' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $true)
+Assert-Eq 'verdict: localhost is also loopback' 'residue-blocking' (Get-SystemProxyVerdict -Url 'http://localhost:7890' -Port 7890 -Alive $false)
+Assert-Eq 'verdict: bracketed IPv6 is also loopback' 'residue-blocking' (Get-SystemProxyVerdict -Url 'http://[::1]:10808' -Port 10808 -Alive $false)
+Assert-Eq 'verdict: dead PAC is slowing, not blocking' 'residue-slowing' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078/pac' -Port 7078 -Alive $false -Kind 'pac')
+Assert-Eq 'verdict: a company proxy is never ours' 'foreign' (Get-SystemProxyVerdict -Url 'http://10.0.0.8:8080' -Port 8080 -Alive $false)
+Assert-Eq 'verdict: a hostname proxy is never ours' 'foreign' (Get-SystemProxyVerdict -Url 'http://proxy.corp.com:3128' -Port 3128 -Alive $false)
+Assert-Eq 'verdict: policy-managed wins over everything' 'managed' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $false -Managed $true)
+Assert-Eq 'verdict: unknown liveness is never touched' 'foreign' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $null)
+Assert-Eq 'fixable: blocking yes' 'True' (Test-SysProxyFixable 'residue-blocking')
+Assert-Eq 'fixable: slowing yes' 'True' (Test-SysProxyFixable 'residue-slowing')
+Assert-Eq 'fixable: alive no' 'False' (Test-SysProxyFixable 'alive')
+Assert-Eq 'fixable: foreign no' 'False' (Test-SysProxyFixable 'foreign')
+Assert-Eq 'fixable: managed no' 'False' (Test-SysProxyFixable 'managed')
+Assert-Eq 'fixable: clean no' 'False' (Test-SysProxyFixable 'clean')
+
+Write-Host '[25] DefaultConnectionSettings parsing (doctor)'
+# 这一段防的是「假修好」：Windows 真正生效的是这段二进制，只读 ProxyEnable 看不出来
+# PAC 残留（那种情况下 ProxyEnable 是 0，看着一切正常）。解析错了，界面就会报错状态。
+function New-ProxyBlob([int]$Flags, [string]$Server, [string]$Bypass, [string]$Pac) {
+    $ms = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($ms)
+    $bw.Write([int]0x46); $bw.Write([int]7); $bw.Write([int]$Flags)
+    foreach ($s in @($Server, $Bypass, $Pac)) {
+        $b = [System.Text.Encoding]::ASCII.GetBytes($s)
+        $bw.Write([int]$b.Length); $bw.Write($b)
+    }
+    $bw.Write([int]1); $bw.Write((New-Object byte[] 31))
+    $bw.Flush()
+    return $ms.ToArray()
+}
+$manualBlob = ConvertFrom-ProxyConnectionBlob (New-ProxyBlob 0x03 '127.0.0.1:7078' '<local>' '')
+Assert-Eq 'blob: manual proxy parsed' 'True' $manualBlob.ManualProxy
+Assert-Eq 'blob: manual proxy has no PAC' 'False' $manualBlob.AutoConfig
+Assert-Eq 'blob: manual proxy server read back' '127.0.0.1:7078' $manualBlob.ProxyServer
+$pacBlob = ConvertFrom-ProxyConnectionBlob (New-ProxyBlob 0x05 '' '' 'http://127.0.0.1:7078/pac')
+Assert-Eq 'blob: PAC-only is not manual' 'False' $pacBlob.ManualProxy
+Assert-Eq 'blob: PAC-only is detected' 'True' $pacBlob.AutoConfig
+Assert-Eq 'blob: PAC url read back' 'http://127.0.0.1:7078/pac' $pacBlob.AutoConfigUrl
+$offBlob = ConvertFrom-ProxyConnectionBlob (New-ProxyBlob 0x01 '' '' '')
+Assert-Eq 'blob: everything off reads as clean' 'False' $offBlob.ManualProxy
+Assert-Eq 'blob: everything off has no PAC' 'False' $offBlob.AutoConfig
+$shortBlob = ConvertFrom-ProxyConnectionBlob ([byte[]](1, 2, 3))
+Assert-Eq 'blob: too short is not Ok (not "no proxy")' 'False' $shortBlob.Ok
+$truncBlob = ConvertFrom-ProxyConnectionBlob ([byte[]](0x46, 0, 0, 0, 1, 0, 0, 0, 0x03, 0, 0, 0, 255, 0, 0, 0))
+Assert-Eq 'blob: truncated does not throw and is not Ok' 'False' $truncBlob.Ok
+
+Write-Host '[26] Operator remark: doctor must not depend on the GUI'
+# doctor 是叶子层：它只允许依赖 base + probe。ops/shortcut 反过来调它是正常的，
+# 而它一旦调界面就会成环（门禁 1/2 会拦，但那要等到 CI；这里先钉一道）。
+$doctorText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\win\lib\doctor.ps1'))
+foreach ($guiFn in @('Write-Styled', 'Write-Host', 'Read-Host', 'Clear-Screen', 'Show-AdvancedPage')) {
+    $hit = [regex]::IsMatch($doctorText, ('(?m)^(?!\s*#).*\b' + [regex]::Escape($guiFn) + '\b'))
+    Assert-Eq ('doctor never calls ' + $guiFn) 'False' ([string]$hit)
+}
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

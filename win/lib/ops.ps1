@@ -1,4 +1,4 @@
-# ==============================================================================
+﻿# ==============================================================================
 #  ops.ps1 — 动作层：菜单背后的安装、停止、卸载、状态编排、菜单与帮助、问题反馈
 #  把下面各层拼成使用者点得到的行为。
 #  卸载要处理「走代理的快捷方式」的去留，因此依赖 shortcut 层的扫描与删除函数。
@@ -653,8 +653,17 @@ function Format-StatusLines($st) {
         & $line "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）重做一次即可。" 'dim'
     }
     if ($st.SysProxy) {
-        & $row $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
-        & $line '  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。' 'dim'
+        # 两种残留的症状真的不同，不能混成一句：
+        #   manual 手动代理指向死端口 —— 浏览器打不开任何网页（真断网）
+        #   pac    设置脚本指向死端口 —— 能上网，但每次开网页先卡几秒
+        # 说成同一句话，前者会被当成小毛病、后者会被当成彻底坏了。
+        $spText = if ($st.SysProxy.Kind -eq 'residue-slowing') {
+            '有个设置脚本指向已经关掉的程序（网页能开，但每次要等几秒）'
+        } else {
+            '指向本机一个已经关掉的程序（浏览器会打不开网页）'
+        }
+        & $row $StatusLabels.SysProxy ($spText + '。不是本工具写的。') 'warn'
+        & $line ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络救援。') 'dim'
     }
     # ---- 第四组：终端同步 ----
     # 话术从 Get-TermSyncText 取，与静态页同源
@@ -971,6 +980,31 @@ function New-ProblemReport {
     }
     & $add ''
 
+    # 网络体检：报告里最该有的一节。
+    # 用户报「上不了网」的时候，作者第一件事就是想确认「是不是浏览器被指到了死端口」——
+    # 没有这一节，得靠来回追问三四轮。判据本来就是现成的（doctor 层），
+    # 顺手写进来，提问的人不用另外描述。
+    & $rule '网络体检（浏览器那一侧）'
+    try {
+        $docLayers = @(Get-SystemProxyLayers)
+        if ($docLayers.Count -eq 0) {
+            & $add '  没有设任何浏览器代理（干净直连）。'
+        } else {
+            foreach ($dl in $docLayers) {
+                $flag = if (Test-SysProxyFixable $dl.Kind) { '【可修】' }
+                        elseif ($dl.Kind -eq $SysProxyKinds.Alive) { '（正在用）' }
+                        elseif ($dl.Kind -eq $SysProxyKinds.Managed) { '（被管理员锁定）' }
+                        else { '（不是本机的，未动）' }
+                & $add ('  ' + $dl.Layer + '  ' + $dl.Url + '  -> ' + $dl.Kind + ' ' + $flag)
+            }
+        }
+        $fixCount = @($docLayers | Where-Object { Test-SysProxyFixable $_.Kind }).Count
+        & $add ('  这一层有没有问题：' + $(if ($fixCount -gt 0) { '有' } else { '没有' }))
+    } catch {
+        & $add ('  （取网络体检结论时出错：' + $_.Exception.Message + '）')
+    }
+    & $add ''
+
     & $rule '运行日志（最后 30 行）'
     $tail = ''
     try { $tail = [string](Get-LogTailText 30) } catch { $tail = '' }
@@ -1165,15 +1199,21 @@ function Get-StatusSnapshot {
         # 处理方式不同——前者等监控自愈，后者要人看一眼变量被谁改坏了。
     }
     # 系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
-    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它（动它是「网络救援」的活）。
+    #
+    # 判据**只有一处实现**：doctor 层的 Get-SystemProxyLayers + Get-SystemProxyVerdict。
+    # 这里原来内联了一小段（只认 ProxyEnable + 127.0.0.1 + 端口死活），
+    # 与 doctor 各写一套必然分叉——那个版本还看不见 PAC 残留、也不认 ::1 与 localhost，
+    # 于是「浏览器每次开网页先等几秒」这种症状在状态页上完全隐形。
+    # -Quick 只查两层、超时 300 毫秒：状态页每 2 秒刷一次，全量档会把刷新拖垮。
     $st.SysProxy = $null
     try {
-        $sp = Get-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop
-        if (($sp.ProxyEnable -eq 1) -and ($sp.ProxyServer -match "127\.0\.0\.1:(\d+)")) {
-            $spPort = [int]$Matches[1]
-            if (-not (Test-TcpAlive "127.0.0.1" $spPort 800)) {
-                $st.SysProxy = @{ Server = $sp.ProxyServer; Port = $spPort }
-            }
+        $spLayers = @(Get-SystemProxyLayers -Quick)
+        $spBad = @($spLayers | Where-Object { Test-SysProxyFixable $_.Kind })
+        if ($spBad.Count -gt 0) {
+            # 只报第一个：状态页那一行是一句话，列一长串会读不下去。
+            # 详细的几项留给「网络救援」那一屏。
+            $st.SysProxy = @{ Server = $spBad[0].Url; Port = $spBad[0].Port; Kind = $spBad[0].Kind; Count = $spBad.Count }
         }
     } catch {}
     # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
@@ -1348,10 +1388,16 @@ function Show-StatusSnapshot($st) {
         Write-Styled 'dim' "  打开菜单选 $(Get-MenuKey 'Install')（$(Get-MenuName 'Install')）（安装 / 修复）重做一次即可。"
     }
     if ($st.SysProxy) {
-        Write-StatusRow $StatusLabels.SysProxy ("疑似残留（指向本机死端口 {0}，非本工具写入）。" -f $st.SysProxy.Server) 'warn'
+        # 措辞与实时帧逐字相同（两版是同一屏的两种刷新方式），见 Format-StatusLines。
+        $spText2 = if ($st.SysProxy.Kind -eq 'residue-slowing') {
+            '有个设置脚本指向已经关掉的程序（网页能开，但每次要等几秒）'
+        } else {
+            '指向本机一个已经关掉的程序（浏览器会打不开网页）'
+        }
+        Write-StatusRow $StatusLabels.SysProxy ($spText2 + '。不是本工具写的。') 'warn'
         # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
-        Write-Styled 'dim' "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+        Write-Styled 'dim' ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络救援。')
     }
     # ---- 参考信息：正常项各占一行，用 ok 色方便一眼确认核心链路是通的 ----
     #
@@ -2008,6 +2054,38 @@ function Get-HelpTopics {
                 'r 日常|-Install -Status -Stop -Uninstall -Update',
                 'r 其它|-Help -Menu -Advanced -Report',
                 'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记'
+            )
+        },
+        @{
+            Key = '7'; Title = '上不了网（关了翻墙软件之后）'; Short = '上不了网'
+            Lines = @(
+                'h 先分清是哪种"上不了网"',
+                't 浏览器打不开、但别的程序照常 = 浏览器这边的问题。',
+                't 什么都连不上 = 网络本身的问题，跟这个工具无关。',
+                'b ',
+                'h 最常见的原因：翻墙软件没关干净',
+                't 多数翻墙软件退出时会把自己写进系统的设置撤掉。',
+                't 被强制关机、断电、或者直接点了叉，就没来得及撤。',
+                't 那条设置还在，浏览器就照旧去找一个已经不存在的程序，',
+                't 于是国内网站也打不开——这不是网断了，是路指错了。',
+                'b ',
+                'h 怎么自己修',
+                "i 1. 菜单选 $(Get-MenuKey 'Advanced')（$(Get-MenuName 'Advanced')），再选 4（网络救援）",
+                't2 它会说清查到什么；能修的问你一句才动手，改之前先备份。',
+                'i 2. 按 y 回车',
+                't2 修完把浏览器关掉重开一次再看。',
+                'b ',
+                'h 什么东西它不会动',
+                't 公司、学校给你的代理，它一个字节都不碰。',
+                't 被管理员统一管着的也不碰，那种改了也会被改回去。',
+                't 它只修「指向本机、但程序已经不在了」的那种。',
+                'b ',
+                'h 修错了想改回去',
+                't 再进那一屏，按 r 回车就能还原成修之前的样子。',
+                'b ',
+                'h 还不行',
+                "t 用菜单选 $(Get-MenuKey 'Report')（$(Get-MenuName 'Report')）生成报告，贴到项目页面。",
+                't 报告里有网络体检的结论，不用你另外描述。'
             )
         }
     )

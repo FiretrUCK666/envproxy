@@ -499,20 +499,31 @@ EOF
     fi
 
     # 系统代理：浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
-    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它。
-    # 与 Win 侧 HKCU Internet Settings 那段同语义（读系统设置 → 试连 → 只在连不上时提醒）。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它
+    # （动它是「网络救援」的活）。
+    #
+    # 判据**只有一处实现**：doctor 层的 sysproxy_layers + sysproxy_verdict。
+    # 这里原来是第三套实现（scutil --proxy 读全局，只认 127.0.0.1），
+    # 而 mac 的系统代理是**每个网络服务各存一份**，scutil 只报当前生效的那一份——
+    # 公司 VPN 上残留、Wi-Fi 上干净的情况它完全看不见。
+    # quick 只查手动代理两层：状态页每次刷新都调它，全量档会拖慢刷新。
     _sp_bad=0
-    _sp_info=$(scutil --proxy 2>/dev/null || true)
-    if [ -n "$_sp_info" ]; then
-        _sp_enable=$(printf '%s' "$_sp_info" | awk '/HTTPEnable *: *1/ {print 1; exit}')
-        _sp_host=$(printf '%s' "$_sp_info" | awk '/HTTPProxy *: */ {sub(/.*: */, ""); print; exit}')
-        _sp_port=$(printf '%s' "$_sp_info" | awk '/HTTPPort *: */ {sub(/.*: */, ""); print; exit}')
-        if [ "$_sp_enable" = "1" ] && [ "$_sp_host" = "127.0.0.1" ] && [ -n "$_sp_port" ]; then
-            # "在听"还不够：多数翻墙软件的断开按钮不停内核，端口仍会应答。
-            # 真连一次才分得清"活着"与"占着不放"（与 Win 侧 Test-TcpAlive 同口径）。
-            _port_alive "127.0.0.1" "$_sp_port" || _sp_bad=1
+    _sp_first_url=""
+    _sp_first_kind=""
+    _sp_count=0
+    while IFS="$(printf '\t')" read -r _sp_layer _sp_svc _sp_kind _sp_url _sp_port; do
+        [ -n "$_sp_svc" ] || continue
+        if sysproxy_fixable "$_sp_kind"; then
+            _sp_count=$((_sp_count + 1))
+            if [ -z "$_sp_first_kind" ]; then
+                _sp_first_url="$_sp_url"
+                _sp_first_kind="$_sp_kind"
+            fi
         fi
-    fi
+    done <<EOF
+$(sysproxy_layers quick)
+EOF
+    [ "$_sp_count" -gt 0 ] && _sp_bad=1
 
     # 版本信息（只读：查不到只提示，不写文件、不提问）
     _local_ver=$(get_local_version || true)
@@ -974,8 +985,17 @@ show_status() {
         style_out dim "  打开菜单$(menu_ref install)重做一次即可。"
     fi
     if [ "$_sp_bad" = "1" ]; then
-        _status_row "系统代理" "疑似残留（指向本机死端口 127.0.0.1:$_sp_port，非本工具写入）。" warn
-        style_out dim "  浏览器打不开先检查它：系统设置 → 网络 → 代理，或把翻墙软件断开重进一次。"
+        # 两种残留的症状真的不同，不能混成一句：
+        #   manual 手动代理指向死端口 —— 浏览器打不开任何网页（真断网）
+        #   pac    设置脚本指向死端口 —— 能上网，但每次开网页先卡几秒
+        # 措辞与 Windows 侧逐字相同（两平台同一件事必须同一句话）。
+        if [ "$_sp_first_kind" = "$SYSPROXY_KIND_SLOWING" ]; then
+            _sp_text="有个设置脚本指向已经关掉的程序（网页能开，但每次要等几秒）"
+        else
+            _sp_text="指向本机一个已经关掉的程序（浏览器会打不开网页）"
+        fi
+        _status_row "系统代理" "${_sp_text}。不是本工具写的。" warn
+        style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选网络救援。"
     fi
     [ "$_pn" != "0" ] && echo ""
 
@@ -1131,6 +1151,7 @@ HELP_TOPICS=(
     '4|命令行|某条命令不想翻墙'
     '5|软件|某个程序还是翻不了墙'
     '6|出问题|出问题了：怎么查、怎么报'
+    '7|上不了网|上不了网（关了翻墙软件之后）'
 )
 
 # 从 HELP_TOPICS 取第 N 段（$1=字段号，$2=主题编号）。
@@ -1495,6 +1516,31 @@ t 不碰 ~/.zshrc 和环境变量，只报告结果。
 TOPIC
     ;;
 
+    7) cat <<'TOPIC'
+h 先分清是哪种上不了网
+t 浏览器打不开、但别的程序照常 = 浏览器这边的问题。
+t 什么都连不上 = 网络本身的问题，跟这个工具无关。
+h 最常见的原因：翻墙软件没关干净
+t 多数翻墙软件退出时会把自己写进系统的设置撤掉。
+t 被强制关机、断电、或者直接点了叉，就没来得及撤。
+t 那条设置还在，浏览器就照旧去找一个
+t 已经不存在的程序，于是国内网站也打不开。
+h 怎么自己修
+t 进主菜单的高级功能，再选网络救援。
+t 它会说清查到什么；能修的问你一句才动手，
+t 改之前先备份。
+t 修完把浏览器关掉重开一次再看。
+h 什么东西它不会动
+t 公司、学校给你的代理，它一个字节都不碰。
+t 被管理员统一管着的也不碰，那种改了也会被改回去。
+t 它只修「指向本机、但程序已经不在了」的那种。
+h 修错了想改回去
+t 再进那一屏，按 r 回车就能还原成修之前的样子。
+h 还不行
+t 用主菜单的「问题反馈」生成报告，贴到项目页面。
+t 报告里已经有网络体检的结论，不用你另外描述。
+TOPIC
+    ;;
     esac
     return 0
 }
@@ -1752,14 +1798,15 @@ _help_key_valid() {
 # 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
 #
 # 两侧共用同一套编号：同名项在两台机器上必须是同一个数字（用户可能两台都用）。
-# Mac 侧编号 5 空缺——那边没有「高级功能」（DIVERGE(Mac): 从 Dock 启动的程序
-# 本来就拿得到 launchctl 设的变量，不需要额外做启动器）。留空而不是把后面的
-# 编号往前挤：挤动会让「选 7」在两边指不同的事。跳号不影响显示，渲染按表顺序打印。
+# 编号 5「高级功能」两侧同名同号；里面装的东西按平台不同（mac 没有启动器需求，
+# 那边只放「网络救援」）。DIVERGE(Mac): 从 Dock 启动的程序本来就拿得到 launchctl
+# 设的变量，不需要额外做启动器——所以这边的高级功能里没有建图标那一项。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'
     '3|检查更新|有新版先告诉改了什么，同意才装|日常|update'
     '4|帮助|忘了怎么用就看它|日常|help'
+    '5|高级功能|上不了网的时候用这个|进阶|advanced'
     '6|停止监控|先停掉，下次开机自己回来|维护|stop'
     '7|一键恢复|彻底卸载，回到没装之前|维护|uninstall'
     '8|问题反馈|出问题了，一键生成一份报告|支持|report'
@@ -2010,4 +2057,186 @@ show_menu() {
         IFS= read -r _dummy || true
         _mode="menu"
     done
+}
+
+# ==============================================================================
+#  高级功能与网络救援（界面层）
+#
+#  这一层只做界面：把 doctor 层的结论画出来、问一句、把用户的意思交回去。
+#  判定与修复全在 doctor 层（那边才允许碰系统设置）。
+#  与 Windows 侧同名同序（shortcut.ps1 的 Show-AdvancedMenu / Show-RescuePage），
+#  两平台同一件事必须同一句话。
+#
+#  DIVERGE(Mac): Windows 的高级功能里另有「建走代理的图标」「管理图标」「看中继」，
+#  mac 都没有——从 Dock 启动的程序本来就拿得到 launchctl 设的变量，不需要启动器。
+#  所以这边的高级功能只有一项，但菜单项本身与 Win 同名同号（编号 5）。
+# ==============================================================================
+
+# 高级功能二级菜单。编号从这张表派生，散文里不写死数字。
+show_advanced_menu() {
+    while :; do
+        clear_screen_safe
+        style_out title "======== 高级功能 ========"
+        echo ""
+        style_out heading "  这里面是做什么的"
+        echo ""
+        style_out text "    平时用不到。上网出问题、主菜单那边没解决的时候，来这里。"
+        echo ""
+        style_out heading "  能做什么"
+        echo ""
+        style_out cmd "    1  网络救援    浏览器上不了网的时候，先来这里查一下"
+        echo ""
+        style_out dim "  输编号后回车执行    0 = 返回主菜单"
+        _adm_ans=""
+        if ! read -r _adm_ans 2>/dev/null; then
+            # 非交互（管道/重定向）：把这一屏打出来就够了，不要死循环等输入。
+            echo "  管道里没法交互，请直接用开关（见 help）。"
+            return 0
+        fi
+        case "$_adm_ans" in
+            ''|0|q|Q) return 0 ;;
+            1) show_rescue_page ;;
+            *) style_out warn "  没有这个编号：$_adm_ans（可用的有 1，0 = 返回）" ;;
+        esac
+    done
+}
+
+# 网络救援页：查出问题 -> 说清 -> 问一句 -> 修 -> 回读 -> 报结果。
+#
+# 这一屏的读法是「先结论、后明细、最后动作」，与状态页同一套：
+# 用户打开它的时候心里只有一个问题「我这网到底怎么了」。
+show_rescue_page() {
+    clear_screen_safe
+    style_out title "======== 网络救援 ========"
+    echo ""
+
+    _rs_layers=$(sysproxy_layers full)
+    _rs_fixable=0
+    _rs_blocking=0
+    _rs_slowing=0
+    _rs_foreign=0
+    _rs_managed=0
+    while IFS="$(printf '\t')" read -r _rs_l _rs_svc _rs_kind _rs_url _rs_port; do
+        [ -n "$_rs_svc" ] || continue
+        case "$_rs_kind" in
+            "$SYSPROXY_KIND_BLOCKING") _rs_blocking=$((_rs_blocking + 1)) ;;
+            "$SYSPROXY_KIND_SLOWING")  _rs_slowing=$((_rs_slowing + 1)) ;;
+            "$SYSPROXY_KIND_FOREIGN")  _rs_foreign=$((_rs_foreign + 1)) ;;
+            "$SYSPROXY_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
+        esac
+        sysproxy_fixable "$_rs_kind" && _rs_fixable=$((_rs_fixable + 1))
+    done <<EOF
+$_rs_layers
+EOF
+
+    # ---- 先给结论：这一屏最上面那句必须是"你现在是什么情况" ----
+    if [ "$_rs_blocking" -gt 0 ]; then
+        style_out warn "  查下来：浏览器被指到了一个已经关掉的程序上。"
+        style_out dim  "          所以网页打不开——线没断，是路指错了。"
+    elif [ "$_rs_slowing" -gt 0 ]; then
+        style_out warn "  查下来：有个设置脚本指向已经关掉的程序。"
+        style_out dim  "          网页能开，但每次都要先等它几秒。"
+    elif [ "$_rs_fixable" -eq 0 ]; then
+        style_out ok "  查下来：没发现问题，浏览器这边的设置是好的。"
+        if [ "$_rs_foreign" -gt 0 ]; then
+            echo ""
+            style_out dim "  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。"
+        fi
+    fi
+
+    # ---- 明细：能修的与不能动的分开列，不混在一起 ----
+    if [ "$_rs_fixable" -gt 0 ]; then
+        echo ""
+        style_out heading "  能修的有 $_rs_fixable 项："
+        echo ""
+        while IFS="$(printf '\t')" read -r _rs_l2 _rs_svc2 _rs_kind2 _rs_url2 _rs_port2; do
+            [ -n "$_rs_svc2" ] || continue
+            sysproxy_fixable "$_rs_kind2" || continue
+            if [ "$_rs_kind2" = "$SYSPROXY_KIND_SLOWING" ]; then
+                _rs_why="那个脚本已经不在了"
+            else
+                _rs_why="那个程序已经不在了"
+            fi
+            style_out text "    $_rs_svc2  $_rs_url2"
+            style_out dim  "      $_rs_why"
+        done <<EOF
+$_rs_layers
+EOF
+    fi
+    if [ "$_rs_foreign" -gt 0 ] || [ "$_rs_managed" -gt 0 ]; then
+        echo ""
+        style_out heading "  不能动的 $((_rs_foreign + _rs_managed)) 项："
+        echo ""
+        while IFS="$(printf '\t')" read -r _rs_l3 _rs_svc3 _rs_kind3 _rs_url3 _rs_port3; do
+            [ -n "$_rs_svc3" ] || continue
+            case "$_rs_kind3" in
+                "$SYSPROXY_KIND_FOREIGN")
+                    style_out text "    $_rs_svc3  $_rs_url3"
+                    style_out dim "      不是本机的地址，多半是公司或学校的，本工具不碰"
+                    ;;
+                "$SYSPROXY_KIND_MANAGED")
+                    style_out text "    $_rs_svc3"
+                    style_out dim "      这台电脑的设置由管理员统一管着，改了也会被改回去"
+                    ;;
+            esac
+        done <<EOF
+$_rs_layers
+EOF
+    fi
+
+    # ---- 动作 ----
+    echo ""
+    if [ "$_rs_fixable" -eq 0 ]; then
+        style_out dim "  按回车返回"
+        read -r _rs_dummy || true
+        return 0
+    fi
+    style_out text "  输 y 回车 = 修好上面那 $_rs_fixable 项（会先备份，能还原）"
+    style_out dim "  输 r 回车 = 还原成上次修之前的样子"
+    style_out dim "  直接回车 = 什么都不做，返回"
+    _rs_ans=""
+    if ! read -r _rs_ans 2>/dev/null; then return 0; fi
+    case "$_rs_ans" in
+        y|Y|yes|YES|是) ;;
+        r|R)
+            _rs_rr=$(sysproxy_restore)
+            echo ""
+            case "$_rs_rr" in
+                ok)       style_out ok "  [完成] 已经改回上次修之前的样子。" ;;
+                none)     style_out dim "  没有可还原的记录（还没修过，或者修完已经不在了）。" ;;
+                canceled) style_out warn "  你取消了密码，什么都没改。" ;;
+                *)        style_out warn "  [未完成] 没能改回去。可以再试一次。" ;;
+            esac
+            style_out dim "  按回车返回"
+            read -r _rs_dummy || true
+            return 0 ;;
+        *) return 0 ;;
+    esac
+
+    # 真动手。mac 上改系统代理要管理员，会弹一次系统密码框。
+    echo ""
+    style_out text "  接下来会弹一个要开机密码的窗口，那是系统的，不是要装别的东西。"
+    _rs_res=$(sysproxy_repair)
+    echo ""
+    case "$_rs_res" in
+        fixed)
+            style_out ok "  [完成] 修好了。"
+            style_out dim "  浏览器要是还打不开，把它关掉重开一次。" ;;
+        none)
+            style_out dim "  查的时候还在，动手的时候已经没了（可能是你自己关掉了）。" ;;
+        managed)
+            style_out warn "  这台电脑的设置由管理员统一管着，本工具改不动。"
+            style_out dim "  需要的话请找管理员。" ;;
+        nobackup)
+            style_out warn "  [未完成] 备份写不下来，为了安全没有动任何设置。"
+            style_out dim "  确认日志目录可写之后再来一次。" ;;
+        canceled)
+            style_out warn "  你取消了密码，什么都没改。" ;;
+        *)
+            style_out warn "  [未完成] 没能改完。"
+            style_out dim "  可以再试一次；还不行就用主菜单的「问题反馈」生成一份报告。" ;;
+    esac
+    style_out dim "  按回车返回"
+    read -r _rs_dummy || true
+    return 0
 }
