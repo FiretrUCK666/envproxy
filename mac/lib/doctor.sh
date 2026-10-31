@@ -67,15 +67,29 @@ sysproxy_verdict() {
 
 # 端口死活的三态判定。
 #
-# **不调 ops 层的 _port_alive**：那会让 doctor 反向依赖 ops，门禁 1 会拦
-# （依赖不成环）。这里只做一次直连，判据与它一致：连得上 = alive。
-# 用 curl 而不是 nc：base 层已经有 curl_direct（探测层也用同一条路），
-# 而 nc -G 在部分 macOS 版本上不支持，得先探——那是 probe 层的事，这里不重复。
+# **判据必须与 Windows 侧 Test-TcpAlive 完全一致：只连 TCP 端口，不建隧道、不访问目标。**
+#
+# 这里原来的写法是 `curl -p -x <proxy> http://127.0.0.1:9/`，它做的是
+# 「让代理去连 127.0.0.1:9」——判的不是"端口在不在"，而是"代理能不能带你访问那个目标"。
+# 两者不等价，而且差别是要命的那种：
+#   代理端口活着、但翻墙节点刚好挂了 / 目标被墙 → 隧道失败 → 判 dead
+#   → verdict 变成 residue-blocking → 救援把使用者**正在用**的代理关掉。
+# 实测由子 agent 用真监听端口复现过（假代理回 502，curl 退出码非 0）。
+# Windows 侧一直只做 TCP 连接，所以那边不会误判；两端判据必须同形。
+#
+# 用 bash 内建的 /dev/tcp 而不是 curl/nc：
+#   - 零依赖、零 fork、无输出，语义就是"连得上吗"，与 Test-TcpAlive 严格对齐；
+#   - nc -G 在部分 macOS 版本不存在，要探它就得先进 probe 层，那是反向依赖。
 sysproxy_port_state() {
     _sps_addr="${1:-}"; _sps_port="${2:-0}"
     [ -n "$_sps_addr" ] && [ "$_sps_port" -gt 0 ] 2>/dev/null || { printf 'unknown'; return 0; }
-    if curl_direct --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
-        --noproxy '' -p -x "http://$_sps_addr:$_sps_port" "http://127.0.0.1:9/" 2>/dev/null; then
+    # IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西。
+    case "$_sps_addr" in
+        *:*) _sps_host="[$_sps_addr]" ;;
+        *)   _sps_host="$_sps_addr" ;;
+    esac
+    if (exec 3<>"/dev/tcp/${_sps_host}/${_sps_port}") 2>/dev/null; then
+        exec 3<&- 2>/dev/null || true
         printf 'alive'
     else
         printf 'dead'
@@ -124,8 +138,18 @@ _sysproxy_read_one() {
     _sro_host=""
     _sro_port=""
     if [ "$_sro_kind" = "autoproxy" ]; then
-        # 自动配置脚本只有 URL 一行，没有独立的 Port
-        _sro_host=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^URL/ {print $2; exit}')
+        # 自动配置脚本只有 URL 一行，没有独立的 Port。
+        #
+        # **不能用 `-F': *'` 取第二列**：URL 自己就含冒号
+        # （`URL: http://127.0.0.1:7078/proxy.pac`），按冒号切第二列拿到的是 `http`。
+        # 实测后果有两层，都不是小事：
+        #   ① 拿到的"地址"是 `http`，不是回环 → 判 foreign → mac 上「PAC 指向死端口、
+        #      网页每次卡几秒」这一整类问题永远检测不到（residue-slowing 在 mac 侧不可能产出）；
+        #   ② 备份里存下的是 `http`，用户一按还原就执行
+        #      `networksetup -setautoproxyurl 'Wi-Fi' 'http' on` —— 把 PAC 地址写成字符串
+        #      `http`，浏览器代理彻底损坏。
+        # 取「URL: 」之后的整行，别切分。
+        _sro_host=$(printf '%s\n' "$_sro_out" | sed -n 's/^URL: *//p' | head -n 1)
     else
         _sro_host=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Server/ {print $2; exit}')
         _sro_port=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Port/ {print $2; exit}')
@@ -174,8 +198,12 @@ sysproxy_layers() {
             _gspl_alive=$(sysproxy_port_state "$_gspl_addr" "${_gspl_port:-0}")
             _gspl_verdict=$(sysproxy_verdict "$_gspl_url" "${_gspl_port:-0}" \
                 "$_gspl_alive" "$_gspl_managed" "$_gspl_layer")
-            printf '%s\t%s\t%s\t%s\t%s\n' \
-                "$_gspl_layer" "$_gspl_svc" "$_gspl_verdict" "$_gspl_url" "${_gspl_port:-0}"
+            # 第 6 列是"这个地址来自哪个勾选框"（web/secureweb/socksfirewall/autoproxy）。
+            # 必须带出来：三个勾选框各存各的地址，web 死了不代表 socks 也死。
+            # 只按 layer 决定关哪个，就会把使用者正在用的那个一起关掉。
+            # 前 5 列的含义不变，所有既有调用点（用 read 只取前 5 个变量）照常工作。
+            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$_gspl_layer" "$_gspl_svc" "$_gspl_verdict" "$_gspl_url" "${_gspl_port:-0}" "$_gspl_kind"
         done
     done
 }
@@ -249,7 +277,7 @@ sysproxy_repair() {
     # 收集要关的项；同时确认有没有可修的
     _spr_cmds=""
     _spr_count=0
-    while IFS="$(printf '\t')" read -r _spr_layer _spr_svc _spr_kind _spr_url _spr_port; do
+    while IFS="$(printf '\t')" read -r _spr_layer _spr_svc _spr_kind _spr_url _spr_port _spr_box; do
         [ -n "$_spr_svc" ] || continue
         sysproxy_fixable "$_spr_kind" || continue
         _spr_count=$((_spr_count + 1))
@@ -259,10 +287,19 @@ sysproxy_repair() {
                 _spr_cmds="$_spr_cmds networksetup -setautoproxystate '$_spr_q' off;"
                 ;;
             manual)
-                # 三个勾选框都要关：只关 web 不关 secureweb，浏览器照旧走死端口。
-                _spr_cmds="$_spr_cmds networksetup -setwebproxystate '$_spr_q' off;"
-                _spr_cmds="$_spr_cmds networksetup -setsecurewebproxystate '$_spr_q' off;"
-                _spr_cmds="$_spr_cmds networksetup -setsocksfirewallproxystate '$_spr_q' off;"
+                # **只关出问题的那一个勾选框，不整组关。**
+                #
+                # mac 的 web / secureweb / socks 三个勾选框各存各的地址——
+                # web 指向死端口时，socks 完全可能正活着在用。整组关就把使用者
+                # **正在用**的代理关掉了。第 6 列带出来的就是"这条记录来自哪个勾选框"，
+                # 按它精确关。
+                # 勾选框名取不到时不动（宁可这次没修成，也不误关一条好的）。
+                case "$_spr_box" in
+                    web)           _spr_cmds="$_spr_cmds networksetup -setwebproxystate '$_spr_q' off;" ;;
+                    secureweb)     _spr_cmds="$_spr_cmds networksetup -setsecurewebproxystate '$_spr_q' off;" ;;
+                    socksfirewall) _spr_cmds="$_spr_cmds networksetup -setsocksfirewallproxystate '$_spr_q' off;" ;;
+                    *)             _spr_count=$((_spr_count - 1)) ;;
+                esac
                 ;;
         esac
     done <<EOF
@@ -312,7 +349,8 @@ sysproxy_restore() {
             web)           _srr_cmds="$_srr_cmds networksetup -setwebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
             secureweb)     _srr_cmds="$_srr_cmds networksetup -setsecurewebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
             socksfirewall) _srr_cmds="$_srr_cmds networksetup -setsocksfirewallproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
-            autoproxy)     _srr_cmds="$_srr_cmds networksetup -setautoproxyurl '$_srr_q' '$_srr_host' on;" ;;
+            # -setautoproxyurl 只收 <服务名> <url> 两个参数；多给一个 on 会被判为无效，整串 set -e 就此中断。
+            autoproxy)     _srr_cmds="$_srr_cmds networksetup -setautoproxyurl '$_srr_q' '$_srr_host';" ;;
         esac
         _srr_count=$((_srr_count + 1))
     done < "$_srr_path"
@@ -326,6 +364,17 @@ sysproxy_restore() {
         printf 'failed'
         return 0
     fi
-    printf 'ok'
+    # 回读确认：osascript 返回 0 只代表"那串命令都返回 0"，不代表设置真的生效——
+    # 描述文件（MDM）会在下一瞬间把它覆盖回去。与 sysproxy_repair 同一条道理：
+    # 不确认就报成功，就是屏幕上说改回去了、实际没改。
+    _srr_after=$(sysproxy_layers)
+    _srr_left=0
+    while IFS="$(printf '\t')" read -r _srr_l2 _srr_s2 _srr_k2 _srr_u2 _srr_p2 _srr_b2; do
+        [ -n "$_srr_s2" ] || continue
+        sysproxy_fixable "$_srr_k2" && _srr_left=$((_srr_left + 1))
+    done <<EOF
+$_srr_after
+EOF
+    [ "$_srr_left" -eq 0 ] && printf 'ok' || printf 'failed'
     return 0
 }

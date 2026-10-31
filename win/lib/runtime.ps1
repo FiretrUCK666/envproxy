@@ -1450,6 +1450,16 @@ function Get-MonitorProcessFast {
         } catch { return $null }
         if ($beatPid -le 0) { return $null }
 
+        # 心跳的**年龄**也要看：只认 pid 与启动时刻，等于"这个进程还活着"，
+        # 但那不是我们要回答的问题——我们要的是"监控还在正常轮转"。
+        # 进程活着却卡死（IO 挂起、死循环、被调试器停住）时，pid 和 ticks 都对得上，
+        # 心跳却早就停更了；这种状态下状态页会一直说"运行中"，而环境变量再也不更新。
+        # $HeartbeatMaxSec 就是为这件事存在的，这里必须真的用它。
+        try {
+            $beatAge = ((Get-Date) - (Get-Item -LiteralPath $HeartbeatFile).LastWriteTime).TotalSeconds
+            if ($beatAge -gt $HeartbeatMaxSec) { return $null }
+        } catch { return $null }
+
         # pid 对得上还不够：系统回收 pid 后新进程会顶替它。
         # 心跳里记着写它的那个进程的启动时刻，两者都对上才认。
         $proc = Get-Process -Id $beatPid -ErrorAction SilentlyContinue

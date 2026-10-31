@@ -2703,7 +2703,11 @@ $snapSrc = (Get-Command Get-StatusSnapshot).Definition
 $renderSrc = (Get-Command Show-StatusSnapshot).Definition
 Assert-Eq 'status page checks whether the injected port is still alive' $true ($snapSrc -match 'Test-TcpAlive')
 Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($renderSrc -match 'ECONNREFUSED')
-Assert-Eq 'status page tells the reader what to do next' $true ($renderSrc -match '安装 / 修复')
+# 断言改成钉"派生调用"而不是"死文字"：文案里的菜单名已收敛到 Get-MenuRef，
+# 源码里不再出现「安装 / 修复」这个字面串（它住在菜单表里）。
+# 钉死文字会让这条断言在正确的重构之后变红，而钉死"有没有告诉读者下一步"才是它本来要守的东西。
+Assert-Eq 'status page tells the reader what to do next' $true ($renderSrc -match 'Get-MenuRef')
+Assert-Eq 'status page points at the install/repair action' $true ($renderSrc -match "Get-MenuRef 'Install'")
 # 结论行必须在最上面：读者读完 8 行再自己合成判断，是这屏原来的最大问题。
 Assert-Eq 'status page leads with a one-line verdict' $true ($renderSrc -match '一切正常')
 
@@ -3400,7 +3404,12 @@ $fCode = (@((Get-FunctionBody 'win/lib/runtime.ps1' 'Get-MonitorProcessFast') -s
         Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
 Assert-Eq '判活：核了 pid 存在性（Get-Process -Id）' $true ([bool]([regex]::IsMatch($fCode, 'Get-Process\s+-Id')))
 Assert-Eq '判活：比对了启动时刻（挡 pid 复用）' $true ([bool]([regex]::IsMatch($fCode, 'wantTicks')))
-Assert-Eq '判活：不再只靠文件 mtime' $false ([bool]([regex]::IsMatch($fCode, 'LastWriteTime')))
+# 心跳年龄必须看（否则进程卡死时状态页一直说"运行中"），但**不许只用它**：
+# 强杀/崩溃/断电都会留下一个新鲜心跳，只凭 mtime 会把死进程报成活着。
+# 所以两条都要：mtime 判"还在正常轮转"，pid + 启动时刻判"那个进程真的还活着"。
+Assert-Eq '判活：看了心跳年龄（进程卡死能被发现）' $true ([bool]([regex]::IsMatch($fCode, 'LastWriteTime')))
+Assert-Eq '判活：心跳年龄用了具名阈值而非裸数字' $true ([bool]([regex]::IsMatch($fCode, 'HeartbeatMaxSec')))
+Assert-Eq '判活：mtime 只是条件之一，不是唯一判据' $true ([bool]([regex]::IsMatch($fCode, 'Get-Process\s+-Id')))
 
 # 9. 卸载与停止都要清掉状态快照（否则重装/停止后读到上一份结论）
 $unIdx = $opsSrc2.IndexOf('function Uninstall-EnvProxy')
@@ -3628,5 +3637,68 @@ foreach ($guiFn in @('Write-Styled', 'Write-Host', 'Read-Host', 'Clear-Screen', 
     $hit = [regex]::IsMatch($doctorText, ('(?m)^(?!\s*#).*\b' + [regex]::Escape($guiFn) + '\b'))
     Assert-Eq ('doctor never calls ' + $guiFn) 'False' ([string]$hit)
 }
+Write-Host '[27] System proxy address normalization and liveness (doctor)'
+# 这四条对应四个「会弄坏用户东西」的真实缺陷，每一条都是实跑复现出来的。
+# 拔掉修复，下面至少一条会红。
+Assert-Eq 'normalize: multi-protocol picks the first usable' 'http://127.0.0.1:7078' (ConvertTo-SysProxyUrl 'http=127.0.0.1:7078;https=127.0.0.1:7078;socks=127.0.0.1:7079')
+Assert-Eq 'normalize: multi-protocol socks only' 'http://127.0.0.1:1080' (ConvertTo-SysProxyUrl 'socks=127.0.0.1:1080')
+Assert-Eq 'normalize: corporate multi-protocol still parses' 'http://10.0.0.8:8080' (ConvertTo-SysProxyUrl 'http=10.0.0.8:8080;https=10.0.0.8:8080')
+Assert-Eq 'normalize: plain address unchanged' 'http://127.0.0.1:7078' (ConvertTo-SysProxyUrl '127.0.0.1:7078')
+Assert-Eq 'normalize: garbage yields nothing' '' ([string](ConvertTo-SysProxyUrl 'garbage'))
+# localhost 必须与 127.0.0.1 同判：存主机名时判成"端口已死"，救援会关掉正在用的代理。
+$loPort = 0
+for ($i = 0; $i -lt 20; $i++) {
+    $cand = 19100 + (Get-Random -Maximum 300)
+    try {
+        $probe = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $cand)
+        $probe.Start(); $probe.Stop(); $loPort = $cand; break
+    } catch {}
+}
+Assert-Eq 'liveness: a free port is found for the hostname test' $true ($loPort -gt 0)
+if ($loPort -gt 0) {
+    $ln = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $loPort)
+    $ln.Start()
+    try {
+        Assert-Eq 'liveness: 127.0.0.1 reaches a live listener' $true (Test-TcpAlive '127.0.0.1' $loPort 800)
+        Assert-Eq 'liveness: localhost reaches the same listener' $true (Test-TcpAlive 'localhost' $loPort 800)
+    } finally { try { $ln.Stop() } catch {} }
+    Assert-Eq 'liveness: hostname on a dead port is dead' $false (Test-TcpAlive 'localhost' $loPort 500)
+}
+Assert-Eq 'liveness: an unresolvable host is dead, not an exception' $false (Test-TcpAlive 'no-such-host.invalid' 9 500)
+# WinHTTP 输出里的 IPv6 必须整段取到，不能被中间冒号切开。
+$whRx = '\[[0-9A-Fa-f:]+\]:\d+|[A-Za-z0-9_\.\-]+:\d+'
+Assert-Eq 'winhttp: bracketed IPv6 is taken whole' '[::1]:7078' ([regex]::Match('Proxy Server(s) : [::1]:7078', $whRx).Value)
+Assert-Eq 'winhttp: plain host still parses' 'proxy.corp.com:3128' ([regex]::Match('Proxy Server(s) : proxy.corp.com:3128', $whRx).Value)
+Assert-Eq 'winhttp: an IPv4 address still parses' '127.0.0.1:7078' ([regex]::Match('Proxy Server(s) : 127.0.0.1:7078', $whRx).Value)
+Write-Host '[28] Rescue must not overstate success or over-delete'
+# 这一节守三件"说假话"的事，每一条都对应一个实跑复现过的缺陷。
+# ① 部分失败不许报成"全部修好"；
+# ② netsh 读不出来不许当成"没设"，更不许反推成"修好了"；
+# ③ 分协议写法里只删死的那一段，活着的原样保留。
+$repSrc = (Get-Command Repair-SystemProxy).Definition
+Assert-Eq 'repair: a partial result is reported as partial' $true ($repSrc -match "'partial'")
+Assert-Eq 'repair: partial only when failed and changed are both non-empty' $true ($repSrc -match '\$res\.Failed\.Count -eq 0')
+Assert-Eq 'repair: winhttp writes only after netsh exits cleanly' $true ($repSrc -match 'LASTEXITCODE')
+# 分协议：按段处理，不许整段置空。
+Assert-Eq 'repair: manual layer is edited segment by segment' $true ($repSrc -match "ProxyServer -split ';'")
+Assert-Eq 'repair: unrecognized segments are kept as-is' $true ($repSrc -match 'kept \+= \$s')
+$whSrc = (Get-Command Get-WinHttpProxy).Definition
+Assert-Eq 'winhttp read: returns a three-state object, not $null' $true ($whSrc -match "State = 'unknown'")
+Assert-Eq 'winhttp read: reports an exit code when netsh fails' $true ($whSrc -match 'LASTEXITCODE')
+Assert-Eq 'winhttp read: takes bracketed IPv6 whole' $true ($whSrc -match '\\\[\[0-9A-Fa-f:'  )
+# 组策略名单里不许混进与代理无关的值（否则企业机永远"被管着"、救援永不生效）。
+# 只看代码、剔掉注释：这两个名字会出现在解释"为什么不能把它们算进来"的注释里，
+# 拿整段源码去比会把注释一并算上，断言就变成在检查注释有没有提到它。
+$manCode = (@(($manSrc = (Get-Command Test-SystemProxyManaged).Definition) -split "`n" |
+        Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
+Assert-Eq 'policy: SSL page caching is not a proxy policy' $false ($manCode -match 'DisableCachingOfSSLPages')
+Assert-Eq 'policy: a made-up value name is not used' $false ($manCode -match 'ProxySettingsPerUserMachine')
+Assert-Eq 'policy: the real prevent-value is still checked' $true ($manSrc -match 'PreventChangingProxySettings')
+# 还原入口不许被"没有可修项"挡住。
+$rescueSrc = (Get-Command Show-RescuePage).Definition
+Assert-Eq 'rescue: restore is gated on the backup, not on fixable count' $true ($rescueSrc -match '\$hasBackup')
+Assert-Eq 'rescue: no early return just because nothing is fixable' $true ($rescueSrc -match '\$fixable\.Count -eq 0 -and -not \$hasBackup')
+# 失败的项必须在屏幕上说出来，不许只报"修好了"。
+Assert-Eq 'rescue: partial names what was left unfixed' $true ($rescueSrc -match '\$leftNames')
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

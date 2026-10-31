@@ -36,7 +36,6 @@ $SysProxyKinds = @{
 }
 
 # WinINET 的连接标志位。值与 Windows SDK 一致，改动会导致写进去的开关错位。
-$ProxyTypeDirect       = 0x01
 $ProxyTypeProxy        = 0x02
 $ProxyTypeAutoProxyUrl = 0x04
 $ProxyTypeAutoDetect   = 0x08
@@ -72,7 +71,6 @@ function Get-SystemProxyVerdict {
     if ($Managed) { return $SysProxyKinds.Managed }
     if (-not $Url -and $Port -le 0) { return $SysProxyKinds.Clean }
     # 地址拆不出端口、也不是合法地址：无从判断死活，归「不是本机代理」那类——不动。
-    if (-not (Test-LoopbackUrl $Url) -and $Port -le 0) { return $SysProxyKinds.Foreign }
     if (-not (Test-LoopbackUrl $Url)) { return $SysProxyKinds.Foreign }
     if ($null -eq $Alive) { return $SysProxyKinds.Foreign }
     if ($Alive) { return $SysProxyKinds.Alive }
@@ -263,9 +261,16 @@ function Set-SystemProxyConnection {
     $optSize = [System.Runtime.InteropServices.Marshal]::SizeOf([type][EnvProxyWinInet+INTERNET_PER_CONN_OPTION])
     $entries = New-Object System.Collections.ArrayList
     [void]$entries.Add(@{ Option = $script:IpcFlags; Value = [IntPtr][int]$Flags })
-    if ($ProxyServer) { [void]$entries.Add(@{ Option = $script:IpcProxyServer; Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($ProxyServer) }) }
-    if ($ProxyBypass) { [void]$entries.Add(@{ Option = $script:IpcProxyBypass; Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($ProxyBypass) }) }
-    if ($AutoConfigUrl) { [void]$entries.Add(@{ Option = $script:IpcAutoConfig; Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni($AutoConfigUrl) }) }
+    # 三个字符串项**不管空不空都要下发**。
+    #
+    # 原来写成 `if ($ProxyServer) { ... }`，空串就整条不发——而"不发"不是"写空"，
+    # 是"保留 blob 里原来的值"。于是清一条残留时：代理服务器、例外列表、PAC 地址
+    # 全被保住，只有标志位变了；回读只比 Flags，照样报"修好了"。
+    # 用户看到成功、浏览器还是打不开，而且下次读出来仍是脏的。
+    # 空值要显式写成空串（StringToHGlobalUni('') 给的是有效空串指针，不是 IntPtr.Zero）。
+    [void]$entries.Add(@{ Option = $script:IpcProxyServer; Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni([string]$ProxyServer) })
+    [void]$entries.Add(@{ Option = $script:IpcProxyBypass;    Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni([string]$ProxyBypass) })
+    [void]$entries.Add(@{ Option = $script:IpcAutoConfig;     Value = [System.Runtime.InteropServices.Marshal]::StringToHGlobalUni([string]$AutoConfigUrl) })
     $ptrs = [System.Runtime.InteropServices.Marshal]::AllocCoTaskMem($optSize * $entries.Count)
     $ok = $false
     try {
@@ -316,11 +321,14 @@ function Set-SystemProxyConnection {
 function Test-SystemProxyManaged {
     # 「禁止更改代理设置」策略：值名固定，出现即生效（DWORD 1）。
     # ProxySettingsPerUser=0 是「让代理设置作用于整台机器」，用户级改动本就不生效。
+    # 名单里**只放真正管辖代理的值**。
+    # DisableCachingOfSSLPages 管的是 SSL 页面缓存，与代理无关，但它出现在同一批策略键下面、
+    # 企业环境里相当常见——把它算进来，那些机器会被判成「被管着」，救援永远说改不动，
+    # 恰恰在这个功能最该工作的场景里失效。ProxySettingsPerUserMachine 不是真实值名，同样去掉。
     $policyNames = @(
         'ProxySettingsPerUser'
-        'DisableCachingOfSSLPages'
-        'ProxySettingsPerUserMachine'
         'PreventChangingProxySettings'
+        'ProxySettingsPerMachine'
     )
     $keys = @(
         'HKLM:\Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings',
@@ -355,6 +363,34 @@ function Test-SystemProxyManaged {
 # -Quick 只查手动代理与自动配置两层，且超时短——供每 2–3 秒刷新的状态页用。
 # 不加 -Quick 是全量（多查 winhttp），供体检页用。
 # **一个函数、两种深度**，不是两套代码：复制一份轻量实现，迟早两边结论不一致。
+# 把「系统代理的原始值」归一成一条能判断的地址。
+#
+# Windows 允许分协议写法：`http=127.0.0.1:7078;https=127.0.0.1:7078;socks=127.0.0.1:7079`。
+# 而 `ConvertTo-ProxyUrl` 只认单个地址，遇到这种整串就返回 $null——
+# 于是在系统代理里明明写着死端口，界面却报"没发现问题"，用户怎么点都修不好。
+# 这在 Windows 上是很常见的写法（不少客户端与组策略都这么写），不能当边角情况。
+#
+# 做法：按 `;` 拆开，每段去掉 `proto=` 前缀后逐个归一，**取第一个可用的**。
+# 为什么不返回多地址：判据只关心"有没有指向本机的死端口"，一条就足以决定修不修；
+# 而修复动作是把整段关掉，不需要知道其余几条。
+function ConvertTo-SysProxyUrl([string]$Raw) {
+    if (-not $Raw) { return $null }
+    $v = $Raw.Trim()
+    if (-not $v) { return $null }
+    $single = ConvertTo-ProxyUrl $v
+    if ($single) { return $single }
+    foreach ($seg in ($v -split ';')) {
+        $s = $seg.Trim()
+        if (-not $s) { continue }
+        # 去掉 `proto=host:port` 里的 `proto=` 前缀
+        $s = $s -replace '^[A-Za-z][A-Za-z0-9+.-]*=\s*', ''
+        if (-not $s) { continue }
+        $one = ConvertTo-ProxyUrl $s
+        if ($one) { return $one }
+    }
+    return $null
+}
+
 function Get-SystemProxyLayers {
     param([switch]$Quick)
     $timeoutMs = if ($Quick) { 300 } else { 800 }
@@ -365,11 +401,11 @@ function Get-SystemProxyLayers {
     $conn = Get-SystemProxyConnection
     if ($conn) {
         if (($conn.Flags -band $ProxyTypeProxy) -ne 0 -and $conn.ProxyServer) {
-            $split = Split-ProxyUrl (ConvertTo-ProxyUrl $conn.ProxyServer)
+            $split = Split-ProxyUrl (ConvertTo-SysProxyUrl $conn.ProxyServer)
             $port = if ($split) { [int]$split.Port } else { 0 }
             $alive = $null
             if ($split) { $alive = Test-TcpAlive $split.Host $port $timeoutMs }
-            $url = ConvertTo-ProxyUrl $conn.ProxyServer
+            $url = ConvertTo-SysProxyUrl $conn.ProxyServer
             [void]$out.Add(@{
                 Layer = 'manual'; Url = $url; Port = $port
                 Kind = (Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual')
@@ -393,12 +429,21 @@ function Get-SystemProxyLayers {
     # DIVERGE(Win): Mac 没有等价的独立层，那边系统代理只有「每个网络服务一份」那套。
     if (-not $Quick) {
         $wh = Get-WinHttpProxy
-        if ($wh -and $wh.Server) {
-            $split = Split-ProxyUrl (ConvertTo-ProxyUrl $wh.Server)
+        # 读不出来时也要成层（Kind=foreign，不可修），否则这一层会静默消失：
+        # 用户报"上不了网"，工具说"没发现问题"，因为最脏的那层根本不在清单里。
+        if ($wh -and $wh.State -eq 'unknown') {
+            [void]$out.Add(@{
+                Layer = 'winhttp'; Url = ''; Port = 0
+                Kind = $SysProxyKinds.Foreign
+                Detail = ('读不出来：' + $wh.Detail)
+            })
+        }
+        if ($wh -and $wh.State -eq 'set' -and $wh.Server) {
+            $split = Split-ProxyUrl (ConvertTo-SysProxyUrl $wh.Server)
             $port = if ($split) { [int]$split.Port } else { 0 }
             $alive = $null
             if ($split) { $alive = Test-TcpAlive $split.Host $port $timeoutMs }
-            $url = ConvertTo-ProxyUrl $wh.Server
+            $url = ConvertTo-SysProxyUrl $wh.Server
             [void]$out.Add(@{
                 Layer = 'winhttp'; Url = $url; Port = $port
                 Kind = (Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual')
@@ -413,18 +458,38 @@ function Get-SystemProxyLayers {
 #
 # 用 netsh 而不是直接读注册表：注册表里那份是二进制（WinHttpSettings），
 # 解析它等于再写一遍微软的内部格式。netsh 是系统自带、输出稳定、且是官方入口。
+# 读 WinHTTP 那一层。**返回三态，不许把「读不出来」和「没设」混成一个 $null**：
+#   @{ State='set';     Server='host:port' }  确实设了代理
+#   @{ State='none' }                          确实没设（Direct access）
+#   @{ State='unknown'; Detail='原因' }        读不出来（netsh 不可用、输出认不出）
+#
+# 为什么必须分开：混成一个 $null 时，netsh 被组策略禁用/被 AppLocker 拦/PATH 坏掉，
+# 这一层就会静默消失——用户报「上不了网」，工具说「没发现问题」，因为最脏的那层看不见。
+# 而写回去那一步同样靠"回读还是 $null"反推成功，于是"一条命令都没跑"也会报修好了。
 function Get-WinHttpProxy {
     try {
         $raw = & netsh winhttp show proxy 2>$null
-        if (-not $raw) { return $null }
+        $rc = $LASTEXITCODE
+        if ($null -eq $raw -or ($raw -is [array] -and $raw.Count -eq 0)) {
+            return @{ State = 'unknown'; Detail = if ($rc) { "netsh 退出码 $rc" } else { 'netsh 没有输出' } }
+        }
         $text = ($raw | Out-String)
+        if (-not $text.Trim()) { return @{ State = 'unknown'; Detail = 'netsh 输出为空' } }
         # 「直接访问(没有代理服务器)」/ "Direct access (no proxy server)" 都表示没设。
-        if ($text -match 'Direct access|直接访问') { return $null }
-        $m = [regex]::Match($text, '[A-Za-z0-9_\.\-\[\]]+:\d+')
-        if (-not $m.Success) { return $null }
-        return @{ Server = $m.Value }
+        if ($text -match 'Direct access|直接访问') { return @{ State = 'none' } }
+        # 取「主机:端口」。两种形态都要认：
+        #   普通主机 / IPv4：`proxy.corp.com:3128`、`127.0.0.1:7078`
+        #   IPv6：`[::1]:7078`
+        # 原来只有 `[A-Za-z0-9_\.\-\[\]]+:\d+` 一条，它会把 `[::1]:7078` 从中间的冒号处切，
+        # 得到 `1]:7078` —— 拆不出端口，这一层就直接从结果里消失（不报、不修、不提示）。
+        # 方括号那一条必须排前面：正则取第一个匹配，顺序反了会被普通规则先吃掉。
+        $m = [regex]::Match($text, '\[[0-9A-Fa-f:]+\]:\d+|[A-Za-z0-9_\.\-]+:\d+')
+        # 有输出、但没有"直接访问"字样、也取不到 host:port —— 这是"认不出"，
+        # 不是"没设"。报 unknown，让界面如实说这一层没法判断。
+        if (-not $m.Success) { return @{ State = 'unknown'; Detail = 'netsh 输出认不出代理地址' } }
+        return @{ State = 'set'; Server = $m.Value }
     } catch {
-        return $null
+        return @{ State = 'unknown'; Detail = $_.Exception.Message }
     }
 }
 
@@ -552,8 +617,36 @@ function Repair-SystemProxy {
     $newPac = $before.AutoConfigUrl
     foreach ($f in $fixable) {
         if ($f.Layer -eq 'manual') {
-            $newFlags = $newFlags -band (-bnot $ProxyTypeProxy)
-            $newServer = ''
+            # **逐段处理，不许整段清空。**
+            #
+            # Windows 允许分协议写法：`http=127.0.0.1:7890;https=127.0.0.1:7891`。
+            # 若 7890 死了、7891 还跟着当前客户端活着，整段清空就把用户唯一还通的
+            # 那条路径删掉了——而判据是"只修指向死端口的那一项"，实现却退化成"全关"。
+            # 做法：拆开、只删掉判为死的那几段、其余原样拼回去；全删空才清标志位。
+            $kept = @()
+            foreach ($seg in ([string]$before.ProxyServer -split ';')) {
+                $s = $seg.Trim()
+                if (-not $s) { continue }
+                $one = ConvertTo-ProxyUrl ($s -replace '^[A-Za-z][A-Za-z0-9+.-]*=\s*', '')
+                if (-not $one) {
+                    # 认不出的段原样保留：宁可这次没修成，也不删掉一段我们看不懂的配置。
+                    $kept += $s
+                    continue
+                }
+                $sp = Split-ProxyUrl $one
+                if (-not $sp) { $kept += $s; continue }
+                $segAlive = Test-TcpAlive $sp.Host ([int]$sp.Port) 800
+                $segVerdict = Get-SystemProxyVerdict -Url $one -Port ([int]$sp.Port) -Alive $segAlive
+                if (Test-SysProxyFixable $segVerdict) { continue }   # 这一段是死的，丢掉
+                $kept += $s
+            }
+            if ($kept.Count -eq 0) {
+                $newFlags = $newFlags -band (-bnot $ProxyTypeProxy)
+                $newServer = ''
+            } else {
+                # 还有活着的段：保留代理标志位，只把字符串换成剩下的部分。
+                $newServer = ($kept -join ';')
+            }
             [void]$res.Changed.Add('manual')
         } elseif ($f.Layer -eq 'pac') {
             $newFlags = $newFlags -band (-bnot $ProxyTypeAutoProxyUrl)
@@ -567,10 +660,16 @@ function Repair-SystemProxy {
             -ProxyBypass $before.ProxyBypass -AutoConfigUrl $newPac
         if (-not $ok) { $res.Result = 'failed'; $res.Detail = 'write'; return $res }
         # 回读确认：值与期望不一致就是没成功，如实报。
+        #
+        # **三个字符串项也要比**，不能只比 Flags。只比标志位的话，"标志位改了、
+        # 服务器地址/PAC 地址还留在 blob 里"这种情况会被判成成功——
+        # 而那正是"屏幕上说修好了、浏览器还是打不开"的来源。
         $after = Get-SystemProxyConnection
         if (-not $after) { $res.Result = 'failed'; $res.Detail = 'verify'; return $res }
         $flagOk = ([int]$after.Flags -eq [int]$newFlags)
-        if (-not $flagOk) { $res.Result = 'failed'; $res.Detail = 'verify'; return $res }
+        $valOk = ([string]$after.ProxyServer -eq [string]$newServer) -and
+                 ([string]$after.AutoConfigUrl -eq [string]$newPac)
+        if (-not $flagOk -or -not $valOk) { $res.Result = 'failed'; $res.Detail = 'verify'; return $res }
     }
 
     # WinHTTP 是独立一层，需要管理员。不是管理员时不代跑，由界面给出命令。
@@ -578,10 +677,16 @@ function Repair-SystemProxy {
         $whLayers = @($layers | Where-Object { $_.Layer -eq 'winhttp' -and (Test-SysProxyFixable $_.Kind) })
         if ($whLayers.Count -gt 0) {
             if (Test-IsElevated) {
-                try { & netsh winhttp reset proxy 2>$null | Out-Null } catch {}
+                # 必须看 netsh 自己的退出码。原来的判法是"回读还没读到就算修好"——
+                # 而 netsh 根本跑不起来时，回读同样读不到，于是"一条命令都没跑"也报成功。
+                $resetOk = $false
+                try { & netsh winhttp reset proxy 2>$null | Out-Null; $resetOk = ($LASTEXITCODE -eq 0) } catch { $resetOk = $false }
                 $after2 = Get-WinHttpProxy
-                if ($after2 -and $after2.Server) { [void]$res.Failed.Add('winhttp') }
-                else { [void]$res.Changed.Add('winhttp') }
+                if ($resetOk -and $after2 -and $after2.State -eq 'none') {
+                    [void]$res.Changed.Add('winhttp')
+                } else {
+                    [void]$res.Failed.Add('winhttp')
+                }
             } else {
                 [void]$res.Failed.Add('winhttp')
                 $res.Detail = 'needadmin'
@@ -589,7 +694,18 @@ function Repair-SystemProxy {
         }
     }
 
-    $res.Result = if ($res.Failed.Count -gt 0 -and $res.Changed.Count -eq 0) { 'failed' } else { 'fixed' }
+    # 结论必须是三态，不许把「部分失败」压成「修好了」。
+    #
+    # 原来写成「失败有、成功零」才算 failed —— 于是「WinINET 修好了、WinHTTP 没修成」
+    # 会被报成 fixed，界面打「[完成] 修好了」，而 Failed 列表从头到尾没人读过。
+    # 那正是这个功能最不能犯的错：屏幕上说好了，实际还留着一层指着死端口。
+    if ($res.Failed.Count -eq 0) {
+        $res.Result = 'fixed'
+    } elseif ($res.Changed.Count -eq 0) {
+        $res.Result = 'failed'
+    } else {
+        $res.Result = 'partial'
+    }
     return $res
 }
 

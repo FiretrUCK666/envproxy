@@ -56,6 +56,20 @@
 # missing 排在最后是刻意的：它指控的是发布方，只有在没有别的解释时才能这么说。
 $UpdateFailureKinds = @("local", "network", "quota", "server", "bad-content", "missing")
 
+# 从响应头里取「本小时还剩多少次配额」。
+#
+# 403 / 429 有两种含义（配额用尽 vs 真的被拒），靠这个头区分，所以三个取响应的地方
+# 都要用它。原来那段 7 行代码在三个地方逐字重复——正是项目自己在批判的
+# 「同一件事两套实现」；改一处忘一处，403 的归类就会在两处不一致。
+# 取不到（没有这个头、或读头本身抛错）返回空串，由 Get-UpdateFailureKind 按"真的被拒"处理。
+function Get-RateLimitRemaining($Response) {
+    try {
+        if ($Response -and $Response.Headers.Contains("X-RateLimit-Remaining")) {
+            return ((($Response.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1) + "").Trim()
+        }
+    } catch {}
+    return ""
+}
 # 把 HTTP 状态码归到失败原因。403/429 有两种含义（限流 vs 真的被拒），
 # 靠响应头里的 X-RateLimit-Remaining 区分：剩 0 就是配额用尽。
 # $RateLimitRemaining 传空表示"没拿到这个头"，此时按"真的被拒"处理。
@@ -297,12 +311,7 @@ function Invoke-UpdateTextVia([string]$Url, [string]$ProxyPort) {
         if (-not $task.Wait(8000)) { return @{ Text = ""; Failure = "network" } }
         $resp = $task.Result
         if (-not $resp.IsSuccessStatusCode) {
-            $rem = ""
-            try {
-                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
-                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
-                }
-            } catch {}
+            $rem = Get-RateLimitRemaining $resp
             return @{ Text = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
         }
         return @{ Text = $task.Result.Content.ReadAsStringAsync().Result; Failure = "" }
@@ -450,12 +459,7 @@ function Get-TagFromWebVia([string]$Url, [string]$ProxyPort) {
             return @{ Tag = ""; Failure = "server" }
         }
         if (-not $resp.IsSuccessStatusCode) {
-            $rem = ""
-            try {
-                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
-                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
-                }
-            } catch {}
+            $rem = Get-RateLimitRemaining $resp
             return @{ Tag = ""; Failure = (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim()) }
         }
         # 2xx 但没有重定向目标：这一层给的不是我们期待的形状。
@@ -666,12 +670,7 @@ function Save-UpdateFileVia([string]$Url, [string]$DestFile, [string]$ProxyPort,
         $resp = $respTask.Result
         if (-not $resp.IsSuccessStatusCode) {
             # 403 有两种含义（限流 / 真的被拒），靠限流头区分：剩 0 就是配额用尽。
-            $rem = ""
-            try {
-                if ($resp.Headers.Contains("X-RateLimit-Remaining")) {
-                    $rem = (($resp.Headers.GetValues("X-RateLimit-Remaining")) | Select-Object -First 1)
-                }
-            } catch {}
+            $rem = Get-RateLimitRemaining $resp
             return (Get-UpdateFailureKind ([int]$resp.StatusCode) ("$rem").Trim())
         }
         $bodyTask = $resp.Content.ReadAsByteArrayAsync()

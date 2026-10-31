@@ -644,13 +644,28 @@ function Test-TcpAlive([string]$Address, [int]$Port, [int]$TimeoutMs = 800) {
     if (-not $Address -or $Port -le 0) { return $false }
     $c = $null
     try {
-        $family = if ($Address -like "*:*") {
-            [System.Net.Sockets.AddressFamily]::InterNetworkV6
+        # 地址可能是 IP 字面量，也可能是主机名（`localhost`、`myhost.local`）。
+        # **不能直接 IPAddress::Parse**：它对主机名抛异常，被下面的 catch 吞掉后
+        # 返回"连不上"——而"连不上"在读这一层等价于"端口已死"。
+        # 后果不是少一个功能，是反向的：系统代理存的是 `localhost:7078`、代理明明活着，
+        # 救援会判成 residue-blocking 然后把使用者**正在用**的代理关掉。
+        # 所以先解析（IP 字面量走 Parse，主机名走 DNS），拿到 IP 再连；解析不出来才算不通。
+        $target = $null
+        $parsed = $null
+        if ([System.Net.IPAddress]::TryParse($Address, [ref]$parsed)) {
+            $target = $parsed
         } else {
-            [System.Net.Sockets.AddressFamily]::InterNetwork
+            $addrs = $null
+            try { $addrs = [System.Net.Dns]::GetHostAddresses($Address) } catch { $addrs = $null }
+            if ($addrs) {
+                # 优先 IPv4：本机代理大多只绑 127.0.0.1，先试它命中率最高。
+                $target = @($addrs | Where-Object { $_.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork }) | Select-Object -First 1
+                if (-not $target) { $target = @($addrs) | Select-Object -First 1 }
+            }
         }
-        $c = New-Object System.Net.Sockets.TcpClient($family)
-        $iar = $c.BeginConnect([System.Net.IPAddress]::Parse($Address), $Port, $null, $null)
+        if (-not $target) { return $false }
+        $c = New-Object System.Net.Sockets.TcpClient($target.AddressFamily)
+        $iar = $c.BeginConnect($target, $Port, $null, $null)
         if ($iar.AsyncWaitHandle.WaitOne($TimeoutMs)) { $c.EndConnect($iar); return $true }
         return $false
     } catch {

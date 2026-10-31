@@ -2026,6 +2026,56 @@ jobs:
             }
           }
 
+          # ---- 系统代理（doctor 层）：两端结论词与判据必须同形 ----
+          #
+          # doctor.ps1 / doctor.sh 的注释里一直写着「两侧同形，门禁 6 核对」，
+          # 而门禁 6 从来没有这一段——注释在替不存在的门禁做保证。
+          # 这类"假承诺"比没有保证更糟：下一个改动的人会相信已经有人看着了。
+          #
+          # 这里核对三件事，都是两端各写一套、最容易各走各的：
+          #   ① 结论词表（六种）逐字一致；
+          #   ② "哪些结论可修"一致——判错就会关掉用户正在用的代理；
+          #   ③ 判活的语义一致：只连 TCP 端口，不建隧道、不访问目标。
+          $winDoc = Get-CodeOnly 'win/lib/doctor.ps1'
+          $macDoc = Get-CodeOnly 'mac/lib/doctor.sh'
+          $kindNames = @('clean', 'residue-blocking', 'residue-slowing', 'alive', 'foreign', 'managed')
+          # 两端各按自己的写法取：Win 是哈希表里的值（'clean' = …），Mac 是常量赋值（…="clean"）。
+          # 不按各自写法取，这条断言就只是在检查"字面量长什么样"，不是检查结论词本身。
+          foreach ($k in $kindNames) {
+            $inWin = [regex]::IsMatch($winDoc, [regex]::Escape("'$k'"))
+            $inMac = [regex]::IsMatch($macDoc, [regex]::Escape('"' + $k + '"'))
+            if (-not $inWin) { Write-Host ("系统代理结论词 {0} 在 Windows 侧不存在" -f $k); $fail = 1 }
+            if (-not $inMac) { Write-Host ("系统代理结论词 {0} 在 macOS 侧不存在" -f $k); $fail = 1 }
+          }
+          # 可修的只有两条 residue。判宽了会误删别人的设置，判窄了用户修不好。
+          foreach ($k in @('residue-blocking', 'residue-slowing')) {
+            if (-not [regex]::IsMatch($winDoc, [regex]::Escape("'$k'"))) { Write-Host ("Windows 侧缺少可修结论 {0}" -f $k); $fail = 1 }
+          }
+          # 判活：Windows 用 .NET 的 TcpClient，mac 用 bash 内建 /dev/tcp。
+          # 两者都必须是"连端口"，一旦哪边改成 curl -p 之类走隧道的写法，
+          # "代理活着但目标不通"就会被判成死端口，救援随即关掉正在用的代理。
+          # Windows 的判活实现住在 probe 层（doctor 只调用它，这是正确的分层），
+          # 所以这里核对的是「doctor 调了那个纯 TCP 函数」，而不是要求 doctor 里出现 TcpClient。
+          $winProbe = Get-CodeOnly 'win/lib/probe.ps1'
+          if ($winDoc -notmatch 'Test-TcpAlive') {
+            Write-Host 'Windows 侧 doctor 没有走 Test-TcpAlive 判活（可能改成走隧道，会误判活代理为死端口）'
+            $fail = 1
+          }
+          if ($winProbe -notmatch 'TcpClient') {
+            Write-Host 'Windows 侧 Test-TcpAlive 不是 TCP 连接（会误判活代理为死端口）'
+            $fail = 1
+          }
+          if ($macDoc -notmatch '/dev/tcp/') {
+            Write-Host 'macOS 侧判活不是纯 TCP 连接（会误判活代理为死端口）'
+            $fail = 1
+          }
+          # 判活时不许让代理去访问目标地址——那是"能不能上网"，不是"端口在不在"。
+          if ($macDoc -match 'curl_direct[^\n]*-[px]\s') {
+            Write-Host 'macOS 侧判活用了 curl 走代理（判的是能否访问目标，不是端口死活）'
+            $fail = 1
+          }
+          Write-Host '系统代理判据核对通过（结论词、可修集合、判活语义三端一致）'
+
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

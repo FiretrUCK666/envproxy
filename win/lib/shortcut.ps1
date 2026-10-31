@@ -684,31 +684,79 @@ function Get-InstalledPrograms {
 # 空行排列与帮助页同一套规矩：标题**上下各空一行**，内容块之间分开。
 # 这里也遵守"不要手写不一致"——每一节都是"空行、标题、空行、内容"，
 # 四节结构一模一样，加一节照抄一段即可。
+# 高级功能里的菜单项。
+#
+# **打印与分派共用这一张表**：加一项就自动出现在屏幕上、也自动能敲，
+# 不会再出现"表里加了、打印忘了"或"打印有、敲了没反应"。
+# 与主菜单的 $MenuItems 同一条道理（那边也是表驱动）。
+#
+# 模块这一列是给「分组」用的：1-3 是同一个功能的三种操作（都围绕"给程序建图标"），
+# 4 是另一件事（修浏览器代理），所以两模块分开显示、各带一句说明。
+# 分组只影响打印顺序，不影响编号——编号是用户要敲的数字，按表顺序连续排。
+$AdvancedItems = @(
+    # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
+    @{ Key='1'; Module='icon';   Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径' }
+    @{ Key='2'; Module='icon';   Name='管理已建的';               Hint='看状态、删掉不要的' }
+    @{ Key='3'; Module='icon';   Name='查看中继';                 Hint='图标用的那个固定地址，现在怎么样' }
+    @{ Key='4'; Module='rescue'; Name='网络救援';                 Hint='浏览器打不开网页的时候，先来这里查一下' }
+)
+
+# 模块顺序与各自的说明。加一个模块只改这张表。
+# 分成两段的原因：1-3 是"让某个程序能翻墙"，4 是"浏览器上不了网怎么修"——
+# 前者是主动配置，后者是出问题后的急救，混在一列里会让人分不清该看哪一段。
+$AdvancedModules = @(
+    @{ Id='icon';   Title='让某个程序能翻墙'
+       Why=@('有些程序只认启动那一刻的环境变量，不会自己去找代理。',
+             '而资源管理器的环境可能在开机时就固定了，之后代理怎么变它都收不到。',
+             '这里的快捷方式会在启动前先读一次代理，直接交给程序，绕开那一环。')
+       Note=@('程序已经开着的，点了不会换代理，必须先关掉再点。',
+              '微软商店装的应用（UWP）不支持，它们没有独立的 exe 路径。') }
+    @{ Id='rescue'; Title='浏览器上不了网的时候'
+       Why=@('翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统的那条设置',
+             '可能没来得及撤掉。浏览器照旧把请求发给一个已经不存在的程序，',
+             '于是连国内网站都打不开——线没断，是路指错了。')
+       Note=@('只修「指向本机、但那个程序已经不在」的那一种。',
+              '公司/学校给你的代理，它一个字节都不碰。') }
+)
+
+# 按模块取项。打印用，分派不用（分派只按编号查）。
+function Get-AdvancedItemsByModule([string]$Module) {
+    return @($AdvancedItems | Where-Object { $_.Module -eq $Module })
+}
+
+# 高级功能页的内容。**从上面两张表生成，不手写**：
+# 手写的话，加一项要同时改表和正文，必有一处漏——而这类漏法在屏幕上看不出来。
 function Get-AdvancedPageLines {
-    return @(
-        @{ Role='title';   Text='======== 高级功能 ========' },
-        @{ Role='blank';   Text='' },
-        @{ Role='heading'; Text='  为什么需要它' },
-        @{ Role='blank';   Text='' },
-        @{ Role='text';    Text='    有些程序只认启动那一刻的环境变量，不会自己去找代理。' },
-        @{ Role='text';    Text='    而资源管理器的环境可能在开机时就固定了，之后代理怎么变它都收不到。' },
-        @{ Role='text';    Text='    这里的快捷方式会在启动前先读一次代理，直接交给程序，绕开那一环。' },
-        @{ Role='blank';   Text='' },
-        @{ Role='heading'; Text='  能做什么' },
-        @{ Role='blank';   Text='' },
-        # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
-            @{ Role='item';    Text='    1  给程序建走代理的快捷方式   挑一个已装的程序，或手动输入路径' },
-        @{ Role='item';    Text='    2  管理已建的                 看状态、删掉不要的' },
-        @{ Role='item';    Text='    3  查看中继                   图标用的那个固定地址，现在怎么样' },
-        @{ Role='item';    Text='    4  网络救援                   浏览器上不了网的时候，先来这里查一下' },
-        @{ Role='blank';   Text='' },
-        @{ Role='heading'; Text='  要注意' },
-        @{ Role='blank';   Text='' },
-        @{ Role='dim';     Text='    程序已经开着的，点了不会换代理，必须先关掉再点。' },
-        @{ Role='dim';     Text='    微软商店装的应用（UWP）不支持，它们没有独立的 exe 路径。' },
-        @{ Role='blank';   Text='' },
-        @{ Role='dim';     Text='  输编号后回车执行    0 = 返回主菜单' }
-    )
+    # 名字列按最宽的名字自动对齐。写死宽度会在改文案后错位——
+    # 错位之后「编号—名字—说明」三列的读法就散了，用户分不清哪个说明属于哪一项。
+    $nameWidth = 0
+    foreach ($it in $AdvancedItems) {
+        $w = Get-DisplayWidth $it.Name
+        if ($w -gt $nameWidth) { $nameWidth = $w }
+    }
+    $out = New-Object System.Collections.ArrayList
+    [void]$out.Add(@{ Role='title';   Text='======== 高级功能 ========' })
+    foreach ($mod in $AdvancedModules) {
+        $items = @(Get-AdvancedItemsByModule $mod.Id)
+        if ($items.Count -eq 0) { continue }
+        [void]$out.Add(@{ Role='blank';   Text='' })
+        [void]$out.Add(@{ Role='heading'; Text=('  ' + $mod.Title) })
+        [void]$out.Add(@{ Role='blank';   Text='' })
+        foreach ($w in $mod.Why) { [void]$out.Add(@{ Role='text'; Text=('    ' + $w) }) }
+        [void]$out.Add(@{ Role='blank';   Text='' })
+        foreach ($it in $items) {
+            # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
+            $pad = ' ' * [Math]::Max(0, $nameWidth - (Get-DisplayWidth $it.Name))
+            [void]$out.Add(@{ Role='item'; Text=('    {0}  {1}{2}   {3}' -f $it.Key, $it.Name, $pad, $it.Hint) })
+        }
+        if ($mod.Note.Count -gt 0) {
+            [void]$out.Add(@{ Role='blank';   Text='' })
+            foreach ($n in $mod.Note) { [void]$out.Add(@{ Role='dim'; Text=('    ' + $n) }) }
+        }
+    }
+    [void]$out.Add(@{ Role='blank';   Text='' })
+    [void]$out.Add(@{ Role='dim';     Text='  输编号后回车执行    0 = 返回主菜单' })
+    return $out
 }
 
 # 把 role+text 的行画到屏幕上。与主菜单同一套颜色，只差这里是一行一色（不分段），
@@ -1274,26 +1322,30 @@ Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
 
 # 高级功能的总入口：菜单选 5 进来就是这里。
 function Show-AdvancedMenu {
+    # 分派也查 $AdvancedItems：屏幕上有的编号就一定能敲，屏幕上没有的一定敲不到。
+    # 编号 → 动作的映射写在这里一处，而"有哪些编号"由表算出来，两边不会分叉。
+    $actions = @{
+        '1' = { Invoke-NewProxyShortcutFlow }
+        '2' = { Invoke-ManageProxyShortcuts }
+        # 只读的一屏：看完按回车回来。不提供任何"开关"——
+        # 中继跟监控同生共死，没有可拨的开关，给一个假开关只会让人困惑。
+        # 这一屏自己就地实时刷新、自己收退出键，所以这里不再补一次 Read-Host：
+        # 那会让用户按回车回到这一屏，再按一次才真的返回（多按一次、看不出所以然）。
+        '3' = { Show-RelayPage }
+        '4' = { Show-RescuePage }
+    }
     while ($true) {
         Show-AdvancedPage
         $ans = ''
         try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
         if (-not $ans -or $ans -eq '0' -or $ans -match '^[Qq]$') { return }
-        switch ($ans) {
-            '1' { Invoke-NewProxyShortcutFlow }
-            '2' { Invoke-ManageProxyShortcuts }
-            '3' {
-                # 只读的一屏：看完按回车回来。不提供任何"开关"——
-                # 中继跟监控同生共死，没有可拨的开关，给一个假开关只会让人困惑。
-                # 这一屏自己就地实时刷新、自己收退出键，所以这里不再补一次 Read-Host：
-                # 那会让用户按回车回到这一屏，再按一次才真的返回（多按一次、看不出所以然）。
-                Show-RelayPage
-            }
-            '4' { Show-RescuePage }
-            default {
-                Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1、2、3、4，0 = 返回）')
-                Start-Sleep -Milliseconds 700
-            }
+        if ($actions.ContainsKey($ans)) {
+            & $actions[$ans]
+        } else {
+            # 可用编号从表里算，不写死"1、2、3、4"：加一项后提示会自动跟上来。
+            $keys = @($AdvancedItems | ForEach-Object { $_.Key })
+            Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 ' + ($keys -join '、') + '，0 = 返回）')
+            Start-Sleep -Milliseconds 700
         }
     }
 }
@@ -1358,26 +1410,40 @@ function Show-RescuePage {
 
     # ---- 动作 ----
     Write-Host ''
-    if ($fixable.Count -eq 0) {
+    # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
+    #
+    # 最容易撞上的正是这个时序：昨天修过（备份已写），今天客户端换回原来的端口，
+    # 现在没有可修项了，用户想把代理改回原样——若在这里按「可修项为零」提前返回，
+    # 他只会看到「按回车返回」，r 根本敲不到；而帮助页白纸黑字承诺了那条路。
+    # 备份在就允许还原，与 fixable 无关。
+    $hasBackup = $false
+    try { $hasBackup = [bool](Test-Item (Get-SysProxyBackupPath)) } catch { $hasBackup = $false }
+    if ($fixable.Count -eq 0 -and -not $hasBackup) {
         Write-Styled 'dim' '  按回车返回'
         try { [void](Read-Host) } catch { return }
         return
     }
-    Write-Styled 'text' ("  输 y 回车 = 修好上面那 {0} 项（会先备份，能还原）" -f $fixable.Count)
-    Write-Styled 'dim'  '  输 r 回车 = 还原成上次修之前的样子'
-    Write-Styled 'dim'  '  直接回车 = 什么都不做，返回'
+    if ($fixable.Count -gt 0) {
+        Write-Styled 'text' ("  输 y 回车 = 修好上面那 {0} 项（会先备份，能还原）" -f $fixable.Count)
+    }
+    if ($hasBackup) {
+        Write-Styled 'dim' '  输 r 回车 = 还原成第一次修之前的样子'
+    }
+    Write-Styled 'dim' '  直接回车 = 什么都不做，返回'
     $ans = ''
     try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
     if ($ans -match '^(r|R)$') {
+        if (-not $hasBackup) { return }
         $ok = Restore-SystemProxyBackup
         Write-Host ''
-        if ($ok) { Write-Styled 'ok' '  [完成] 已经改回上次修之前的样子。' }
-        else { Write-Styled 'warn' '  [未完成] 没有可还原的记录，或者没能改回去。' }
+        if ($ok) { Write-Styled 'ok' '  [完成] 已经改回第一次修之前的样子。' }
+        else { Write-Styled 'warn' '  [未完成] 没能改回去。可以再试一次。' }
         Write-Styled 'dim' '  按回车返回'
         try { [void](Read-Host) } catch { }
         return
     }
     if (-not ($ans -match '^(y|Y|yes|YES|是)$')) { return }
+    if ($fixable.Count -eq 0) { return }
 
     # 真动手。先备份再改，改完回读确认——三态结论各有各的说法，不许塌缩成一句「失败」。
     $r = Repair-SystemProxy -IncludeWinHttp
@@ -1386,6 +1452,24 @@ function Show-RescuePage {
         'fixed' {
             Write-Styled 'ok' '  [完成] 修好了。'
             Write-Styled 'dim' '  浏览器要是还打不开，把它关掉重开一次。'
+        }
+        'partial' {
+            # 部分成功也必须算「未完成」：屏幕要说清哪几项没成，否则用户以为全好了。
+            Write-Styled 'warn' '  [未完成] 修好了一部分，还有没改成的。'
+            $leftNames = @($r.Failed | ForEach-Object {
+                switch ($_) {
+                    'winhttp' { '系统下载这一层（要管理员权限）' }
+                    'manual'  { '浏览器代理' }
+                    'pac'     { '设置脚本' }
+                    default   { [string]$_ }
+                }
+            })
+            Write-Styled 'dim' ('  没改成的：' + ($leftNames -join '、'))
+            if (@($r.Failed) -contains 'winhttp') {
+                Write-Styled 'dim' '  这一项要管理员权限。用管理员身份打开终端，执行：'
+                Write-Styled 'cmd' '    netsh winhttp reset proxy'
+            }
+            Write-Styled 'dim' '  其余的可以再试一次。'
         }
         'none' {
             Write-Styled 'dim' '  查的时候还在，动手的时候已经没了（可能是你自己关掉了）。'

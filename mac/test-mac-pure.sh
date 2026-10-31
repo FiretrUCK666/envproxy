@@ -2004,6 +2004,35 @@ EOF
         _selftest_assert_eq "不可修：$_nk" "0" "$_k"
     done
 
+    echo "[13b] 判活只连端口，不建隧道（与 Windows 侧同判据）"
+    # 这条防的是「把用户正在用的代理关掉」：代理端口活着、但翻墙节点挂了/目标被墙时，
+    # 如果用"能不能访问目标"来判活，就会判成 dead → residue-blocking → 救援误删。
+    # 实测由子 agent 用真监听端口复现过。判据必须只看 TCP 端口在不在。
+    if (exec 3<>"/dev/tcp/127.0.0.1/9") 2>/dev/null; then
+        _selftest_assert_eq "自检环境里 127.0.0.1:9 不该有人听（端口挑选前提）" "0" "1"
+    else
+        _selftest_assert_eq "没人听的端口判 dead" "dead" "$(sysproxy_port_state 127.0.0.1 9)"
+    fi
+    _selftest_assert_eq "端口 0 判 unknown（不是 dead）" "unknown" "$(sysproxy_port_state 127.0.0.1 0)"
+    _selftest_assert_eq "空地址判 unknown（不是 dead）" "unknown" "$(sysproxy_port_state '' 17099)"
+    # 用一个临时监听端口验证"活着"这一侧：连得上就必须判 alive。
+    (exec 3<>/dev/tcp/127.0.0.1/9) 2>/dev/null || true
+    _li_port=""
+    for _li_try in 17511 17512 17513 17514 17515; do
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$_li_try") 2>/dev/null; then _li_port="$_li_try"; break; fi
+    done
+    if [ -n "$_li_port" ]; then
+        # bash 3.2 没有协程；用 nc 起一个短命监听来验"活"，拿不到就跳过这一条。
+        if command -v nc >/dev/null 2>&1; then
+            (nc -l 127.0.0.1 "$_li_port" >/dev/null 2>&1 &) 2>/dev/null || true
+            sleep 1
+            _selftest_assert_eq "有人在听 → 判 alive" "alive" "$(sysproxy_port_state 127.0.0.1 "$_li_port")"
+            pkill -f "nc -l 127.0.0.1 $_li_port" 2>/dev/null || true
+        else
+            echo "  SKIP 没有 nc，跳过'有人在听 → alive'那一条"
+        fi
+    fi
+
     echo "[14] 网络救援的备份只写一次，且能读回"
     # 「只写一次」是契约：每次覆盖就失效——用户第一次修之前的原样才是要还原的那个。
     _bk_saved="$MONITOR_DIR"

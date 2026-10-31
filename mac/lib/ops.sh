@@ -163,9 +163,13 @@ install_envproxy() {
 # 同一份清单只有一处，就不会再出现"删了忘了查"。
 # 与 Windows 侧 ops.ps1 卸载分支同一套文件（那边逐项 Remove-Item）。
 monitor_runtime_files() {
+    # doctor.bak 也在这里：它是网络救援动手前留下的原样，卸载之后没有任何组件会再用它。
+    # 漏掉的后果不是"多留一个文件"——它记着使用者当时的系统代理设置，留着就是留了份
+    # 没人管理、也没人知道该不该删的配置副本。
     printf '%s\n' "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
         "$VERSION_CACHE" "$SNAPSHOT_FILE" \
-        "$MONITOR_DIR/update.inprogress" "$MONITOR_DIR/notify.last"
+        "$MONITOR_DIR/update.inprogress" "$MONITOR_DIR/notify.last" \
+        "$MONITOR_DIR/doctor.bak"
 }
 
 uninstall_envproxy() {
@@ -2073,18 +2077,89 @@ show_menu() {
 # ==============================================================================
 
 # 高级功能二级菜单。编号从这张表派生，散文里不写死数字。
+# 高级功能里的菜单项表。**打印与分派共用这一张**：加一项就自动出现在屏幕上、
+# 也自动能敲，不会出现"表里加了、打印忘了"或"打印有、敲了没反应"。
+# 与主菜单的 MENU_ITEMS 同一条道理。
+#
+# 第 2 列是模块：同一个功能的几种操作归一组，插在这里只影响分组显示，
+# 不影响编号——编号是用户要敲的数字。
+ADVANCED_ITEMS=(
+    '1|rescue|网络救援|浏览器打不开网页的时候，先来这里查一下'
+)
+
+# 模块顺序与各自的说明。加一个模块只改这张表。
+ADVANCED_MODULES=(
+    'rescue|浏览器上不了网的时候'
+)
+
+# 某个模块的"为什么需要它"。三条以 | 分隔，与上面的表分开维护：
+# 说明是整段散文，塞进表格行会把那张表读成一团。
+_advanced_module_why() {
+    case "$1" in
+        rescue) printf '%s\n' \
+            '翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统的那条设置' \
+            '可能没来得及撤掉。浏览器照旧把请求发给一个已经不存在的程序，' \
+            '于是连国内网站都打不开——线没断，是路指错了。' ;;
+    esac
+}
+
+# 某个模块的"要注意"。与 why 同一个理由分开维护。
+_advanced_module_note() {
+    case "$1" in
+        rescue) printf '%s\n' \
+            '只修「指向本机、但那个程序已经不在」的那一种。' \
+            '公司/学校给你的代理，它一个字节都不碰。' ;;
+    esac
+}
+
+# 高级功能二级菜单。编号、名字、说明全部从 ADVANCED_ITEMS 取，不手写。
 show_advanced_menu() {
     while :; do
         clear_screen_safe
         style_out title "======== 高级功能 ========"
-        echo ""
-        style_out heading "  这里面是做什么的"
-        echo ""
-        style_out text "    平时用不到。上网出问题、主菜单那边没解决的时候，来这里。"
-        echo ""
-        style_out heading "  能做什么"
-        echo ""
-        style_out cmd "    1  网络救援    浏览器上不了网的时候，先来这里查一下"
+        # 名字列按最宽的名字自动对齐。写死宽度会在改文案后错位——
+        # 错位之后「编号—名字—说明」三列的读法就散了。
+        _adm_nw=0
+        for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+            _adm_rest=${_adm_i#*|}; _adm_rest=${_adm_rest#*|}
+            _adm_nm=${_adm_rest%%|*}
+            _adm_w=$(_display_width "$_adm_nm")
+            [ "$_adm_w" -gt "$_adm_nw" ] && _adm_nw="$_adm_w"
+        done
+        for _adm_m in ${ADVANCED_MODULES[@]+"${ADVANCED_MODULES[@]}"}; do
+            _adm_mid=${_adm_m%%|*}
+            _adm_mtitle=${_adm_m#*|}
+            # 这个模块下有没有项？没有就整段不印（表里留着也不会出现空标题）。
+            _adm_has=0
+            for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+                _adm_k=${_adm_i%%|*}; _adm_r=${_adm_i#*|}; _adm_mo=${_adm_r%%|*}
+                [ "$_adm_mo" = "$_adm_mid" ] && _adm_has=1
+            done
+            [ "$_adm_has" = "1" ] || continue
+            echo ""
+            style_out heading "  $_adm_mtitle"
+            echo ""
+            _advanced_module_why "$_adm_mid" | while IFS= read -r _adm_w; do
+                style_out text "    $_adm_w"
+            done
+            echo ""
+            for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+                _adm_k=${_adm_i%%|*}; _adm_r=${_adm_i#*|}
+                _adm_mo=${_adm_r%%|*}; _adm_r=${_adm_r#*|}
+                _adm_nm=${_adm_r%%|*}; _adm_hint=${_adm_r#*|}
+                [ "$_adm_mo" = "$_adm_mid" ] || continue
+                _adm_gap=$((_adm_nw - $(_display_width "$_adm_nm"))); [ "$_adm_gap" -lt 0 ] && _adm_gap=0; _adm_pad=$(printf "%*s" "$_adm_gap" "")
+                style_out cmd "    ${_adm_k}  ${_adm_nm}${_adm_pad}   ${_adm_hint}"
+            done
+            # 空行只在这一段前面加一次：写在循环里会每行都空一行。
+            if _advanced_module_note "$_adm_mid" | grep -q .; then
+                echo ""
+                _advanced_module_note "$_adm_mid" | while IFS= read -r _adm_n; do
+                    [ -n "$_adm_n" ] || continue
+                    style_out dim "    $_adm_n"
+                done
+            fi
+        done
         echo ""
         style_out dim "  输编号后回车执行    0 = 返回主菜单"
         _adm_ans=""
@@ -2095,9 +2170,21 @@ show_advanced_menu() {
         fi
         case "$_adm_ans" in
             ''|0|q|Q) return 0 ;;
-            1) show_rescue_page ;;
-            *) style_out warn "  没有这个编号：$_adm_ans（可用的有 1，0 = 返回）" ;;
         esac
+        # 分派查同一张表：屏幕上有的编号一定敲得到，没有的一定敲不到。
+        _adm_hit=0
+        for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+            if [ "${_adm_i%%|*}" = "$_adm_ans" ]; then _adm_hit=1; fi
+        done
+        if [ "$_adm_hit" = "1" ]; then
+            show_rescue_page
+        else
+            _adm_keys=""
+            for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+                _adm_keys="$_adm_keys ${_adm_i%%|*}"
+            done
+            style_out warn "  没有这个编号：$_adm_ans（可用的有$_adm_keys，0 = 返回）"
+        fi
     done
 }
 
@@ -2186,24 +2273,30 @@ EOF
 
     # ---- 动作 ----
     echo ""
-    if [ "$_rs_fixable" -eq 0 ]; then
+    # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
+    # 最常撞上的时序：昨天修过（备份已写），今天客户端换回原端口，现在没有可修项了，
+    # 用户想把代理改回原样——若按「可修项为零」提前返回，他只会看到「按回车返回」，
+    # r 根本敲不到，而帮助页承诺了那条路。备份在就允许还原，与 fixable 无关。
+    _rs_hasbak=0
+    [ -f "$(sysproxy_backup_path)" ] && _rs_hasbak=1
+    if [ "$_rs_fixable" -eq 0 ] && [ "$_rs_hasbak" -eq 0 ]; then
         style_out dim "  按回车返回"
         read -r _rs_dummy || true
         return 0
     fi
-    style_out text "  输 y 回车 = 修好上面那 $_rs_fixable 项（会先备份，能还原）"
-    style_out dim "  输 r 回车 = 还原成上次修之前的样子"
+    [ "$_rs_fixable" -gt 0 ] && style_out text "  输 y 回车 = 修好上面那 $_rs_fixable 项（会先备份，能还原）"
+    [ "$_rs_hasbak" -eq 1 ] && style_out dim "  输 r 回车 = 还原成第一次修之前的样子"
     style_out dim "  直接回车 = 什么都不做，返回"
     _rs_ans=""
     if ! read -r _rs_ans 2>/dev/null; then return 0; fi
     case "$_rs_ans" in
         y|Y|yes|YES|是) ;;
         r|R)
+            [ "$_rs_hasbak" -eq 1 ] || return 0
             _rs_rr=$(sysproxy_restore)
             echo ""
             case "$_rs_rr" in
-                ok)       style_out ok "  [完成] 已经改回上次修之前的样子。" ;;
-                none)     style_out dim "  没有可还原的记录（还没修过，或者修完已经不在了）。" ;;
+                ok)       style_out ok "  [完成] 已经改回第一次修之前的样子。" ;;
                 canceled) style_out warn "  你取消了密码，什么都没改。" ;;
                 *)        style_out warn "  [未完成] 没能改回去。可以再试一次。" ;;
             esac

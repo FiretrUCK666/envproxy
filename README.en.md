@@ -98,7 +98,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | Shortcut, rescue | Adds one icon; rescue edits the proxy only |
+| **5 Advanced** (`高级功能`) | Shortcut / rescue modules | Adds one icon; rescue edits proxy only |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -628,7 +628,7 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | Limit | Reason | Effect |
 |---|---|---|
 | **TUN vs. corporate VPN** | Both are virtual adapters | Most apps keep the port open; a few close it |
-| **System proxy is not modified** | It would affect browsers | Only user-level variables |
+| **Rescue is the only thing that edits it** | Editing it breaks browsers | Only a dead loopback port |
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
