@@ -616,3 +616,181 @@ show_status() {
 # 帮助：纯打印，不改任何状态。给"忘了怎么用"的时候看。
 # 内容与 Windows 侧 Show-Help 同形（两端同文案，只换命令写法），自检会查关键词。
 # 帮助的内容表：每个主题一屏放得下，进帮助先看目录，选一个只看那一段。
+
+# ------------------------------------------------------------------------------
+# 状态快照的收集（get_status_snapshot）住在状态页这一层，不留在编排层：
+# 它收集的是「此刻什么情况」，只被状态页与报告消费，编排层不消费它。
+# 留在编排层会与状态页形成环（编排层调 show_status，状态页又调它）——
+# 这个项目只认单向依赖：单独读任何一个文件都要能看出它依赖什么。
+# ------------------------------------------------------------------------------
+
+# 采集状态页需要的事实。**只读**：不写文件、不提问、不联网（版本缓存由监控写）。
+# 结果留在全局变量里（本项目不用 local），由 show_status 负责显示。
+#
+# 为什么分两层：这一段原来与渲染混在同一个 358 行的函数里，读的人要在几十行
+# 显示语句之间翻找"这个值从哪来"。Windows 侧早就是 Get-StatusSnapshot /
+# Show-StatusSnapshot 两层，这里与它对齐。分开之后还有一个结构性的好处：
+# "状态页只读"不再靠自觉——采集函数里没有一句显示，渲染函数里没有一处探测。
+get_status_snapshot() {
+    _m=$(get_monitor_pid || true)
+    # 只看"launchd 里有这个 label"会说谎：卸载不彻底、或用户手删过 ~/.envproxy/ 时，
+    # plist 还在、它要启动的 locator.sh 已经不在了，登录时什么都不会起来，
+    # 状态页却仍报"已启用"。判据要和"能不能真的启动"一致：注册在，且那个文件真的存在。
+    # 与 Windows 侧同口径（那边查的是 Run 键指向的脚本是否存在）。
+    _autorun_reg=0
+    launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL" && _autorun_reg=1
+    _autorun_ok=0
+    if [ "$_autorun_reg" = "1" ] && [ -f "$LOCATOR_PATH" ]; then _autorun_ok=1; fi
+
+    # 端口枚举读不出来 = 这一轮不知道有没有代理在运行，不能说成"没有代理"。
+    # 状态页要回答"我此刻正常吗"，所以必须**看得见用户真正在用的那个端口**。
+    #
+    # 只做快扫（find_candidate_ports 0）的问题是它只认"常见端口表 + 进程名"：
+    # 用户把端口改成表外的值（如 7099）后，快扫返回空，屏幕打"未检测到"；
+    # 而同一屏的"代理变量"那行读的是真实值、试连还通着 —— 两行自相矛盾。
+    # 与 Windows 侧 Get-InUseProxyPort 同一套顺序、同一套理由：
+    #   1) 先直接验注入值指向的那个端口（我们自己写的，就是用户此刻在用的），
+    #      命中即返回，一次 TCP，毫秒级；
+    #   2) 没命中才退到候选集，且用**全扫**——状态页一天点不了几次，
+    #      "慢一点"远比"说谎"便宜。
+    _port=""
+    _port_unknown=0
+    # 优先读监控写下的结论快照，读不到或太旧才自己现场探测。
+    #
+    # 为什么不一律现场探测：最坏情况（代理刚换端口、变量指向的旧端口已死）要走
+    # 全端口扫描，而监控每 2–3 秒就在做同一件事、结论它早就有了。
+    # 读快照是个位数毫秒，且两边结论同源——不会再出现"状态页说没代理、监控还在用某个端口"
+    # 这种自相矛盾。这与 Windows 侧读 state.snapshot 是同一套做法，两端终于同形。
+    #
+    # 降级由 read_state_snapshot 的 SNAP_STATUS 表达：ok 用快照；
+    # none / unreadable / damaged / 太旧 退回实时探测。任何情况下都不许把
+    # "读不出来"当成"没有代理"——那会删掉用户的变量，方向与保留相反。
+    read_state_snapshot
+    _snap_ok=0
+    if [ "$SNAP_STATUS" = "ok" ]; then
+        # 时间戳比现在晚 60 秒以上 = 系统时间被调过，不许当"刚写的"
+        if [ "$SNAP_AGE" -lt -60 ]; then
+            _snap_ok=0
+        elif [ "$SNAP_AGE" -le "$SNAPSHOT_STALE_SEC" ]; then
+            _snap_ok=1
+        fi
+    fi
+    if [ "$_snap_ok" = "1" ]; then
+        case "$SNAP_STATE" in
+            on:*) _port="${SNAP_STATE#on:}" ;;
+            *)    _port="" ;;
+        esac
+        if [ "$SNAP_PORT_ENUMERATION" = "failed" ]; then _port_unknown=1; fi
+    else
+        # 三态直接由返回码给出（0 找到 / 1 确实没有 / 2 读不出来），**不要再问一次枚举层**。
+        # 曾经是"拿到 1 之后再调一次 find_candidate_ports 去分辨"，而那个函数内部
+        # 本身就是一次全端口 lsof+ps+CONNECT——于是没有代理的机器上，每 2 秒刷新的
+        # 状态页要跑两轮全扫。三态在源头分开，这里一次即可。
+        # 注入的端口由这里读好再传进去：probe 层只管探测，不该反过来调 env 层的读值函数
+        # （那会让 probe 依赖 env、env 又依赖 probe 的端口函数，形成环）。
+        _p=$(get_in_use_proxy_port "$(get_current_proxy_port 2>/dev/null || echo "")")
+        _p_rc=$?
+        case "$_p_rc" in
+            0) _port="$_p" ;;
+            1) _port=""; _port_unknown=0 ;;   # 枚举成功、确实没有代理：dim「未检测到」
+            *) _port=""; _port_unknown=1 ;;   # 枚举失败：warn「没读到，无法判断」
+        esac
+    fi
+
+    # 终端同步到底有没有在生效。光看「块写进去了」不算数：块不成对同样能让
+    # 「看起来装好了，实则每次开窗口都不同步」。与 Win 侧 Get-TerminalSyncState 同语义。
+    _ts_state="missing"
+    _ts_hits=0
+    _ts_unpaired=0
+    _ts_stale=0
+    _ts_badline=""
+    # 按行读而不是 for-in-$( )：后者靠词拆分，路径含空格会被拆坏。
+    while IFS= read -r _ts_p; do
+        [ -n "$_ts_p" ] || continue
+        [ -f "$_ts_p" ] || continue
+        # 先看有没有我们的标记：连标记都没有的文件不是「不成对」，是「没装过」，不计数。
+        _ts_has_s=0
+        _hook_marker_present "$_ts_p" "$HOOK_START" && _ts_has_s=1
+        _ts_has_e=0
+        _hook_marker_present "$_ts_p" "$HOOK_END" && _ts_has_e=1
+        [ "$_ts_has_s" = "0" ] && [ "$_ts_has_e" = "0" ] && continue
+        if ! _hook_block_paired "$_ts_p"; then
+            _ts_unpaired=$((_ts_unpaired + 1))
+            # 顺带记下孤立标记的行号：状态页要能告诉用户"删哪一行"。
+            # 只说"标记不成对"等于让用户自己去几千行里找。
+            [ -z "$_ts_badline" ] && _ts_badline=$(grep -nxF -e "$HOOK_START" -e "$HOOK_END" "$_ts_p" 2>/dev/null | head -n 1 | cut -d: -f1)
+            continue
+        fi
+        # 成对了还要看钩子行是不是当前版本：标记在、钩子行被改过就不算生效。
+        if _hook_marker_present "$_ts_p" "$HOOK_LINE"; then
+            _ts_hits=$((_ts_hits + 1))
+        else
+            # 块成对、但不是当前版本：这是"过期"，不是"没有块"。
+            # 报成 missing 会让用户以为从没装过；而它其实装过、只是那段代码旧了。
+            # 与 Windows 侧 stale 同一口径（安装会按当前版本重写，不用用户动手）。
+            _ts_stale=$((_ts_stale + 1))
+        fi
+    done <<EOF
+$(rc_check_files)
+EOF
+    if [ "$_ts_hits" -gt 0 ]; then
+        _ts_state="ok"
+    elif [ "$_ts_unpaired" -gt 0 ]; then
+        _ts_state="unpaired"
+    elif [ "$_ts_stale" -gt 0 ]; then
+        _ts_state="stale"
+    fi
+
+    # 代理变量：整条地址读回来（不只端口），再试连看它指向的端口还在不在。
+    _cur=$(get_current_proxy_url 2>/dev/null || true)
+    # 三态：1 = 活着、0 = 端口不在、"" = 说不清（值不是合法地址）。
+    #
+    # 初值必须是""，不能是 1。原来是 1，于是"取不出端口"时整个 if 被跳过、
+    # 1 留在原处变成了结论——屏幕上说"已注入"、结论行说"一切正常"。
+    # 这条路径真实可达：proxy.env 被别的工具改坏、或写进了半个地址就会命中。
+    # 拿不准时默认必须是"不知道"：说不知道最多让人多查一眼，说"正常"会让人不去查。
+    _cur_alive=""
+    _cur_addr=""
+    _cur_port=""
+    if [ -n "$_cur" ]; then
+        # 从 URL 里取主机与端口：IPv6 形态是 http://[::1]:7078，直接按最后一个冒号切。
+        _cur_hostport=$(printf '%s' "$_cur" | sed -E 's#^[a-zA-Z]+://##; s#/.*$##')
+        _cur_port=$(printf '%s' "$_cur_hostport" | sed -nE 's/.*:([0-9]+)$/\1/p')
+        _cur_addr=$(printf '%s' "$_cur_hostport" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
+        if [ -n "$_cur_port" ]; then
+            _cur_alive=1
+            _port_alive "$_cur_addr" "$_cur_port" || _cur_alive=0
+        fi
+    fi
+
+    # 系统代理：浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它
+    # （动它是「网络救援」的活）。
+    #
+    # 判据**只有一处实现**：doctor 层的 sysproxy_layers + sysproxy_verdict。
+    # 这里原来是第三套实现（scutil --proxy 读全局，只认 127.0.0.1），
+    # 而 mac 的系统代理是**每个网络服务各存一份**，scutil 只报当前生效的那一份——
+    # 公司 VPN 上残留、Wi-Fi 上干净的情况它完全看不见。
+    # quick 只查手动代理两层：状态页每次刷新都调它，全量档会拖慢刷新。
+    _sp_bad=0
+    _sp_first_url=""
+    _sp_first_kind=""
+    _sp_count=0
+    while IFS="$(printf '\t')" read -r _sp_layer _sp_svc _sp_kind _sp_url _sp_port; do
+        [ -n "$_sp_svc" ] || continue
+        if sysproxy_fixable "$_sp_kind"; then
+            _sp_count=$((_sp_count + 1))
+            if [ -z "$_sp_first_kind" ]; then
+                _sp_first_url="$_sp_url"
+                _sp_first_kind="$_sp_kind"
+            fi
+        fi
+    done <<EOF
+$(sysproxy_layers quick)
+EOF
+    [ "$_sp_count" -gt 0 ] && _sp_bad=1
+
+    # 版本信息（只读：查不到只提示，不写文件、不提问）
+    _local_ver=$(get_local_version || true)
+    return 0
+}

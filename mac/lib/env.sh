@@ -493,3 +493,13 @@ apply_state() {
     fi
     return 0
 }
+# 当前注入的代理地址：**整条**读回来，不只取端口。
+# 只取端口再拼 127.0.0.1 是错的：注入值可能是 http://[::1]:7078，
+# 那样屏幕上会显示一个本机根本不成立的地址，而用户完全可能照抄去填别的工具。
+# 与 write_off_sentinel 里同一套"整条 URL"取法。
+get_current_proxy_url() {
+    [ -f "$PROXY_ENV" ] || return 1
+    _gpu_line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    [ -n "$_gpu_line" ] || return 1
+    printf '%s' "$_gpu_line" | sed -E 's/^export HTTP_PROXY="?([^"]*)"?$/\1/'
+}
