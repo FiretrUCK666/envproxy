@@ -98,7 +98,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | A blocked-site shortcut and network rescue (both platforms; contents differ) | Adds one new icon only; rescue touches nothing but the browser proxy setting, and backs it up first |
+| **5 Advanced** (`高级功能`) | Shortcut, rescue | Adds one icon; rescue edits the proxy only |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -580,7 +580,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `monitor.beat` | heartbeat: process id plus start time |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | state snapshot written by the background program; the status page only reads it |
-| | `doctor.bak` | what the browser proxy setting looked like before network rescue changed it, so it can be put back. Written only when a repair actually happens |
+| | `doctor.bak` | proxy setting before rescue changed it, so it can be restored |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
@@ -718,7 +718,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | verdict the background program writes every round; the status page only reads it |
-| | `doctor.bak` | what the browser proxy setting looked like before network rescue changed it, so it can be put back. Written only when a repair actually happens |
+| | `doctor.bak` | proxy setting before rescue changed it, so it can be restored |
 | | `report-*.txt` | reports built by "Problem report"; open one before sending it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
