@@ -1532,8 +1532,8 @@ jobs:
           # 恰恰是不知道的——只有把该查的列全，才谈得上"查过"。
           # 每项：文件、正则（第 1 组是数字）、给用户看的说法。
           $epPlaces = @(
-            @('win/lib/ops.ps1',                  '试 (\d+) 个端点',        'win 帮助'),
-            @('mac/lib/ops.sh',                   '试 (\d+) 个端点',        'mac 帮助'),
+            @('win/lib/help.ps1',                 '试 (\d+) 个端点',        'win 帮助'),
+            @('mac/lib/help.sh',                  '试 (\d+) 个端点',        'mac 帮助'),
             @('README.md',                        '(\d+) 个不同的端点',     '中文 README'),
             @('README.en.md',                     '(\d+) different endpoints', '英文 README'),
             @('assets/readme/mechanism.svg',      '(\d+) 个端点',           '中文配图'),
@@ -1827,14 +1827,14 @@ jobs:
           # 函数还在、但被塞进 Get-StatusSnapshot 里，等于把联网搬了个地方，
           # 而上面那四行一个都不会红。所以还要验"谁在调"：
           #   写入方 = 监控主循环（runtime 层）；状态页（ops 层的状态函数）只许读。
-          $statusWin = Get-Content 'win/lib/ops.ps1' -Raw -Encoding UTF8
+          $statusWin = Get-Content 'win/lib/pages.ps1' -Raw -Encoding UTF8
           # 只看代码，不看注释：注释里会写"状态页不许联网（见 Write-VersionCache 的注释）"。
           $statusWinCode = (@($statusWin -split "`n" | Where-Object { $_.Trim() -notmatch '^#' }) -join "`n")
           if ($statusWinCode -match '\bWrite-VersionCache\b') {
             Write-Host 'Win 侧状态页（ops 层）调用了 Write-VersionCache——状态页必须只读，写入方只能是监控'
             $fail = 1
           }
-          $statusMac = Get-Content 'mac/lib/ops.sh' -Raw -Encoding UTF8
+          $statusMac = Get-Content 'mac/lib/pages.sh' -Raw -Encoding UTF8
           $statusMacCode = (@($statusMac -split "`n" | Where-Object { $_.Trim() -notmatch '^#' }) -join "`n")
           if ($statusMacCode -match '\bwrite_version_cache\b') {
             Write-Host 'Mac 侧状态页（ops 层）调用了 write_version_cache——状态页必须只读，写入方只能是监控'
@@ -2158,8 +2158,8 @@ jobs:
           # 这里比的是**结构**（编号、短名、标题），不比正文——正文里的命令本来
           # 就必须不同（PowerShell vs shell），那是平台差异不是漂移。
           $fail = 0
-          $ps = [System.IO.File]::ReadAllText('win/lib/ops.ps1', [System.Text.Encoding]::UTF8)
-          $sh = [System.IO.File]::ReadAllText('mac/lib/ops.sh', [System.Text.Encoding]::UTF8)
+          $ps = [System.IO.File]::ReadAllText('win/lib/help.ps1', [System.Text.Encoding]::UTF8)
+          $sh = [System.IO.File]::ReadAllText('mac/lib/help.sh', [System.Text.Encoding]::UTF8)
           $rt = [System.IO.File]::ReadAllText('win/lib/runtime.ps1', [System.Text.Encoding]::UTF8)
           $mrt = [System.IO.File]::ReadAllText('mac/lib/runtime.sh', [System.Text.Encoding]::UTF8)
 
@@ -2200,7 +2200,7 @@ jobs:
             $winMenu[$m.Groups[2].Value] = $m.Groups[1].Value
           }
           # Mac 的菜单表格式是 '编号|名字|说明|分组|子命令'。
-          # **必须限定在菜单表块内**：原来在整份 ops.sh 上跑，
+          # **必须限定在菜单表块内**：原来在整份 ops 库上跑，
           # 把帮助主题表（同样是 '数字|名字|…' 形状）也当菜单抓了进来，
           # 解析出 14 项、其中 6 项是帮助主题，靠编号恰好不冲突才没误报。
           $macMenu = @{}
@@ -2345,10 +2345,10 @@ jobs:
               $wantName = $mm.Groups[2].Value
               $hit = $macMenuRows | Where-Object { $_.Key -eq $wantKey } | Select-Object -First 1
               if (-not $hit) {
-                Write-Host ("mac/lib/ops.sh:{0} 帮助正文写了「选 {1}」，但菜单里没有编号 {1} 的项" -f $lnNo, $wantKey)
+                Write-Host ("mac/lib/help.sh:{0} 帮助正文写了「选 {1}」，但菜单里没有编号 {1} 的项" -f $lnNo, $wantKey)
                 $fail = 1
               } elseif ($hit.Name -ne $wantName) {
-                Write-Host ("mac/lib/ops.sh:{0} 帮助正文写的是「选 {1}（{2}）」，而菜单表里编号 {1} 是「{3}」" -f $lnNo, $wantKey, $wantName, $hit.Name)
+                Write-Host ("mac/lib/help.sh:{0} 帮助正文写的是「选 {1}（{2}）」，而菜单表里编号 {1} 是「{3}」" -f $lnNo, $wantKey, $wantName, $hit.Name)
                 $fail = 1
               }
             }
@@ -2723,7 +2723,7 @@ jobs:
           #
           # 判据不写死任何具体菜单项：从 base 层的菜单表取权威清单，
           # 再用它去核图里所有"编号 + 名字"形态的文字。菜单改了，这条自动跟着改。
-          $menuSrc = Get-Content 'win/lib/ops.ps1' -Raw
+          $menuSrc = Get-Content 'win/lib/help.ps1' -Raw
           $menuBlock = [regex]::Match($menuSrc, '\$MenuItems\s*=\s*@\((?<b>[\s\S]*?)\r?\n\)')
           if (-not $menuBlock.Success) {
             Write-Host 'SVG 事实核验：取不到 $MenuItems 菜单表，无法核对'
