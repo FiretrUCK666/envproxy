@@ -88,7 +88,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 # relay 只依赖 base（它用的是固定安装目录，不是 monitor 目录），所以排在 runtime 之前
 # 也可以；排在 package 之前是因为建快捷方式那一段要用它算端口记录的位置。
 # doctor 排在 ops 之前：菜单与高级功能页要调它给结论，而它自己不调界面。
-$CoreLibs = @("base", "probe", "env", "runtime", "relay", "package", "update", "doctor", "ops", "shortcut")
+$CoreLibs = @("base", "probe", "env", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "help", "shortcut")
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 $missingLib = @()
 foreach ($libName in $CoreLibs) {

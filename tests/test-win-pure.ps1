@@ -216,6 +216,18 @@ function Stop-OneShotServer($Server) {
     try { $Server.Runspace.Dispose() } catch {}
 }
 
+# 把 win\lib 下所有库的源码合并成一段文本。
+#
+# 用途：那些"某个词在整个库里出现/不该出现"的断言。它们关心的是**整个库集合**，
+# 不是某个具体文件。写死文件名的话，把库拆开就要来改一遍测试——而拆分不该改变
+# 任何被测行为的结论。
+function Get-AllLibSource {
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($f in @(Get-ChildItem 'win\lib' -Filter *.ps1 -File | Sort-Object Name)) {
+        [void]$sb.AppendLine([System.IO.File]::ReadAllText($f.FullName))
+    }
+    return $sb.ToString()
+}
 Write-Host '[1] pure functions'
 Assert-Eq 'merge keeps user entries' 'localhost,127.0.0.1,::1,example.com' (Merge-NoProxy 'localhost,example.com,::1' $DefaultNoProxy)
 Assert-Eq 'merge empty' 'localhost,127.0.0.1,::1' (Merge-NoProxy '' $DefaultNoProxy)
@@ -677,7 +689,7 @@ foreach ($pl in ($probeSrc -split "`r?`n")) {
 Assert-Eq 'probe 层不写日志（结构保证，不靠开关）' 0 $probeCalls
 Assert-Eq 'probe 层把失败原因交出来' $true ($probeSrc -match 'PortEnumerationReason')
 Assert-Eq 'Get-ActiveProxyPort 不再有 NoLog 参数' $false ((Get-Command Get-ActiveProxyPort).Parameters.ContainsKey('NoLog'))
-$opsSrc = Get-Content (Join-Path $ScriptDir 'lib\ops.ps1') -Raw -Encoding UTF8
+$opsSrc = Get-AllLibSource
 Assert-Eq '状态页调探测时不传任何开关' $false ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog')
 
 # 卸载必须把运行时状态清干净：漏一个就"没恢复到装之前"，而屏幕照样报"已完成"。
@@ -1119,7 +1131,7 @@ Assert-Eq 'an empty reason falls back to unreachable' 'network' (Select-UpdateFa
 # 标签值从 $StatusLabels 表取（唯一权威处），源码里查的是"用它做行标签"这件事：
 #   ① 静态页必须出现 `Write-StatusRow $StatusLabels.X`；
 #   ② 表里的每个键都必须真的被渲染器用到——只建表不接线等于没建。
-$srcLive = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '../win/lib/ops.ps1'))
+$srcLive = Get-AllLibSource
 foreach ($k in @('Monitor', 'AutoRun', 'Proxy', 'TermSync', 'Vars', 'Version')) {
     $lbl = [string]$StatusLabels[$k]
     $inRow = [regex]::IsMatch($srcLive, 'Write-StatusRow \$StatusLabels\.' + $k + '\b')
@@ -2875,7 +2887,19 @@ function Test-SourceMatch([string]$file, [string]$pattern) {
 # 用窗口会漏判：Confirm-CandidatePort 里有两个 Test-NodeAlive 调用，删掉其中一个，
 # 另一个还在窗口内，断言照样过——而这正是"删掉一半接线"这类破坏的特征。
 # 按花括号配对取到的是确切的函数体，"里面还剩几个调用"数得清。
+# 取一个函数的正文。
+#
+# $file 传空串 = **在 win\lib 下的所有库里找**。这是默认该用的方式：
+# 断言关心的是"这个函数怎么写"，不是"它住在哪个文件"。写死文件名的话，
+# 每次把库拆开或挪位置都要来改一遍测试——那是让测试去绑定实现细节。
 function Get-FunctionBody([string]$file, [string]$name) {
+    if (-not $file) {
+        foreach ($libFile in @(Get-ChildItem 'win\lib' -Filter *.ps1 -File)) {
+            $body = Get-FunctionBody ('win\lib\' + $libFile.Name) $name
+            if ($body) { return $body }
+        }
+        return ''
+    }
     $p = Join-Path (Get-Location) $file
     if (-not (Test-Path -LiteralPath $p)) { return '' }
     $src = [System.IO.File]::ReadAllText($p)
@@ -2962,7 +2986,7 @@ foreach ($r in $cmdRefs) {
 Assert-Eq '接线：菜单壳引用的脚本都存在' 0 $cmdMissing.Count
 # 状态页必须只读：它在"查看状态"里被调用，写文件或改变量都是越界。
 foreach ($fn in @('Show-Status')) {
-    $chunk = Get-FunctionBody 'win/lib/ops.ps1' $fn
+    $chunk = Get-FunctionBody '' $fn
     Assert-Eq ('接线：' + $fn + ' 函数体取到了') $true ($chunk.Length -gt 0)
     Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable')))
 }
@@ -3117,14 +3141,14 @@ Assert-Eq '问题清单：全正常时零条' 0 (@(Get-StatusProblems $goodSt)).
 
 # 判断只有一处实现：Show-StatusSnapshot 必须调 Get-StatusProblems，
 # 不许自己再算一遍（两处各写一套必然分叉）
-$opsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/ops.ps1'))
-$ssBody = Get-FunctionBody 'win/lib/ops.ps1' 'Show-StatusSnapshot'
+$opsSrc = Get-AllLibSource
+$ssBody = Get-FunctionBody '' 'Show-StatusSnapshot'
 Assert-Eq '接线：Show-StatusSnapshot 函数体取到了' $true ($ssBody.Length -gt 0)
 Assert-Eq '接线：Show-StatusSnapshot 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($ssBody, 'Get-StatusProblems')))
 Assert-Eq '接线：Show-StatusSnapshot 不自己累加问题' $false ([bool]([regex]::IsMatch($ssBody, '\$problems \+= ')))
 
 # Format-StatusLines 也必须走同一个判断
-$fsBody = Get-FunctionBody 'win/lib/ops.ps1' 'Format-StatusLines'
+$fsBody = Get-FunctionBody '' 'Format-StatusLines'
 Assert-Eq '接线：Format-StatusLines 函数体取到了' $true ($fsBody.Length -gt 0)
 Assert-Eq '接线：Format-StatusLines 调用 Get-StatusProblems' $true ([bool]([regex]::IsMatch($fsBody, 'Get-StatusProblems')))
 
@@ -3252,7 +3276,7 @@ foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 foreach ($fn in @('Format-StatusLines', 'Show-StatusLive', 'Get-StatusProblems')) {
     # 按花括号配对取函数体：截固定长度会把下一个函数框进来，
     # 而它的写文件调用会让这条断言永远红——量错对象比没量更糟。
-    $chunk = Get-FunctionBody 'win/lib/ops.ps1' $fn
+    $chunk = Get-FunctionBody '' $fn
     Assert-Eq ('接线：' + $fn + ' 函数体取到了') $true ($chunk.Length -gt 0)
     Assert-Eq ('接线：' + $fn + ' 不写文件') $false ([bool]([regex]::IsMatch($chunk, 'Write-Text|Set-Content|New-Item|Remove-ItemSafe')))
     Assert-Eq ('接线：' + $fn + ' 不写用户变量') $false ([bool]([regex]::IsMatch($chunk, 'SetEnvironmentVariable|Write-UserEnv')))
@@ -3301,7 +3325,7 @@ Assert-Eq '终端同步：未知状态也要说人话' $true ([bool]((Get-TermSy
 
 # 2. 提示里出现的按键必须真的被处理
 #    曾经：底部写「按 2 看一次静态快照」，而循环只认 Quit，按 2 毫无反应。
-$opsSrc2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/ops.ps1'))
+$opsSrc2 = Get-AllLibSource
 $fsIdx2 = $opsSrc2.IndexOf('function Format-StatusLines')
 $nextFn2 = $opsSrc2.IndexOf('function ', $fsIdx2 + 10)
 $fsChunk2 = if ($nextFn2 -gt $fsIdx2) { $opsSrc2.Substring($fsIdx2, $nextFn2 - $fsIdx2) } else { $opsSrc2.Substring($fsIdx2) }
@@ -3337,7 +3361,7 @@ Assert-Eq '按键：等满超时明确返回空串（调用方据此区分没按
 # 两个屏幕循环都不许把空串当退出。
 # 判据取「$k 与空串比较」这一具体形态，而不是笼统搜 break——
 # 笼统搜会把正常分支也算进去。
-foreach ($pair in @(@('win/lib/ops.ps1', '状态页'), @('win/lib/shortcut.ps1', '中继页'))) {
+foreach ($pair in @(@('win/lib/pages.ps1', '状态页'), @('win/lib/ops.ps1', '状态页'), @('win/lib/shortcut.ps1', '中继页'))) {
     $src2 = [System.IO.File]::ReadAllText((Join-Path (Get-Location) $pair[0]))
     $badEmpty = 0
     foreach ($m in [regex]::Matches($src2, '\$k\s+-eq\s+(\S+)')) {
@@ -3427,7 +3451,7 @@ Assert-Eq '停止：清掉状态快照' $true ([bool]([regex]::IsMatch($stopChun
 #       ① 安装收尾会清它（否则照状态页的指引重做一次也清不掉，唯一出路是卸载）；
 #       ② 写它必须在备份成功之后（否则备份阶段一失败就留下一个没人清的标记）；
 #       ③ 回滚完整成功时也要清它（否则安装区明明已经回到原样，警报还在）。
-$instBody = Get-FunctionBody 'win/lib/ops.ps1' 'Install-EnvProxy'
+$instBody = Get-FunctionBody '' 'Install-EnvProxy'
 Assert-Eq '接线：安装收尾会清更新中断标记' $true ([bool]([regex]::IsMatch($instBody, 'Remove-ItemSafe\s+\$UpdateInProgressFile|Remove-Item[^\r\n]*\$UpdateInProgressFile')))
 # ② 用行号比先后：写标记的那行必须晚于备份完成的那个循环。
 $pkgLines = Get-Content 'win/lib/package.ps1'

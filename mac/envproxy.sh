@@ -68,7 +68,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 LIB_DIR="$SCRIPT_DIR/lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib/ 实际内容一致。
 # doctor 排在 ops 之前：菜单要调它给结论，而它自己不调界面。
-CORE_LIBS="base probe env runtime package update doctor ops"
+CORE_LIBS="base probe env runtime package update doctor ops pages help"
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 _missing_lib=""
 for _lib_name in $CORE_LIBS; do

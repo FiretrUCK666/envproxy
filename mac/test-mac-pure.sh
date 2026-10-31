@@ -74,7 +74,15 @@ self_test() {
     # shellcheck disable=SC2064
     trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检在第 ${LINENO} 行意外中止（退出码 $?）"; fi' EXIT
     _selftest_fails=0
-    _sandbox=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_selftest.XXXXXX" 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
+    # 把 mac/lib 下所有库的源码合并成一段文本。
+#
+# 用途：那些"某个词在整个库里出现/不该出现"的断言。它们关心的是**整个库集合**，
+# 不是某个具体文件。写死文件名的话，把库拆开就要来改一遍测试——而拆分不该改变
+# 任何被测行为的结论。
+all_lib_source() {
+    cat "$SCRIPT_DIR"/lib/*.sh 2>/dev/null
+}
+_sandbox=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_selftest.XXXXXX" 2>/dev/null) || { echo "自检失败：沙箱建不起"; return 1; }
     # 运行期改道：HOME 管 hook 落点，ENVPROXY_HOME 管 proxy.env/快照，MONITOR_DIR 管日志。
     HOME="$_sandbox"
     ENVPROXY_HOME="$_sandbox/.envproxy"
@@ -1144,7 +1152,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     _selftest_assert_eq "帮助给了逐窗口接管的命令" "1" "$_lh3"
     # 帮助页也要认 q 和 0：菜单里它们是退出，刚学会的人进到帮助再按就被判成
     # "没有这一条"，会以为帮助坏了。这条钉住两端行为一致。
-    if grep -qE '^[[:space:]]*q\|Q\|0\)' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null; then _lq=1; else _lq=0; fi
+    if all_lib_source | grep -qE '^[[:space:]]*q\|Q\|0\)' 2>/dev/null; then _lq=1; else _lq=0; fi
     _selftest_assert_eq "帮助页认 q 和 0（与菜单同义）" "1" "$_lq"
     # 配色：颜色由内容自己声明（行首标记），不再从行的形状去猜。
     # 为什么改：猜的判据是"缩进 4 格 + 无汉字 = 命令"，而真实内容不按这个形状长——
@@ -1211,9 +1219,9 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 标签也跟着灰——用户最先看的恰恰是标签。这条钉住"标签走 _status_row"这个结构。
     _sr_bad=""
     for _sr_lbl in 监控进程 开机自启 翻墙代理 终端同步 代理变量 版本; do
-        grep -q "_status_row \"$_sr_lbl\"" "$SCRIPT_DIR/lib/ops.sh" || _sr_bad="$_sr_bad $_sr_lbl(缺)"
+        all_lib_source | grep -q "_status_row \"$_sr_lbl\"" || _sr_bad="$_sr_bad $_sr_lbl(缺)"
         # 不许再有"整行同色 + 标签 : 内容"的老写法
-        if grep -qE "style_out (ok|warn|dim) \"$_sr_lbl : " "$SCRIPT_DIR/lib/ops.sh"; then
+        if all_lib_source | grep -qE "style_out (ok|warn|dim) \"$_sr_lbl : "; then
             _sr_bad="$_sr_bad $_sr_lbl(整行同色)"
         fi
     done
@@ -1230,13 +1238,13 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 为什么分两步：原来删除处内联一串 rm -f、复检处一个都没查，删失败也报"已完成"。
     # 抽成一份清单后，删除、复检、以及这条用例看的是同一个来源——
     # 将来漏加一个文件，这里会红；而"删了忘了查"在结构上就不可能再发生。
-    _un_body=$(sed -n "/^uninstall_envproxy()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
+    _un_body=$(all_lib_source | sed -n "/^uninstall_envproxy()/,/^}/p")
     # 用 grep -q 而不是 `case` 套在命令替换里：后者在 macOS 自带的 bash 3.2 上
     # 表现与新版 bash 不同（实测 CI 报出的是半截 case 正文），而这条用例
     # 要在真机上跑，不能用「本地能过」当标准。
     if printf '%s' "$_un_body" | grep -q 'monitor_runtime_files'; then _un_uses=1; else _un_uses=0; fi
     _selftest_assert_eq "卸载: 删除走共用清单（不内联重列）" "1" "$_un_uses"
-    _un_files=$(sed -n "/^monitor_runtime_files()/,/^}/p" "$SCRIPT_DIR/lib/ops.sh")
+    _un_files=$(all_lib_source | sed -n "/^monitor_runtime_files()/,/^}/p")
     _un_bad=""
     for _un_f in 'VERSION_CACHE' 'update.inprogress' 'STOP_INTENT' 'PID_FILE' 'STOP_FLAG' 'SNAPSHOT_FILE' 'notify.last'; do
         case "$_un_files" in
@@ -1895,15 +1903,39 @@ EOF
     # 两种写法都要挡：`x =$(...)` 与 `x= $(...)`。只查"="后面跟空格的话，
     # 前者（"="前面有空格、后面紧贴 $(）会漏过去——而它一样不是赋值。
     # 判据：名字后面出现空白再跟"="，就一定是错的（真赋值不许有空白）。
-    _sp_assign=$(grep -cE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+=' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null)
-    _selftest_assert_eq "接线：ops.sh 里没有带空格的赋值语句" "0" "$_sp_assign"
+    #
+    # **必须排除引号里的内容**：awk/sed 的程序体常写成跨多行的单引号字符串，
+    # 里面的 `n = NF`、`host = $(n - 2)` 是 awk 语法、完全合法，不是 shell 赋值。
+    # 早先这条只扫 ops.sh（那里恰好没有 awk），所以一直是绿的；改成扫全库后
+    # 立刻命中了 31 处 awk 赋值——那说明判据本身不够准，不是代码坏了。
+    #
+    # 做法：先用一个小状态机把**所有单引号字符串**（可跨行）整体抹掉，再在剩下的
+    # shell 代码里查。跨行是关键——逐行正则做不到，实测会漏。
+    _sp_stripped=$(all_lib_source | awk '
+        BEGIN { inq = 0 }
+        {
+            line = $0; out = ""; i = 1
+            while (i <= length(line)) {
+                c = substr(line, i, 1)
+                if (inq == 0) {
+                    if (c == "\047") { inq = 1; out = out "QUOTED"; i++; continue }
+                    out = out c; i++
+                } else {
+                    if (c == "\047") { inq = 0 }
+                    i++
+                }
+            }
+            print out
+        }')
+    _sp_assign=$(printf '%s\n' "$_sp_stripped" | grep -cE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+=' 2>/dev/null)
+    _selftest_assert_eq "接线：库里没有带空格的 shell 赋值语句（引号内的 awk 程序体除外）" "0" "$_sp_assign"
 
     # ---- 状态分支必须覆盖 ok ----
     # show_status 的 `case "$_ts_state"` 只管"有问题的几种"，正常态由后面单独打一行。
     # 漏掉 ok 时最正常的状态会落进 `*)`，于是每个装对了的人都看到
     # 「终端同步 : 状态未知（ok）」——同一屏两行说法相反，比不报还糟。
     # 这里直接数 case 里有没有 ok) 这一支，缺了就红。
-    _ts_ok_branch=$(sed -n '/case "\$_ts_state" in/,/^    esac$/p' "$SCRIPT_DIR/lib/ops.sh" | grep -cE '^[[:space:]]+ok\)')
+    _ts_ok_branch=$(all_lib_source | sed -n '/case "\$_ts_state" in/,/^    esac$/p' | grep -cE '^[[:space:]]+ok\)')
     _selftest_assert_eq "接线：状态 case 覆盖 ok 分支" "1" "$([ "$_ts_ok_branch" -ge 1 ] && echo 1 || echo 0)"
 
     # ---- 安装收尾必须清掉"更新中断"标记 ----
@@ -1912,7 +1944,7 @@ EOF
     # 「上次更新没有完成」，并让用户「选 1 重做一次」——重做真的成功了，
     # 标记还在，屏幕上是同一句警告：一条自己都说错了怎么修的指引。
     # 两处都要：package.sh 里挪到备份成功之后写；install 收尾兜一次。
-    _ip_in_install=$(sed -n '/^install_envproxy()/,/^}/p' "$SCRIPT_DIR/lib/ops.sh" | grep -c 'update\.inprogress')
+    _ip_in_install=$(all_lib_source | sed -n '/^install_envproxy()/,/^}/p' | grep -c 'update\.inprogress')
     _selftest_assert_eq "接线：安装收尾会清更新中断标记" "1" "$([ "$_ip_in_install" -ge 1 ] && echo 1 || echo 0)"
 
     # ---- 标记的写入必须在备份成功之后 ----
@@ -1934,9 +1966,9 @@ EOF
     # 没有管住"每一处"。同时直接禁掉整行套色那种写法：只要出现
     # `style_out ... "版本 : ` 就是错的（"版本 : " 里那个空格是全角冒号前的空格，
     # 只有整行套色那版才会这么拼）。
-    _ver_row=$(grep -c '_status_row "版本"' "$SCRIPT_DIR/lib/ops.sh")
+    _ver_row=$(all_lib_source | grep -c '_status_row "版本"')
     _selftest_assert_eq "接线：版本行两处都走分段渲染" "2" "$_ver_row"
-    _ver_bad=$(grep -cE 'style_out .*"版本 : ' "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null)
+    _ver_bad=$(all_lib_source | grep -cE 'style_out .*"版本 : ' 2>/dev/null)
     _selftest_assert_eq "接线：版本行没有整行套色写法" "0" "$_ver_bad"
 
     # ---- 子命令表必须与入口分派一致 ----
@@ -2126,7 +2158,7 @@ except Exception: pass
     _selftest_assert_eq "握手：2000 绝不能被读成 200" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 2000 weird')"
 
     # 救援页那一档必须同时要求「活着」+「握手说上游失败」。
-    _rp_src=$(cat "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null || echo "")
+    _rp_src=$(all_lib_source)
     case "$_rp_src" in
         *"_rs_alivebroken"*) _selftest_assert_eq "救援页：节点那一档存在" "1" "1" ;;
         *) _selftest_assert_eq "救援页：节点那一档存在" "1" "0" ;;
@@ -2187,7 +2219,7 @@ except Exception: pass
     _selftest_assert_eq "快照：缺字段读成「不知道」而不是「没问题」" "" "$SNAP_NODE_HANDSHAKE"
 
     # ② 状态页那条提示只在拿到 upstream-fail 证据时出现。
-    _ops_src2=$(cat "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null || echo "")
+    _ops_src2=$(all_lib_source)
     case "$_ops_src2" in
         *'SNAP_NODE_HANDSHAKE:-}" = "upstream-fail"'*) _selftest_assert_eq "状态页：提示由握手证据触发" "1" "1" ;;
         *) _selftest_assert_eq "状态页：提示由握手证据触发" "1" "0" ;;
