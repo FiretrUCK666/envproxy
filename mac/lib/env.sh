@@ -480,7 +480,13 @@ apply_state() {
         _port=$(printf '%s' "$_state" | sed 's/^on://')
         if ! env_vars_in_sync "$_port"; then
             if set_user_env_vars "$_port"; then
-                log_msg "检测到本地代理端口 $_port -> 已注入代理 $_http"
+                # 日志里要写出**实际注入的那个地址**（可能是 [::1]），不能写死 127.0.0.1，
+                # 也不能借用 set_user_env_vars 内部的变量：那个函数里的 _http 是 local，
+                # 在这个作用域里根本不存在。而入口开了 set -u，读它会直接崩掉监控——
+                # 表现为"代理通了、监控无声消失、日志里一条错都没有"。
+                # 这里重算一次：proxy_url_for_port 只做地址选择，不起外部进程。
+                proxy_url_for_port "$_port" || true
+                log_msg "检测到本地代理端口 $_port -> 已注入代理 ${PROXY_URL_HIT:-http://127.0.0.1:$_port}"
             else
                 # 写失败必须如实记，不能记"已注入"。
                 # 原来这里无条件记成功：磁盘满、~/.envproxy 不可写、被安全软件挡住时，

@@ -248,6 +248,10 @@ EOF
     # Ctrl+C 也要恢复光标：不恢复的话用户下次看到的是一台"没有光标"的终端。
     trap 'exit_screen; trap - INT; return 130' INT
     while :; do
+        # **每轮先 mono_tick**（理由见 probe 层 monotonic_now 的注释）：
+        # 只调 monotonic_now 的话时刻永不前进，`_ssl_now >= _ssl_next` 恒假，
+        # 首帧之后再也不刷新——屏幕写着"正在实时刷新"却是一张定格画面。
+        mono_tick
         monotonic_now; _ssl_now=$MONO_NOW
         if [ "$_ssl_now" -ge "$_ssl_next" ]; then
             # 渲染失败就保留上一帧：状态页是"看一眼"用的，不该被一帧失败踢出去。
@@ -776,7 +780,11 @@ EOF
     _sp_first_url=""
     _sp_first_kind=""
     _sp_count=0
-    while IFS="$(printf '\t')" read -r _sp_layer _sp_svc _sp_kind _sp_url _sp_port; do
+    # 列要**读全**：sysproxy_layers 每行 7 个 TAB 字段。这里只用到前 5 个，
+    # 但少写变量会让最后一个把剩余字段连同 TAB 一起吃掉——今天恰好没用到被污染的
+    # 那个变量，所以看不出问题；哪天有人开始用它，就会踩到 doctor 层同一处坑
+    # （_spr_box 变成 "web<TAB>proxy-ok"、case 匹配不上、可修项全变 none）。
+    while IFS="$(printf '\t')" read -r _sp_layer _sp_svc _sp_kind _sp_url _sp_port _sp_box _sp_hs; do
         [ -n "$_sp_svc" ] || continue
         if sysproxy_fixable "$_sp_kind"; then
             _sp_count=$((_sp_count + 1))

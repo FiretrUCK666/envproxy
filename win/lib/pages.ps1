@@ -127,23 +127,12 @@ function Format-StatusLines($st) {
     # 组间留白、组内紧凑——八行紧贴在一起是一坨字，眼睛找不到落点。
     # 顺序是有意的：代理变量必须紧跟翻墙代理，它们讲的是同一条链路的两端；
     # 终端同步排在最后，它只关系"已开的窗口跟不跟得上"，与链路本身无关。
-    if ($st.ProxyValue -and $st.ProxyAlive) {
-        & $row $StatusLabels.Vars ('已注入 ({0})' -f $st.ProxyValue) 'ok'
-    } elseif ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
-        & $row $StatusLabels.Vars ('指向的端口已不在（{0}）' -f $st.ProxyValue) 'warn'
-        $op = 0
-        if ($st.ProxyPort) { $op = [int]$st.ProxyPort }
-        if ($op -gt 0 -and $st.Port -and $op -ne [int]$st.Port) {
-            & $line ('  变量里是旧端口 {0}，翻墙代理现在在 {1}。' -f $op, $st.Port) 'dim'
-            & $line '  监控在跑的话几秒内会自己跟过去。' 'dim'
-        } elseif (-not $st.Port) {
-            & $line '  翻墙代理现在没在跑，所以这个地址已经没用了。' 'dim'
-        }
-    } elseif ($st.ProxyValue) {
-        & $row $StatusLabels.Vars ('值不是合法地址（{0}）' -f $st.ProxyValue) 'warn'
-    } else {
-        & $row $StatusLabels.Vars '无（直连状态）' 'dim'
-    }
+    # 结论与说明都从 Get-ProxyVarsText 取：与静态页同一张表。
+    # 原来这里自己判「值在 && 端口活 = 已注入(绿)」，没看监控在不在，
+    # 于是同一份状态在静态页是「已注入但没人维护(黄)」、在这里是「已注入(绿)」。
+    $pvt = Get-ProxyVarsText $st
+    & $row $StatusLabels.Vars $pvt.Text $pvt.Role
+    foreach ($h in @($pvt.Hints)) { & $line ('  ' + $h.Text) $h.Role }
 
 
     # ---- 第三组之二：更新中断 / 系统代理残留 ----
@@ -266,6 +255,75 @@ function Format-StatusLines($st) {
 # 让被强杀的人以为自己点错了；什么都不说，真停过的人会以为坏了。
 #
 # 返回 @{ Text; Role; Hints }。Hints 是后续说明行（每项 @{Text;Role}），两版都逐行渲染。
+# 代理变量那一行的结论 + 说明：状态 -> 「一句结论 + 若干说明行」。
+#
+# 为什么要这张表：实时帧与静态页各写了一条 if 链，判据不同源。实测同一份状态
+# （监控已停 + 变量已注入且端口活着）：
+#   实时帧 -> 「已注入 (…)」绿色，像一切正常；
+#   静态页 -> 「已注入（…），但没人维护」黄色 + 「终端会连不上」。
+# 用户按回车看和等两秒刷新看到相反的颜色与结论——最难被描述清楚的那类问题。
+#
+# 分支的**顺序**就是判据：先看值在不在、再看地址合不合法、再看端口活不活，
+# 最后才看有没有人在维护。顺序变了结论会互相覆盖，所以这一整段只有一处。
+#
+# 返回 @{ Text; Role; Hints }；Hints 每项 @{ Text; Role }。
+# 拿不准时（端口解析不出来等）宁可少说一句，也不编具体原因。
+function Get-ProxyVarsText($st) {
+    $m = $st.Monitor
+    $hintInstall = ('打开菜单' + (Get-MenuRef 'Install'))
+
+    if ($st.ProxyValue -and $st.ProxyAlive) {
+        if ($m) {
+            return @{ Text = ('已注入 ({0})' -f $st.ProxyValue); Role = 'ok'; Hints = @() }
+        }
+        # 值在、端口也活着，但没人在维护：翻墙软件一断这个值不会被清掉，
+        # 终端就会连一个不存在的端口。这句必须说，否则绿字等于骗人。
+        return @{
+            Text  = ('已注入（{0}），但没人维护' -f $st.ProxyValue)
+            Role  = 'warn'
+            Hints = @(
+                @{ Text = '翻墙软件断开后不会自动清掉，终端会连不上。'; Role = 'dim' },
+                @{ Text = ($hintInstall + '恢复监控；或一键恢复，把这批变量一并清掉。'); Role = 'dim' }
+            )
+        }
+    }
+
+    if ($st.ProxyValue -and $null -eq $st.ProxyAlive) {
+        return @{
+            Text  = ('值不是合法地址（{0}）' -f $st.ProxyValue)
+            Role  = 'warn'
+            Hints = @(@{ Text = ('多半是别的工具改写成了半个地址。' + $hintInstall + '会按当前代理重写一遍。'); Role = 'dim' })
+        }
+    }
+
+    if ($st.ProxyValue -and $st.ProxyAlive -eq $false) {
+        $hints = @(@{ Text = '终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。'; Role = 'warn' })
+        $oldPort = $null
+        try {
+            $pv = Split-ProxyUrl $st.ProxyValue
+            if ($pv -and $pv.Port) { $oldPort = [int]$pv.Port }
+        } catch {}
+        if ($oldPort -and $st.Port -and $oldPort -ne [int]$st.Port) {
+            $hints += @{ Text = ('变量里是旧端口 {0}，翻墙代理现在在 {1}。' -f $oldPort, $st.Port); Role = 'dim' }
+            $hints += @{ Text = '监控在跑的话几秒内会自己跟过去。'; Role = 'dim' }
+        } elseif (-not $st.Port) {
+            $hints += @{ Text = '翻墙代理现在没在跑，所以这个地址已经没用了。'; Role = 'dim' }
+            $hints += @{ Text = '监控在跑的话几秒内会把它清掉。'; Role = 'dim' }
+        } else {
+            $hints += @{ Text = '这个地址已经连不上了（多半是刚换过端口）。'; Role = 'dim' }
+            $hints += @{ Text = '监控在跑的话几秒内会自己跟上。'; Role = 'dim' }
+        }
+        return @{ Text = ('指向的端口已不在（{0}）' -f $st.ProxyValue); Role = 'warn'; Hints = $hints }
+    }
+
+    # 值不在：翻墙软件在跑但本工具被停了，这看着像自相矛盾，必须解释
+    if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
+        return @{ Text = '无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）'; Role = 'dim'; Hints = @() }
+    }
+
+    return @{ Text = '无（直连状态）'; Role = 'dim'; Hints = @() }
+}
+
 function Get-MonitorGoneText($st) {
     if ($st.StopIntent) {
         if ($st.AutoRunOk) {
@@ -864,15 +922,18 @@ function Show-StatusSnapshot($st) {
     # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
     $m = $st.Monitor
     if (-not $m) {
-        Write-StatusRow $StatusLabels.Monitor '未运行' 'warn'
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
-        # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
-        # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
+        # 但"没在跑"有三种完全不同的原因，事后长相一样：使用者主动停的、从没装过、
+        # 还是进程被"结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
         # 不分辨就只能猜：说成"你停的"，被强杀的人会以为自己点错了；什么都不说，
         # 真停过的人会以为坏了。
-        # 三种情形的措辞从 Get-MonitorGoneText 取：与实时帧同一张表，
-        # 两边说的话逐字相同（与下面终端同步那条同一套做法）。
+        #
+        # 措辞从 Get-MonitorGoneText 取：与实时帧同一张表，两边说的话逐字相同
+        # （与下面终端同步那条同一套做法）。**结论与颜色也一起取**——
+        # 写死一句 '未运行' 会让这张表白建：屏幕上三种情形全部显示"未运行"，
+        # 而实时帧显示的是各自那句，两版又对不上。
         $gone = Get-MonitorGoneText $st
+        Write-StatusRow $StatusLabels.Monitor $gone.Text $gone.Role
         foreach ($h in @($gone.Hints)) { Write-Styled $h.Role ('  ' + $h.Text) }
     }
     if (-not $st.AutoRunOk) {
@@ -884,44 +945,12 @@ function Show-StatusSnapshot($st) {
         }
         Write-Styled 'dim' "  打开菜单$(Get-MenuRef 'Install')可以重建。"
     }
-    if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
-        # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
-        # 但本工具没在它上面工作（多半是用户自己停的）。补一句桥接，否则会被判定"坏了"。
-        Write-StatusRow $StatusLabels.Vars '无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）' 'dim'
-    } elseif ($st.ProxyValue -and $null -eq $st.ProxyAlive) {
-        # 值在，但不是个能解析的地址。与"端口已不在"分开说：那个等监控自愈就行，
-        # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
-        # 不许落绿字"已注入"——那等于告诉用户一切正常。
-        Write-StatusRow $StatusLabels.Vars ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
-        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。$(Get-MenuRef 'Install')会按当前代理重写一遍。"
-    } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
-        Write-StatusRow $StatusLabels.Vars ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
-        Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
-        # 这一屏最容易被读成"工具坏了"：翻墙代理明明是开着的，代理变量却说端口不在。
-        # 实情是**它俩指向的不是同一个端口**——换了端口、变量还停在旧的那个上。
-        $oldPort = $null
-        try {
-            $pv = Split-ProxyUrl $st.ProxyValue
-            if ($pv -and $pv.Port) { $oldPort = [int]$pv.Port }
-        } catch {}
-        if ($oldPort -and $st.Port -and $oldPort -ne [int]$st.Port) {
-            # 代理在别的端口上活着：跟着它走就对了
-            Write-Styled 'dim' ("  变量里是旧端口 {0}，翻墙代理现在在 {1}。" -f $oldPort, $st.Port)
-            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟过去；想立刻跟上就$(Get-MenuRef 'Install')。"
-        } elseif (-not $st.Port) {
-            # 代理根本没在跑：没有可跟的目标，那就是该清掉
-            Write-Styled 'dim' '  翻墙代理现在没在跑，所以这个地址已经没用了。'
-            Write-Styled 'dim' "  监控在跑的话几秒内会把它清掉；想立刻清掉就$(Get-MenuRef 'Install')。"
-        } else {
-            # 端口解析不出来（极少见），只给通用说法，不编具体原因
-            Write-Styled 'dim' '  这个地址已经连不上了（多半是刚换过端口）。'
-            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟上；想立刻跟上就$(Get-MenuRef 'Install')。"
-        }
-    } elseif ($st.ProxyValue -and -not $m) {
-        Write-StatusRow $StatusLabels.Vars ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
-        Write-Styled 'dim' "  翻墙软件断开后不会自动清掉，终端会连不上。"
-        Write-Styled 'dim' "  打开菜单选 1 恢复监控；或选 7 一键恢复，把这批变量一并清掉。"
-    }
+    # 结论与说明都从 Get-ProxyVarsText 取：与实时帧同一张表。
+    # 这一段原来是一条独立的长 if 链，与实时帧各写一套，于是同一份状态给出相反结论。
+    $pv = Get-ProxyVarsText $st
+    Write-StatusRow $StatusLabels.Vars $pv.Text $pv.Role
+    foreach ($h in @($pv.Hints)) { Write-Styled $h.Role ('  ' + $h.Text) }
+
     if ($st.TermSync) {
         # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。
         $tt = Get-TermSyncText $st.TermSync.State $st.TermSync

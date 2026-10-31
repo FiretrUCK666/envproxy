@@ -71,7 +71,9 @@ Assert-Eq 'help warns about the ampersand space trap' $true ($docText -match '�
 $snapSrc = (Get-Command Get-StatusSnapshot).Definition
 $renderSrc = (Get-Command Show-StatusSnapshot).Definition
 Assert-Eq 'status page checks whether the injected port is still alive' $true ($snapSrc -match 'Test-TcpAlive')
-Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ($renderSrc -match 'ECONNREFUSED')
+# ECONNREFUSED 那句现在住在 Get-ProxyVarsText（两版共用的那张表），不在渲染器里。
+# 判据跟着表走：只要整个 lib 里还写着这句就够了——它必须出现在用户能看到的地方。
+Assert-Eq 'status page names ECONNREFUSED as its own doing' $true ((Get-AllLibSource) -match 'ECONNREFUSED')
 # 断言改成钉"派生调用"而不是"死文字"：文案里的菜单名已收敛到 Get-MenuRef，
 # 源码里不再出现「安装 / 修复」这个字面串（它住在菜单表里）。
 # 钉死文字会让这条断言在正确的重构之后变红，而钉死"有没有告诉读者下一步"才是它本来要守的东西。
@@ -653,6 +655,35 @@ foreach ($__gc in @(
 # 两版必须真的调同一张表：谁绕过它自己写一套，这里就红。
 Assert-Eq '实时帧的监控行从 Get-MonitorGoneText 取' $true ([bool]([regex]::IsMatch((Get-FunctionBody '' 'Format-StatusLines'), 'Get-MonitorGoneText')))
 Assert-Eq '静态页的监控行从 Get-MonitorGoneText 取' $true ([bool]([regex]::IsMatch((Get-FunctionBody '' 'Show-StatusSnapshot'), 'Get-MonitorGoneText')))
+
+# **判据必须落在输出上，不能落在"函数名出现过"。**
+# 只查函数名的版本漏掉过一个真实的坏状态：静态页调了 Get-MonitorGoneText、
+# 却只用它的 Hints，结论仍旧写死一句 `Write-StatusRow ... '未运行' 'warn'`——
+# 于是屏幕上三种情形全部显示「未运行」，颜色也与实时帧相反，而那两条断言全绿。
+# 这里改成：把表返回的 Text 拿去两版的**实际渲染结果**里找，必须找得到。
+foreach ($__gc2 in @(
+    @{ Name = 'stopped'; St = [pscustomobject]@{ StopIntent = $true;  AutoRunOk = $true;  NeverInstalled = $false } },
+    @{ Name = 'never';   St = [pscustomobject]@{ StopIntent = $false; AutoRunOk = $true;  NeverInstalled = $true  } },
+    @{ Name = 'gone';    St = [pscustomobject]@{ StopIntent = $false; AutoRunOk = $true;  NeverInstalled = $false } }
+)) {
+    $__g2 = Get-MonitorGoneText $__gc2.St
+    $__st2 = [ordered]@{
+        Monitor = $null; StopIntent = $__gc2.St.StopIntent; NeverInstalled = $__gc2.St.NeverInstalled
+        AutoRunOk = $__gc2.St.AutoRunOk; AutoRunRaw = ''; AutoRunLauncher = ''
+        Port = 0; PortUnknown = $false
+        ProxyValue = ''; ProxyAlive = $null
+        TermSync = [pscustomobject]@{ State = 'ok' }
+        SysProxy = $null; UpdateInProgress = $false
+        VarsMatch = 'yes'; ApplyResult = 'ok'
+        NodeHandshake = ''; State = 'off'; PortEnumeration = 'ok'; PortReason = ''
+    }
+    $__live2 = @((Format-StatusLines $__st2) | ForEach-Object { Remove-AnsiColor ([string]$_) })
+    $__stat2 = @((Show-StatusSnapshot $__st2 6>&1) | ForEach-Object { Remove-AnsiColor ("$_") })
+    $__inLive = @($__live2 | Where-Object { $_.Contains([string]$__g2.Text) }).Count -ge 1
+    $__inStat = @($__stat2 | Where-Object { $_.Contains([string]$__g2.Text) }).Count -ge 1
+    Assert-Eq ('两版一致性[' + $__gc2.Name + ']：实时帧真的打印了这个结论') $true $__inLive
+    Assert-Eq ('两版一致性[' + $__gc2.Name + ']：静态页真的打印了这个结论') $true $__inStat
+}
 foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 
 # 状态页整段不许写文件、不许改变量（只读契约）

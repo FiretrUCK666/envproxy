@@ -331,7 +331,14 @@ sysproxy_repair() {
     # 收集要关的项；同时确认有没有可修的
     _spr_cmds=""
     _spr_count=0
-    while IFS="$(printf '\t')" read -r _spr_layer _spr_svc _spr_kind _spr_url _spr_port _spr_box; do
+        # **六个变量对应七列是错的**：sysproxy_layers 每行输出 7 个 TAB 字段
+    # （层 / 服务 / 结论 / 地址 / 端口 / 勾选框 / 握手类）。少写一个变量时，
+    # 最后一个变量会把剩余字段连同 TAB 一起吃掉——_spr_box 变成 "web<TAB>proxy-ok"，
+    # 下面 case 匹配不上，落进 `*` 分支把计数减回去，于是可修项一律变成 none。
+    # 症状：真断网（residue-blocking）一条都修不了，界面还把它说成
+    # "查的时候还在、动手的时候已经没了（可能是你自己关掉了）"——把解析错误赖给用户。
+    # 多出来的那一列（握手类）只用于解释，这里用 _spr_hs 接住、不使用。
+    while IFS="$(printf '\t')" read -r _spr_layer _spr_svc _spr_kind _spr_url _spr_port _spr_box _spr_hs; do
         [ -n "$_spr_svc" ] || continue
         sysproxy_fixable "$_spr_kind" || continue
         _spr_count=$((_spr_count + 1))
@@ -428,7 +435,8 @@ sysproxy_restore() {
     # 不确认就报成功，就是屏幕上说改回去了、实际没改。
     _srr_after=$(sysproxy_layers)
     _srr_left=0
-    while IFS="$(printf '\t')" read -r _srr_l2 _srr_s2 _srr_k2 _srr_u2 _srr_p2 _srr_b2; do
+    # 同样要读全 7 列（理由见 sysproxy_repair 里那段注释）。
+    while IFS="$(printf '\t')" read -r _srr_l2 _srr_s2 _srr_k2 _srr_u2 _srr_p2 _srr_b2 _srr_h2; do
         [ -n "$_srr_s2" ] || continue
         sysproxy_fixable "$_srr_k2" && _srr_left=$((_srr_left + 1))
     done <<EOF

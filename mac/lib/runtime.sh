@@ -779,6 +779,11 @@ start_monitor() {
     # 这一轮会立刻放弃等待，把"正在正常启动的监控"误报成起不来。
     monotonic_now; _deadline=$(( MONO_NOW + 12 ))
     while :; do
+        # **每轮必须先 mono_tick**：monotonic_now 只把上次读到的值交出来，
+        # 真正读时钟的是 mono_tick（它才是那个起子进程的地方，故意做成每轮一次）。
+        # 只调 monotonic_now 的话时间永远停在起点，这个"最多等 12 秒"的循环
+        # 会**永远不退出**——监控起不来时安装就永久卡住，正是它要避免的那件事。
+        mono_tick
         monotonic_now
         [ "$MONO_NOW" -lt "$_deadline" ] || break
         get_monitor_pid_from_file >/dev/null 2>&1 && break
