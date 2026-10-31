@@ -2022,14 +2022,28 @@ EOF
         if ! (exec 3<>"/dev/tcp/127.0.0.1/$_li_try") 2>/dev/null; then _li_port="$_li_try"; break; fi
     done
     if [ -n "$_li_port" ]; then
-        # bash 3.2 没有协程；用 nc 起一个短命监听来验"活"，拿不到就跳过这一条。
-        if command -v nc >/dev/null 2>&1; then
-            (nc -l 127.0.0.1 "$_li_port" >/dev/null 2>&1 &) 2>/dev/null || true
+        # 验"端口活着"这一侧。**不用 nc**：macOS 自带的 nc 各版本 -l 的参数顺序不一致
+        # （有的要 `-l -p PORT`、有的要 `-l ADDR PORT`），BSD 与 GNU 又不同；
+        # 自检依赖它就会在某一版系统上随机红。
+        # 改用 python3 起一个纯监听——macOS 12+ 自带 python3（Command Line Tools），
+        # 拿不到就跳过这一条，绝不让环境差异变成假红。
+        if command -v python3 >/dev/null 2>&1; then
+            python3 -c "
+import socket,sys
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(('127.0.0.1', $_li_port)); s.listen(1)
+sys.stderr.write('ready\n'); sys.stderr.flush()
+s.settimeout(5)
+try: s.accept()
+except Exception: pass
+" >/dev/null 2>&1 &
+            _li_pid=$!
             sleep 1
             _selftest_assert_eq "有人在听 → 判 alive" "alive" "$(sysproxy_port_state 127.0.0.1 "$_li_port")"
-            pkill -f "nc -l 127.0.0.1 $_li_port" 2>/dev/null || true
+            kill "$_li_pid" 2>/dev/null || true
+            wait "$_li_pid" 2>/dev/null || true
         else
-            echo "  SKIP 没有 nc，跳过'有人在听 → alive'那一条"
+            echo "  SKIP 没有 python3，跳过'有人在听 → alive'那一条"
         fi
     fi
 
@@ -2063,7 +2077,8 @@ EOF
     # 三条都对应"永远修不好"或"误判"的真实缺陷。
     # ① PAC 的端口必须从 URL 里解析出来，否则 port=0 → unknown → foreign，
     #    residue-slowing 成了永远不可能产出的死结论词（实测：只修取址不修端口，症状一样）。
-    _pp_ac=$(networksetup -getautoproxyurl "Wi-Fi" 2>/dev/null)
+    # 先装桩再调用：真机上先调一次真实 networksetup 会读到真值，
+    # 而下面几条断言依赖桩的固定输出——那在 CI 上必然红。
     unset -f networksetup 2>/dev/null || true
     networksetup() {
         case "$1" in
@@ -2079,6 +2094,15 @@ EOF
     _selftest_assert_eq "PAC 回环+死端口 -> residue-slowing" "residue-slowing" "$(sysproxy_verdict "http://127.0.0.1:7078/proxy.pac" 7078 dead 0 pac)"
     _selftest_assert_eq "PAC 回环+活端口 -> alive" "alive" "$(sysproxy_verdict "http://127.0.0.1:7078/proxy.pac" 7078 alive 0 pac)"
     _selftest_assert_eq "PAC 非回环 -> foreign" "foreign" "$(sysproxy_verdict "http://10.0.0.8:8080/x.pac" 8080 dead 0 pac)"
+    # 边界：带路径 / 不带路径 / 无端口 / file:// —— 每种都要正确取（或不取）端口。
+    # 这条防的是"先按 / 截路径、把 http:// 的协议斜杠也截掉"，那会让端口全变空。
+
+    unset -f networksetup 2>/dev/null || true
+    networksetup() { case "$1" in -getautoproxyurl) printf 'URL: http://127.0.0.1:7078\nEnabled: Yes\n' ;; *) return 0 ;; esac; }
+    _selftest_assert_eq "PAC 不带路径也能取端口" "7078" "$(_sysproxy_read_one 'Wi-Fi' autoproxy | sed -n '3p')"
+    unset -f networksetup 2>/dev/null || true
+    networksetup() { case "$1" in -getautoproxyurl) printf 'URL: file:///Users/x/p.pac\nEnabled: Yes\n' ;; *) return 0 ;; esac; }
+    _selftest_assert_eq "file:// 的 PAC 没有端口（不是乱取一个）" "" "$(_sysproxy_read_one 'Wi-Fi' autoproxy | sed -n '3p')"
     unset -f networksetup 2>/dev/null || true
 
     # ② 裸 IPv6（无方括号）：${x%%:*} 会在第一个冒号处切断，::1 直接变空串。

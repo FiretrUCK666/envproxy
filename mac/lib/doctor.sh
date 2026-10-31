@@ -155,7 +155,27 @@ _sysproxy_read_one() {
         # 于是「PAC 指向死端口、网页每次卡几秒」这一整类问题在 mac 侧**永远检测不到**，
         # residue-slowing 成了一个永远不可能产出的死结论词。
         # 只修了取址不修端口，症状一模一样（实测：三行输出里第三行恒为空）。
-        _sro_port=$(printf '%s\n' "$_sro_host" | sed -n 's/.*:\([0-9][0-9]*\)\/.*$/\1/p; t; s/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
+        # 取端口用纯 shell，不用 sed：
+        # 这段要同时处理 `http://h:7078/x.pac` 与 `http://h:7078`（带不帯路径），
+        # sed 得写两个 s 命令叠一个 `t`——而 BSD sed（macOS 自带）对 `t;` 的解析比 GNU 严格，
+        # 实测在不同版本上行为不一致。纯 shell 没有这个风险。
+        _sro_port=""
+        _sro_rest="$_sro_host"
+        # **先去协议头再去路径**：`http://h:7078/x.pac` 里第一个 `/` 是协议的一部分，
+        # 直接按 `/` 截会把整个地址截空（实测踩到过：port 全变成空）。
+        case "$_sro_rest" in
+            *://*) _sro_rest="${_sro_rest#*://}" ;;
+        esac
+        case "$_sro_rest" in
+            */*) _sro_rest="${_sro_rest%%/*}" ;;   # 去掉路径部分
+        esac
+        case "$_sro_rest" in
+            *:*) _sro_port="${_sro_rest##*:}" ;;   # 最后一个冒号之后是端口
+        esac
+        # 只接受纯数字；不是数字就当没端口（宁可不判，也不要拿错数字去判活）
+        case "$_sro_port" in
+            ''|*[!0-9]*) _sro_port="" ;;
+        esac
     else
         _sro_host=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Server/ {print $2; exit}')
         _sro_port=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Port/ {print $2; exit}')
