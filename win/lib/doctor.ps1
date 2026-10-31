@@ -449,11 +449,19 @@ function Get-SystemProxyLayers {
             if ($split) { $alive = Test-TcpAlive (ConvertTo-ProbeHost $split.Host) $port $timeoutMs }
             $url = ConvertTo-SysProxyUrl $conn.ProxyServer
             $manualKind = Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual'
+            # 证据只在**端口活着**或**端口死了但有人报错**时才有意义；死了就没什么可问的。
+            # -Quick（状态页，每 2–3 秒刷一次）绝不采集：握手与查进程都要起连接/查询，
+            # 那是这个页面刷新的十倍开销。状态页只报结论，体检页才报证据。
+            $ev = $null
+            if (-not $Quick -and $port -gt 0) {
+                try { $ev = Get-SysProxyEvidence $port } catch { $ev = $null }
+            }
             [void]$out.Add(@{
                 Layer = 'manual'; Url = $url; Port = $port
                 Kind = $manualKind
                 Detail = (Get-SysProxyReason -Kind $manualKind -Url $url -Port $port -Alive $alive -Layer 'manual')
                 Advice = (Get-SysProxyAdvice -Kind $manualKind -Port $port)
+                Evidence = $(if ($ev) { $ev.Summary } else { '' })
             })
         }
         if (($conn.Flags -band $ProxyTypeAutoProxyUrl) -ne 0 -and $conn.AutoConfigUrl) {
@@ -462,11 +470,16 @@ function Get-SystemProxyLayers {
             $alive = $null
             if ($split) { $alive = Test-TcpAlive (ConvertTo-ProbeHost $split.Host) $port $timeoutMs }
             $pacKind = Get-SystemProxyVerdict -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Managed $managed -Kind 'pac'
+            $ev2 = $null
+            if (-not $Quick -and $port -gt 0) {
+                try { $ev2 = Get-SysProxyEvidence $port } catch { $ev2 = $null }
+            }
             [void]$out.Add(@{
                 Layer = 'pac'; Url = $conn.AutoConfigUrl; Port = $port
                 Kind = $pacKind
                 Detail = (Get-SysProxyReason -Kind $pacKind -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Layer 'pac')
                 Advice = (Get-SysProxyAdvice -Kind $pacKind -Port $port)
+                Evidence = $(if ($ev2) { $ev2.Summary } else { '' })
             })
         }
     }
@@ -507,6 +520,66 @@ function Get-SystemProxyLayers {
 #
 # 为什么必须有：屏幕上只写"能修"等于让用户盲信。他会想知道"你凭什么动我的设置"。
 # 说得出依据，他才能自己核对；说不出，这个功能就只是一个黑箱。
+# 收集"这个端口现在到底是谁"的证据。**只用于解释，绝不参与授权。**
+#
+# 三个信号：属主进程 / CONNECT 握手分类 / 是否在客户端目录里。
+# 为什么只做解释：它们都会因环境失败（权限不足读不到属主、握手被防火墙拦、
+# 自研客户端不在目录里）。一旦它们参与"要不要动手"，失败就会变成"退回可修"——
+# 越不可靠越容易删东西。挡在授权外，失效的代价只是"解释少一句"。
+#
+# 返回 @{ Handshake; OwnerName; OwnerIsClient; CatalogName; Summary } 或 $null（都拿不到）。
+function Get-SysProxyEvidence([int]$Port) {
+    if ($Port -le 0) { return $null }
+    $hs = ''
+    $owner = ''
+    $isClient = $false
+    $catName = ''
+    try { $hs = [string](Get-ConnectHandshakeKind $Port) } catch { $hs = '' }
+    try {
+        $o = Get-PortOwner $Port
+        if ($o) { $owner = [string]$o.Name }
+    } catch { $owner = '' }
+    try {
+        if ($owner) {
+            $c = Get-ClientByProcessName $owner
+            if ($c) { $isClient = $true; $catName = [string]$c.Name }
+        }
+        if (-not $catName) {
+            $c2 = Get-ClientByPort $Port
+            if ($c2) { $catName = [string]$c2.Name }
+        }
+    } catch { }
+    if (-not $hs -and -not $owner) { return $null }
+    return @{
+        Handshake     = $hs
+        OwnerName     = $owner
+        OwnerIsClient = $isClient
+        CatalogName   = $catName
+        Summary       = (Get-SysProxyEvidenceText -Handshake $hs -OwnerName $owner -IsClient $isClient -CatalogName $catName)
+    }
+}
+
+# 把证据说成一句人话。
+function Get-SysProxyEvidenceText([string]$Handshake, [string]$OwnerName, [bool]$IsClient, [string]$CatalogName) {
+    $parts = @()
+    if ($OwnerName) {
+        if ($IsClient -and $CatalogName) {
+            $parts += ('占用端口的是 ' + $OwnerName + '，像是' + $CatalogName + '在跑')
+        } else {
+            $parts += ('占用端口的是 ' + $OwnerName)
+        }
+    }
+    switch ($Handshake) {
+        'proxy-ok'        { $parts += '它应答了代理握手，确实在工作' }
+        'proxy-auth'      { $parts += '它要求密码，是个正经代理' }
+        'upstream-fail'   { $parts += '它是代理，但连不上你要访问的地方（多半是节点问题）' }
+        'not-http'        { $parts += '它不像代理，更像别的程序占着这个端口' }
+        'silent'          { $parts += '它连上了但不应答代理握手' }
+    }
+    if ($parts.Count -eq 0) { return '' }
+    return (($parts -join '；') + '。')
+}
+
 function Get-SysProxyReason([string]$Kind, [string]$Url, [int]$Port, $Alive, [string]$Layer) {
     $host_ = ''
     try { $sp = Split-ProxyUrl $Url; if ($sp) { $host_ = [string]$sp.Host } } catch { $host_ = '' }
@@ -516,8 +589,12 @@ function Get-SysProxyReason([string]$Kind, [string]$Url, [int]$Port, $Alive, [st
         'clean'           { return '没有设任何代理，浏览器直接连。' }
         'managed'         { return '这台电脑的代理设置由管理员统一管着，改了也会被改回去。' }
         'alive' {
-            if ($isLoop) { return ('代理地址是本机，端口 ' + $Port + ' 上有程序在听——它正在工作。') }
-            return '代理端口连得上，它正在工作。'
+            # 措辞要分三种情况，别一律说"它正在工作"：
+            #   ① 本机地址 + 端口活  → 最可能是翻墙软件在跑
+            #   ② 别的形态 + 端口活  → 只说"连得上"，不替它下结论
+            # （握手与属主的细节由 Evidence 那一行补，这里只管一句总述。）
+            if ($isLoop) { return ('代理地址是本机，端口 ' + $Port + ' 上有程序在听，连得上。') }
+            return ('代理地址 ' + $host_ + ' 的端口 ' + $Port + ' 连得上。')
         }
         'residue-blocking' {
             if ($isLoop) { return ('地址是本机，但端口 ' + $Port + ' 上没有任何程序在听。网页请求发出去没人接，所以打不开。') }
@@ -530,6 +607,12 @@ function Get-SysProxyReason([string]$Kind, [string]$Url, [int]$Port, $Alive, [st
         'foreign' {
             if (-not $host_) { return '这一项的地址读不出来，所以不动它。' }
             if ($Layer -eq 'winhttp') { return '这是系统下载那一层的设置，不是浏览器那一层。' }
+            # 本机网卡上的地址（allow LAN 的客户端会这么写）要说清，别笼统说成"公司代理"。
+            $isOwnNic = $false
+            try { $isOwnNic = Test-LocalInterfaceAddress $host_ } catch { $isOwnNic = $false }
+            if ($isOwnNic) {
+                return ('地址 ' + $host_ + ' 是这台电脑网卡上的地址。它可能是某个客户端开了「允许局域网」后写下的，本工具不动。')
+            }
             return ('代理地址是 ' + $host_ + '，不是这台电脑自己——多半是公司或学校给的，本工具不碰。')
         }
         default { return '' }

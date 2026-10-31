@@ -597,6 +597,38 @@ function Test-IPv6AnyAddress([string]$Text) {
     return $false
 }
 
+# 这个 IP 是不是**本机网卡上的地址**（不是回环，但确实是这台机器）。
+#
+# 为什么需要：有些客户端开了 "allow LAN" 之后，把系统代理写成 `192.168.x.x:7890`
+# （它自己网卡的地址），而不是 127.0.0.1。那**确实是本机**，代理死了同样要修。
+# 但只看"是不是回环"会把它判成 foreign（公司代理）→ 永远不修。
+#
+# 为什么只做**解释增强**、不改授权：
+# 内网地址今天属于本机，明天换网络就可能属于别人（子代理实测提到过这个风险：
+# 换过网络的旧内网 IP 可能是别人的公司代理）。拿它当"可以修"的依据，
+# 会在那种情况下删掉一条别人的代理设置。
+# 所以：能认出它是本机 -> 措辞更准；但它仍然**不进入"可修"集合**。
+#
+# 返回 $true/$false；拿不到网卡列表时返回 $false（不知道就不认领）。
+function Test-LocalInterfaceAddress([string]$Addr) {
+    if (-not $Addr) { return $false }
+    $a = $Addr.Trim('[', ']')
+    # 只对 IPv4 字面量做这件事：IPv6 的网卡地址列表更杂，误认代价更高。
+    $parsed = $null
+    if (-not [System.Net.IPAddress]::TryParse($a, [ref]$parsed)) { return $false }
+    if ($parsed.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    if ([System.Net.IPAddress]::IsLoopback($parsed)) { return $false }
+    try {
+        $addrs = [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces() |
+            ForEach-Object { $_.GetIPProperties().UnicastAddresses } |
+            ForEach-Object { $_.Address }
+        foreach ($x in $addrs) {
+            if ($x -and $x.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and
+                [string]$x -eq $a) { return $true }
+        }
+    } catch { return $false }
+    return $false
+}
 # 把一个"指向本机"的地址翻成真正能连的回环地址。
 #
 # 通配地址（0.0.0.0 / ::）不能直接拿去 Connect（系统会判为非法目标），
