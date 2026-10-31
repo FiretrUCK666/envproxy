@@ -497,6 +497,15 @@ style_out() {
     return 0
 }
 
+# 按角色输出**不换行**的一段。同一行要分几种颜色时用它拼（编号绿、说明白）。
+# 与 style_out 同一套规则：stdout 不是终端就不上色，免得转义序列写进日志。
+style_out_nonewline() {
+    _son_role="$1"; shift
+    if [ ! -t 1 ]; then printf '%s' "$*"; return 0; fi
+    _son_c=$(style_color "$_son_role")
+    if [ -z "$_son_c" ]; then printf '%s' "$*"; else printf '\033[%sm%s\033[0m' "$_son_c" "$*"; fi
+    return 0
+}
 # 变量事实源（写/核/收/判四处共用，口径不再分家）：代理变量 6 个（大小写双写）
 # + NO_PROXY 双写 + 哨兵 1 个，归属一律按"本机地址才是我们写下的"判定。
 OWNED_HTTP_PREFIX="http://127.0.0.1:"

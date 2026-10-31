@@ -2144,6 +2144,54 @@ except Exception: pass
     _q_hs=$(sysproxy_layers quick 2>/dev/null | head -1 | cut -f7)
     _selftest_assert_eq "quick 档不采集握手（永远不会误报节点问题）" "" "$_q_hs"
 
+    echo "[17] 快照的握手字段与状态页提示"
+    # ① 快照能往返，且**老快照不许被判损坏**（升级瞬间那份旧数据必须还能用）。
+    # SNAPSHOT_FILE 在库加载时就由 MONITOR_DIR 派生好了；自检换了沙箱目录之后
+    # 必须**跟着重算**，否则写到沙箱外，读的又是另一处——看起来像"字段丢了"。
+    SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
+    _sn_file="$_sandbox/snap-hs.txt"
+    write_state_snapshot "on:7078" "off" "" "0" "ok" "" "yes" "ok" "5" "1234" "upstream-fail"
+    read_state_snapshot
+    _selftest_assert_eq "快照：握手字段能往返" "upstream-fail" "$SNAP_NODE_HANDSHAKE"
+    _selftest_assert_eq "快照：状态是 ok" "ok" "$SNAP_STATUS"
+    # 老版本写的快照：没有这个字段
+    cat > "$_sn_file" <<'EPEOF'
+# envproxy-snapshot 1
+written=2026-10-31T10:00:00Z
+round=5
+pid=1234
+state=on:7078
+prev_state=off
+pending_state=
+pending_count=0
+port_enumeration=ok
+port_reason=
+vars_match=yes
+apply_result=ok
+log_tail=hi
+EPEOF
+    cp "$_sn_file" "$SNAPSHOT_FILE" 2>/dev/null || true
+    read_state_snapshot
+    _selftest_assert_eq "快照：老快照不被判损坏" "ok" "$SNAP_STATUS"
+    _selftest_assert_eq "快照：缺字段读成「不知道」而不是「没问题」" "" "$SNAP_NODE_HANDSHAKE"
+
+    # ② 状态页那条提示只在拿到 upstream-fail 证据时出现。
+    _ops_src2=$(cat "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null || echo "")
+    case "$_ops_src2" in
+        *'SNAP_NODE_HANDSHAKE:-}" = "upstream-fail"'*) _selftest_assert_eq "状态页：提示由握手证据触发" "1" "1" ;;
+        *) _selftest_assert_eq "状态页：提示由握手证据触发" "1" "0" ;;
+    esac
+    case "$_ops_src2" in
+        *"多半是节点问题"*) _selftest_assert_eq "状态页：台词指向节点" "1" "1" ;;
+        *) _selftest_assert_eq "状态页：台词指向节点" "1" "0" ;;
+    esac
+
+    # ③ 高级功能页的编号必须单独上色（与 Windows 侧同规则）。
+    case "$_ops_src2" in
+        *'style_out_nonewline cmd "    ${_adm_k}"'*) _selftest_assert_eq "高级功能：编号单独上色" "1" "1" ;;
+        *) _selftest_assert_eq "高级功能：编号单独上色" "1" "0" ;;
+    esac
+
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面

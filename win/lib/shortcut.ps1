@@ -747,7 +747,14 @@ function Get-AdvancedPageLines {
         foreach ($it in $items) {
             # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
             $pad = ' ' * [Math]::Max(0, $nameWidth - (Get-DisplayWidth $it.Name))
-            [void]$out.Add(@{ Role='item'; Text=('    {0}  {1}{2}   {3}' -f $it.Key, $it.Name, $pad, $it.Hint) })
+            # 编号单独一段、染成 cmd 色（绿）：屏幕上的绿字就是"这是你要敲的东西"，
+            # 与主菜单同一条规则。整行同色会让编号混进正文里，用户得逐字找。
+            [void]$out.Add(@{
+                Segments = @(
+                    @{ Role='cmd';  Text=('    ' + $it.Key) }
+                    @{ Role='item'; Text=('  ' + $it.Name + $pad + '   ' + $it.Hint) }
+                )
+            })
         }
         if ($mod.Note.Count -gt 0) {
             [void]$out.Add(@{ Role='blank';   Text='' })
@@ -765,6 +772,12 @@ function Show-AdvancedPage {
     Clear-Screen
     foreach ($r in (Get-AdvancedPageLines)) {
         if ($r.Role -eq 'blank') { Write-Host ''; continue }
+        # 一段一行一色：编号绿、名字白。没有分段的行照常整行一色。
+        if ($r.ContainsKey('Segments')) {
+            foreach ($seg in $r.Segments) { Write-Styled $seg.Role $seg.Text -NoNewline }
+            Write-Host ''
+            continue
+        }
         Write-Styled $r.Role $r.Text
     }
 }

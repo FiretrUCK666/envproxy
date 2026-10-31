@@ -852,6 +852,10 @@ show_status() {
 "
         [ "$SNAP_APPLY_RESULT" = "failed" ] && _pb="$_pb代理变量写不进去（下一轮还会再试）
 "
+# 代理在跑、端口也活着，但它连不出去——多半是节点问题，不是设置坏了。
+# 只在**拿到握手证据**时才说（空 = 不知道），否则就是凭猜给用户指方向。
+[ "${SNAP_NODE_HANDSHAKE:-}" = "upstream-fail" ] && _pb="$_pb代理在跑，但它连不上外面（多半是节点问题，换个节点试试）
+"
     fi
     # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
     # 那种情况下入口通常还能起来、启动自检全绿，但安装区可能新旧混合，
@@ -2149,7 +2153,11 @@ show_advanced_menu() {
                 _adm_nm=${_adm_r%%|*}; _adm_hint=${_adm_r#*|}
                 [ "$_adm_mo" = "$_adm_mid" ] || continue
                 _adm_gap=$((_adm_nw - $(_display_width "$_adm_nm"))); [ "$_adm_gap" -lt 0 ] && _adm_gap=0; _adm_pad=$(printf "%*s" "$_adm_gap" "")
-                style_out cmd "    ${_adm_k}  ${_adm_nm}${_adm_pad}   ${_adm_hint}"
+                # 只给**编号**上色（绿 = 你要敲的东西），名字与说明用正文色。
+                # 整行同色会让编号混进正文里，用户得逐字找；与 Windows 侧同一条规则。
+                style_out_nonewline cmd "    ${_adm_k}"
+                style_out_nonewline item "  ${_adm_nm}${_adm_pad}   ${_adm_hint}"
+                echo ""
             done
             # 空行只在这一段前面加一次：写在循环里会每行都空一行。
             if _advanced_module_note "$_adm_mid" | grep -q .; then

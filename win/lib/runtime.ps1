@@ -214,7 +214,8 @@ function Write-StateSnapshot {
         [string]$PortEnumeration,
         [string]$PortReason,
         [string]$VarsMatch,
-        [string]$ApplyResult
+        [string]$ApplyResult,
+        [string]$NodeHandshake = ''
     )
     $lines = @()
     $lines += '# envproxy-snapshot 1'
@@ -228,6 +229,10 @@ function Write-StateSnapshot {
     # 用 24340（PowerShell 自动变量，当前进程）；本地同名变量会遮蔽它，所以显式取一次
     $myPid = 0; try { $myPid = [int]$PID } catch { $myPid = 0 }
     $lines += 'pid=' + $myPid
+    # 握手结论：只在**已经锁定端口**时才有值（那时端口是活的，握手不会等超时）。
+    # 它回答「代理在，但它连不连得出去」——这一条决定了状态页要不要提示「是节点问题」。
+    # 空串 = 这一轮没采（没有锁定端口），调用方必须当成「不知道」，不许当「没问题」。
+    $lines += 'node_handshake=' + (ConvertTo-SnapshotValue $NodeHandshake)
     $lines += 'state=' + (ConvertTo-SnapshotValue $State)
     $lines += 'prev_state=' + (ConvertTo-SnapshotValue $PrevState)
     $lines += 'pending_state=' + (ConvertTo-SnapshotValue $PendingState)
@@ -259,6 +264,7 @@ function Read-StateSnapshot {
         Status = 'none'; AgeSec = $null; Round = 0; Pid = 0
         State = ''; PrevState = ''; PendingState = ''; PendingCount = 0
         PortEnumeration = ''; PortReason = ''; VarsMatch = ''; ApplyResult = ''
+        NodeHandshake = ''
         LogTail = ''; Reason = ''
     }
     if (-not (Test-Item $StateSnapshotFile)) { return $r }
@@ -316,6 +322,10 @@ function Read-StateSnapshot {
     $r.PortReason = ConvertFrom-SnapshotValue $map['port_reason']
     $r.VarsMatch = ConvertFrom-SnapshotValue $map['vars_match']
     $r.ApplyResult = ConvertFrom-SnapshotValue $map['apply_result']
+    # **可选字段**：它不在 $SnapshotKeys 里，因为老版本监控写不出它。
+    # 放进去的话，升级瞬间那份旧快照会被判成「缺字段 = 损坏」，状态页会整段退回实时探测。
+    # 读不到就是不知道——判据那里按「不报」处理，绝不假设成「没问题」。
+    if ($map.ContainsKey('node_handshake')) { $r.NodeHandshake = ConvertFrom-SnapshotValue $map['node_handshake'] }
     $r.LogTail = ConvertFrom-SnapshotValue $map['log_tail']
     # 年龄：用墙上时钟（快照里的时刻本来就是墙上时钟）。为负说明系统时间被调过，
     # 那时不许当"刚写的"，判成过旧、让调用方退回实时探测。
@@ -1820,9 +1830,25 @@ function Run-MonitorLoop {
                 if ($lastVarsMatch -ne $null) {
                     $snapVars = if ($lastVarsMatch) { "yes" } else { "no" }
                 }
+                # 代理在跑的时候，顺手问一句"它连不连得出去"。
+                #
+                # 三条纪律，缺一条就会拖垮或说谎：
+                #   ① **只对已锁定的端口问**——那时端口是活的，握手 3–14ms，不会等 TCP 超时
+                #      （对一个没人听的端口会白等 4 秒，那是把刷新周期踩爆的代价）；
+                #   ② **只在 on 状态问**。off 的时候没有代理，问它干什么；
+                #   ③ **问不到就留空**，不许写成"没问题"。空 = 这一轮不知道，
+                #      状态页据此不作任何判断（宁可不说，也不能猜）。
+                $snapHs = ""
+                if ($snapState -like 'on *') {
+                    $snapPort = 0
+                    try { if ([int]::TryParse($snapState.Substring(3), [ref]$snapPort)) { } else { $snapPort = 0 } } catch { $snapPort = 0 }
+                    if ($snapPort -gt 0) {
+                        try { $snapHs = [string](Get-ConnectHandshakeKind $snapPort 300) } catch { $snapHs = "" }
+                    }
+                }
                 Write-StateSnapshot -State $snapState -PrevState $snapPrev -PendingState $snapPending `
                     -PendingCount $pendingCount -PortEnumeration $snapEnum -PortReason $snapReason `
-                    -VarsMatch $snapVars -ApplyResult $lastApplyResult
+                    -VarsMatch $snapVars -ApplyResult $lastApplyResult -NodeHandshake $snapHs
             } catch {}
 
             # 固定入口跟着当前代理走：每轮把"我们注入的那个值指向哪个端口"告诉中继。

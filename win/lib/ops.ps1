@@ -1166,6 +1166,9 @@ function Get-StatusSnapshot {
         # 读不到（老版本写的快照没有这两个字段）时留空串，判据那里按"不报"处理。
         $st.VarsMatch = [string]$st.Snapshot.VarsMatch
         $st.ApplyResult = [string]$st.Snapshot.ApplyResult
+        # 监控在"代理在跑"那一轮顺手问过的握手结论。空 = 不知道（老版本快照或那一轮没采），
+        # 判据那里按"不报"处理——**不知道绝不等于没问题**。
+        $st.NodeHandshake = [string]$st.Snapshot.NodeHandshake
     } else {
         # 注入的地址由这里读好再传进去：Get-InUseProxyPort 只管探测，
         # 不该反过来去调 env 层的读值函数（那会让 probe 依赖 env、env 又依赖 probe）。
@@ -1177,6 +1180,7 @@ function Get-StatusSnapshot {
         # 没读到快照就没有这两个结论：留空串，不许假设成"一致 / 成功"。
         $st.VarsMatch = ''
         $st.ApplyResult = ''
+        $st.NodeHandshake = ''
     }
     try { $st.TermSync = Get-TerminalSyncState } catch { $st.TermSync = $null }
     $st.ProxyValue = Get-EnvProxyValue
@@ -1278,6 +1282,11 @@ function Get-StatusProblems($st) {
     # 用户看到的是"一切正常"，而终端其实连不上。
     if ($st.VarsMatch -eq 'no') { $problems += "代理变量和当前状态对不上（可能被别的程序改了）" }
     if ($st.ApplyResult -eq 'failed') { $problems += "代理变量写不进去（下一轮还会再试）" }
+    # 代理在跑、端口也活着，但它连不出去——多半是节点问题，不是设置坏了。
+    # 只在**拿到握手证据**时才说（空 = 不知道），否则就是凭猜给用户指方向。
+    if ($st.NodeHandshake -eq 'upstream-fail') {
+        $problems += "代理在跑，但它连不上外面（多半是节点问题，换个节点试试）"
+    }
     return $problems
 }
 

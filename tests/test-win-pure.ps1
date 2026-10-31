@@ -3786,5 +3786,65 @@ $quickLayers = @(Get-SystemProxyLayers -Quick)
 foreach ($q in $quickLayers) {
     Assert-Eq ('quick: no handshake collected for ' + $q.Layer) '' ([string]$q.Handshake)
 }
+Write-Host '[31] Colored keys, snapshot node_handshake, status hint'
+# ① 高级功能页的编号必须**单独一段、染 cmd 色**：整行同色会让编号混进正文，用户得逐字找。
+$advLines = @(Get-AdvancedPageLines)
+$segRows = @($advLines | Where-Object { $_.ContainsKey('Segments') })
+Assert-Eq 'advanced: item rows are segmented so the key can be colored' $true ($segRows.Count -ge 4)
+foreach ($r in $segRows) {
+    Assert-Eq 'advanced: first segment is the key' 'cmd' $r.Segments[0].Role
+    Assert-Eq 'advanced: the rest is body text' 'item' $r.Segments[1].Role
+    Assert-Eq 'advanced: the key segment is just the number' $true ([bool]($r.Segments[0].Text.Trim() -match '^[0-9]+$'))
+}
+# 编号颜色必须是绿色（cmd 角色），且这是唯一的"要敲的东西"色。
+Assert-Eq 'advanced: cmd role is green' 'green' ([string]$StyleMap['cmd'])
+
+# ② 快照的 node_handshake 必须能往返，且**老快照不许被判损坏**。
+$snapFile = Join-Path $env:TEMP ('snaptest-' + [guid]::NewGuid().ToString('N') + '.txt')
+$script:StateSnapshotFile = $snapFile
+Write-StateSnapshot -State 'on:7078' -PrevState 'off' -PendingState '' -PendingCount 0 `
+    -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok' -NodeHandshake 'upstream-fail'
+$snapNew = Read-StateSnapshot
+Assert-Eq 'snapshot: node_handshake survives a round trip' 'upstream-fail' ([string]$snapNew.NodeHandshake)
+Assert-Eq 'snapshot: status is ok' 'ok' ([string]$snapNew.Status)
+# 模拟老版本监控写下的快照（没有这个字段）：必须仍判 ok，字段留空 = 不知道。
+$oldBody = @"
+# envproxy-snapshot 1
+written=$(([DateTimeOffset]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ'))
+round=5
+pid=1234
+state=on:7078
+prev_state=off
+pending_state=
+pending_count=0
+port_enumeration=ok
+port_reason=
+vars_match=yes
+apply_result=ok
+log_tail=hi
+"@
+[System.IO.File]::WriteAllText($snapFile, $oldBody, (New-Object System.Text.UTF8Encoding($false)))
+$snapOld = Read-StateSnapshot
+Assert-Eq 'snapshot: an older snapshot is not judged damaged' 'ok' ([string]$snapOld.Status)
+Assert-Eq 'snapshot: a missing handshake reads as unknown, not as fine' '' ([string]$snapOld.NodeHandshake)
+Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
+
+# ③ 状态页那条提示只在拿到 upstream-fail 证据时出现。
+$mkSt = {
+    param($hs)
+    [pscustomobject]@{
+        Monitor = @{ ProcessId = 999 }; AutoRunOk = $true; PortUnknown = $false
+        ProxyValue = 'http://127.0.0.1:7078'; ProxyAlive = $true; TermSync = @{ State = 'ok' }
+        SysProxy = $null; UpdateInProgress = $false; VarsMatch = 'yes'; ApplyResult = 'ok'
+        NodeHandshake = $hs
+    }
+}
+$pHit = @(Get-StatusProblems (& $mkSt 'upstream-fail') | Where-Object { $_ -match '节点' })
+$pOk  = @(Get-StatusProblems (& $mkSt 'proxy-ok') | Where-Object { $_ -match '节点' })
+$pUnk = @(Get-StatusProblems (& $mkSt '') | Where-Object { $_ -match '节点' })
+Assert-Eq 'status: upstream-fail raises the node hint' 1 $pHit.Count
+Assert-Eq 'status: a healthy proxy raises nothing' 0 $pOk.Count
+Assert-Eq 'status: an unknown handshake raises nothing' 0 $pUnk.Count
+Assert-Eq 'status: the hint points at the node' $true ([bool]($pHit[0] -match '节点'))
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

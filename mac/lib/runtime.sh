@@ -72,7 +72,7 @@ _snapshot_unescape() {
 write_state_snapshot() {
     _wss_state="$1"; _wss_prev="$2"; _wss_pending="$3"; _wss_pending_n="$4"
     _wss_enum="$5"; _wss_reason="$6"; _wss_vars="$7"; _wss_apply="$8"
-    _wss_round="${9:-0}"; _wss_pid="${10:-0}"
+    _wss_round="${9:-0}"; _wss_pid="${10:-0}"; _wss_hs="${11:-}"
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
     _wss_tmp="$SNAPSHOT_FILE.tmp$$"
     {
@@ -81,6 +81,10 @@ write_state_snapshot() {
         printf 'written=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
         printf 'round=%s\n' "$_wss_round"
         printf 'pid=%s\n' "$_wss_pid"
+        # 握手结论：只在**已经锁定端口**时才有值（那时端口是活的，握手不等超时）。
+        # 它回答「代理在，但它连不连得出去」——决定状态页要不要提示「是节点问题」。
+        # 空 = 这一轮没采，调用方必须当成「不知道」，不许当「没问题」。
+        printf 'node_handshake=%s\n' "$(_snapshot_escape "${_wss_hs:-}")"
         printf 'state=%s\n' "$(_snapshot_escape "$_wss_state")"
         printf 'prev_state=%s\n' "$(_snapshot_escape "$_wss_prev")"
         printf 'pending_state=%s\n' "$(_snapshot_escape "$_wss_pending")"
@@ -106,7 +110,7 @@ read_state_snapshot() {
     SNAP_AGE=0
     SNAP_STATE=""; SNAP_PORT_ENUMERATION=""; SNAP_PORT_REASON=""; SNAP_LOG_TAIL=""
     SNAP_ROUND=0; SNAP_PID=0; SNAP_PREV_STATE=""; SNAP_PENDING_STATE=""
-    SNAP_PENDING_COUNT=0; SNAP_VARS_MATCH=""; SNAP_APPLY_RESULT=""
+    SNAP_PENDING_COUNT=0; SNAP_VARS_MATCH=""; SNAP_APPLY_RESULT=""; SNAP_NODE_HANDSHAKE=""
     [ -f "$SNAPSHOT_FILE" ] || return 0
     if [ ! -r "$SNAPSHOT_FILE" ]; then SNAP_STATUS="unreadable"; return 0; fi
 
@@ -134,6 +138,9 @@ read_state_snapshot() {
     SNAP_LOG_TAIL=$(_snapshot_unescape "$(_rss_get log_tail)")
     SNAP_VARS_MATCH=$(_rss_get vars_match)
     SNAP_APPLY_RESULT=$(_rss_get apply_result)
+    # **可选字段**：老版本监控写不出它，所以它不进 SNAPSHOT_KEYS（进了会让升级瞬间
+    # 那份旧快照被判成「缺字段 = 损坏」）。读不到就是不知道，判据按「不报」处理。
+    SNAP_NODE_HANDSHAKE=$(_snapshot_unescape "$(_rss_get node_handshake)")
     SNAP_ROUND=$(_rss_get round); case "$SNAP_ROUND" in ''|*[!0-9]*) SNAP_ROUND=0;; esac
     SNAP_PID=$(_rss_get pid); case "$SNAP_PID" in ''|*[!0-9]*) SNAP_PID=0;; esac
     SNAP_PENDING_COUNT=$(_rss_get pending_count); case "$SNAP_PENDING_COUNT" in ''|*[!0-9]*) SNAP_PENDING_COUNT=0;; esac
@@ -1117,8 +1124,24 @@ run_monitor_loop() {
         # prev_state 直接等于 state——即使有人去读，读到的也是假数据：
         # 状态页会永远显示"一切正常"，而变量可能早就被删光了。
         # 这与 Windows 侧 runtime.ps1 逐项算出来再写是同一套口径。
+        # 代理在跑的时候顺手问一句"它连不连得出去"。
+        # 纪律与 Windows 侧同一套：
+        #   ① 只对**已锁定的端口**问——那时端口活着，握手几毫秒，不等 TCP 超时
+        #      （对没人听的端口会白等几秒，那是把刷新周期踩爆的代价）；
+        #   ② 只在 on 状态问；
+        #   ③ 问不到就留空，**不许写成"没问题"**。空 = 不知道，状态页据此不作判断。
+        _snap_hs=""
+        case "$_last" in
+            on:*)
+                _snap_hs_port="${_last#on:}"
+                case "$_snap_hs_port" in
+                    ''|*[!0-9]*) : ;;
+                    *) _snap_hs=$(handshake_kind_at "127.0.0.1" "$_snap_hs_port" 2>/dev/null || echo "") ;;
+                esac
+                ;;
+        esac
         write_state_snapshot "$_last" "$_prev" "$_pending" "$_pending_n" \
-            "$_snap_enum" "$_snap_reason" "$_snap_vars" "$_snap_apply" "$_round_no" "$$" || true
+            "$_snap_enum" "$_snap_reason" "$_snap_vars" "$_snap_apply" "$_round_no" "$$" "$_snap_hs" || true
         _prev="$_last"
         _round_no=$((_round_no + 1))
         if [ "$_last" = "off" ]; then sleep 3; else sleep 2; fi
