@@ -1366,6 +1366,11 @@ function Show-RescuePage {
     $slowing = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Slowing })
     $foreign = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Foreign })
     $managed = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Managed })
+    # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
+    # 拿不到握手（-Quick 或权限不足）时**不算**，绝不凭猜给用户指方向。
+    $aliveBroken = @($layers | Where-Object {
+        $_.Kind -eq $SysProxyKinds.Alive -and $_.Handshake -eq 'upstream-fail'
+    })
 
     # ---- 先给结论：这一屏最上面那句必须是「你现在是什么情况」 ----
     if ($blocking.Count -gt 0) {
@@ -1374,6 +1379,14 @@ function Show-RescuePage {
     } elseif ($slowing.Count -gt 0) {
         Write-Styled 'warn' '  查下来：有个设置脚本指向已经关掉的程序。'
         Write-Styled 'dim'  '          网页能开，但每次都要先等它几秒。'
+    } elseif ($aliveBroken.Count -gt 0) {
+        # **这一档以前根本不存在**：代理程序还开着、端口也活着，但它连不上外面。
+        # 以前只会说"没发现问题"，用户会以为工具没查出来，然后去动系统代理——
+        # 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。
+        # 说清"这是节点的问题"才是正确答案。
+        Write-Styled 'warn' '  查下来：代理程序还开着，端口也在，但它连不上外面。'
+        Write-Styled 'dim'  '          这多半是节点的问题，不是设置坏了。'
+        Write-Styled 'dim'  '          关掉重开代理软件、或者换一个节点试试。'
     } elseif ($fixable.Count -eq 0) {
         Write-Styled 'ok' '  查下来：浏览器这边的设置没发现问题。'
         if ($foreign.Count -gt 0) {

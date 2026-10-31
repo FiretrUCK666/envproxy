@@ -2203,7 +2203,8 @@ show_rescue_page() {
     _rs_slowing=0
     _rs_foreign=0
     _rs_managed=0
-    while IFS="$(printf '\t')" read -r _rs_l _rs_svc _rs_kind _rs_url _rs_port; do
+    _rs_alivebroken=0
+    while IFS="$(printf '\t')" read -r _rs_l _rs_svc _rs_kind _rs_url _rs_port _rs_box _rs_hs; do
         [ -n "$_rs_svc" ] || continue
         case "$_rs_kind" in
             "$SYSPROXY_KIND_BLOCKING") _rs_blocking=$((_rs_blocking + 1)) ;;
@@ -2211,6 +2212,11 @@ show_rescue_page() {
             "$SYSPROXY_KIND_FOREIGN")  _rs_foreign=$((_rs_foreign + 1)) ;;
             "$SYSPROXY_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
         esac
+        # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
+        # 拿不到（quick 或权限不足）时**不算**，绝不凭猜给用户指方向。
+        if [ "$_rs_kind" = "$SYSPROXY_KIND_ALIVE" ] && [ "${_rs_hs:-}" = "upstream-fail" ]; then
+            _rs_alivebroken=$((_rs_alivebroken + 1))
+        fi
         sysproxy_fixable "$_rs_kind" && _rs_fixable=$((_rs_fixable + 1))
     done <<EOF
 $_rs_layers
@@ -2223,12 +2229,23 @@ EOF
     elif [ "$_rs_slowing" -gt 0 ]; then
         style_out warn "  查下来：有个设置脚本指向已经关掉的程序。"
         style_out dim  "          网页能开，但每次都要先等它几秒。"
+    elif [ "$_rs_alivebroken" -gt 0 ]; then
+        # 代理程序还开着、端口也活着，但它连不上外面。
+        # 这一档以前不存在：以前只会说"没发现问题"，用户会以为工具没查出来，然后去动系统代理——
+        # 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。
+        style_out warn "  查下来：代理程序还开着，端口也在，但它连不上外面。"
+        style_out dim  "          这多半是节点的问题，不是设置坏了。"
+        style_out dim  "          关掉重开代理软件、或者换一个节点试试。"
     elif [ "$_rs_fixable" -eq 0 ]; then
         style_out ok "  查下来：没发现问题，浏览器这边的设置是好的。"
         if [ "$_rs_foreign" -gt 0 ]; then
             echo ""
             style_out dim "  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。"
         fi
+        # 必须说清这个工具管不到哪儿，否则用户会以为"它说没事 = 网没问题"。
+        echo ""
+        style_out dim "  这个工具只管「浏览器代理」这一层。"
+        style_out dim "  如果网还是不通，问题可能在别处：虚拟网卡、路由表、或防火墙规则。"
     fi
 
     # ---- 明细：能修的与不能动的分开列，不混在一起 ----

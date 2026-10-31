@@ -2113,6 +2113,37 @@ except Exception: pass
     _selftest_assert_eq "公网 IPv6 不是本机" "0" "$(is_loopback_url 'http://[2001:db8::1]:8080' && echo 1 || echo 0)"
     _selftest_assert_eq "localhost 判为本机（SSX-NG 的 PAC 就用它）" "1" "$(is_loopback_url 'http://localhost:1089/x.pac' && echo 1 || echo 0)"
 
+    echo "[16] 握手五分类与「节点问题」那一档"
+    # 这三件事守的都是"说错方向"：把"节点挂了"说成"设置坏了"，
+    # 用户就会去动系统代理——而删掉设置并不恢复网络（程序还在跑、还占着端口），
+    # 只会把他能用的路径删掉。与 Windows 侧同一套词（门禁 6 核对）。
+    _selftest_assert_eq "握手：200 是 proxy-ok" "proxy-ok" "$(handshake_kind_text 'HTTP/1.1 200 Connection established')"
+    _selftest_assert_eq "握手：407 是 proxy-auth" "proxy-auth" "$(handshake_kind_text 'HTTP/1.1 407 Proxy Authentication Required')"
+    _selftest_assert_eq "握手：502 是 upstream-fail（不能当成「不是代理」）" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 502 Bad Gateway')"
+    _selftest_assert_eq "握手：403 也是 upstream-fail" "upstream-fail" "$(handshake_kind_text 'HTTP/1.0 403 Forbidden')"
+    _selftest_assert_eq "握手：SSH 横幅是 not-http" "not-http" "$(handshake_kind_text 'SSH-2.0-OpenSSH_9.0')"
+    _selftest_assert_eq "握手：没回话是 silent" "silent" "$(handshake_kind_text '')"
+    _selftest_assert_eq "握手：2000 绝不能被读成 200" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 2000 weird')"
+
+    # 救援页那一档必须同时要求「活着」+「握手说上游失败」。
+    _rp_src=$(cat "$SCRIPT_DIR/lib/ops.sh" 2>/dev/null || echo "")
+    case "$_rp_src" in
+        *"_rs_alivebroken"*) _selftest_assert_eq "救援页：节点那一档存在" "1" "1" ;;
+        *) _selftest_assert_eq "救援页：节点那一档存在" "1" "0" ;;
+    esac
+    case "$_rp_src" in
+        *"upstream-fail"*) _selftest_assert_eq "救援页：它要握手证据" "1" "1" ;;
+        *) _selftest_assert_eq "救援页：它要握手证据" "1" "0" ;;
+    esac
+    case "$_rp_src" in
+        *"多半是节点的问题"*) _selftest_assert_eq "救援页：台词指向节点" "1" "1" ;;
+        *) _selftest_assert_eq "救援页：台词指向节点" "1" "0" ;;
+    esac
+
+    # quick 档不采集握手，所以状态页永远不会误报这一档。
+    _q_hs=$(sysproxy_layers quick 2>/dev/null | head -1 | cut -f7)
+    _selftest_assert_eq "quick 档不采集握手（永远不会误报节点问题）" "" "$_q_hs"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面

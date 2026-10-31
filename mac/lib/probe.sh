@@ -320,6 +320,45 @@ _handshake_at() {
     printf '%s' "$_ha_resp" | grep -qE '^HTTP/1\.[01] +200( |$)'
 }
 
+# CONNECT 握手结果的**五分类**（给救援层判"这个端口到底是什么"用）。
+#
+# 为什么不能沿用 _handshake_at 的布尔：它只回答"能不能拿去注入"，
+# 而救援要回答"这个端口是不是真代理、它现在为什么不能用"。两者不是同一个问题。
+# 最要命的一种：节点挂掉的代理对 CONNECT 会回 **502**——
+#   布尔判据把它当"不是代理"，于是"端口活着但握手不 200"会被读成"可以当残留删掉"，
+#   而它恰恰是使用者**正在跑**的代理，只是上游节点不通。
+#   "我是代理但连不上" 与 "我根本不是 HTTP" 必须分开。
+#
+# 输出：proxy-ok / proxy-auth / upstream-fail / not-http / silent / closed
+# 与 Windows 侧同一套词，门禁 6 核对。
+handshake_kind_text() {
+    # $1 = 一行应答原文
+    case "${1:-}" in
+        '') printf 'silent'; return 0 ;;
+    esac
+    # 状态码整段比对：写成以 200 结尾会让 "2000" 也匹配上。
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +200( |$)'; then printf 'proxy-ok'; return 0; fi
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +407( |$)'; then printf 'proxy-auth'; return 0; fi
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[45][0-9][0-9]( |$)'; then printf 'upstream-fail'; return 0; fi
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[0-9]{3}'; then printf 'upstream-fail'; return 0; fi
+    printf 'not-http'
+}
+
+# 对一个端口做握手，输出五分类之一。与 _handshake_at 走同一条连接路径。
+handshake_kind_at() {
+    # 端口 0 或空：没有可以连的东西
+    case "${2:-}" in ''|0) printf 'closed'; return 0 ;; esac
+    _hkres=""
+    if nc_supports_G; then
+        _hkres=$(printf 'CONNECT 127.0.0.1:9 HTTP/1.1\r\nHost: 127.0.0.1:9\r\n\r\n' | nc -G 1 -w 2 "$1" "$2" 2>/dev/null | head -n 1)
+    else
+        _hkres=$(curl_direct --disable -s -o /dev/null -D - --connect-timeout 1 --max-time 2 \
+            --noproxy '' -p -x "http://$(url_host_for "$1"):$2" "http://127.0.0.1:9/" 2>/dev/null | head -n 1)
+    fi
+    # 一个字节都没回：可能连不上，也可能连上了不说话。这里只说"没应话"，
+    # 不假装知道是哪一种——知道死活的是调用方（它已经探过 TCP 了）。
+    handshake_kind_text "$_hkres"
+}
 # 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
 # 命中的地址放进 $LOOPBACK_HIT（注入端要用它拼 URL）。
 test_http_proxy() {

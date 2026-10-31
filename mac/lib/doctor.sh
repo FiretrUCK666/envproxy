@@ -228,8 +228,15 @@ sysproxy_layers() {
             # 必须带出来：三个勾选框各存各的地址，web 死了不代表 socks 也死。
             # 只按 layer 决定关哪个，就会把使用者正在用的那个一起关掉。
             # 前 5 列的含义不变，所有既有调用点（用 read 只取前 5 个变量）照常工作。
-            printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-                "$_gspl_layer" "$_gspl_svc" "$_gspl_verdict" "$_gspl_url" "${_gspl_port:-0}" "$_gspl_kind"
+            # 第 7 列是握手分类，**只在 full 档采集**。
+            # quick（状态页每 2–3 秒刷一次）绝不采集：握手要起 nc/curl，那是刷新开销的十倍。
+            # 这列只用于**解释**（判断"端口活着但连不出去"），绝不参与可修判定。
+            _gspl_hs=""
+            if [ "$_gspl_quick" != "quick" ]; then
+                _gspl_hs=$(handshake_kind_at "$_gspl_addr" "${_gspl_port:-0}" 2>/dev/null)
+            fi
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+                "$_gspl_layer" "$_gspl_svc" "$_gspl_verdict" "$_gspl_url" "${_gspl_port:-0}" "$_gspl_kind" "$_gspl_hs"
         done
     done
 }

@@ -462,6 +462,7 @@ function Get-SystemProxyLayers {
                 Detail = (Get-SysProxyReason -Kind $manualKind -Url $url -Port $port -Alive $alive -Layer 'manual')
                 Advice = (Get-SysProxyAdvice -Kind $manualKind -Port $port)
                 Evidence = $(if ($ev) { $ev.Summary } else { '' })
+                Handshake = $(if ($ev) { $ev.Handshake } else { '' })
             })
         }
         if (($conn.Flags -band $ProxyTypeAutoProxyUrl) -ne 0 -and $conn.AutoConfigUrl) {
@@ -480,6 +481,7 @@ function Get-SystemProxyLayers {
                 Detail = (Get-SysProxyReason -Kind $pacKind -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Layer 'pac')
                 Advice = (Get-SysProxyAdvice -Kind $pacKind -Port $port)
                 Evidence = $(if ($ev2) { $ev2.Summary } else { '' })
+                Handshake = $(if ($ev2) { $ev2.Handshake } else { '' })
             })
         }
     }

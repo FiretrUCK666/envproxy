@@ -3748,5 +3748,43 @@ foreach ($L in $lay) {
 # 这一步只要"能调用、能返回、不抛"就算过，条数由真机决定。
 $otherConnsProbe = @(Get-OtherConnectionProxyNames)
 Assert-Eq 'other connections: detector runs and yields a countable list' $true ($otherConnsProbe.Count -ge 0)
+Write-Host '[30] Evidence text and the node-problem branch'
+# 这一节守的是"端口活着但连不上外面"这一档：说错方向会让用户去动系统代理，
+# 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。
+Assert-Eq 'evidence: upstream-fail names the node, not the settings' $true `
+    ((Get-SysProxyEvidenceText -Handshake 'upstream-fail' -OwnerName 'clash' -IsClient $true -CatalogName 'Clash 系') -match '节点')
+Assert-Eq 'evidence: upstream-fail never blames the settings' $false `
+    ((Get-SysProxyEvidenceText -Handshake 'upstream-fail' -OwnerName '' -IsClient $false -CatalogName '') -match '设置')
+Assert-Eq 'evidence: proxy-ok says it works' $true `
+    ((Get-SysProxyEvidenceText -Handshake 'proxy-ok' -OwnerName 'clash' -IsClient $true -CatalogName 'Clash 系') -match '确实在工作')
+Assert-Eq 'evidence: not-http says another program holds the port' $true `
+    ((Get-SysProxyEvidenceText -Handshake 'not-http' -OwnerName 'python' -IsClient $false -CatalogName '') -match '别的程序')
+Assert-Eq 'evidence: an owner from the catalog gets named' $true `
+    ((Get-SysProxyEvidenceText -Handshake 'proxy-ok' -OwnerName 'clash-verge' -IsClient $true -CatalogName 'Clash 系') -match 'Clash 系')
+Assert-Eq 'evidence: no handshake and no owner yields nothing' '' `
+    (Get-SysProxyEvidenceText -Handshake '' -OwnerName '' -IsClient $false -CatalogName '')
+
+# 救援页那一档只在「活着 + 握手说上游失败」时成立。
+# 拿不到握手时必须不成立——绝不凭猜给用户指方向。
+$rescueSrc = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\win\lib\shortcut.ps1'))
+Assert-Eq 'rescue: the node-problem branch exists' $true ($rescueSrc -match 'aliveBroken')
+Assert-Eq 'rescue: it requires the alive kind' $true ($rescueSrc -match '\$_.Kind -eq \$SysProxyKinds\.Alive')
+Assert-Eq 'rescue: it requires upstream-fail evidence' $true ($rescueSrc -match "Handshake -eq 'upstream-fail'")
+Assert-Eq 'rescue: the message points at the node' $true ($rescueSrc -match '多半是节点的问题')
+# 这一档的台词本身不许出现"删/清掉设置"之类的话——那正是错的指导。
+# 只取**这一段分支**里的字符串，不看注释，也不扫整份文件（别处的"删掉"说的是删快捷方式图标）。
+$branchStart = $rescueSrc.IndexOf('aliveBroken.Count -gt 0')
+$branchEnd = $rescueSrc.IndexOf('elseif ($fixable.Count -eq 0)', [Math]::Max($branchStart, 0))
+$branch = if ($branchStart -ge 0 -and $branchEnd -gt $branchStart) { $rescueSrc.Substring($branchStart, $branchEnd - $branchStart) } else { '' }
+Assert-Eq 'rescue: the node-problem branch was located' $true ([bool]$branch)
+$branchStr = (@([regex]::Matches($branch, "'([^']*[\u4e00-\u9fa5][^']*)'") | ForEach-Object { $_.Groups[1].Value }) -join "`n")
+Assert-Eq 'rescue: its text never says delete the setting' $false ($branchStr -match '删|清掉')
+Assert-Eq 'rescue: its text tells the user to switch node or restart' $true ($branchStr -match '节点|重开')
+
+# Quick 模式不采集握手，所以这一档在状态页永远不可能误报。
+$quickLayers = @(Get-SystemProxyLayers -Quick)
+foreach ($q in $quickLayers) {
+    Assert-Eq ('quick: no handshake collected for ' + $q.Layer) '' ([string]$q.Handshake)
+}
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1
