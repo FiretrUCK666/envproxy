@@ -37,11 +37,35 @@ probe_clean_stale_temp() {
 # 注意：只做快筛，不做判决——判决永远是 CONNECT 握手 + 真实连通。
 # 收录标准：能过 CONNECT 门、且可能拿去注入（http:// 方案）的口才值得收；
 # 纯 SOCKS 口刻意不收（过不了握手门，只是白扫）。已在表内的不动（判决走握手门，无害）。
-KNOWN_PORTS="7078 7890 7897 10808 10809 10801 2080 2081 1080 8118 8080 6152 8888 12334"  # 12334 = Hiddify-Next 默认
+# 客户端目录：**端口与进程名的单一数据源**（与 Windows 侧 $ClientCatalog 同结构同语义）。
+# 每行用 | 分隔：Id|Name|端口(空格分)|进程名特征(空格分)
+#
+# 原来端口一份、进程名一份，散在两处靠门禁比字面量硬撑，必然漂移。
+# 收敛到这里之后，**加一个客户端支持 = 表里加一行**，两张旧表自动派生。
+#
+# 端口数字来自一手源码/官方文档核实，但**只影响识别速度，不参与授权**：
+# v2rayN 的端口是「基址+枚举偏移」（改基址整套跟着变），Clash Nyanpasu 可设随机端口，
+# 所以按端口号认客户端从根上有天花板。
+CLIENT_CATALOG="
+monocloud|MonoCloud|7078|monocloud
+clash|Clash 系|7890 7891 7892 7897 7898 7899 9090|clash mihomo verge nyanpasu party
+v2ray|v2ray 系|10808 10809 10810 10811 10812 10813 10814 10801 1080|v2ray xray nekoray nekobox
+singbox|sing-box|2080 2081 7890|sing-box singbox
+hiddify|Hiddify|12334 2334|hiddify
+ss|Shadowsocks 系|1080 1086 1087 1089 8118|shadowsocks ss-local trojan hysteria
+surge|Surge / Stash|6152 6153|surge stash quantumult
+netch|Netch|2801 2802|netch
+outline|Outline|8888|outline
+devtools|调试代理|8888 8889 8080 9090|fiddler charles proxyman mitmproxy mitmdump
+"
+
+# 从目录派生（不要手写第二份）
+KNOWN_PORTS=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' 'NF>=3 {print $3}' | tr -s ' ' '\n' | grep -v '^$' | sort -un | tr '\n' ' ' | sed 's/ *$//')
+PATTERNS=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' 'NF>=4 {print $4}' | tr -s ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//')
 
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。
 # 不认品牌、不认版本：mihomo-party/flclash 已被 mihomo/clash 命中；Stash/Quantumult X 默认 Network Extension 模式、不产生本地口，故不单列。
-PATTERNS="monocloud clash mihomo verge v2ray xray sing-box singbox hiddify shadowsocks ss-local trojan hysteria neko netch surge outline"
+
 
 # 验证端点（与 Windows 版一致：跨厂商/跨域段，快路优先 + 失败并行兜底）。
 # 端点池的两条硬要求，缺一不可：

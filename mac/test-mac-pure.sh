@@ -2059,6 +2059,36 @@ EOF
     unset -f networksetup 2>/dev/null || true
     MONITOR_DIR="$_bk_saved"
 
+    echo "[15] PAC 端口解析、裸 IPv6、地址形态"
+    # 三条都对应"永远修不好"或"误判"的真实缺陷。
+    # ① PAC 的端口必须从 URL 里解析出来，否则 port=0 → unknown → foreign，
+    #    residue-slowing 成了永远不可能产出的死结论词（实测：只修取址不修端口，症状一样）。
+    _pp_ac=$(networksetup -getautoproxyurl "Wi-Fi" 2>/dev/null)
+    unset -f networksetup 2>/dev/null || true
+    networksetup() {
+        case "$1" in
+            -getautoproxyurl) printf 'URL: http://127.0.0.1:7078/proxy.pac\nEnabled: Yes\n' ;;
+            *) return 0 ;;
+        esac
+    }
+    _pp_lines=$(_sysproxy_read_one "Wi-Fi" autoproxy)
+    _pp_host=$(printf '%s\n' "$_pp_lines" | sed -n '2p')
+    _pp_port=$(printf '%s\n' "$_pp_lines" | sed -n '3p')
+    _selftest_assert_eq "PAC 地址取整行（不是切成 http）" "http://127.0.0.1:7078/proxy.pac" "$_pp_host"
+    _selftest_assert_eq "PAC 端口从 URL 里解析出来（不是空）" "7078" "$_pp_port"
+    _selftest_assert_eq "PAC 回环+死端口 -> residue-slowing" "residue-slowing" "$(sysproxy_verdict "http://127.0.0.1:7078/proxy.pac" 7078 dead 0 pac)"
+    _selftest_assert_eq "PAC 回环+活端口 -> alive" "alive" "$(sysproxy_verdict "http://127.0.0.1:7078/proxy.pac" 7078 alive 0 pac)"
+    _selftest_assert_eq "PAC 非回环 -> foreign" "foreign" "$(sysproxy_verdict "http://10.0.0.8:8080/x.pac" 8080 dead 0 pac)"
+    unset -f networksetup 2>/dev/null || true
+
+    # ② 裸 IPv6（无方括号）：${x%%:*} 会在第一个冒号处切断，::1 直接变空串。
+    _selftest_assert_eq "裸 IPv6 能取出主机" "::1" "$(_url_host 'http://::1:7890')"
+    _selftest_assert_eq "裸 IPv6 判为本机" "1" "$(is_loopback_url 'http://::1:7890' && echo 1 || echo 0)"
+    _selftest_assert_eq "方括号 IPv6 仍正确" "::1" "$(_url_host 'http://[::1]:7890')"
+    _selftest_assert_eq "主机名仍正确" "proxy.corp.com" "$(_url_host 'http://proxy.corp.com:3128')"
+    _selftest_assert_eq "公网 IPv6 不是本机" "0" "$(is_loopback_url 'http://[2001:db8::1]:8080' && echo 1 || echo 0)"
+    _selftest_assert_eq "localhost 判为本机（SSX-NG 的 PAC 就用它）" "1" "$(is_loopback_url 'http://localhost:1089/x.pac' && echo 1 || echo 0)"
+
     rm -rf "$_sandbox" 2>/dev/null || true
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面

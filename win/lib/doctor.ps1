@@ -318,34 +318,76 @@ function Set-SystemProxyConnection {
 # 按「键存在且有值」判，会把没被管的机器一律判成被管，从而永远不修，
 # 那正是这个功能最该避免的失败（用户点了修，工具说「被管着」）。
 # 只有真正管辖代理的那几个值名出现，才算被管。
-function Test-SystemProxyManaged {
-    # 「禁止更改代理设置」策略：值名固定，出现即生效（DWORD 1）。
-    # ProxySettingsPerUser=0 是「让代理设置作用于整台机器」，用户级改动本就不生效。
-    # 名单里**只放真正管辖代理的值**。
-    # DisableCachingOfSSLPages 管的是 SSL 页面缓存，与代理无关，但它出现在同一批策略键下面、
-    # 企业环境里相当常见——把它算进来，那些机器会被判成「被管着」，救援永远说改不动，
-    # 恰恰在这个功能最该工作的场景里失效。ProxySettingsPerUserMachine 不是真实值名，同样去掉。
-    $policyNames = @(
-        'ProxySettingsPerUser'
-        'PreventChangingProxySettings'
-        'ProxySettingsPerMachine'
-    )
-    $keys = @(
-        'HKLM:\Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings',
-        'HKCU:\Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
-    )
-    foreach ($k in $keys) {
-        if (-not (Test-RegKey $k)) { continue }
-        foreach ($n in $policyNames) {
-            $v = Get-ItemProperty -LiteralPath $k -Name $n -ErrorAction SilentlyContinue
-            if (-not $v) { continue }
-            $raw = $null
-            try { $raw = $v.$n } catch {}
-            if ($null -eq $raw) { continue }
-            # ProxySettingsPerUser=0 才表示「整机统一」，=1 是默认（每用户各管各的）。
-            if ($n -eq 'ProxySettingsPerUser') { if ([int]$raw -eq 0) { return $true } continue }
-            if ([int]$raw -eq 1) { return $true }
+# WinINET 的代理设置是**按连接**存的：LAN 一份，每个拨号/VPN 连接各一份。
+# 我们现在读写的是 LAN 那份（pszConnection = NULL）。若用户在用 PPPoE 拨号或 VPN，
+# **别的连接上可能还留着一条死端口的代理**，那也会让浏览器打不开网，而我们只看 LAN，
+# 会报"已修好"——这正是"部分失败不许报成修好"这条契约要防的。
+#
+# 这个函数只做一件事：把"除 LAN 之外还有哪些连接存着自己的代理设置"列出来，
+# 供界面如实提示。它**不读也不改**那些连接（写别的连接风险更大，且本项目不覆盖那种场景）。
+# 返回连接名数组（不含 DefaultConnectionSettings / SavedLegacySettings 这两个 LAN 专用值）。
+function Get-OtherConnectionProxyNames {
+    $out = @()
+    $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings\Connections'
+    if (-not (Test-RegKey $key)) { return $out }
+    try {
+        $props = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+        foreach ($p in $props.PSObject.Properties) {
+            $n = [string]$p.Name
+            if ($n -match '^PS') { continue }
+            # 这两个是 LAN 用的（Default 是生效值、SavedLegacy 是旧版兼容），不算"别的连接"。
+            if ($n -eq 'DefaultConnectionSettings' -or $n -eq 'SavedLegacySettings') { continue }
+            $out += $n
         }
+    } catch { }
+    return $out
+}
+# 这台机器的代理设置是不是被组策略管着（改了会被刷回去，所以不该动）。
+#
+# **三个值名与它们所属的键，逐一按微软官方策略定义（inetres.admx）核对过**。
+# 策略的值名与策略标题不是一回事，把标题当值名是这类判据最常见的错法。
+# 今天这张表只有三项，每一项都能在 admx 里逐字找到：
+#
+#   策略 UserProxy            key=Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings
+#                             valueName=ProxySettingsPerUser   enabledValue=0（整机统一，用户级改动不生效）
+#   策略 RestrictProxy        key=Software\Policies\Microsoft\Internet Explorer\Control Panel
+#                             valueName=Proxy          DWORD 1 = 锁住代理页
+#   策略 RestrictAutoconfig   key=Software\Policies\Microsoft\Internet Explorer\Control Panel
+#                             valueName=Autoconfig     DWORD 1 = 锁住自动配置页
+#
+# 三个值**不在同一个键**：后两个在 Internet Explorer\Control Panel 下。
+# 只查 Internet Settings 一个键，会把「锁了代理页」的企业机判成没被管，然后去改一个改不动的东西、
+# 改完还报成功——那正是这个函数要防的失败。
+#
+# 反例（曾经写进来、已删）：DisableCachingOfSSLPages 管 SSL 页面缓存，与代理无关；
+# PreventChangingProxySettings / ProxySettingsPerMachine 在 admx 里**根本不存在**（是记错的标题）。
+# 把它们算进来/写错，会让判据两个方向都出错：该拦的没拦，不该拦的乱拦。
+$SysProxyPolicyChecks = @(
+    @{ Key = 'HKLM:\Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+       Name = 'ProxySettingsPerUser'; Want = 0 }
+    @{ Key = 'HKCU:\Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings'
+       Name = 'ProxySettingsPerUser'; Want = 0 }
+    @{ Key = 'HKLM:\Software\Policies\Microsoft\Internet Explorer\Control Panel'
+       Name = 'Proxy'; Want = 1 }
+    @{ Key = 'HKCU:\Software\Policies\Microsoft\Internet Explorer\Control Panel'
+       Name = 'Proxy'; Want = 1 }
+    @{ Key = 'HKLM:\Software\Policies\Microsoft\Internet Explorer\Control Panel'
+       Name = 'Autoconfig'; Want = 1 }
+    @{ Key = 'HKCU:\Software\Policies\Microsoft\Internet Explorer\Control Panel'
+       Name = 'Autoconfig'; Want = 1 }
+)
+
+function Test-SystemProxyManaged {
+    foreach ($check in $SysProxyPolicyChecks) {
+        if (-not (Test-RegKey $check.Key)) { continue }
+        $v = Get-ItemProperty -LiteralPath $check.Key -Name $check.Name -ErrorAction SilentlyContinue
+        if (-not $v) { continue }
+        $raw = $null
+        try { $raw = $v.($check.Name) } catch { $raw = $null }
+        if ($null -eq $raw) { continue }
+        $num = 0
+        if (-not [int]::TryParse([string]$raw, [ref]$num)) { continue }
+        if ($num -eq [int]$check.Want) { return $true }
     }
     return $false
 }
@@ -404,23 +446,27 @@ function Get-SystemProxyLayers {
             $split = Split-ProxyUrl (ConvertTo-SysProxyUrl $conn.ProxyServer)
             $port = if ($split) { [int]$split.Port } else { 0 }
             $alive = $null
-            if ($split) { $alive = Test-TcpAlive $split.Host $port $timeoutMs }
+            if ($split) { $alive = Test-TcpAlive (ConvertTo-ProbeHost $split.Host) $port $timeoutMs }
             $url = ConvertTo-SysProxyUrl $conn.ProxyServer
+            $manualKind = Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual'
             [void]$out.Add(@{
                 Layer = 'manual'; Url = $url; Port = $port
-                Kind = (Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual')
-                Detail = ''
+                Kind = $manualKind
+                Detail = (Get-SysProxyReason -Kind $manualKind -Url $url -Port $port -Alive $alive -Layer 'manual')
+                Advice = (Get-SysProxyAdvice -Kind $manualKind -Port $port)
             })
         }
         if (($conn.Flags -band $ProxyTypeAutoProxyUrl) -ne 0 -and $conn.AutoConfigUrl) {
             $split = Split-ProxyUrl $conn.AutoConfigUrl
             $port = if ($split) { [int]$split.Port } else { 0 }
             $alive = $null
-            if ($split) { $alive = Test-TcpAlive $split.Host $port $timeoutMs }
+            if ($split) { $alive = Test-TcpAlive (ConvertTo-ProbeHost $split.Host) $port $timeoutMs }
+            $pacKind = Get-SystemProxyVerdict -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Managed $managed -Kind 'pac'
             [void]$out.Add(@{
                 Layer = 'pac'; Url = $conn.AutoConfigUrl; Port = $port
-                Kind = (Get-SystemProxyVerdict -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Managed $managed -Kind 'pac')
-                Detail = ''
+                Kind = $pacKind
+                Detail = (Get-SysProxyReason -Kind $pacKind -Url $conn.AutoConfigUrl -Port $port -Alive $alive -Layer 'pac')
+                Advice = (Get-SysProxyAdvice -Kind $pacKind -Port $port)
             })
         }
     }
@@ -442,18 +488,65 @@ function Get-SystemProxyLayers {
             $split = Split-ProxyUrl (ConvertTo-SysProxyUrl $wh.Server)
             $port = if ($split) { [int]$split.Port } else { 0 }
             $alive = $null
-            if ($split) { $alive = Test-TcpAlive $split.Host $port $timeoutMs }
+            if ($split) { $alive = Test-TcpAlive (ConvertTo-ProbeHost $split.Host) $port $timeoutMs }
             $url = ConvertTo-SysProxyUrl $wh.Server
+            $whKind = Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual'
             [void]$out.Add(@{
                 Layer = 'winhttp'; Url = $url; Port = $port
-                Kind = (Get-SystemProxyVerdict -Url $url -Port $port -Alive $alive -Managed $managed -Kind 'manual')
-                Detail = ''
+                Kind = $whKind
+                Detail = (Get-SysProxyReason -Kind $whKind -Url $url -Port $port -Alive $alive -Layer 'winhttp')
+                Advice = (Get-SysProxyAdvice -Kind $whKind -Port $port)
             })
         }
     }
     return $out
 }
 
+# 给一个结论配一句"为什么这么判"。**只用廉价信号**（地址形态、端口三态、是否被管），
+# 不引入握手/进程/时间那些贵信号——贵信号会因为环境失败，一旦影响措辞就会影响授权判断。
+#
+# 为什么必须有：屏幕上只写"能修"等于让用户盲信。他会想知道"你凭什么动我的设置"。
+# 说得出依据，他才能自己核对；说不出，这个功能就只是一个黑箱。
+function Get-SysProxyReason([string]$Kind, [string]$Url, [int]$Port, $Alive, [string]$Layer) {
+    $host_ = ''
+    try { $sp = Split-ProxyUrl $Url; if ($sp) { $host_ = [string]$sp.Host } } catch { $host_ = '' }
+    $isLoop = $false
+    try { $isLoop = Test-LoopbackUrl $Url } catch { $isLoop = $false }
+    switch ($Kind) {
+        'clean'           { return '没有设任何代理，浏览器直接连。' }
+        'managed'         { return '这台电脑的代理设置由管理员统一管着，改了也会被改回去。' }
+        'alive' {
+            if ($isLoop) { return ('代理地址是本机，端口 ' + $Port + ' 上有程序在听——它正在工作。') }
+            return '代理端口连得上，它正在工作。'
+        }
+        'residue-blocking' {
+            if ($isLoop) { return ('地址是本机，但端口 ' + $Port + ' 上没有任何程序在听。网页请求发出去没人接，所以打不开。') }
+            return '这个代理连不上，网页打不开。'
+        }
+        'residue-slowing' {
+            if ($isLoop) { return ('设置脚本指向本机的 ' + $Port + ' 端口，那里已经没程序了。网页能开，但每次都要先等它超时。') }
+            return '这个设置脚本连不上，网页会变慢。'
+        }
+        'foreign' {
+            if (-not $host_) { return '这一项的地址读不出来，所以不动它。' }
+            if ($Layer -eq 'winhttp') { return '这是系统下载那一层的设置，不是浏览器那一层。' }
+            return ('代理地址是 ' + $host_ + '，不是这台电脑自己——多半是公司或学校给的，本工具不碰。')
+        }
+        default { return '' }
+    }
+}
+
+# 给一个结论配一句"你可以做什么"。空串表示"没有需要你做的事"。
+function Get-SysProxyAdvice([string]$Kind, [int]$Port) {
+    switch ($Kind) {
+        'residue-blocking' { return '可以让本工具修掉它（会先备份，能还原）。' }
+        'residue-slowing'  { return '可以让本工具修掉它（会先备份，能还原）。' }
+        'alive'            { return '不需要做什么。' }
+        'managed'          { return '需要的话请找管理员。' }
+        'foreign'          { return '如果这是你自己设的，保持原样即可。' }
+        default            { return '' }
+    }
+}
 # 读 WinHTTP 的代理设置。返回 $null = 没设或读不出来。
 #
 # 用 netsh 而不是直接读注册表：注册表里那份是二进制（WinHttpSettings），
@@ -611,6 +704,14 @@ function Repair-SystemProxy {
     if (-not (Backup-SystemProxy $before)) { $res.Result = 'nobackup'; return $res }
 
     # 目标标志位：把「可修的层」关掉，其余层原样保留。
+    #
+    # **必须逐位改、只碰出问题的那一位。** 在 WinINET 里"关手动代理"与"关 PAC"不是独立的：
+    # 有些客户端（Clash Verge Rev 的 sysopt.rs 明说）在用命令行方式切代理时，
+    # 关 PAC 会连带清掉代理标志位，所以它必须先清 PAC 再设代理——两个方向都会互踩。
+    # 我们走 INTERNET_PER_CONN_OPTION 逐项下发，实测不会互踩
+    # （0x7 清手动后得 0x5，PAC 位与 PAC 地址都还在），但**这个结论依赖于"只改那一位"**：
+    # 谁要是图省事改成"写整个 flags=1"或"只写 ProxyEnable=0"，就会把用户的 PAC 一起清掉，
+    # 造出"修好手动代理、弄坏 PAC"的新故障。事后的回读比对（含 AutoConfigUrl）就是为这条兜底。
     # 只关出问题的那一层——把整个代理关掉会连带干掉用户正常的公司代理。
     $newFlags = $before.Flags
     $newServer = $before.ProxyServer
@@ -635,7 +736,7 @@ function Repair-SystemProxy {
                 }
                 $sp = Split-ProxyUrl $one
                 if (-not $sp) { $kept += $s; continue }
-                $segAlive = Test-TcpAlive $sp.Host ([int]$sp.Port) 800
+                $segAlive = Test-TcpAlive (ConvertTo-ProbeHost $sp.Host) ([int]$sp.Port) 800
                 $segVerdict = Get-SystemProxyVerdict -Url $one -Port ([int]$sp.Port) -Alive $segAlive
                 if (Test-SysProxyFixable $segVerdict) { continue }   # 这一段是死的，丢掉
                 $kept += $s

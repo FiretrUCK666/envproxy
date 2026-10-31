@@ -150,6 +150,12 @@ _sysproxy_read_one() {
         #      `http`，浏览器代理彻底损坏。
         # 取「URL: 」之后的整行，别切分。
         _sro_host=$(printf '%s\n' "$_sro_out" | sed -n 's/^URL: *//p' | head -n 1)
+        # **PAC 的端口必须从 URL 里解析出来**，否则永远是 0。
+        # 端口为 0 时 sysproxy_port_state 回 unknown，verdict 见 unknown 直接归 foreign —
+        # 于是「PAC 指向死端口、网页每次卡几秒」这一整类问题在 mac 侧**永远检测不到**，
+        # residue-slowing 成了一个永远不可能产出的死结论词。
+        # 只修了取址不修端口，症状一模一样（实测：三行输出里第三行恒为空）。
+        _sro_port=$(printf '%s\n' "$_sro_host" | sed -n 's/.*:\([0-9][0-9]*\)\/.*$/\1/p; t; s/.*:\([0-9][0-9]*\)$/\1/p' | head -n 1)
     else
         _sro_host=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Server/ {print $2; exit}')
         _sro_port=$(printf '%s\n' "$_sro_out" | awk -F': *' '/^Port/ {print $2; exit}')
@@ -212,12 +218,33 @@ sysproxy_layers() {
 #
 # 与 Windows 侧同一意图：改了会被改回来，所以要单独说清「不是我们能改的」。
 # mac 上判据是「这台机器由 MDM 管理」——家用机没有这个文件。
+# 这台机器的代理设置是不是被 MDM 描述文件管着（改了会被刷回去，所以不该动）。
+#
+# **判据必须收敛到"确实有描述文件装着"，不能是"某个目录存在"。**
+# 原来判的是 /var/db/ConfigurationProfiles/Settings 存在或 mcx.plist 存在，
+# 而 /var/db/ConfigurationProfiles 在**未受管**的 Mac 上也可能存在
+# （社区实测：里面只有一个 .migrated 文件）。一旦误判为真，sysproxy_repair 开头就
+# `return managed`，**整个 mac 救援一条都不修**——那不是"多说一句话"，
+# 是功能整体静默失效，而且伪装成"你的机器有特殊情况"。代价方向被估反了。
+#
+# 现在的判据：`profiles` 是 macOS 自带的、专门回答"装了哪些描述文件"的命令。
+#   - 命令不存在（老系统/被裁剪）→ 退回看目录，仍保守
+#   - 命令存在但没有输出 → 没有描述文件 → **明确不是被管**
+#   - 有输出 → 交给上层按 managed 处理
+# 这样"没装描述文件的机器"不会被一个空目录误伤成不可修。
 sysproxy_managed() {
+    if command -v profiles >/dev/null 2>&1; then
+        _spm_out=$(profiles -P 2>/dev/null)
+        case "$_spm_out" in
+            ''|*'There are no configuration profiles installed'*|*'no configuration profiles'*)
+                return 1 ;;
+        esac
+        # 有输出但读不懂（权限不足等）→ 保守按被管处理，别去动。
+        return 0
+    fi
+    # 没有 profiles 命令：退回文件存在性，方向仍然保守。
     if [ -d /var/db/ConfigurationProfiles/Settings ] || \
        [ -f /Library/Preferences/com.apple.mcx.plist ]; then
-        # 有描述文件目录不等于必然管着代理，但这是最接近的判据。
-        # 判成 managed 只会让工具「不修」，代价是多说一句话；
-        # 判错成「可以修」则会去改一台公司机器，代价大得多——所以这里偏保守。
         return 0
     fi
     return 1
@@ -345,6 +372,11 @@ sysproxy_restore() {
         [ -n "$_srr_svc" ] || continue
         [ "$_srr_en" = "Yes" ] || continue
         _srr_q=$(printf '%s' "$_srr_svc" | sed "s/'/'\\\\''/g")
+        # restore 用 -set*proxy <svc> <host> <port> on：
+        # 整串里的 on 会把状态一并打开（这正是还原想要的）。
+        # **但注意 `-setwebproxy` 有副作用：它会顺带打开状态。**
+        # 所以"修"那边绝不能走"先清地址再关状态"——那会把代理重新打开、指向一个死端口。
+        # 修复侧现在的做法（只 -set*proxystate off，不动地址）是对的，别改。
         case "$_srr_kind" in
             web)           _srr_cmds="$_srr_cmds networksetup -setwebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
             secureweb)     _srr_cmds="$_srr_cmds networksetup -setsecurewebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;

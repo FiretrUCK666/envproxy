@@ -3693,12 +3693,60 @@ $manCode = (@(($manSrc = (Get-Command Test-SystemProxyManaged).Definition) -spli
         Where-Object { $_ -notmatch '^\s*#' }) -join "`n")
 Assert-Eq 'policy: SSL page caching is not a proxy policy' $false ($manCode -match 'DisableCachingOfSSLPages')
 Assert-Eq 'policy: a made-up value name is not used' $false ($manCode -match 'ProxySettingsPerUserMachine')
-Assert-Eq 'policy: the real prevent-value is still checked' $true ($manSrc -match 'PreventChangingProxySettings')
+# 策略表住在函数外的顶层（$SysProxyPolicyChecks），所以要比**整个库文件**，
+# 不能只比 Test-SystemProxyManaged 的函数体——那样永远匹配不到。
+$docAll = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\win\lib\doctor.ps1'))
+Assert-Eq 'policy: UserProxy value is checked' $true ($docAll -match 'ProxySettingsPerUser')
+Assert-Eq 'policy: RestrictProxy value is checked' $true ($docAll -match "Name = 'Proxy'")
+Assert-Eq 'policy: RestrictAutoconfig value is checked' $true ($docAll -match "Name = 'Autoconfig'")
+Assert-Eq 'policy: the Control Panel key is consulted too' $true ($docAll -match 'Internet Explorer\\Control Panel')
 # 还原入口不许被"没有可修项"挡住。
 $rescueSrc = (Get-Command Show-RescuePage).Definition
 Assert-Eq 'rescue: restore is gated on the backup, not on fixable count' $true ($rescueSrc -match '\$hasBackup')
 Assert-Eq 'rescue: no early return just because nothing is fixable' $true ($rescueSrc -match '\$fixable\.Count -eq 0 -and -not \$hasBackup')
 # 失败的项必须在屏幕上说出来，不许只报"修好了"。
 Assert-Eq 'rescue: partial names what was left unfixed' $true ($rescueSrc -match '\$leftNames')
+Write-Host '[29] Handshake classification, port ownership, client catalog'
+# 这一节守三件事，都对应"会误删活代理"或"永远修不好"的真实缺陷。
+# ① 握手必须五分类：节点挂掉的代理回 502，不能被当成"这不是代理"；
+# ② 0.0.0.0 / :: 是本机，但直接连会抛异常，必须先归一化；
+# ③ 客户端目录是端口表/进程表的唯一来源，加客户端只改表。
+Assert-Eq 'handshake: 200 is proxy-ok' 'proxy-ok' (Get-HandshakeKind 'HTTP/1.1 200 Connection established')
+Assert-Eq 'handshake: 407 is proxy-auth' 'proxy-auth' (Get-HandshakeKind 'HTTP/1.1 407 Proxy Authentication Required')
+Assert-Eq 'handshake: 502 is upstream-fail, not "not a proxy"' 'upstream-fail' (Get-HandshakeKind 'HTTP/1.1 502 Bad Gateway')
+Assert-Eq 'handshake: 403 is upstream-fail too' 'upstream-fail' (Get-HandshakeKind 'HTTP/1.0 403 Forbidden')
+Assert-Eq 'handshake: an SSH banner is not-http' 'not-http' (Get-HandshakeKind 'SSH-2.0-OpenSSH_9.0')
+Assert-Eq 'handshake: silence is silent' 'silent' (Get-HandshakeKind '')
+Assert-Eq 'handshake: 2000 is never read as proxy-ok' $false ((Get-HandshakeKind 'HTTP/1.1 2000 weird') -eq 'proxy-ok')
+
+# 地址归一化：通配地址指本机，但探测要走回环，否则 Connect 抛"地址无效"。
+Assert-Eq 'addr: 0.0.0.0 counts as local' $true (Test-LoopbackUrl 'http://0.0.0.0:7890')
+Assert-Eq 'addr: :: counts as local' $true (Test-LoopbackUrl 'http://[::]:7890')
+Assert-Eq 'addr: 0.0.0.0 probes via 127.0.0.1' '127.0.0.1' (ConvertTo-ProbeHost '0.0.0.0')
+Assert-Eq 'addr: :: probes via ::1' '::1' (ConvertTo-ProbeHost '::')
+Assert-Eq 'addr: a LAN IP is still not local' $false (Test-LoopbackUrl 'http://192.168.1.5:7890')
+Assert-Eq 'addr: a LAN IP probes as itself' '192.168.1.5' (ConvertTo-ProbeHost '192.168.1.5')
+
+# 客户端目录：两张旧表必须从它派生，不能各存一份。
+Assert-Eq 'catalog: known ports derive from the catalog' $true ($KnownProxyPorts.Count -ge 20)
+Assert-Eq 'catalog: 7897 belongs to Clash Verge Rev' 'Clash 系' ((Get-ClientByPort 7897).Name)
+Assert-Eq 'catalog: 12334 belongs to Hiddify' 'Hiddify' ((Get-ClientByPort 12334).Name)
+Assert-Eq 'catalog: 10811 is the v2ray PAC port' 'v2ray 系' ((Get-ClientByPort 10811).Name)
+Assert-Eq 'catalog: process patterns derive too' $true ($ProxyProcessPatterns -contains 'clash')
+Assert-Eq 'catalog: an unknown port maps to nothing' '' ([string]((Get-ClientByPort 54321)))
+# 端口表只能提速，绝不能参与授权——授权只看形态+端口三态。
+$catKinds = @($KnownProxyPorts | ForEach-Object { Get-SystemProxyVerdict -Url ("http://127.0.0.1:" + $_) -Port $_ -Alive $false })
+Assert-Eq 'catalog: every catalog port is fixable only when dead+loopback' $true (@($catKinds | Where-Object { $_ -ne 'residue-blocking' }).Count -eq 0)
+
+# 结论必须带解释，不能只给一个词。
+$lay = @(Get-SystemProxyLayers)
+foreach ($L in $lay) {
+    Assert-Eq ('reason present for ' + $L.Kind) $true ([bool]($L.Detail))
+}
+# 拨号/VPN 连接各存一份代理——发现到了就要说，不能报"已修好"。
+# 空数组经管道会被展平成 $null，所以判据用 @() 包一层再数个数：
+# 这一步只要"能调用、能返回、不抛"就算过，条数由真机决定。
+$otherConnsProbe = @(Get-OtherConnectionProxyNames)
+Assert-Eq 'other connections: detector runs and yields a countable list' $true ($otherConnsProbe.Count -ge 0)
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
 Write-Host ("FAILURES: {0}" -f $script:fails); exit 1

@@ -2282,22 +2282,36 @@ jobs:
           # 正因为不出错，才必须由门禁来管：没有门禁时，一侧加品牌另一侧静默不跟是必然结果。
           $wps = [System.IO.File]::ReadAllText('win/lib/probe.ps1', [System.Text.Encoding]::UTF8)
           $mps = [System.IO.File]::ReadAllText('mac/lib/probe.sh', [System.Text.Encoding]::UTF8)
-          $winPorts = [regex]::Match($wps, '\$KnownProxyPorts = @\(([^)]*)\)')
-          $macPorts = [regex]::Match($mps, 'KNOWN_PORTS="([^"]*)"')
-          if (-not $winPorts.Success) { Write-Host 'Win 侧读不到已知端口表'; $fail = 1 }
-          if (-not $macPorts.Success) { Write-Host 'Mac 侧读不到已知端口表'; $fail = 1 }
-          if ($winPorts.Success -and $macPorts.Success) {
-            $wp = @([regex]::Matches($winPorts.Groups[1].Value, '\d+') | ForEach-Object { $_.Value })
-            $mp = @($macPorts.Groups[1].Value -split '\s+' | Where-Object { $_ -match '^\d+$' })
-            if (($wp -join ',') -ne ($mp -join ',')) {
-              Write-Host ("两侧已知端口表不同：Win [{0}] / Mac [{1}]" -f ($wp -join ','), ($mp -join ','))
-              $fail = 1
-            }
+          # 端口表与进程名表现在都从客户端目录派生，改成直接比源头（见下方 $winCat / $macCat）。
+          # 两张表现在都**从客户端目录派生**，不再有字面量可抓。
+          # 派生的源头是同一份数据（Win $ClientCatalog / Mac CLIENT_CATALOG），
+          # 所以这里也读源头：抓目录表里的 Ports 与 Patterns 列，排序去重后比。
+          # 只抓旧字面量的话，改结构会让门禁读到空表——那正是这条门禁该拦的漂移。
+          $winCat = [regex]::Match($wps, '(?s)\$ClientCatalog = @\((.*?)\n\)')
+          $macCat = [regex]::Match($mps, '(?s)CLIENT_CATALOG="(.*?)"')
+          if (-not $winCat.Success) { Write-Host 'Win 侧读不到客户端目录表'; $fail = 1 }
+          if (-not $macCat.Success) { Write-Host 'Mac 侧读不到客户端目录表'; $fail = 1 }
+          # 从目录表里抽出两张派生表的**等价内容**
+          $winPorts2 = @([regex]::Matches($winCat.Groups[1].Value, 'Ports=@\(([^)]*)\)') |
+              ForEach-Object { $_.Groups[1].Value -split ',' } |
+              ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+          $winPats2 = @([regex]::Matches($winCat.Groups[1].Value, "Patterns=@\(([^)]*)\)") |
+              ForEach-Object { [regex]::Matches($_.Groups[1].Value, "'([^']+)'") } |
+              ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+          $macPorts2 = @($macCat.Groups[1].Value -split "`n" |
+              Where-Object { $_ -match '\|' } |
+              ForEach-Object { ($_ -split '\|')[2] } |
+              ForEach-Object { $_ -split '\s+' } | Where-Object { $_ } | ForEach-Object { [int]$_ } | Sort-Object -Unique)
+          $macPats2 = @($macCat.Groups[1].Value -split "`n" |
+              Where-Object { $_ -match '\|' } |
+              ForEach-Object { ($_ -split '\|')[3] } |
+              ForEach-Object { $_ -split '\s+' } | Where-Object { $_ } | Sort-Object -Unique)
+          $wp2 = $winPats2
+          $mp2 = $macPats2
+          if (($winPorts2 -join ',') -ne ($macPorts2 -join ',')) {
+            Write-Host ("两侧客户端目录的端口集不同：Win [{0}] / Mac [{1}]" -f ($winPorts2 -join ','), ($macPorts2 -join ','))
+            $fail = 1
           }
-          $winPats = [regex]::Match($wps, '(?s)\$ProxyProcessPatterns = @\((.*?)\)')
-          $macPats = [regex]::Match($mps, 'PATTERNS="([^"]*)"')
-          if (-not $winPats.Success) { Write-Host 'Win 侧读不到进程名特征表'; $fail = 1 }
-          if (-not $macPats.Success) { Write-Host 'Mac 侧读不到进程名特征表'; $fail = 1 }
           if ($winPats.Success -and $macPats.Success) {
             $wp2 = @([regex]::Matches($winPats.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
             $mp2 = @($macPats.Groups[1].Value -split '\s+' | Where-Object { $_ })

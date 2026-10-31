@@ -561,12 +561,57 @@ function Test-LoopbackProxyUrl([string]$Value) {
 # 判据要认全三种写法：127.0.0.1、[::1]、localhost。给回环地址设代理没有意义——
 # 代理那次请求的主机名仍是回环，看的是代理进程自己那一侧，只会让"本机服务"
 # 看起来忽好忽坏。
+# 这个地址是不是"指向本机"。
+#
+# 除了 Uri.IsLoopback 覆盖的 127.0.0.0/8、::1、localhost，还要认**通配地址**：
+#   `0.0.0.0` 与 `::` 在监听侧表示"本机任意地址"，有些客户端（或用户手填）会把监听地址
+#   误填到代理地址里。它语义上就是本机，但 `TcpClient.Connect('0.0.0.0', p)` 会抛
+#   "地址无效"——于是"端口明明活着"被判成"连不上"，
+#   再往下就是 residue-blocking → **关掉一个正在工作的代理**。
+# 所以判"是不是本机"必须包含这两个，判活时再把它们翻成 127.0.0.1 去连。
 function Test-LoopbackUrl([string]$Url) {
     if (-not $Url) { return $false }
     $u = $null
     if (-not [System.Uri]::TryCreate($Url, [System.UriKind]::Absolute, [ref]$u)) { return $false }
     if ($u.IsLoopback) { return $true }
-    return ($u.Host -eq "localhost")
+    $h = [string]$u.Host
+    if (-not $h) { return $false }
+    $h = $h.Trim('[', ']')
+    if ($h -eq 'localhost') { return $true }
+    if ($h -eq '0.0.0.0') { return $true }
+    # IPv6 的全零地址（通配）有两种写法，**两个 PowerShell 版本给的不一样**：
+    #   7 保持 `::`；5.1 会展开成 `0:0:0:0:0:0:0:0`（甚至带方括号）。
+    # 只认短形式会让这条判据在 5.1 上失败——而 5.1 是 Windows 自带、用户量最大的那个。
+    if (Test-IPv6AnyAddress $h) { return $true }
+    return $false
+}
+
+# 这个主机串是不是 IPv6 的"全零/任意"地址。5.1 与 7 的写法不同，都认。
+function Test-IPv6AnyAddress([string]$Text) {
+    if (-not $Text) { return $false }
+    $h = $Text.Trim('[', ']')
+    if (-not $h) { return $false }
+    if ($h -eq '::') { return $true }
+    # 展开形式：只由 0 与冒号组成，且至少有两段
+    if ($h -match '^[0:]+$' -and $h.Contains(':')) { return $true }
+    return $false
+}
+
+# 把一个"指向本机"的地址翻成真正能连的回环地址。
+#
+# 通配地址（0.0.0.0 / ::）不能直接拿去 Connect（系统会判为非法目标），
+# 但它们确实指本机，所以要翻成对应的回环再探。
+# 非通配地址原样返回：127.0.0.1 就是 127.0.0.1，::1 就是 ::1（只绑 IPv6 的代理对 IPv4 拒绝）。
+# 参数名不能叫 $Host：那是 PowerShell 的只读自动变量（指向当前主机对象），
+# 用它当参数名会在**函数体第一行就抛**"无法覆盖变量 Host"——而报错发生在调用点，
+# 看起来像调用方写错了。实测踩到过。
+function ConvertTo-ProbeHost([string]$Addr) {
+    if (-not $Addr) { return $Addr }
+    $h = $Addr.Trim('[', ']')
+    if ($h -eq '0.0.0.0') { return '127.0.0.1' }
+    if ($h -eq '::' -or $h -eq '0:0:0:0:0:0:0:0') { return '::1' }
+    if ($h -eq 'localhost') { return '127.0.0.1' }
+    return $Addr
 }
 
 function Get-ProxyVarTable([string]$Port, [string]$ProxyUrl = "") {

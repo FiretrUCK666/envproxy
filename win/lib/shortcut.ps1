@@ -1375,11 +1375,18 @@ function Show-RescuePage {
         Write-Styled 'warn' '  查下来：有个设置脚本指向已经关掉的程序。'
         Write-Styled 'dim'  '          网页能开，但每次都要先等它几秒。'
     } elseif ($fixable.Count -eq 0) {
-        Write-Styled 'ok' '  查下来：没发现问题，浏览器这边的设置是好的。'
+        Write-Styled 'ok' '  查下来：浏览器这边的设置没发现问题。'
         if ($foreign.Count -gt 0) {
             Write-Host ''
             Write-Styled 'dim' '  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。'
         }
+        # **必须说清这个工具管不到哪儿**，否则用户会以为"它说没事 = 我网没问题"。
+        # Proxifier / Netch 1.8.3+ / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，
+        # 它们出问题时 Internet Settings 里一个字节都不会变——扫注册表永远扫不出来。
+        # 不把这条说出来，用户就会在真正的原因上找不到方向。
+        Write-Host ''
+        Write-Styled 'dim' '  这个工具只管「浏览器代理」这一层。'
+        Write-Styled 'dim' '  如果网还是不通，问题可能在别处：虚拟网卡、路由表、或防火墙规则。'
     }
 
     # ---- 明细：能修的与不能动的分开列，不混在一起 ----
@@ -1491,6 +1498,16 @@ function Show-RescuePage {
     if ($r.Changed.Count -gt 0) {
         Write-Host ''
         Write-Styled 'dim' ('  改动的项：' + (@($r.Changed) -join '、'))
+    }
+    # 拨号/VPN 连接各存一份代理设置，我们只改 LAN 那份。
+    # 不把这条说出来，用户就会得到"修好了但还是打不开"——而那正是最伤人的那种失败。
+    $otherConns = @()
+    try { $otherConns = @(Get-OtherConnectionProxyNames) } catch { $otherConns = @() }
+    if ($otherConns.Count -gt 0) {
+        Write-Host ''
+        Write-Styled 'warn' '  另外还有连接存着自己的代理设置，这次没有检查：'
+        foreach ($cn in $otherConns) { Write-Styled 'text' ('    ' + $cn) }
+        Write-Styled 'dim'  '  如果你在用拨号或 VPN 上网，请在上面那个连接里看一下代理设置。'
     }
     Write-Styled 'dim' '  按回车返回'
     try { [void](Read-Host) } catch { }

@@ -11,16 +11,86 @@
 # 收录标准：能过 CONNECT 门、且可能拿去注入（http:// 方案）的口才值得收；
 # 纯 SOCKS 口（如 Surge 6153、mihomo socks-port 7891、Netch 2801）刻意不收——
 # 过不了握手门，列进去只是每轮多一次注定失败的本机握手。已在表内的不动（判决走握手门，无害）。
-$KnownProxyPorts = @(7078, 7890, 7897, 10808, 10809, 10801, 2080, 2081, 1080, 8118, 8080, 6152, 8888, 12334)  # 12334 = Hiddify-Next 默认
+# ------------------------------------------------------------------------------
+# 客户端目录：**端口、进程名、签名特征的单一数据源**
+#
+# 一张表描述"哪个客户端会用什么端口、进程叫什么"。原来同一件事散在好几处
+# （端口一份、进程名一份、救援层又要一份），靠门禁比字面量硬撑，必然漂移。
+# 收敛到这里之后，**加一个客户端支持 = 表里加一行**，其余全部自动派生。
+#
+# 字段：
+#   Id       稳定标识（日志与结论里用，不许改）
+#   Name     给人看的名字
+#   Ports    它可能监听的本地端口（这些端口只影响"识别得快不快"，不影响判决）
+#   Patterns 进程名特征（小写子串匹配）
+#   PacPorts 它可能提供的 PAC 服务端口（与代理端口分开列，因为语义不同）
+#
+# **这张表不参与"该不该修"的授权**——它只用来解释"这个端口大概是谁"。
+# 授权永远看形态 + 端口三态 + 属主是不是客户端 + 握手分类，不看品牌。
+$ClientCatalog = @(
+    @{ Id='monocloud';  Name='MonoCloud';      Ports=@(7078);                             Patterns=@('monocloud') }
+    # Clash 系四家的端口**互不相同**（一手源码核实）：
+    #   Clash for Windows mixed=7890；Clash Verge Rev mixed=7897 / socks=7898 / http=7899；
+    #   Clash Nyanpasu 默认 7890（端口策略可选 Random，每次启动可能不同）；
+    #   Mihomo Party 三个默认全开：mixed=7890 / socks=7891 / http=7892。
+    # 9090 是外部控制口（API），不是代理口，但常被用户误填，留着便于识别"这不是代理口"。
+    @{ Id='clash';      Name='Clash 系';        Ports=@(7890, 7891, 7892, 7897, 7898, 7899, 9090); Patterns=@('clash','mihomo','verge','nyanpasu','party','stash','quantumult') }
+    # v2rayN 的端口是「基址 + 枚举偏移」算出来的（AppManager.GetLocalPort），不是各自独立的：
+    #   基址 10808 时 socks=10808 / socks2=10809(HTTP) / socks3=10810 / pac=10811 /
+    #   api=10812 / api2=10813 / mixed=10814。
+    # 用户把基址改成 2080，整套就变成 2080/2081/2082/2083……
+    # **所以端口表只能用来提速，绝不能用来认客户端**——这条现在有源码级证据。
+    # 10801 是常见的手改值；1080 是 SS/旧版常用值。
+    @{ Id='v2ray';      Name='v2ray 系';        Ports=@(10808, 10809, 10810, 10811, 10812, 10813, 10814, 10801, 1080); Patterns=@('v2ray','xray','nekoray','nekobox') }
+    @{ Id='singbox';    Name='sing-box';        Ports=@(2080, 2081, 7890);                Patterns=@('sing-box','singbox') }
+    @{ Id='hiddify';    Name='Hiddify';         Ports=@(12334, 2334);                     Patterns=@('hiddify') }
+    # 1086/1087/1089 是 SSX-NG（mac 上常见）的 socks/http/PAC 三个口；
+    # Windows 版 Shadowsocks-windows 用 1080，且写的是 `localhost:1080` 而不是 127.0.0.1。
+    @{ Id='ss';         Name='Shadowsocks 系';  Ports=@(1080, 1086, 1087, 1089, 8118);   Patterns=@('shadowsocks','ss-local','trojan','hysteria') }
+    @{ Id='surge';      Name='Surge / Stash';   Ports=@(6152, 6153);                      Patterns=@('surge') }
+    @{ Id='netch';      Name='Netch';           Ports=@(2801, 2802);                      Patterns=@('netch') }
+    @{ Id='outline';    Name='Outline';         Ports=@(8888);                            Patterns=@('outline') }
+    # 抓包工具：Fiddler 默认 8888、Charles 默认 8888/8889、Proxyman 默认 9090。
+    # **它们的端口只要程序开着就一直活着**（Fiddler 作者原话：Capturing 开关只决定"要不要当系统代理"，
+    # 不决定"有没有在监听"）。所以"端口活着"绝不能反推成"代理是被这工具设的"。
+    # mitmproxy 完全不碰系统代理（全仓零命中）——若系统代理指着 8080，那是用户手配的，不许清。
+    @{ Id='devtools';   Name='调试代理';         Ports=@(8888, 8889, 8080, 9090);          Patterns=@('fiddler','charles','proxyman','mitmproxy','mitmdump') }
+)
+
+# 从目录表派生：所有可能被代理客户端占用的端口（去重、排序）。
+# **不要再手写第二份**：新增客户端只改上面那张表。
+$KnownProxyPorts = @($ClientCatalog | ForEach-Object { $_.Ports } | Sort-Object -Unique)
+
+# 从目录表派生：进程名特征。
+$ProxyProcessPatterns = @($ClientCatalog | ForEach-Object { $_.Patterns } | Sort-Object -Unique)
+
+# 这个端口在目录表里对应哪个客户端？查不到返回 $null。
+# 只用于**解释**（"7890 大概是 Clash 系的"），绝不用于授权。
+function Get-ClientByPort([int]$Port) {
+    if ($Port -le 0) { return $null }
+    foreach ($c in $ClientCatalog) {
+        if (@($c.Ports) -contains $Port) { return $c }
+    }
+    return $null
+}
+
+# 这个进程名像不像代理客户端？返回对应条目或 $null。
+# 同样是解释用的：名字可以伪造，不能当"安全"的证明。
+function Get-ClientByProcessName([string]$Name) {
+    if (-not $Name) { return $null }
+    $n = $Name.ToLower()
+    foreach ($c in $ClientCatalog) {
+        foreach ($pat in $c.Patterns) {
+            if ($n.Contains($pat)) { return $c }
+        }
+    }
+    return $null
+}
 
 # 翻墙软件进程名特征（用于快速预筛，缩小 CONNECT 探测范围）。可自行扩展。
 # 注意：此列表只影响"速度"不影响"覆盖面"——即使进程名不在列表里，
 #       第二轮的"全端口 CONNECT 探测"也能发现它（见 Find-CandidatePorts）。
-# 不认品牌、不认版本：mihomo-party/flclash 已被 mihomo/clash 命中；
-# Stash/Quantumult X 默认 Network Extension 模式、不产生本地口，故不单列。
-$ProxyProcessPatterns = @("monocloud", "clash", "mihomo", "verge", "v2ray", "xray",
-    "sing-box", "singbox", "hiddify", "shadowsocks", "ss-local", "trojan", "hysteria",
-    "neko", "netch", "surge", "outline")
+
 
 # 把 netstat 的本地端点拆成地址与端口。
 # IPv6 写成 "[::1]:445"（带方括号），IPv4 写成 "127.0.0.1:8080"（不带）——两种形态都要认。
@@ -255,6 +325,40 @@ function Test-ConnectResponse([string]$Response) {
     return [bool]($Response -match "^\s*HTTP/1\.[01]\s+200(?:\s|$)")
 }
 
+# 这个端口现在的属主是谁。给救援层用：判断"占着这个端口的是代理客户端，还是别的什么程序"。
+#
+# 为什么要问这个：判据只知道"端口活着"，但活着有两种完全不同的含义——
+#   ① 翻墙软件在跑（端口是它的）→ 不能动，动了就是删掉使用者的代理
+#   ② 某个开发服务器恰好占了 7890 → 这是一个"占位"，不是代理
+# 这两种在 TCP 探活看来一模一样，只有问属主才分得开。
+#
+# 返回：@{ Pid; Name; Path; Id } 或 $null（查不到）。
+# **查不到不等于安全**：调用方必须把 $null 当成"不知道"，不许当成"不是代理"。
+function Get-PortOwner([int]$Port) {
+    if ($Port -le 0) { return $null }
+    $listenerPid = 0
+    try {
+        $map = Get-ListeningPortPidMap
+        if ($map -and $map.ContainsKey($Port)) { $listenerPid = [int]$map[$Port] }
+    } catch { $listenerPid = 0 }
+    if ($listenerPid -le 0) {
+        # 退路：直接问系统。比 netstat 慢，但只在 netstat 拿不到时走。
+        try {
+            $c = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop | Select-Object -First 1
+            if ($c) { $listenerPid = [int]$c.OwningProcess }
+        } catch { $listenerPid = 0 }
+    }
+    if ($listenerPid -le 0) { return $null }
+    try {
+        $proc = Get-Process -Id $listenerPid -ErrorAction Stop
+        $name = [string]$proc.ProcessName
+        $path = ''
+        try { $path = [string]$proc.Path } catch { $path = '' }
+        return @{ Pid = $listenerPid; Name = $name; Path = $path; Id = ($name + '|' + $path) }
+    } catch {
+        return $null
+    }
+}
 # 这是区分"代理端口"与"其他服务端口"的终极判定，不依赖进程名/端口号猜测。
 function Test-HttpProxy([int]$Port) {
     $client = $null
@@ -277,6 +381,74 @@ function Test-HttpProxy([int]$Port) {
         return $false
     } catch {
         return $false
+    } finally {
+        if ($stream) { try { $stream.Close() } catch {} }
+        if ($client) { try { $client.Close() } catch {} }
+    }
+}
+
+# CONNECT 握手结果的**五分类**（给救援层判"这个端口到底是什么"用）。
+#
+# 为什么不能沿用 Test-HttpProxy 的布尔：它只回答"能不能拿去注入"，
+# 而救援要回答"这个端口是不是一个真的代理、它现在为什么不能用"。两者不是同一个问题。
+# 最要命的一种：节点挂掉的 Clash 对 CONNECT 会回 **502**——
+#   布尔判据把它当"不是代理"，于是"端口活着但握手不 200"会被读成"这不是代理，可以当残留删掉"，
+#   而它恰恰是使用者**正在跑**的代理，只是上游节点不通。
+# 502 的正确含义是"我是代理，但我连不上你让我连的地方"，它与"这不是 HTTP"必须分开。
+#
+# 五类：
+#   proxy-ok        回 HTTP/1.x 200  → 真是代理且链路可用
+#   proxy-auth      回 407            → 真是代理，要认证（也是活的代理）
+#   upstream-fail   回 5xx / 4xx      → 真是代理，但上游有问题（节点挂了、被墙）
+#   not-http        回了东西但不是 HTTP 应答 → 不是代理（普通程序占了端口）
+#   silent          连上了但一言不发 → 不是代理（或是不认 CONNECT 的纯 SOCKS 口）
+#   closed          连都连不上 → 端口没人听
+$ConnectHandshakeKinds = @{
+    Ok           = 'proxy-ok'
+    Auth         = 'proxy-auth'
+    UpstreamFail = 'upstream-fail'
+    NotHttp      = 'not-http'
+    Silent       = 'silent'
+    Closed       = 'closed'
+}
+
+# 把一段应答文本判成上面某一类。纯函数：测试可直接喂文本，不必起真端口。
+function Get-HandshakeKind([string]$Response) {
+    if (-not $Response) { return $ConnectHandshakeKinds.Silent }
+    # 状态码整段比对：`\s+200` 会放过 "2000"，那是"看着对其实不对"的判据。
+    if ($Response -match "^\s*HTTP/1\.[01]\s+200(?:\s|$)") { return $ConnectHandshakeKinds.Ok }
+    if ($Response -match "^\s*HTTP/1\.[01]\s+407(?:\s|$)") { return $ConnectHandshakeKinds.Auth }
+    # 4xx/5xx：它**是**一个会说 HTTP 的东西，只是这次拒绝或失败。
+    # 不能归进"不是代理"——那会把节点不通误判成端口残留。
+    if ($Response -match "^\s*HTTP/1\.[01]\s+[45]\d\d(?:\s|$)") { return $ConnectHandshakeKinds.UpstreamFail }
+    # 有字节但不成 HTTP 应答：普通服务（数据库、开发服务器、MUD 之类）。
+    if ($Response -match '^\s*HTTP/1\.[01]\s+\d{3}') { return $ConnectHandshakeKinds.UpstreamFail }
+    return $ConnectHandshakeKinds.NotHttp
+}
+
+# 对一个端口做握手，返回五分类之一。与 Test-HttpProxy 走同一条连接逻辑，只是结论更细。
+function Get-ConnectHandshakeKind([int]$Port, [int]$TimeoutMs = 600) {
+    if ($Port -le 0) { return $ConnectHandshakeKinds.Closed }
+    $client = $null
+    $stream = $null
+    try {
+        $conn = Connect-Loopback $Port $TimeoutMs
+        if (-not $conn) { return $ConnectHandshakeKinds.Closed }
+        $client = $conn.Client
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $TimeoutMs
+        $req = Get-ConnectProbeRequest
+        $stream.Write($req, 0, $req.Length)
+        $stream.Flush()
+        $buf = New-Object byte[] 512
+        $n = $stream.Read($buf, 0, 512)
+        if ($n -gt 0) {
+            return (Get-HandshakeKind ([System.Text.Encoding]::ASCII.GetString($buf, 0, $n)))
+        }
+        return $ConnectHandshakeKinds.Silent
+    } catch {
+        # 连上之后被重置也归 silent：端口在，但不对 CONNECT 应话。
+        return $ConnectHandshakeKinds.Silent
     } finally {
         if ($stream) { try { $stream.Close() } catch {} }
         if ($client) { try { $client.Close() } catch {} }
