@@ -2158,7 +2158,10 @@ jobs:
           # 这里比的是**结构**（编号、短名、标题），不比正文——正文里的命令本来
           # 就必须不同（PowerShell vs shell），那是平台差异不是漂移。
           $fail = 0
+          # 帮助主题在 help 层，菜单表在 base 层（它是契约常量，状态页也要查它）。
+          # 两处分开读：$ps 给帮助正文用，$psMenu 给菜单核对用。
           $ps = [System.IO.File]::ReadAllText('win/lib/help.ps1', [System.Text.Encoding]::UTF8)
+          $psMenu = [System.IO.File]::ReadAllText('win/lib/base.ps1', [System.Text.Encoding]::UTF8)
           $sh = [System.IO.File]::ReadAllText('mac/lib/help.sh', [System.Text.Encoding]::UTF8)
           $rt = [System.IO.File]::ReadAllText('win/lib/runtime.ps1', [System.Text.Encoding]::UTF8)
           $mrt = [System.IO.File]::ReadAllText('mac/lib/runtime.sh', [System.Text.Encoding]::UTF8)
@@ -2196,7 +2199,7 @@ jobs:
 
           # 菜单：两侧共享同一套编号（Mac 可以缺项，但同名项的编号必须一致）
           $winMenu = @{}
-          foreach ($m in [regex]::Matches($ps, 'Key = "(\d)"; Name = "([^"]*)"')) {
+          foreach ($m in [regex]::Matches($psMenu, 'Key = "(\d)"; Name = "([^"]*)"')) {
             $winMenu[$m.Groups[2].Value] = $m.Groups[1].Value
           }
           # Mac 的菜单表格式是 '编号|名字|说明|分组|子命令'。
@@ -2204,7 +2207,8 @@ jobs:
           # 把帮助主题表（同样是 '数字|名字|…' 形状）也当菜单抓了进来，
           # 解析出 14 项、其中 6 项是帮助主题，靠编号恰好不冲突才没误报。
           $macMenu = @{}
-          $macMenuBlock = [regex]::Match($sh, '(?s)MENU_ITEMS=\((.*?)\n\)')
+          $macBaseSrc = [System.IO.File]::ReadAllText('mac/lib/base.sh', [System.Text.Encoding]::UTF8)
+          $macMenuBlock = [regex]::Match($macBaseSrc, '(?s)MENU_ITEMS=\((.*?)\n\)')
           if (-not $macMenuBlock.Success) {
             Write-Host 'Mac 侧找不到 MENU_ITEMS 菜单表，菜单核对无法进行'
             $fail = 1
@@ -2329,8 +2333,12 @@ jobs:
           # 表必须从 `MENU_ITEMS=(` 里取，不能全局扫 `'N|名字|`：
           # 帮助主题表也是同一种形状，"1|用处|"与"1|安装 / 修复|"会同时命中，
           # 于是核对时拿主题名去比菜单名，必然假红。
-          $menuBlock = [regex]::Match($sh, '(?s)MENU_ITEMS=\((.*?)\r?\n\)')
-          if (-not $menuBlock.Success) { Write-Host 'Mac 侧读不到菜单表（MENU_ITEMS）'; $fail = 1 }
+          # 菜单表住在 base 层（它是契约常量，状态页与帮助页都要查它），
+          # 帮助正文住在 help 层。**两者已经不在一起了**，所以这里分别读：
+          # 菜单表去 base 找，正文核对仍在 help 上跑。
+          $shMenuSrc = [System.IO.File]::ReadAllText('mac/lib/base.sh', [System.Text.Encoding]::UTF8)
+          $menuBlock = [regex]::Match($shMenuSrc, '(?s)MENU_ITEMS=\((.*?)\r?\n\)')
+          if (-not $menuBlock.Success) { Write-Host 'Mac 侧读不到菜单表（MENU_ITEMS，应在 base 层）'; $fail = 1 }
           $macMenuRows = @([regex]::Matches($menuBlock.Groups[1].Value, "(?m)^\s*'(\d+)\|([^|]+)\|") | ForEach-Object { @{ Key = $_.Groups[1].Value; Name = $_.Groups[2].Value } })
           if ($macMenuRows.Count -eq 0) { Write-Host 'Mac 侧菜单表是空的，无法核对帮助正文里的菜单编号'; $fail = 1 }
           $inTopic = $false
@@ -2723,7 +2731,7 @@ jobs:
           #
           # 判据不写死任何具体菜单项：从 base 层的菜单表取权威清单，
           # 再用它去核图里所有"编号 + 名字"形态的文字。菜单改了，这条自动跟着改。
-          $menuSrc = Get-Content 'win/lib/help.ps1' -Raw
+          $menuSrc = Get-Content 'win/lib/base.ps1' -Raw
           $menuBlock = [regex]::Match($menuSrc, '\$MenuItems\s*=\s*@\((?<b>[\s\S]*?)\r?\n\)')
           if (-not $menuBlock.Success) {
             Write-Host 'SVG 事实核验：取不到 $MenuItems 菜单表，无法核对'
