@@ -4,7 +4,7 @@
 #  「几小时前的记录」，缓存没有就说清「没法确认」并指向更新入口。
 #
 #  两份渲染器（实时帧 Format-StatusLines 与静态页 Show-StatusSnapshot）必须同源：
-#  同一份 $st、同一个 Get-StatusProblems。内容一旦不一致，自检里有断言比对行数。
+#  同一份 $st、同一个 Get-StatusProblems。内容一旦不一致，自检里有断言逐步比对两版。
 # ==============================================================================
 
 
@@ -25,7 +25,7 @@
 # 两边会不会分叉？会，所以这个函数的输出必须由 Show-StatusSnapshot 的同源数据算出：
 #   - 结论行、问题清单、参考项：同一份 $st
 #   - 判断逻辑：调同一个 Get-StatusProblems（下面抽出来的）
-# 内容一旦不一致，自检里有断言比对两者的行数。
+# 内容一旦不一致，自检里有断言逐步比对两版。
 function Format-StatusLines($st) {
     $out = New-Object System.Collections.ArrayList
     # 一行的标准形态：标签固定用 key 色，内容按状态取角色。
@@ -63,12 +63,13 @@ function Format-StatusLines($st) {
             # 心跳判活拿不到 PID：如实说"在写心跳"，不编一个号
             & $row $StatusLabels.Monitor '运行中（心跳正常）' 'ok'
         }
-    } elseif ($st.StopIntent) {
-        & $row $StatusLabels.Monitor '按你的选择停着' 'dim'
-    } elseif ($st.NeverInstalled) {
-        & $row $StatusLabels.Monitor '还没安装' 'dim'
     } else {
-        & $row $StatusLabels.Monitor '不在了（可能被结束任务关掉或崩溃）' 'warn'
+        # 三种「没在跑」的情形与静态页同一张表：结论一行 + 说明若干行。
+        # 原来这里只有一句状态、没有任何"怎么办"，静态页却有完整解释——
+        # 同一台机器按回车和等刷新看到相反的颜色与结论。
+        $gone = Get-MonitorGoneText $st
+        & $row $StatusLabels.Monitor $gone.Text $gone.Role
+        foreach ($h in @($gone.Hints)) { & $line ('  ' + $h.Text) $h.Role }
     }
 
     # 自启
@@ -152,7 +153,7 @@ function Format-StatusLines($st) {
     if ($st.UpdateInProgress) {
         & $row $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         & $line '  程序文件可能新旧混合，某些功能会静默失效。' 'dim'
-        & $line "  打开菜单选 $(Get-MenuRef 'Install')重做一次即可。" 'dim'
+        & $line "  打开菜单$(Get-MenuRef 'Install')重做一次即可。" 'dim'
     }
     if ($st.SysProxy) {
         # 两种残留的症状真的不同，不能混成一句：
@@ -250,6 +251,59 @@ function Format-StatusLines($st) {
 # 是内部词汇，只有这张表知道怎么把它翻译给使用者。两条渲染路径各自 switch 一遍，
 # 结果就是实时页直接把 unpaired 印给用户、静态页给出中文——同一份数据两种说法。
 # 表在这里，两个渲染器都从它取，加新状态只改一处。
+# 监控「没在跑」的三种情形：一句结论 + 一句怎么办。
+#
+# 为什么抽成数据：这两句原来只写在静态页里，实时帧那一支是另一条 if 链、从来只有
+# 「按你的选择停着」六个字。实测同一台机器（点过停止 + 变量已注入 + 端口活着）：
+# 实时帧 8 行、说「已注入」而且整行绿；静态页 14 行、说「已注入但没人维护」「终端会连不上」。
+# 按回车看和等两秒刷新看到相反的颜色与结论——而这正是最难被用户描述清楚的那类问题。
+#
+# 三种情形事后长相一样，必须分开说：
+#   stopped  —— 使用者自己停的（有意图标记），是稳定状态，不用管
+#   never    —— 从没装过，那是起点，不是故障
+#   gone     —— 不是点停止，是进程被结束任务关掉或崩了
+# 判据只能靠「执行停止的那一方留下的意图标记」：不分辨就得猜，说成"你停的"会
+# 让被强杀的人以为自己点错了；什么都不说，真停过的人会以为坏了。
+#
+# 返回 @{ Text; Role; Hints }。Hints 是后续说明行（每项 @{Text;Role}），两版都逐行渲染。
+function Get-MonitorGoneText($st) {
+    if ($st.StopIntent) {
+        if ($st.AutoRunOk) {
+            return @{
+                Text  = '按你的选择停着'
+                Role  = 'dim'
+                Hints = @(@{ Text = '（你点过停止。下次登录会自动恢复，或现在点一下菜单就能恢复）'; Role = 'dim' })
+            }
+        }
+        # 两个问题叠在一起时必须说清是两个：点过停止 + 自启记录也坏了。
+        return @{
+            Text  = '按你的选择停着'
+            Role  = 'dim'
+            Hints = @(
+                @{ Text = '（你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）'; Role = 'warn' },
+                @{ Text = ('打开菜单' + (Get-MenuRef 'Install') + '可以一起修好。'); Role = 'dim' }
+            )
+        }
+    }
+    if ($st.NeverInstalled) {
+        return @{
+            Text  = '还没安装'
+            Role  = 'dim'
+            Hints = @(
+                @{ Text = '（还没装过。装上之后它会自己常驻，不用你管）'; Role = 'dim' },
+                @{ Text = ('打开菜单' + (Get-MenuRef 'Install') + '开始使用。'); Role = 'dim' }
+            )
+        }
+    }
+    return @{
+        Text  = '不在了（可能被结束任务关掉或崩溃）'
+        Role  = 'warn'
+        Hints = @(
+            @{ Text = '（不是点了停止，是进程不在了：可能被结束任务关掉，或崩溃）'; Role = 'warn' },
+            @{ Text = ('打开菜单' + (Get-MenuRef 'Install') + '可以让它重新跑起来。'); Role = 'dim' }
+        )
+    }
+}
 function Get-TermSyncText([string]$State, $Sync) {
     switch ($State) {
         'ok'       { return @{ Text = '已生效（已开着的窗口敲回车即跟上）'; Hint = ''; Bad = $false } }
@@ -279,7 +333,7 @@ function Get-TermSyncText([string]$State, $Sync) {
             # 走到这里说明 Get-TerminalSyncState 又加了新状态而这张表没跟上。
             # 必须打印出来：问题清单会说"终端同步没生效"，而整屏找不到那四个字，
             # 用户被指向一个不存在的提示（真发生过：State 叫 nohost、switch 处理 unknown）。
-            return @{ Text = ('状态未知（' + $State + '）'); Hint = "打开菜单选 $(Get-MenuRef 'Install')重写一次。"; Bad = $true }
+            return @{ Text = ('状态未知（' + $State + '）'); Hint = "打开菜单$(Get-MenuRef 'Install')重写一次。"; Bad = $true }
         }
     }
 }
@@ -571,7 +625,7 @@ function New-ProblemReport {
     Write-Host ''
     if (-not $saved) {
         Write-Styled 'warn' '报告生成失败：两个位置都写不进去。'
-        Write-Styled 'dim' "  可以先把菜单选 $(Get-MenuRef 'Status')的截图发给对方。"
+        Write-Styled 'dim' "  可以先把菜单$(Get-MenuRef 'Status')的截图发给对方。"
         # 退出码是这条命令唯一能被程序读懂的结论，说"成功"而实际失败是谎报。
         # 与 mac 侧同一套语义（那边 report 分支 return 1）。AGENTS 规定：1 = 失败。
         $script:ReportExitCode = 1
@@ -800,7 +854,7 @@ function Show-StatusSnapshot($st) {
     } elseif ($st.NeverInstalled) {
         # 从没装过：三件"没生效"都是同一个事实（还没装），
         # 说成"有 3 项要注意"会让第一次打开的人以为机器有三处毛病。
-        Write-Styled 'dim' "还没开始用。打开菜单选 $(Get-MenuRef 'Install')就能装上。"
+        Write-Styled 'dim' "还没开始用。打开菜单$(Get-MenuRef 'Install')就能装上。"
     } else {
         Write-Styled 'warn' ("有 {0} 项要注意：" -f $problems.Count)
         foreach ($p in $problems) { Write-Styled 'warn' ("  - " + $p) }
@@ -816,23 +870,10 @@ function Show-StatusSnapshot($st) {
         # "结束任务"关掉/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
         # 不分辨就只能猜：说成"你停的"，被强杀的人会以为自己点错了；什么都不说，
         # 真停过的人会以为坏了。
-        if ($st.StopIntent) {
-            if ($st.AutoRunOk) {
-                Write-Styled 'dim' "  （你点过停止。下次登录会自动恢复，或现在选 1）"
-            } else {
-                # 两个问题叠在一起时必须说清是两个：点过停止 + 自启记录也坏了。
-                Write-Styled 'warn' "  （你点过停止，但开机自启记录也坏了，下次登录不会自动恢复）"
-                Write-Styled 'dim' "  打开菜单选 $(Get-MenuRef 'Install')可以一起修好。"
-            }
-        } elseif ($st.NeverInstalled) {
-            # 从没装过：这不是问题，是起点。用"崩溃/被结束任务"描述它，
-            # 第一次打开的人会以为自己的机器出了事（"我明明没装过"）。
-            Write-Styled 'dim' "  （还没装过。装上之后它会自己常驻，不用你管）"
-            Write-Styled 'dim' "  打开菜单选 $(Get-MenuRef 'Install')开始使用。"
-        } else {
-            Write-Styled 'warn' "  （不是点了停止，是进程不在了：可能被结束任务关掉，或崩溃）"
-            Write-Styled 'dim' "  打开菜单选 $(Get-MenuRef 'Install')可以让它重新跑起来。"
-        }
+        # 三种情形的措辞从 Get-MonitorGoneText 取：与实时帧同一张表，
+        # 两边说的话逐字相同（与下面终端同步那条同一套做法）。
+        $gone = Get-MonitorGoneText $st
+        foreach ($h in @($gone.Hints)) { Write-Styled $h.Role ('  ' + $h.Text) }
     }
     if (-not $st.AutoRunOk) {
         if ($st.AutoRunRaw) {
@@ -841,7 +882,7 @@ function Show-StatusSnapshot($st) {
         } else {
             Write-StatusRow $StatusLabels.AutoRun '未启用' 'warn'
         }
-        Write-Styled 'dim' "  打开菜单选 $(Get-MenuRef 'Install')可以重建。"
+        Write-Styled 'dim' "  打开菜单$(Get-MenuRef 'Install')可以重建。"
     }
     if (-not $st.ProxyValue -and $st.Port -and -not $m -and -not $st.NeverInstalled) {
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
@@ -852,7 +893,7 @@ function Show-StatusSnapshot($st) {
         # 这个说明变量被别的工具改坏了（写进了半个地址、或者端口是个词）。
         # 不许落绿字"已注入"——那等于告诉用户一切正常。
         Write-StatusRow $StatusLabels.Vars ("值不是合法地址（{0}）" -f $st.ProxyValue) 'warn'
-        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。选 $(Get-MenuRef 'Install')会按当前代理重写一遍。"
+        Write-Styled 'dim' "  多半是别的工具改写成了半个地址。$(Get-MenuRef 'Install')会按当前代理重写一遍。"
     } elseif ($st.ProxyValue -and -not $st.ProxyAlive) {
         Write-StatusRow $StatusLabels.Vars ("指向的端口已不在（{0}）" -f $st.ProxyValue) 'warn'
         Write-Styled 'warn' ("  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。")
@@ -866,15 +907,15 @@ function Show-StatusSnapshot($st) {
         if ($oldPort -and $st.Port -and $oldPort -ne [int]$st.Port) {
             # 代理在别的端口上活着：跟着它走就对了
             Write-Styled 'dim' ("  变量里是旧端口 {0}，翻墙代理现在在 {1}。" -f $oldPort, $st.Port)
-            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟过去；想立刻跟上就选 $(Get-MenuRef 'Install')。"
+            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟过去；想立刻跟上就$(Get-MenuRef 'Install')。"
         } elseif (-not $st.Port) {
             # 代理根本没在跑：没有可跟的目标，那就是该清掉
             Write-Styled 'dim' '  翻墙代理现在没在跑，所以这个地址已经没用了。'
-            Write-Styled 'dim' "  监控在跑的话几秒内会把它清掉；想立刻清掉就选 $(Get-MenuRef 'Install')。"
+            Write-Styled 'dim' "  监控在跑的话几秒内会把它清掉；想立刻清掉就$(Get-MenuRef 'Install')。"
         } else {
             # 端口解析不出来（极少见），只给通用说法，不编具体原因
             Write-Styled 'dim' '  这个地址已经连不上了（多半是刚换过端口）。'
-            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟上；想立刻跟上就选 $(Get-MenuRef 'Install')。"
+            Write-Styled 'dim' "  监控在跑的话几秒内会自己跟上；想立刻跟上就$(Get-MenuRef 'Install')。"
         }
     } elseif ($st.ProxyValue -and -not $m) {
         Write-StatusRow $StatusLabels.Vars ("已注入（{0}），但没人维护" -f $st.ProxyValue) 'warn'
@@ -896,7 +937,7 @@ function Show-StatusSnapshot($st) {
     if ($st.UpdateInProgress) {
         Write-StatusRow $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
-        Write-Styled 'dim' "  打开菜单选 $(Get-MenuRef 'Install')重做一次即可。"
+        Write-Styled 'dim' "  打开菜单$(Get-MenuRef 'Install')重做一次即可。"
     }
     if ($st.SysProxy) {
         # 措辞与实时帧逐字相同（两版是同一屏的两种刷新方式），见 Format-StatusLines。
@@ -1012,11 +1053,11 @@ function Get-VersionText($st) {
     } elseif (Test-SourceCopy) {
         $state = "源码包（更新入口会先确认用途再动手）"; $role = 'warn'
     } elseif (-not $localVer) {
-        $state = "可打开菜单选 $(Get-MenuRef 'Update')升级"; $role = 'warn'
+        $state = "可打开菜单$(Get-MenuRef 'Update')升级"; $role = 'warn'
     } elseif ((Compare-Versions $localVer $remote.Version) -gt 0) {
         $state = "本地版本比最新发布版新"; $role = 'dim'
     } elseif ((Compare-Versions $remote.Version $localVer) -gt 0) {
-        $state = ("发现新版 {0}，选 $(Get-MenuRef 'Update')即可升级" -f $remote.Tag); $role = 'warn'
+        $state = ("发现新版 {0}，$(Get-MenuRef 'Update')即可升级" -f $remote.Tag); $role = 'warn'
     } else {
         $state = "已是最新"; $role = 'dim'
     }
@@ -1077,16 +1118,3 @@ function Show-RecentLog {
     }
     Write-Styled 'title' "=================================="
 }
-
-# ------------------------------------------------------------------------------
-# 8. 菜单（唯一双击入口"打开菜单"背后：编号→现有开关，不新增行为）
-# ------------------------------------------------------------------------------
-# 屏幕刷新：菜单与帮助都是"一屏一页"，切换页面时先清屏再画（清屏实现在 base 层的 Clear-Screen）。
-
-# 菜单只做三件事：打印、读编号、起子进程跑对应开关后回到菜单。
-# 每个动作都走一遍入口开关的完整路径（含操作锁）：菜单自己不拿锁、不碰变量不碰文件，
-# 所以菜单里的 bug 最多影响菜单显示，动不了安装区。
-# **打印与分派共用下面这张 $MenuItems**：加一项就自动出现在菜单里，不会再出现
-# "表里加了、打印忘了"这种功能明明做了、用户却看不见的缺口。
-# 非交互环境（管道/后台调用）直接退出并提示，不死循环（与 Read-Host 各处的规矩一致）。
-# 分组只影响打印顺序；编号按使用频率从上往下连续排（1-4 日常、5-6 维护、0 退出）。

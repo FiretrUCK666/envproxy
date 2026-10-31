@@ -1,17 +1,17 @@
 ﻿# ==============================================================================
-#  ops.ps1 — 编排层：安装、卸载、日常操作的编排
-#  只做「按顺序调用别的层」这件事，自己不实现判定与渲染。
+#  ops.ps1 — 编排层：安装、卸载、日常操作的编排，含过程叙述
+#
+#  它做两件事：按顺序调用别的层；把「每一步做成没做成」讲给使用者听
+#  （`[1/4]` 那几行）。**判定与统计不在这里**——那些在 probe / env / doctor 层。
+#
+#  但文案确实在这里，因为它与调用顺序长在一起：第 3 步失败了才说第 3 步的话。
+#  把这些话搬到 pages 层会让"哪一步失败"变成要跨函数传的参数，比现在更难读。
 #
 #  状态页与版本显示住在 pages 层，菜单与帮助住在 help 层：
-#  它们各有各的变更原因（安装流程因安全要求变、状态页因要说清而变化、
-#  菜单帮助因文案变），混在一个文件里会让改一处时碰到另外两处。
+#  它们各有各的变更原因（状态页因要说清而变化、菜单帮助因文案变），
+#  混在一个文件里会让改一处时碰到另外两处。
 # ==============================================================================
 
-# ==============================================================================
-#  ops.ps1 — 动作层：菜单背后的安装、停止、卸载、状态编排、菜单与帮助、问题反馈
-#  把下面各层拼成使用者点得到的行为。
-#  卸载要处理「走代理的快捷方式」的去留，因此依赖 shortcut 层的扫描与删除函数。
-# ==============================================================================
 
 # ------------------------------------------------------------------------------
 # 7. 子命令实现
@@ -47,7 +47,7 @@ function Install-EnvProxy {
     } else {
         $instOk = 1
         Write-Styled 'warn' "[1/4] 开机自启动：没写成。可能被杀软或组策略拦住了。"
-        Write-Styled 'warn' "      请检查杀软拦截，或再打开一次菜单选 $(Get-MenuRef 'Install')；仍然不行就把它加进白名单。"
+        Write-Styled 'warn' "      请检查杀软拦截，或再打开一次菜单$(Get-MenuRef 'Install')；仍然不行就把它加进白名单。"
     }
     # 首次安装的判据必须在写路径记录**之前**取：写完这台机器上就有记录了，再判永远是"重装"。
     # 差别在于本机地址的代理变量算谁的——首次安装时它只可能是使用者自己的。
@@ -98,7 +98,7 @@ function Install-EnvProxy {
         # 写失败必须如实说，不能说"已校正"——用户会以为在走代理，实际是半套变量。
         $instOk = 1
         Write-Styled 'warn' "[3/4] 环境变量：没写进去。可能被杀软或组策略拦住了。"
-        Write-Styled 'warn' "      再打开一次菜单选 $(Get-MenuRef 'Install')重试；仍然不行请反馈。"
+        Write-Styled 'warn' "      再打开一次菜单$(Get-MenuRef 'Install')重试；仍然不行请反馈。"
     } else {
         Write-Styled 'ok' "[3/4] 环境变量：已按当前状态校正"
     }
@@ -154,7 +154,7 @@ function Install-EnvProxy {
         Write-Styled 'ok' "装好了。之后怎么用："
     } else {
         Write-Styled 'warn' "装是装了，但有步骤没做成（见上面带「失败 / 未能 / 没写成」的那几行）。"
-        Write-Styled 'warn' "先把它们解决掉，再打开一次菜单选 $(Get-MenuRef 'Install')重跑；否则某些功能会时好时坏。"
+        Write-Styled 'warn' "先把它们解决掉，再打开一次菜单$(Get-MenuRef 'Install')重跑；否则某些功能会时好时坏。"
         Write-Host ""
         Write-Styled 'dim' "之后怎么用："
     }
@@ -166,10 +166,10 @@ function Install-EnvProxy {
         @('新开的终端 / 程序', '自动就是对的，什么都不用做。', ''),
         @('一直开着的窗口', '敲一下回车就跟上（cmd 窗口只能重开）。', ''),
         @('装之前就开着的窗口', '重开一个，或者手动加载一次', ''),
-        @('', "菜单选 $(Get-MenuRef 'Help')第 2 条，各种终端都有现成命令。", ''),
+        @('', "菜单$(Get-MenuRef 'Help')第 2 条，各种终端都有现成命令。", ''),
         @('想让某个窗口一直不翻墙', '在它里面执行', "`$env:ENVPROXY_TERM = 'off'"),
         @('改回跟着翻墙软件走', '在它里面执行', 'Remove-Item Env:ENVPROXY_TERM'),
-        @('忘了怎么用', "菜单选 $(Get-MenuRef 'Help')。", '')
+        @('忘了怎么用', "菜单$(Get-MenuRef 'Help')。", '')
     )
     $tipW = 0
     foreach ($r in $tipRows) {
@@ -225,10 +225,21 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         }
     } else {
         # 没有可交互的控制台：不能问，也不能替用户答应。
-        Write-Styled 'warn' "这里没法问你要不要卸载（没有可交互的控制台），所以什么都不会做。"
-        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd 选 $(Get-MenuRef 'Uninstall')；"
+        #
+        # **必须显式 return 1**：裸 return 返回 $null，而入口写的是
+        # `exit ([int](...)[-1])` 与 `[int]$code`——[int]$null 等于 0。
+        # 于是屏幕上打「什么都不会做」，退出码却是成功，脚本里那句
+        # `envproxy.ps1 -Uninstall; if ($?)` 会当成卸干净了。
+        # 同一函数里 restore_prev_env 失败那条分支就是这么修的（见下面 return 1），
+        # mac 侧 ops.sh 的同一分支也是。三处必须同形。
+        Write-Styled 'warn' "这里没法问你要不要卸载（没有可交互的控制台），所以不会动你的代理设置与安装文件。"
+        Write-Styled 'dim' "  真的要卸载，请双击 打开菜单.cmd $(Get-MenuRef 'Uninstall')；"
         Write-Styled 'dim' "  或者确认无误后加 -Yes：envproxy.ps1 -Uninstall -Yes"
-        return
+        # 拒绝执行是对的（问不到人就不能替使用者答应），但**自启动记录属于清理自己的残留**，
+        # 不需要征得同意：留着它，每次登录 Windows 都会失败一次，而那时工具已经卸载、
+        # 再没有任何东西会来修它。代理变量与安装区那两样才需要人点头。
+        Remove-AutoRun
+        return 1
     }
     Stop-Monitor
     Remove-AutoRun
@@ -263,7 +274,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     if (-not $restoreOk) {
         Write-Styled 'warn' "[未完成] 你原来的代理设置没能写回去（可能被杀软或组策略拦住了）。"
         Write-Styled 'warn' "        备份还留着，没有再删任何东西。请先手动把原来的设置加回去，"
-        Write-Styled 'warn' "        再点一次菜单选 $(Get-MenuRef 'Uninstall')收尾。"
+        Write-Styled 'warn' "        再点一次菜单$(Get-MenuRef 'Uninstall')收尾。"
         # 必须显式返回 1：裸 return 返回 $null，而入口写的是 `exit ([int](...)[-1])`，
         # [int]$null 等于 0——屏幕上打"[未完成]"，退出码却是成功。
         # 这正是"用户原设置没还原、备份还留着"那种最需要人动手的情形，报成功最贵：
@@ -511,7 +522,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     } else {
         Write-Styled 'warn' "[未完成] 这几处没清干净："
         foreach ($d in $dirty) { Write-Styled 'warn' ("        - " + $d) }
-        Write-Styled 'warn' "        再打开菜单选 $(Get-MenuRef 'Uninstall')试一次；还不行就照上面列出的位置手动删。"
+        Write-Styled 'warn' "        再打开菜单$(Get-MenuRef 'Uninstall')试一次；还不行就照上面列出的位置手动删。"
         # 退出码必须跟着结论走：只打印"[未完成]"而返回成功，
         # 脚本里的"卸载成功就删备份"之类判断就会成立——屏幕说没清完、退出码说成功了。
         return 1

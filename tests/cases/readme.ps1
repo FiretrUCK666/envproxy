@@ -626,7 +626,33 @@ foreach ($lbl in $__liveItems) {
     if (-not $hit) { $__missingInStat += $lbl }
 }
 Assert-Eq '两版状态页：实时帧的每一项静态页都有' 0 $__missingInStat.Count
-foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
+
+# 监控「没在跑」的三种情形：两版的**说明行**也必须一致。
+#
+# 上面那几条只比「标签 + 值」，说明行（"你点过停止…" / "打开菜单选 N 可以…"）
+# 完全在比对范围之外。实测过的真实故障：实时帧对这三种情形只打一句状态、
+# 没有任何"怎么办"，静态页却有完整解释——同一台机器按回车和等两秒刷新
+# 看到相反的颜色与结论，而上面所有断言照样全绿。
+#
+# 判据落在 Get-MonitorGoneText 的返回值上，不落在具体句子上：措辞可以改，
+# 但两版必须从同一处取。这条断言是"两版同源"这个契约的唯一守卫。
+foreach ($__gc in @(
+    @{ Name = 'stopped';     St = [pscustomobject]@{ StopIntent = $true;  AutoRunOk = $true;  NeverInstalled = $false } },
+    @{ Name = 'stop+badrun'; St = [pscustomobject]@{ StopIntent = $true;  AutoRunOk = $false; NeverInstalled = $false } },
+    @{ Name = 'never';       St = [pscustomobject]@{ StopIntent = $false; AutoRunOk = $true;  NeverInstalled = $true  } },
+    @{ Name = 'gone';        St = [pscustomobject]@{ StopIntent = $false; AutoRunOk = $true;  NeverInstalled = $false } }
+)) {
+    $__g = Get-MonitorGoneText $__gc.St
+    Assert-Eq ('监控缺失[' + $__gc.Name + ']：结论非空') $true ([bool]$__g.Text)
+    Assert-Eq ('监控缺失[' + $__gc.Name + ']：角色是合法色名') $true ($StyleRoles -contains [string]$__g.Role)
+    # 除了"自己停的"以外，都必须给出下一步——只报状态不给出路，用户不知道能做什么。
+    if ($__gc.Name -ne 'stopped') {
+        Assert-Eq ('监控缺失[' + $__gc.Name + ']：说出了下一步') $true (@($__g.Hints).Count -ge 1)
+    }
+}
+# 两版必须真的调同一张表：谁绕过它自己写一套，这里就红。
+Assert-Eq '实时帧的监控行从 Get-MonitorGoneText 取' $true ([bool]([regex]::IsMatch((Get-FunctionBody '' 'Format-StatusLines'), 'Get-MonitorGoneText')))
+Assert-Eq '静态页的监控行从 Get-MonitorGoneText 取' $true ([bool]([regex]::IsMatch((Get-FunctionBody '' 'Show-StatusSnapshot'), 'Get-MonitorGoneText')))
 foreach ($m in $__missingInStat) { Write-Host ('    静态页缺少：' + $m) }
 
 # 状态页整段不许写文件、不许改变量（只读契约）
