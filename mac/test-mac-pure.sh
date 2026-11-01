@@ -1218,11 +1218,13 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 原来每一行把「标签 : 内容」整行套一个角色，于是"代理变量 : 无"整行变灰、
     # 标签也跟着灰——用户最先看的恰恰是标签。这条钉住"标签走 _status_row"这个结构。
     _sr_bad=""
-    for _sr_lbl in 监控进程 开机自启 翻墙代理 终端同步 代理变量 版本; do
-        all_lib_source | grep -q "_status_row \"$_sr_lbl\"" || _sr_bad="$_sr_bad $_sr_lbl(缺)"
+    # 标签必须从 base 层的 STATUS_LABEL_* 取（唯一权威处，与 Windows 侧逐字对齐）。
+    # 查常量引用而不是字面量：写死中文的话，改名时这条断言会逼着人在两处改。
+    for _sr_var in MONITOR AUTORUN PROXY TERMSYNC VARS VERSION; do
+        all_lib_source | grep -q "_status_row \"\$STATUS_LABEL_$_sr_var\"" || _sr_bad="$_sr_bad $_sr_var(缺)"
         # 不许再有"整行同色 + 标签 : 内容"的老写法
-        if all_lib_source | grep -qE "style_out (ok|warn|dim) \"$_sr_lbl : "; then
-            _sr_bad="$_sr_bad $_sr_lbl(整行同色)"
+        if all_lib_source | grep -qE "style_out (ok|warn|dim) \"$_sr_var : "; then
+            _sr_bad="$_sr_bad $_sr_var(整行同色)"
         fi
     done
     _selftest_assert_eq "状态页: 每行都走分段渲染" "" "$_sr_bad"
@@ -1966,7 +1968,7 @@ EOF
     # 没有管住"每一处"。同时直接禁掉整行套色那种写法：只要出现
     # `style_out ... "版本 : ` 就是错的（"版本 : " 里那个空格是全角冒号前的空格，
     # 只有整行套色那版才会这么拼）。
-    _ver_row=$(all_lib_source | grep -c '_status_row "版本"')
+_ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     _selftest_assert_eq "接线：版本行两处都走分段渲染" "2" "$_ver_row"
     _ver_bad=$(all_lib_source | grep -cE 'style_out .*"版本 : ' 2>/dev/null)
     _selftest_assert_eq "接线：版本行没有整行套色写法" "0" "$_ver_bad"

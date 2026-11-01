@@ -2365,6 +2365,54 @@ jobs:
             }
           }
 
+
+          # 状态页的左列标签：两侧必须逐字相同。
+          #
+          # AGENTS.md 的同步契约表里有一行「状态页行结构 / 界面用语 → 另一侧逐项同形」，
+          # 但门禁 14 只查机制词、门禁 15 原先只比帮助主题与菜单——**没有任何一条比状态页标签**。
+          # 于是 mac 侧一度根本没有标签常量表（24 处字符串字面量散在各处），
+          # 改名要全仓搜、漏一处就在屏幕上露出两个不同的名字。
+          #
+          # 判据：两边的标签常量表逐项比（名字与值都比）。mac 允许缺 Advanced
+          # 那一项——它没有启动器，那一行在 mac 上不存在，属有意的平台差异。
+          $winLblSrc = [System.IO.File]::ReadAllText('win/lib/base.ps1', [System.Text.Encoding]::UTF8)
+          $macLblSrc = [System.IO.File]::ReadAllText('mac/lib/base.sh', [System.Text.Encoding]::UTF8)
+          $winLblBlock = [regex]::Match($winLblSrc, '(?s)\$StatusLabels = \[ordered\]@\{(.*?)\r?\n\}')
+          if (-not $winLblBlock.Success) { Write-Host 'Win 侧读不到 $StatusLabels 标签表'; $fail = 1 }
+          $winLbl = @{}
+          foreach ($m in [regex]::Matches($winLblBlock.Groups[1].Value, '(\w+)\s*=\s*''([^'']+)''')) {
+            $winLbl[$m.Groups[1].Value] = $m.Groups[2].Value
+          }
+          $macLbl = @{}
+          foreach ($m in [regex]::Matches($macLblSrc, '(?m)^STATUS_LABEL_(\w+)="([^"]+)"')) {
+            $macLbl[$m.Groups[1].Value] = $m.Groups[2].Value
+          }
+          if ($winLbl.Count -eq 0) { Write-Host 'Win 侧标签表是空的，无法核对'; $fail = 1 }
+          if ($macLbl.Count -eq 0) { Write-Host 'Mac 侧读不到 STATUS_LABEL_* 标签常量'; $fail = 1 }
+          # mac 没有启动器，Advanced 那一行不存在（有意的平台差异，不记为失配）。
+          $lblMacOnlyOk = @('ADVANCED')
+          foreach ($k in $winLbl.Keys) {
+            $mk = $k.ToUpperInvariant()
+            if (-not $macLbl.ContainsKey($mk)) {
+              if ($lblMacOnlyOk -notcontains $mk) {
+                Write-Host ("状态页标签「{0}」只在 Win 侧有定义（Mac 缺 STATUS_LABEL_{1}）" -f $winLbl[$k], $mk)
+                $fail = 1
+              }
+              continue
+            }
+            if ($macLbl[$mk] -ne $winLbl[$k]) {
+              Write-Host ("状态页标签「{0}」两侧不同：Win [{1}] / Mac [{2}]" -f $k, $winLbl[$k], $macLbl[$mk])
+              $fail = 1
+            }
+          }
+          foreach ($k in $macLbl.Keys) {
+            if (-not ($winLbl.Keys | Where-Object { $_.ToUpperInvariant() -eq $k })) {
+              if ($lblMacOnlyOk -notcontains $k) {
+                Write-Host ("状态页标签「{0}」只在 Mac 侧有定义" -f $macLbl[$k])
+                $fail = 1
+              }
+            }
+          }
           if ($fail) { exit 1 }
           Write-Host '两侧帮助与菜单结构一致'
 

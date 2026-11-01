@@ -370,7 +370,7 @@ show_status() {
 
     # ---- 要注意的：只印有问题的那几项，每项带一句怎么办 ----
     if [ -z "$_m" ]; then
-        _status_row "监控进程" "未运行" warn
+        _status_row "$STATUS_LABEL_MONITOR" "未运行" warn
         # "停止"是一个稳定状态（自启动只在登录时拉起一次，不保活）。
         # 但"未运行"有两个完全不同的原因，事后长相一样：使用者主动停的，还是进程被
         # 强制退出/崩溃了。只有执行停止的那一方留下的意图标记能分辨。
@@ -394,22 +394,22 @@ show_status() {
     fi
     if [ "$_autorun_ok" = "0" ]; then
         if [ "$_autorun_reg" = "1" ]; then
-            _status_row "开机自启" "记录还在，但启动文件已不存在（登录时不会启动）" warn
+            _status_row "$STATUS_LABEL_AUTORUN" "记录还在，但启动文件已不存在（登录时不会启动）" warn
             style_out dim "  记录指向：$LOCATOR_PATH"
             style_out dim "  打开菜单$(menu_ref install)可以重建。"
         elif [ -f "$PLIST_PATH" ]; then
-            _status_row "开机自启" "已写入但未加载" warn
+            _status_row "$STATUS_LABEL_AUTORUN" "已写入但未加载" warn
             style_out dim "  打开菜单$(menu_ref install)可以重建。"
         else
-            _status_row "开机自启" "未启用" warn
+            _status_row "$STATUS_LABEL_AUTORUN" "未启用" warn
             style_out dim "  打开菜单$(menu_ref install)可以启用。"
         fi
     fi
     if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then
-        _status_row "代理变量" "值不是合法地址（$_cur）" warn
+        _status_row "$STATUS_LABEL_VARS" "值不是合法地址（$_cur）" warn
         style_out dim "  多半是别的工具改写成了半个地址。$(menu_ref install)会按当前代理重写一遍。"
     elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
-        _status_row "代理变量" "指向的端口已不在（$_cur）" warn
+        _status_row "$STATUS_LABEL_VARS" "指向的端口已不在（$_cur）" warn
         style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
         # 这一屏最容易被读成"工具坏了"：翻墙代理明明是开着的，代理变量却说端口不在。
         # 实情是**它俩指向的不是同一个端口**——换了端口、变量还停在旧的那个上。
@@ -429,14 +429,14 @@ show_status() {
             style_out dim "  监控在跑的话几秒内会自己跟上；想立刻跟上就$(menu_ref install)。"
         fi
     elif [ -n "$_cur" ] && [ -z "$_m" ]; then
-        _status_row "代理变量" "已注入（$_cur），但没人维护" warn
+        _status_row "$STATUS_LABEL_VARS" "已注入（$_cur），但没人维护" warn
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
         style_out dim "  打开$(menu_ref install)恢复监控；或$(menu_ref uninstall)，把这批变量一并清掉。"
     elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
         # "翻墙代理有" + "代理变量无" 单独看像自相矛盾。实话是：软件在跑，
         # 但本工具没在它上面工作（多半是使用者自己停的）。补一句桥接，否则会被判定"坏了"。
         # 与 Windows 侧同一句、同一判据。
-        _status_row "代理变量" "无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" dim
+        _status_row "$STATUS_LABEL_VARS" "无（翻墙软件在跑，但本工具已停用，所以没往终端里设代理）" dim
     fi
     case "$_ts_state" in
         # 正常态什么都不说：它由下面"参考信息"那一段单独打一行绿的。
@@ -444,29 +444,29 @@ show_status() {
         # 于是每个装对了的人都会看到"状态未知（ok）"——比不报还糟。
         ok) : ;;
         unpaired)
-            _status_row "终端同步" "配置文件里的标记不成对，未改动它" warn
+            _status_row "$STATUS_LABEL_TERMSYNC" "配置文件里的标记不成对，未改动它" warn
             if [ -n "$_ts_badline" ]; then
                 style_out dim "  删掉配置文件里孤立的那行标记（第 $_ts_badline 行）再$(menu_ref install)。"
             else
                 style_out dim "  删掉配置文件里孤立的 EnvProxy 标记行再$(menu_ref install)。"
             fi ;;
         stale)
-            _status_row "终端同步" "同步块是旧版本的" warn
+            _status_row "$STATUS_LABEL_TERMSYNC" "同步块是旧版本的" warn
             # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
             style_out dim "  这不影响用，只是那段代码旧了；打开$(menu_ref install)会更新它。" ;;
         missing)
-            _status_row "终端同步" "配置文件里没有同步块" warn
+            _status_row "$STATUS_LABEL_TERMSYNC" "配置文件里没有同步块" warn
             style_out dim "  打开$(menu_ref install)可以写入。" ;;
         *)
             # 走到这里说明判定端又加了新状态而这里没跟上。静默跳过不行：
             # 上面的问题清单会说"终端同步没生效"，而往下整屏找不到"终端同步"
             # 四个字——用户被指向一个不存在的提示。Windows 侧真发生过一次
             # （State 叫 nohost、switch 处理的是 unknown，恰好错位）。
-            _status_row "终端同步" "状态未知（$_ts_state）" warn
+            _status_row "$STATUS_LABEL_TERMSYNC" "状态未知（$_ts_state）" warn
             style_out dim "  打开菜单$(menu_ref install)重写一次。" ;;
     esac
     if [ "$_upd_prog" = "1" ]; then
-        _status_row "上次更新" "没有完成（覆盖过程中断）" warn
+        _status_row "$STATUS_LABEL_LASTUPDATE" "没有完成（覆盖过程中断）" warn
         style_out dim "  程序文件可能新旧混合，某些功能会静默失效。"
         style_out dim "  打开菜单$(menu_ref install)重做一次即可。"
     fi
@@ -480,7 +480,7 @@ show_status() {
         else
             _sp_text="指向本机一个已经关掉的程序（浏览器会打不开网页）"
         fi
-        _status_row "系统代理" "${_sp_text}。不是本工具写的。" warn
+        _status_row "$STATUS_LABEL_SYSPROXY" "${_sp_text}。不是本工具写的。" warn
         style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选网络救援。"
     fi
     [ "$_pn" != "0" ] && echo ""
@@ -489,8 +489,8 @@ show_status() {
     # 分组之间空一行（与 Windows 侧同一套）：八行数据紧贴在一起的观感是"一坨字"，
     # 眼睛找不到落点。分三组——进程与自启（后台在不在）、代理与变量（链路通不通）、
     # 终端同步（已开的窗口跟不跟得上）。组内紧凑、组间留白。
-    [ -n "$_m" ] && _status_row "监控进程" "运行中 (PID $_m)" ok
-    [ "$_autorun_ok" = "1" ] && _status_row "开机自启" "已启用" ok
+    [ -n "$_m" ] && _status_row "$STATUS_LABEL_MONITOR" "运行中 (PID $_m)" ok
+    [ "$_autorun_ok" = "1" ] && _status_row "$STATUS_LABEL_AUTORUN" "已启用" ok
     if [ -n "$_m" ] || [ "$_autorun_ok" = "1" ]; then
         if [ -n "$_port" ] || [ "$_port_unknown" = "1" ] || [ -n "$_cur" ]; then
             echo ""
@@ -510,25 +510,25 @@ show_status() {
                 _age_note="（${SNAP_AGE} 秒前的判断）"
             fi
         fi
-        _status_row "翻墙代理" "已开启（本地端口 $_port 监听中）${_age_note}" ok
+        _status_row "$STATUS_LABEL_PROXY" "已开启（本地端口 $_port 监听中）${_age_note}" ok
     elif [ "$_port_unknown" = "1" ]; then
-        _status_row "翻墙代理" "这一轮没读到本机端口，无法判断（正常，会自动重试）" warn
+        _status_row "$STATUS_LABEL_PROXY" "这一轮没读到本机端口，无法判断（正常，会自动重试）" warn
     else
-        _status_row "翻墙代理" "未检测到（当前无翻墙代理在运行）" dim
+        _status_row "$STATUS_LABEL_PROXY" "未检测到（当前无翻墙代理在运行）" dim
     fi
     # 代理变量只有"已注入且活着且监控在跑"才进参考区；其余分支上半段已经说过，
     # 这里再打一遍就是同一件事说两次。
     if [ -n "$_cur" ] && [ "$_cur_alive" = "1" ] && [ -n "$_m" ]; then
-        _status_row "代理变量" "已注入 ($_cur)" ok
+        _status_row "$STATUS_LABEL_VARS" "已注入 ($_cur)" ok
     elif [ -z "$_cur" ] && [ -z "$_port" ]; then
         # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
         # 少了 [ -z "$_port" ] 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
         # 同时命中：同一屏里"代理变量"出现两次、说法还相反。
-        _status_row "代理变量" "无（直连状态）" dim
+        _status_row "$STATUS_LABEL_VARS" "无（直连状态）" dim
     fi
     if [ "$_ts_state" = "ok" ]; then
         echo ""
-        _status_row "终端同步" "已生效（已开着的窗口敲回车即跟上）" ok
+        _status_row "$STATUS_LABEL_TERMSYNC" "已生效（已开着的窗口敲回车即跟上）" ok
     fi
     echo ""
 
@@ -549,7 +549,7 @@ show_status() {
     fi
     if [ -z "$_vc" ]; then
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        _status_row "版本" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以$(menu_ref update)立刻查）" dim
+        _status_row "$STATUS_LABEL_VERSION" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以$(menu_ref update)立刻查）" dim
     else
         REMOTE_VERSION="$_vc"
         REMOTE_TAG="v$_vc"
@@ -584,7 +584,7 @@ show_status() {
         fi
         # 与同屏其余 7 行同一结构：标签固定 key 色、只有内容按状态变色。
         # 整行套一个角色色会让「版本」这个标签也跟着变色——那正是 _status_row 要解决的毛病。
-        _status_row "版本" "$_local_text（$_state）$_age_text" "$_role"
+        _status_row "$STATUS_LABEL_VERSION" "$_local_text（$_state）$_age_text" "$_role"
     fi
 
     style_out title "---------------- 最近日志 ----------------"
