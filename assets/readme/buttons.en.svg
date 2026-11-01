@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="915" viewBox="0 0 1200 915" role="img" aria-labelledby="buttonsTitle buttonsDesc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif">
   <title id="buttonsTitle">What each menu option touches</title>
-  <desc id="buttonsDesc">A nine-row, five-column comparison table. Rows are the nine menu items; columns are start at login, monitor process, environment variables, log, and locator with path record. A check mark means it writes or keeps that item. A dash means it clears it. A solid dot means the menu item does not touch it at all. A blue arrow means it starts the item or restarts it (starts it when not running, restarts it when running, so the newest code is loaded). A dash with a yellow ring means it stops and asks you first. Install writes the login entry, starts or restarts the monitor, corrects the environment variables for the current state, and rewrites the locator and path record, leaving the log alone. Show status, help, advanced, problem report and exit touch none of the five. Check for updates runs the install finish step after the new version lands, so the login entry, monitor, variables and locator are all handled again. Stop the monitor only stops the process and clears the variables; the login entry and locator stay, so it comes back at the next login. Full restore clears everything else and asks first whether to keep the log.</desc>
+  <desc id="buttonsDesc">A nine-row, five-column comparison table. Rows are the nine menu items; columns are start at login, monitor process, environment variables, log, and locator with path record. A check mark means it writes or keeps that item. A dash means it clears it. A solid dot means the menu item does not touch it at all. A blue arrow means it starts the item or restarts it (starts it when not running, restarts it when running so the newest code is loaded). A dash with a yellow ring means it stops and asks you first. Install writes the login entry, starts or restarts the monitor, corrects the environment variables for the current state, and rewrites the locator and path record, leaving the log alone. Show status, help, advanced, problem report and exit touch none of the five. Check for updates runs the install finish step after the new version lands, so the login entry, monitor, variables and locator are all handled again. Stop the monitor only stops the process and clears the variables; the login entry and locator stay, so it comes back at the next login. Full restore clears everything else and asks first whether to keep the log.</desc>
 
   <rect width="1200" height="915" rx="20" fill="#17263E"/>
   <rect x="0.75" y="0.75" width="1198.5" height="913.5" rx="19.25" fill="none" stroke="#33486B" stroke-width="1.5"/>
@@ -11,15 +11,15 @@
 
   <g id="legend">
     <g data-cx="69" data-cy="155"><path d="M60 156 L65.5 161 L78 149" fill="none" stroke="#34D399" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="96" y="162" font-size="22" fill="#94A6BE" textLength="187.5" lengthAdjust="spacing">writes or keeps</text>
-    <g data-cx="324.5" data-cy="155"><path d="M314.5 155 H334.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/></g>
-    <text x="351.5" y="162" font-size="22" fill="#94A6BE" textLength="75" lengthAdjust="spacing">clears</text>
-    <circle cx="467.5" cy="155" r="6" fill="#7A8CA6"/>
-    <text x="494.5" y="162" font-size="22" fill="#94A6BE" textLength="150" lengthAdjust="spacing">leaves alone</text>
-    <g data-cx="685.5" data-cy="155"><path d="M685.5 147 V159 M680.5 152 L685.5 147 L690.5 152 M676.5 163 H694.5" fill="none" stroke="#60A5FA" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="712.5" y="162" font-size="22" fill="#94A6BE" textLength="225" lengthAdjust="spacing">starts or restarts</text>
-    <g data-cx="978.5" data-cy="155"><path d="M968.5 150 H988.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/><circle cx="978.5" cy="157" r="3.2" fill="none" stroke="#FBBF24" stroke-width="2.4"/></g>
-    <text x="1005.5" y="162" font-size="22" fill="#94A6BE" textLength="175" lengthAdjust="spacing">asks you first</text>
+    <text x="96" y="162" font-size="22" fill="#94A6BE" textLength="125" lengthAdjust="spacing">write/keep</text>
+    <g data-cx="262" data-cy="155"><path d="M252 155 H272" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/></g>
+    <text x="289" y="162" font-size="22" fill="#94A6BE" textLength="62.5" lengthAdjust="spacing">clear</text>
+    <circle cx="392.5" cy="155" r="6" fill="#7A8CA6"/>
+    <text x="419.5" y="162" font-size="22" fill="#94A6BE" textLength="137.5" lengthAdjust="spacing">leave alone</text>
+    <g data-cx="598" data-cy="155"><path d="M598 147 V159 M593 152 L598 147 L603 152 M589 163 H607" fill="none" stroke="#60A5FA" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="625" y="162" font-size="22" fill="#94A6BE" textLength="162.5" lengthAdjust="spacing">start/restart</text>
+    <g data-cx="828.5" data-cy="155"><path d="M818.5 150 H838.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/><circle cx="828.5" cy="157" r="3.2" fill="none" stroke="#FBBF24" stroke-width="2.4"/></g>
+    <text x="855.5" y="162" font-size="22" fill="#94A6BE" textLength="125" lengthAdjust="spacing">asks first</text>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">

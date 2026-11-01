@@ -11,15 +11,15 @@
 
   <g id="legend">
     <g data-cx="69" data-cy="155"><path d="M60 156 L65.5 161 L78 149" fill="none" stroke="#34D399" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="96" y="162" font-size="22" fill="#94A6BE" textLength="125.5" lengthAdjust="spacing">写入 / 保留</text>
-    <g data-cx="262.5" data-cy="155"><path d="M252.5 155 H272.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/></g>
-    <text x="289.5" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">清掉</text>
-    <circle cx="374.5" cy="155" r="6" fill="#7A8CA6"/>
-    <text x="401.5" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">不碰</text>
-    <g data-cx="486.5" data-cy="155"><path d="M486.5 147 V159 M481.5 152 L486.5 147 L491.5 152 M477.5 163 H495.5" fill="none" stroke="#60A5FA" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></g>
-    <text x="513.5" y="162" font-size="22" fill="#94A6BE" textLength="110" lengthAdjust="spacing">启动或重启</text>
-    <g data-cx="664.5" data-cy="155"><path d="M654.5 150 H674.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/><circle cx="664.5" cy="157" r="3.2" fill="none" stroke="#FBBF24" stroke-width="2.4"/></g>
-    <text x="691.5" y="162" font-size="22" fill="#94A6BE" textLength="88" lengthAdjust="spacing">会先问你</text>
+    <text x="96" y="162" font-size="22" fill="#94A6BE" textLength="100.5" lengthAdjust="spacing">写入/保留</text>
+    <g data-cx="237.5" data-cy="155"><path d="M227.5 155 H247.5" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/></g>
+    <text x="264.5" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">清掉</text>
+    <circle cx="349.5" cy="155" r="6" fill="#7A8CA6"/>
+    <text x="376.5" y="162" font-size="22" fill="#94A6BE" textLength="44" lengthAdjust="spacing">不碰</text>
+    <g data-cx="461.5" data-cy="155"><path d="M461.5 147 V159 M456.5 152 L461.5 147 L466.5 152 M452.5 163 H470.5" fill="none" stroke="#60A5FA" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></g>
+    <text x="488.5" y="162" font-size="22" fill="#94A6BE" textLength="100.5" lengthAdjust="spacing">启动/重启</text>
+    <g data-cx="630" data-cy="155"><path d="M620 150 H640" fill="none" stroke="#94A6BE" stroke-width="3.2" stroke-linecap="round"/><circle cx="630" cy="157" r="3.2" fill="none" stroke="#FBBF24" stroke-width="2.4"/></g>
+    <text x="657" y="162" font-size="22" fill="#94A6BE" textLength="88" lengthAdjust="spacing">会先问你</text>
   </g>
 
   <g id="column-labels" font-size="23" fill="#C7D3E3" text-anchor="middle">
