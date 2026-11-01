@@ -922,7 +922,7 @@ wait_screen_key() {
 #
 # 标签本身不随状态变化（只有右侧内容按 ok/warn/dim 上色），所以是常量不是变量。
 # 与 Windows 侧 $StatusLabels 逐项对齐，差的一项是 Advanced：mac 没有启动器，
-# 那一行在 mac 上不存在（DIVERGE(Mac) 见 sysproxy 那段的说明）。
+# 那一行在 mac 上不存在（DIVERGE(Mac): mac 没有启动器，不需要给它建图标）。
 # ------------------------------------------------------------------------------
 STATUS_LABEL_MONITOR="监控进程"
 STATUS_LABEL_AUTORUN="开机自启"

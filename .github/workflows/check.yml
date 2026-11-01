@@ -2413,6 +2413,34 @@ jobs:
               }
             }
           }
+
+          # DIVERGE 标记的格式：AGENTS.md 要求平台差异必须写成 `DIVERGE(侧): 原因`，
+          # 「不标视为遗漏」。但此前**没有任何门禁检查这件事**，全靠人自觉——
+          # 而这条标记的价值恰恰在于「有它就是有意的分歧，没它就是漏了」。
+          #
+          # 这里只守格式（侧别必须是已知的几个、原因必须非空）。不试图判断
+          # "某处差异该不该标"——那是判断，机器判不了，也不该假装能判。
+          $dvgBad = @()
+          $dvgAllowed = @('Win', 'Mac', 'Win-GitBash')
+          foreach ($df in @(Get-ChildItem 'win/lib' -Filter *.ps1 -File) + @(Get-ChildItem 'mac/lib' -Filter *.sh -File)) {
+            $ln = 0
+            foreach ($line in [System.IO.File]::ReadAllLines($df.FullName, [System.Text.Encoding]::UTF8)) {
+              $ln++
+              if ($line -notmatch 'DIVERGE') { continue }
+              $m = [regex]::Match($line, 'DIVERGE\(([^)]*)\)\s*:\s*(.*)$')
+              if (-not $m.Success) {
+                $dvgBad += ("{0}:{1} 缺少 (侧): 原因 格式 -- {2}" -f $df.Name, $ln, $line.Trim())
+                continue
+              }
+              if ($dvgAllowed -notcontains $m.Groups[1].Value) {
+                $dvgBad += ("{0}:{1} 侧别 ``{2}`` 不在已知集合（{3}）" -f $df.Name, $ln, $m.Groups[1].Value, ($dvgAllowed -join ' / '))
+              }
+              if ([string]::IsNullOrWhiteSpace($m.Groups[2].Value)) {
+                $dvgBad += ("{0}:{1} DIVERGE 后面没有写原因" -f $df.Name, $ln)
+              }
+            }
+          }
+          foreach ($d in $dvgBad) { Write-Host ("DIVERGE 标记不合规：" + $d); $fail = 1 }
           if ($fail) { exit 1 }
           Write-Host '两侧帮助与菜单结构一致'
 
