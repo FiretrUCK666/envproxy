@@ -1565,7 +1565,8 @@ function Stop-Monitor {
         # 而真相是使用者刚刚点过停止。意图比进程状态更权威。
         try { Write-Text -Path $StopIntentFile -Text "user" } catch {}
         Write-Styled 'warn' "监控进程未在运行。"
-        return
+        # 没在跑 = 目的已经达成，算成功（与 mac 侧那支的 return 0 一致）。
+        return 0
     }
     # 从目标监控的命令行动态解析它的脚本位置 → 把停止标志写到"它自己"的 monitor 目录。
     # 处理文件夹被移动/复制后新旧位置不一致的场景：让旧位置的监控优雅退出，而非强杀。
@@ -1627,9 +1628,15 @@ function Stop-Monitor {
     }
     if (Get-MonitorProcess) {
         Write-Styled 'warn' "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
-    } else {
-        Write-Styled 'ok' "监控进程已停止。"
+        # 定论由复读决定，不由"我发了停止信号"决定：进程还在就不能报"已停止"。
+        # 返回值也必须跟着这个结论走——原来两支都只写屏幕、函数隐式返回 $null，
+        # 于是入口那句 `if (-not $stopOk) { exit 1 }` 永远不成立：屏幕说"未能停止"，
+        # 脚本里的 `envproxy.ps1 -Stop && 下一步` 却照常往下走。
+        # 与 mac 侧 stop_monitor 的 return 1 / return 0 同一套。
+        return 1
     }
+    Write-Styled 'ok' "监控进程已停止。"
+    return 0
 }
 
 # ------------------------------------------------------------------------------

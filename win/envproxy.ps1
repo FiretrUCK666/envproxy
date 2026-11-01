@@ -53,6 +53,7 @@ param(
 #  文件结构（入口只做四件事：解析参数、挂操作锁、加载自检、分派）
 #     envproxy.ps1      入口（本文件）
 #     lib\base.ps1     契约常量、纯函数、文件读写助手
+#     lib\screen.ps1   画屏：整帧刷新、只重画变化的行、等按键
 #     lib\probe.ps1    端口发现、握手、节点连通、状态判定
 #     lib\env.ps1      代理变量写入/删除/归属/快照还原
 #     lib\runtime.ps1  日志、监控进程、主循环、自启动定位器
@@ -60,8 +61,9 @@ param(
 #     lib\update.ps1   版本检查、下载校验、确认流程
 #     lib\doctor.ps1   系统代理各层判定与修复
 #     lib\ops.ps1      安装/停止/卸载/日常操作的编排
-#     lib\pages.ps1    状态页两版渲染、问题清单、问题报告
-#     lib\help.ps1     菜单表与渲染、帮助主题与渲染
+#     lib\pages.ps1    状态页两版渲染、问题清单
+#     lib\report.ps1   问题报告（唯一会写文件、会提问的一层）
+#     lib\help.ps1     菜单渲染、帮助主题与渲染
 #     lib\relay.ps1    固定入口
 #     lib\shortcut.ps1 走代理的快捷方式（生成启动脚本、读写 .lnk、扫描记录、三屏界面）
 #   库清单的唯一权威处是下面的 $CoreLibs；门禁会核对它与 lib\ 实际内容一致。
@@ -270,10 +272,12 @@ if ($Uninstall) {
 if ($Stop) {
     $opMutex = Exit-IfOpBusy
     if (Test-IsElevated) { Write-Styled 'warn' "当前是管理员身份：动的将是管理员的配置，日常使用请用普通终端重做一遍。" }
-    Stop-Monitor
+    # 两个返回值都要接住再说结论：只接住变量那一个的话，监控没停下来时屏幕会说
+    # "未能停止"，而退出码仍然是 0——脚本里的 `-Stop && 下一步` 照常往下走。
+    # 与 mac 侧 stop 分支同一套判据（那边接 stop_monitor 与 remove_user_env_vars 两个码）。
+    $monOk = [bool](Stop-Monitor)
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
     # 返回值必须接住：它写不成时 proxy 变量还在，屏幕上说"已清除"就是假话。
-    # 与 mac 侧 stop 分支同一套判据（那边接 stop_monitor 与 remove_user_env_vars 两个码）。
     $varsOk = [bool](Apply-State "off")
     if ($varsOk) {
         Write-Styled 'title' "代理变量已清除，当前恢复直连。"
@@ -282,11 +286,15 @@ if ($Stop) {
         Write-Styled 'warn' "      已经开着的窗口每次回到提示符，仍会把旧代理地址重新设上——它们看起来还连着一个已经不存在的端口。"
         Write-Styled 'warn' "      先解决拦截问题，再重跑一次停止；或者直接用一键恢复。"
     }
+    if (-not $monOk) {
+        Write-Styled 'warn' "（监控进程也未能确认停止，见上面几行。）"
+    }
     # 提醒已开窗口：它们没被通知，要等下一次回到提示符才更新。
     # 这不是缺陷，是环境变量的固有物理限制（一个进程的环境在它启动时就定了），
     # 与其让人以为"工具坏了"，不如说清楚。
     Write-Styled 'dim' "      已经开着的其它终端窗口，敲一下回车（或随便跑条命令）就跟上。"
-    if (-not $varsOk) { exit 1 }
+    # 退出码如实反映：两件事里任一没做成就是失败（与 mac 侧同一行判据）。
+    if (-not $varsOk -or -not $monOk) { exit 1 }
     return
 }
 if ($Status) {

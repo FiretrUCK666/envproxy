@@ -621,6 +621,10 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 
 > Windows users can stop here. Each platform has its own package: Mac users download the Mac package, and an existing folder that contains `mac\` works as it is.
 
+> **Before you hand the whole folder to someone else, delete the `win\monitor\` folder.**
+> It holds the run records this machine generated for itself (log, process id, state snapshot),
+> including your timestamps and ports. Deleting it changes nothing: a new machine rebuilds it on first run.
+
 ## 11. Technical limits (5)
 
 <img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">

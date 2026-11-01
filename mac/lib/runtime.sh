@@ -848,6 +848,20 @@ stop_monitor() {
         sleep 0.5
     fi
     rm -f "$_target_dir/stop.flag" "$STOP_FLAG" 2>/dev/null || true
+    # 强杀路径下监控来不及删自己的状态快照；不清掉它，状态页接下来这段时间里
+    # 仍会把那份旧结论当成"当前状态"，于是代理没在跑也报"已开启"——而使用者
+    # 刚刚才点过停止，屏幕与他的动作直接矛盾。
+    # 位置必须是目标目录（跨位置停止时目标不是本进程的 MONITOR_DIR）。
+    #
+    # 只清快照、不清心跳：mac 侧**没有**心跳文件（那是 Windows 独有的 monitor.beat，
+    # 那边用它做 3.8 毫秒的快速存活判断）。这边判"在不在"走 pid 文件，没有第二份。
+    rm -f "$_target_dir/state.snapshot" 2>/dev/null || true
+    # 目标目录就是自己的目录时，上面那句已经删到；不是自己的目录时，自己这份也要删。
+    if [ "$_target_dir" != "$MONITOR_DIR" ]; then
+        rm -f "$MONITOR_DIR/state.snapshot" 2>/dev/null || true
+    fi
+    # 跨位置停止的零残留：若停止标志写在"别的" monitor 目录、且该目录已空，
+    # 把这个重建的空目录一并移除。必须排在删状态快照之后——目录先没了，按路径删就落空。
     if [ "$_target_dir" != "$MONITOR_DIR" ] && [ -d "$_target_dir" ]; then
         if [ -z "$(ls -A "$_target_dir" 2>/dev/null)" ]; then rmdir "$_target_dir" 2>/dev/null || true; fi
     fi
