@@ -5,8 +5,8 @@
 #  职责边界（改这个文件前先读这一段）：
 #    可以有 —— 探测系统代理各层、按判据给结论、修复、读写备份
 #    不许有 —— 打印任何屏幕内容、读用户输入、进菜单循环、改环境变量
-#  界面住在 ops（菜单）里，这一层只产出数据。
-#  这样它只依赖 base（+ probe 的 _port_alive），不反向调 ops，不产生新的依赖环。
+  #  界面住在 help / ops（菜单与提示），这一层只产出数据。
+  #  这样它只依赖 base，不反向调菜单与提示层，不产生新的依赖环。判活用 bash 内建的 /dev/tcp。
 #
 #  DIVERGE(Mac): 三处与 Windows 必然不同，原因写在各处。
 #    1) 系统代理是「每个网络服务一份」（Wi-Fi、有线、VPN 各存一份），不是全机一份。
@@ -195,8 +195,9 @@ sysproxy_split_url() {
 #   layer<TAB>service<TAB>kind<TAB>url<TAB>port
 #
 # $1 = quick 时只查手动代理（web/secureweb/socks）与自动配置脚本；
-# 全量模式目前与 quick 相同（mac 没有 WinHTTP 那一层），保留参数是为了与
-# Windows 侧同形——两边调用方式一样，界面那一层不用为平台写分支。
+# 全量模式额外采第 7 列（握手类），quick 留空——那一列要真连一次端口，
+# 状态页每 2 秒刷新时不能付这个代价。参数保留更主要是为了与 Windows 侧同形：
+# 两边调用方式一样，界面那一层不用为平台写分支。
 sysproxy_layers() {
     _gspl_quick="${1:-}"
     _gspl_managed=$(sysproxy_managed)

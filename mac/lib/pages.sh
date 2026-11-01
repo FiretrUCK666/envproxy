@@ -129,7 +129,7 @@ new_problem_report() {
         echo ""
         echo "---------------- 当前状态 ----------------"
         # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
-        show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+        show_status 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g"
         echo ""
         echo "---------------- 运行日志（最后 30 行） ----------------"
         if [ -f "$LOG_FILE" ]; then
@@ -172,7 +172,7 @@ new_problem_report() {
         {
             echo "======== EnvProxy 问题报告 ========"
             echo "生成时间：$(date '+%Y-%m-%d %H:%M:%S')"
-            show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+            show_status 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g"
             echo ""
             echo "---------------- 运行日志 ----------------"
             [ -f "$LOG_FILE" ] && tail -n 30 "$LOG_FILE" 2>/dev/null
@@ -212,7 +212,7 @@ new_problem_report() {
 # 与 show_status 同一份内容，只是这里产出字符串而不是直接打印——
 # 屏幕渲染层要按行比较，所以必须先拿到"这一帧是什么"。
 format_status_lines() {
-    _fsl_out=$(show_status 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+    _fsl_out=$(show_status 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g")
     printf '%s' "$_fsl_out"
 }
 
@@ -226,7 +226,7 @@ show_status_live() {
     _ssl_frame=$(format_status_lines)
     _ssl_frame="$_ssl_frame
 $_ssl_hint"
-    _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
+    _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || true)
     _ssl_width=0
     while IFS= read -r _ssl_l; do
         _ssl_w=$(_display_width "$_ssl_l")
@@ -261,7 +261,7 @@ EOF
             # 只接在首帧的话，刷一次就消失了。
             [ -n "$_ssl_new" ] && _ssl_frame="$_ssl_new
 $_ssl_hint"
-            _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || echo 0)
+            _ssl_need=$(printf '%s\n' "$_ssl_frame" | grep -c '' || true)
             _ssl_width=0
             while IFS= read -r _ssl_l; do
                 _ssl_w=$(_display_width "$_ssl_l")

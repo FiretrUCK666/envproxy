@@ -820,7 +820,7 @@ write_screen_frame() {
     _wsf_old="$1"
     _wsf_new="$2"
     [ -t 1 ] || return 0
-    _wsf_n=$(printf '%s\n' "$_wsf_new" | grep -c '' || echo 0)
+    _wsf_n=$(printf '%s\n' "$_wsf_new" | grep -c '' || true)
     [ "$_wsf_n" -gt 0 ] || return 0
 
     # 尺寸变化检测
