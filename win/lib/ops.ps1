@@ -416,7 +416,7 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         # 「上次提示过的代理状态」。不删的后果具体：重装后的监控会读到上一份安装留下的值，
         # 于是重装后第一次真实变化被当成「已经提示过了」而静默跳过——用户换了端口却什么提示都没有。
         Remove-ItemSafe (Get-ProxyNotifyStatePath)
-        # 网络救援动手前留下的原样。不删的后果与 state.snapshot 同类：
+        # 浏览器代理修复动手前留下的原样。不删的后果与 state.snapshot 同类：
         # 重装后没有任何组件会用它，但它是使用者当时的系统代理设置副本——
         # 一份没人管理、也没人知道该不该删的配置留在盘上，本身就不该发生。
         Remove-ItemSafe (Get-SysProxyBackupPath)

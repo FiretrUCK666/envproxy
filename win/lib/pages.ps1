@@ -580,7 +580,7 @@ function Get-StatusSnapshot {
         # 处理方式不同——前者等监控自愈，后者要人看一眼变量被谁改坏了。
     }
     # 系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
-    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它（动它是「网络救援」的活）。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它（动它是「浏览器代理修复」的活）。
     #
     # 判据**只有一处实现**：doctor 层的 Get-SystemProxyLayers + Get-SystemProxyVerdict。
     # 这里原来内联了一小段（只认 ProxyEnable + 127.0.0.1 + 端口死活），
@@ -593,7 +593,7 @@ function Get-StatusSnapshot {
         $spBad = @($spLayers | Where-Object { Test-SysProxyFixable $_.Kind })
         if ($spBad.Count -gt 0) {
             # 只报第一个：状态页那一行是一句话，列一长串会读不下去。
-            # 详细的几项留给「网络救援」那一屏。
+            # 详细的几项留给「浏览器代理修复」那一屏。
             $st.SysProxy = @{ Server = $spBad[0].Url; Port = $spBad[0].Port; Kind = $spBad[0].Kind; Count = $spBad.Count }
         }
     } catch {}

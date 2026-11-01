@@ -33,8 +33,8 @@
     <text x="120" y="154">TUN vs. corporate VPN</text>
     <text x="120" y="182.6" font-size="16" fill="#94A6BE">Both look like a virtual adapter. Most apps keep the port open; a few close it.</text>
 
-    <text x="120" y="231">System proxy changes only on rescue</text>
-    <text x="120" y="259.6" font-size="16" fill="#94A6BE">Only when you click rescue. Otherwise only user-level variables are written.</text>
+    <text x="120" y="231">System proxy changes only on browser proxy repair</text>
+    <text x="120" y="259.6" font-size="16" fill="#94A6BE">Only when you click browser proxy repair. Otherwise only user-level variables are written.</text>
 
     <text x="120" y="308">Already-running programs are not changed</text>
     <text x="120" y="336.6" font-size="16" fill="#94A6BE">Variables are read once at startup, so windows already open need one Enter press.</text>

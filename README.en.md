@@ -98,7 +98,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | Shortcut / rescue modules | Adds one icon; rescue edits proxy only |
+| **5 Advanced** (`高级功能`) | Shortcut / proxy fix | Adds one icon; the fix edits browser proxy only |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -580,7 +580,7 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `monitor.beat` | heartbeat: process id plus start time |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | state snapshot written by the background program; the status page only reads it |
-| | `doctor.bak` | proxy setting before rescue changed it, so it can be restored |
+| | `doctor.bak` | proxy setting as it was before the browser proxy repair changed it, so it can be restored |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
@@ -628,7 +628,7 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | Limit | Reason | Effect |
 |---|---|---|
 | **TUN vs. corporate VPN** | Both are virtual adapters | Most apps keep the port open; a few close it |
-| **Rescue is the only thing that edits it** | Editing it breaks browsers | Only a dead loopback port |
+| **Only the browser proxy repair edits it** | Editing it breaks browsers | Only a dead loopback port |
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
@@ -718,7 +718,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | verdict the background program writes every round; the status page only reads it |
-| | `doctor.bak` | proxy setting before rescue changed it, so it can be restored |
+| | `doctor.bak` | proxy setting as it was before the browser proxy repair changed it, so it can be restored |
 | | `report-*.txt` | reports built by "Problem report"; open one before sending it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
