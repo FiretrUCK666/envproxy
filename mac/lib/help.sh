@@ -266,7 +266,20 @@ _proj_issue_url() {
 # 写了就会原样打印成 "$(menu_ref install)"，比写错数字更糟（用户看到的是代码）。
 # 代价是这一段会与菜单表各自维护，于是门禁 15 核对这里出现的「选 N（名字）」
 # 与菜单表逐项一致——写死的部分由门禁兜住，而不是靠人记得。
+# 帮助主题的正文（按编号）。
+#
+# **输出一律已经过排版整形**：间距规则由 _help_apply_spacing 统一施加，调用方
+# 不需要再套一次，也不该套（套两次会多出空行）。之所以收进来：原来是"调用方
+# 自己记得加"，而两条渲染路径里恰好只有纯文本那条加了——用户真正在终端里看的
+# 是彩色那条，于是屏幕上的帮助整段挤在一起，而重定向到文件时反而是好的。
+# 排版不是可选项，是这一段输出的定义的一部分。
 _help_topic_body() {
+    _help_topic_body_raw "$1" | _help_apply_spacing
+    return 0
+}
+
+# 未经排版整形的原始正文。除 _help_topic_body 外不要直接调用。
+_help_topic_body_raw() {
     case "$1" in
     1) cat <<'TOPIC'
 h 它做什么
@@ -546,7 +559,7 @@ format_help_topic() {
     _SEG_LINE=""
     echo "================ 帮助 $1 · $_ht_title ================"
     echo ""
-    _HELP_BLOCK=$(_help_topic_body "$1" | _help_apply_spacing)
+    _HELP_BLOCK=$(_help_topic_body "$1")
     while IFS= read -r _ht_l; do
         _help_render_line "$_ht_l"
     done <<EOF

@@ -204,10 +204,18 @@ uninstall_envproxy() {
     else
         # 没有可交互的终端：不能问，也不能替使用者答应。
         # "问不到人就直接做"等于没有确认（Windows 侧实测过一次：管道里跑直接把工具卸干净了）。
-        style_out warn "这里没法问你要不要卸载（没有可交互的终端），所以什么都不会做。"
+        #
+        # **必须返回非零**：拒绝执行就是"没达成目的"。返回 0 的话，
+        # `envproxy.sh uninstall && 认为已卸载` 这类脚本会以为卸干净了——
+        # 而实际上一个字节都没动。Windows 侧同一分支返回 1，两侧退出码是同一套契约，
+        # 而这条路径恰恰是 CI、计划任务、ssh 远程最常走的那条。
+        style_out warn "这里没法问你要不要卸载（没有可交互的终端），所以不会动你的代理设置与安装文件。"
         style_out dim "  真的要卸载，请双击 打开菜单.command $(menu_ref uninstall)；"
         style_out dim "  或者确认无误后加 --yes：bash envproxy.sh uninstall --yes"
-        return 0
+        # 拒绝执行是对的，但**自启动记录属于清理自己的残留**，不需要征得同意：
+        # 留着它每次登录都会失败一次，而那时工具已经卸载、再没有东西会来修它。
+        remove_autorun || true
+        return 1
     fi
     stop_monitor || true
     remove_autorun

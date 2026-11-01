@@ -2310,20 +2310,23 @@ jobs:
               Where-Object { $_ -match '\|' } |
               ForEach-Object { ($_ -split '\|')[3] } |
               ForEach-Object { $_ -split '\s+' } | Where-Object { $_ } | Sort-Object -Unique)
-          $wp2 = $winPats2
-          $mp2 = $macPats2
-          if (($winPorts2 -join ',') -ne ($macPorts2 -join ',')) {
-            Write-Host ("两侧客户端目录的端口集不同：Win [{0}] / Mac [{1}]" -f ($winPorts2 -join ','), ($macPorts2 -join ','))
-            $fail = 1
-          }
-          if ($winPats.Success -and $macPats.Success) {
-            $wp2 = @([regex]::Matches($winPats.Groups[1].Value, '"([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
-            $mp2 = @($macPats.Groups[1].Value -split '\s+' | Where-Object { $_ })
-            if (($wp2 -join ',') -ne ($mp2 -join ',')) {
-              Write-Host ("两侧进程名特征表不同：Win [{0}] / Mac [{1}]" -f ($wp2 -join ','), ($mp2 -join ','))
+            $wp2 = $winPats2
+            $mp2 = $macPats2
+            if (($winPorts2 -join ',') -ne ($macPorts2 -join ',')) {
+              Write-Host ("两侧客户端目录的端口集不同：Win [{0}] / Mac [{1}]" -f ($winPorts2 -join ','), ($macPorts2 -join ','))
               $fail = 1
             }
-          }
+            # 进程名表也必须逐项相同。
+            #
+            # 原来这里还有一段 `if ($winPats.Success -and $macPats.Success) { ... }`，
+            # 而那两个变量**从未被赋值**（它们是更早版本的产物，源头改成客户端目录后没删），
+            # 于是 .Success 恒为 $null、整段永不执行——进程名表的跨端一致性事实上完全没有门禁，
+            # 而它还会把上面刚算好的 $wp2/$mp2 覆盖掉。
+            # 判据直接落在派生出来的两个集合上：比的是排序去重后的元素集，不比顺序。
+            if (($wp2 -join ',') -ne ($mp2 -join ',')) {
+              Write-Host ("两侧客户端目录的进程名特征不同：Win [{0}] / Mac [{1}]" -f ($wp2 -join ','), ($mp2 -join ','))
+              $fail = 1
+            }
 
           # Mac 帮助正文住在 `cat <<'TOPIC'` 里——单引号 heredoc 不展开，
           # 所以那里的「选 N（名字）」只能写字面量，不能派生。写死的部分必须由门禁兜住：
