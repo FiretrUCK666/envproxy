@@ -698,7 +698,7 @@ $AdvancedItems = @(
     @{ Key='1'; Module='icon';   Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径' }
     @{ Key='2'; Module='icon';   Name='管理已建的';               Hint='看状态、删掉不要的' }
     @{ Key='3'; Module='icon';   Name='查看中继';                 Hint='图标用的那个固定地址，现在怎么样' }
-    @{ Key='4'; Module='rescue'; Name='网络救援';                 Hint='浏览器打不开网页的时候，先来这里查一下' }
+    @{ Key='4'; Module='rescue'; Name='浏览器代理修复';                 Hint='浏览器打不开网页的时候，先来这里查一下' }
 )
 
 # 模块顺序与各自的说明。加一个模块只改这张表。
@@ -1370,7 +1370,13 @@ function Show-AdvancedMenu {
 # 与 Mac 侧同形（那边是 show_rescue_page），两平台同一件事必须同一句话。
 function Show-RescuePage {
     Clear-Screen
-    Write-Styled 'title' '======== 网络救援 ========'
+    Write-Styled 'title' '======== 浏览器代理修复 ========'
+    Write-Host ''
+    # 第一句就说清它管到哪儿。名字里带「浏览器」，但用户到这里时心里想的是
+    # 「我整个网都不行」——不说清，他会以为这一屏能修所有上网问题，
+    # 查完没事就以为网络确实没问题，然后往错的方向找。
+    Write-Styled 'dim' '  只修浏览器走的那个代理设置（Chrome、Edge、IE 都读它）。'
+    Write-Styled 'dim' '  终端里的 git、npm、curl 不归这里管。'
     Write-Host ''
 
     $layers = @(Get-SystemProxyLayers)

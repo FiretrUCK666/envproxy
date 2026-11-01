@@ -155,7 +155,7 @@ function Format-StatusLines($st) {
             '指向本机一个已经关掉的程序（浏览器会打不开网页）'
         }
         & $row $StatusLabels.SysProxy ($spText + '。不是本工具写的。') 'warn'
-        & $line ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络救援。') 'dim'
+        & $line ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选浏览器代理修复。') 'dim'
     }
     # ---- 第四组：终端同步 ----
     # 话术从 Get-TermSyncText 取，与静态页同源
@@ -749,7 +749,7 @@ function Show-StatusSnapshot($st) {
         Write-StatusRow $StatusLabels.SysProxy ($spText2 + '。不是本工具写的。') 'warn'
         # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
-        Write-Styled 'dim' ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络救援。')
+        Write-Styled 'dim' ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选浏览器代理修复。')
     }
     # ---- 参考信息：正常项各占一行，用 ok 色方便一眼确认核心链路是通的 ----
     #

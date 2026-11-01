@@ -529,7 +529,7 @@ show_status() {
             _sp_text="指向本机一个已经关掉的程序（浏览器会打不开网页）"
         fi
         _status_row "$STATUS_LABEL_SYSPROXY" "${_sp_text}。不是本工具写的。" warn
-        style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选网络救援。"
+        style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选浏览器代理修复。"
     fi
     [ "$_pn" != "0" ] && echo ""
 
