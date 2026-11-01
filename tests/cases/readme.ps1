@@ -758,8 +758,8 @@ Assert-Eq '提示：提到的每个按键都有对应分支' 0 $unstoppable.Coun
 
 # 3. Wait-ScreenKey 的异常路径不许让外层空转
 #    曾经：catch { return '' } 立即返回，循环毫无间隔地转，一秒几千次、吃满一个核。
-$bsSrc = [System.IO.File]::ReadAllText((Join-Path (Get-Location) 'win/lib/base.ps1'))
-$wsChunk = Get-FunctionBody 'win/lib/base.ps1' 'Wait-ScreenKey'
+$bsSrc = Get-AllLibSource
+$wsChunk = Get-FunctionBody '' 'Wait-ScreenKey'
 Assert-Eq '接线：Wait-ScreenKey 函数体取到了' $true ($wsChunk.Length -gt 0)
 Assert-Eq '按键：读键失败时不会立即返回空转' $false ([bool]([regex]::IsMatch($wsChunk, "catch\s*\{\s*return\s+''\s*\}")))
 Assert-Eq '按键：有放弃阈值常量' $true ($ScreenKeyFailLimit -gt 0)
