@@ -176,8 +176,9 @@ function Format-StatusLines($st) {
     # ---- 第四组之二：固定入口（只在真的建过走代理的图标时才出现）----
     # 两版必须说同一句话，措辞与 Show-StatusSnapshot 里那一段逐字相同。
     # 判据用"有没有图标"而不是"中继在不在跑"：对没建图标的人那是必然的噪音。
+    # 数量由采集层算好（见 Get-StatusSnapshot 结尾）：渲染器不再自己扫。
     $relayIconCount = 0
-    try { $relayIconCount = @(Get-ProxyShortcutRecords).Count } catch { $relayIconCount = 0 }
+    try { $relayIconCount = [int]$st.RelayIconCount } catch { $relayIconCount = 0 }
     if ($relayIconCount -gt 0) {
         $rs = $null
         try { $rs = Get-RelayStatus } catch {}
@@ -849,6 +850,14 @@ function Get-StatusSnapshot {
     # 写缓存的是监控，状态显示"永不写文件"这条契约不动——写的人换了，不是多了一个。
     $st.RemoteCache = $null
     try { $st.RemoteCache = Read-VersionCache } catch {}
+    # 高级功能图标的数量：**在这里算一次**，两个渲染器都读结果。
+    #
+    # 扫描要建 COM 对象、跑遍桌面/任务栏/开始菜单、逐个 .lnk 读参数，实测约 112 毫秒。
+    # 原来两个渲染器各自在渲染时调一次（实时帧每 2 秒一帧），于是一帧 120 毫秒里
+    # 九成花在这一次扫描上，而两张表要的只是同一个数字。
+    # 采集层只跑一次，与上面"版本号读缓存、状态页不自己联网"是同一条道理。
+    $st.RelayIconCount = 0
+    try { $st.RelayIconCount = @(Get-ProxyShortcutRecords).Count } catch { $st.RelayIconCount = 0 }
     return $st
 }
 
@@ -1022,8 +1031,9 @@ function Show-StatusSnapshot($st) {
     # 这里曾经只有实时帧有、静态页整段缺失——建过图标的人在降级路径下就看不到它，
     # 而它正是"程序记的地址为什么不会失效"的唯一解释。
     # 判据用"有没有图标"而不是"中继在不在跑"：对没建图标的人那是必然的噪音。
+    # 数量由采集层算好（见 Get-StatusSnapshot 结尾）：渲染器不再自己扫。
     $relayIconCount = 0
-    try { $relayIconCount = @(Get-ProxyShortcutRecords).Count } catch { $relayIconCount = 0 }
+    try { $relayIconCount = [int]$st.RelayIconCount } catch { $relayIconCount = 0 }
     if ($relayIconCount -gt 0) {
         $rs = $null
         try { $rs = Get-RelayStatus } catch {}
