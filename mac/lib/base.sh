@@ -14,6 +14,13 @@ ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"
 # 于是首次安装判据永远成立，使用者自己设的本机代理会被当成本工具残留删掉。
 # 它只由 ENVPROXY_HOME 派生，天然属于这一层。
 PATH_CONF="$ENVPROXY_HOME/path.conf"
+# 归属记录（每行「变量名 TAB 我们写下的值」）。住在 base 与 PATH_CONF 同一个理由：
+# base 层的 is_owned_proxy_value 要读它，而 base 先于 env 加载。放在 env 层的话，
+# base 里那个函数永远看不出"这个值当初是我们写的"，于是只能退到按形状 + 快照判——
+# 而"装前有、装后被我们覆盖"这个最常见的情形（企业代理、旧工具残留、上一版没清干净）
+# 就再也收不回来：名字一旦进快照就永久算使用者的，我们注入的值留在死端口上。
+# 与 Windows 侧 Test-IsOwnedProxyValue 的第一条判据（查 Owned 注册表）对齐。
+OWNED_ENV="$ENVPROXY_HOME/owned.env"
 
 # 运行时目录与日志文件：住在 base 而不是 runtime，理由是 log_msg 必须在这里。
 # 写日志是横切能力：env / probe / runtime 三层都要写，任何一层都不该"反过来"
@@ -634,7 +641,30 @@ no_proxy_entry_in_snapshot() {
 # 用户或公司工具写的其他地址一律不动。
 # 光看形状不够——用户自己也可能挂 mitmproxy（http://127.0.0.1:8080）；
 # 安装快照里本来就有这个值，那就是他的，永远不许我们删（与 Win 侧分层同形）。
+# 归属判定：$1 = 值，$2 = 变量名（可选，给了就能用归属记录这一层）。
+#
+# 变量名为什么要能选：归属记录 owned.env 是「变量名 TAB 值」两列，没有名字就查不了。
+# 两个调用点（remove_user_env_vars / proxy_vars_present）手里都有变量名，传进来即可。
+# 不给名字时退到"形状 + 快照"那一层，与以前行为一致——单独依名字判会把
+# "值为空"误判成我们的。
 is_owned_proxy_value() {
+    _iov_name="${2:-}"
+    # **第一层：归属记录里逐字记着「这个名字的值为这个」= 一定是我们写的。**
+    #
+    # 这一层必须排在最前面，先于形状与快照。快照只记"这个名字在装之前出现过"，
+    # 它答不了"现在这个值还是不是他的"；而"装前有、装后被我们覆盖"是最常见的情形
+    # （企业代理、旧工具残留、上一版卸载没清干净，都长这样）。少了这一条，
+    # 名字一旦进快照就永久算使用者的，我们注入的值再也收不回来：地址变量留在
+    # 死端口上、其余照删，成为更难查的半套变量。
+    #
+    # 判据落在**值**上，所以使用者自己起在 :8080 的本机代理不受影响：
+    # 它与记录里的 :7078 不相等，落到下面照旧判成他的。
+    # 与 Windows 侧 Test-IsOwnedProxyValue 的第一条（查 Owned 注册表）同源。
+    if [ -n "$_iov_name" ] && [ -f "$OWNED_ENV" ]; then
+        _iov_rec=$(awk -F'\t' -v want="$_iov_name" '$1 == want { print $2; exit }' "$OWNED_ENV" 2>/dev/null)
+        if [ -n "$_iov_rec" ] && [ "$_iov_rec" = "$1" ]; then return 0; fi
+    fi
+
     case "$1" in
         "$OWNED_HTTP_PREFIX"*|"$OWNED_HTTP6_PREFIX"*) ;;
         *) return 1 ;;

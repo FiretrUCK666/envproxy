@@ -7,7 +7,6 @@ PROXY_ENV="$ENVPROXY_HOME/proxy.env"
 # 为什么单独存：off 哨兵要写成"值仍等于我们写下的那个才清"，而那个值不能从 proxy.env 里
 # 反推——哨兵本身已经把 export 行替换掉了。从被覆盖的文件里反推，第二次进 off 就再也
 # 推不出守卫值，已开着的窗口从此清不掉（实测会退化成只有 # off + true 的空哨兵）。
-OWNED_ENV="$ENVPROXY_HOME/owned.env"
 PREV_ENV="$ENVPROXY_HOME/prev.env"
 
 # 读已存在的 NO_PROXY（终端路取自 proxy.env，GUI 路取自 launchctl）。
@@ -403,7 +402,7 @@ remove_user_env_vars() {
     for _v in $PROXY_ADDR_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         [ -n "$_cur" ] || continue
-        is_owned_proxy_value "$_cur" || continue
+        is_owned_proxy_value "$_cur" "$_v" || continue
         launchctl unsetenv "$_v" 2>/dev/null || true
     done
     return "$_rmv_file_ok"
@@ -422,7 +421,7 @@ proxy_vars_present() {
     # 状态页报"直连"而实际还挂着代理，正是要防的那种半代理。
     for _v in $PROXY_ADDR_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
-        if is_owned_proxy_value "$_cur"; then return 0; fi
+        if is_owned_proxy_value "$_cur" "$_v"; then return 0; fi
     done
     for _v in $NO_PROXY_VAR_NAMES; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
