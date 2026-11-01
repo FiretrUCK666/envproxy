@@ -142,8 +142,8 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | 职责 | 入口文件 | 说明 |
 | --- | --- | --- |
-| 两端核心（入口 + 库，同语义；Win 12 库 / Mac 10 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
-| 各库的职责 | `lib\` 下的 `base` `probe` `env` `runtime` `package` `update` `doctor` `ops` `pages` `help`（Win 另有 `relay` `shortcut`） | base 契约常量（含菜单表）、纯函数与渲染层；probe 端口发现与状态判定；env 变量读写与快照还原；runtime 日志/进程/自启动/hook/状态快照；package 覆盖安装区与回滚；update 版本检查与确认；doctor 系统代理各层判定与修复（只判定与修复，不染界面）；ops 安装/卸载/日常操作的编排；pages 状态页与问题报告；help 菜单/帮助/高级功能；relay 固定入口（Win 独有）；shortcut 走代理的快捷方式（Win 独有） |
+| 两端核心（入口 + 库，同语义；Win 14 库 / Mac 10 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
+| 各库的职责 | `lib\` 下两侧共有 `base` `probe` `env` `runtime` `package` `update` `doctor` `ops` `pages` `help`，Win 另有 `screen` `report` `relay` `shortcut` | base 契约常量（含菜单表）与纯函数；probe 端口发现与判定；env 变量读写与快照；runtime 日志/进程/自启动/hook/快照；package 覆盖与回滚；update 版本检查与确认；doctor 系统代理各层判定与修复；ops 安装/卸载/日常操作编排；pages 状态页；help 菜单/帮助/高级；Win 独有：screen 屏幕渲染（有状态）、report 问题报告（唯一会写文件、会提问）、relay 固定入口、shortcut 走代理的快捷方式 |
 | 库清单与库边界 | 入口里的 `$CoreLibs` / `CORE_LIBS` + 入口发布的 `$ScriptDir`、`$ScriptPath`（Mac 侧 `SCRIPT_DIR`、`SCRIPT_PATH`） | 唯一权威处，门禁核对它与 `lib\` 实际内容一致；**只有入口能回答"这个程序在哪里"**：库不得引用 `$PSCommandPath` / `$PSScriptRoot`（库里的它们指向库文件自己），一律用入口发布的全局；库必须加载期安全（无对外副作用：不写文件、不改环境变量、不起外部进程；进程内类型定义与常量初始化可以） |
 | 模板（安装时生成到固定位置的） | `win\locator.ps1`、`mac\locator.sh`、`mac\prompt-sync.sh`；win 的 Git Bash 同步脚本内嵌在 `runtime` 层的 `Get-PromptSyncContent` | 定位器生成到固定位置（win 是 `%LOCALAPPDATA%\EnvProxy\launcher.ps1`，mac 是 `~/.envproxy/`）后按日志活跃度选新位置；同步脚本让每次提示符重读状态（内容比对自愈）。win 的 `.sh` 不随包发，内嵌代价是语法检查看不见它（门禁 1 单独验） |
 | 在线更新 | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读，动手只在更新入口（默认 N 确认、非交互不等待）；其余见「关键不变量」 |
