@@ -194,7 +194,20 @@ if ($Yes)   { $usageSwitches += "yes" }
 #   `-First` 落在管道之后、不在窗口里，自然不会误报。
 # 这个窗口同时保住了护栏的本职：`-Instal` / `-Un` 就在窗口里，照样被拦下。
 # 宁可不拦缩写，也不能把对的用法拦下来——拦错了用户无法通过重试解决。
-$knownSwitches = @('Install','Uninstall','Stop','Status','Update','Menu','Help','Advanced','Report','Yes','Purge','RepairProfile')
+# **从 param 块派生，不手抄第二份。**
+#
+# 原来这里是一张手写的名字表。两份清单之间没有任何机制保证同步：加第 13 个开关
+# 时忘了改这里，后果不是"多打的开关被忽略"，而是**那个开关永远无法使用**——
+# 它正常绑定进 param，然后下面这道护栏报"无法识别的开关"并 exit 2。
+# 更麻烦的是它只在命令行走 $MyInvocation.Line 那条路时触发，从菜单进来永远正常，
+# 于是本地测全绿、只在命令行炸。
+#
+# 派生之后两者的关系从"要记得同步"变成"本来就是同一处"。
+$knownSwitches = @(
+    (Get-Command $PSCommandPath).Parameters.Keys |
+        Where-Object { $_ -ne 'Args' } |
+        Sort-Object
+)
 $rawLine = ""
 try { $rawLine = [string]$MyInvocation.Line } catch {}
 if ([string]::IsNullOrWhiteSpace($rawLine)) {
