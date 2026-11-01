@@ -665,7 +665,7 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 ### 12.3 Menu (same as Windows)
 
-The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). `5 Advanced` exists on both platforms, but holds different things: Windows has "shortcut that goes through the proxy", "manage shortcuts", "view relay" and "network rescue"; Mac has only "network rescue" because programs launched from the Dock already see the proxy and need no launcher. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). `5 Advanced` exists on both platforms, but holds different things: Windows has "shortcut that goes through the proxy", "manage shortcuts", "view relay" and "browser proxy repair"; Mac has only "browser proxy repair" because programs launched from the Dock already see the proxy and need no launcher. Pressing Enter directly means show status.
 
 ### 12.4 What is in the `mac` folder
 
