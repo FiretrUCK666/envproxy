@@ -476,11 +476,17 @@ function Get-HelpIndexRenderedLines {
     $keys = @(foreach ($t in (Get-HelpTopics)) { [string]$t.Key })
     $keyW = 1
     foreach ($k in $keys) { if ($k.Length -gt $keyW) { $keyW = $k.Length } }
+    # 编号与标题之间留够空白、项与项之间空一行。
+    # 原来编号紧贴标题（只隔 3 格），一屏七行读下来是一堵墙：眼睛分不清哪行是新的。
+    # 代价是多占 7 行，帮助目录这一屏本来就短，撑得住。
+    $firstRow = $true
     foreach ($t in (Get-HelpTopics)) {
+        if (-not $firstRow) { $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() } }
+        $firstRow = $false
         $num = ([string]$t.Key).PadLeft($keyW)
         $segs = @(
-            @{ Role = 'cmd';   Text = ('  ' + $num) },
-            @{ Role = 'value'; Text = ('   ' + $t.Title) }
+            @{ Role = 'cmd';   Text = ('  ' + $num + ' ') },
+            @{ Role = 'value'; Text = ('     ' + $t.Title) }
         )
         $joined = ''
         foreach ($sg in $segs) { $joined += $sg.Text }

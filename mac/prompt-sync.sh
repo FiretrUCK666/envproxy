@@ -44,16 +44,20 @@ if [ -z "${_ENVPROXY_SYNC_READY-}" ]; then
     # 数据来源：与 rc 里那一行的口径保持一致（ENVPROXY_HOME 可被运行期改道，自检用）。
     # 每个函数自己算，不依赖模块级变量——本文件在子 shell 里被重新 source 时
     # 哨兵会挡住模块级赋值，函数却还活着，靠模块级变量就会读不到（set -u 下直接报错）。
-    _envproxy_home() {
-        printf '%s' "${ENVPROXY_HOME:-$HOME/.envproxy}"
-    }
+    #
+    # 各函数直接用 "${ENVPROXY_HOME:-$HOME/.envproxy}" 展开，**不要**包成函数再用
+    # $( ) 调：命令替换本身就要 fork 一次子 shell，哪怕里面只有内建 printf。
+    # 这个文件在每次回车时执行，多一次 fork 就是每次回车都慢一点。
 
     # 只清"我们写下的那些值"。判据是确切相等，不是形状相似。
     # 权威来源是 owned.env（monitor 在 on 态写下的那份）：每行「变量名 TAB 我们写的值」。
     # 不从 proxy.env 的 export 行反推——那样要处理双引号/单引号/空值三种形态，
     # 而 off 态时 proxy.env 里根本没有 export 行（已经是哨兵），一条都解析不出来。
     _envproxy_clear_ours() {
-        _ep_home="$(_envproxy_home)"
+        # 直接参数展开，不走 _envproxy_home()：$( ) 本身就是一次子 shell fork，
+        # 哪怕函数里只有内建 printf。本文件的承诺是「热路径不启动任何外部进程」，
+        # 用命令替换等于自食其言——每次回车都白 fork 一次。
+        _ep_home="${ENVPROXY_HOME:-$HOME/.envproxy}"
         # 当前文件若是 off 哨兵，就先执行它——它自带"值仍等于我们写的才清"的守卫，
         # 是 monitor 的正式清除路径。这一步不能无条件做：on 态文件会把使用者自己的
         # 值覆盖成我们的，然后再"清掉我们的"，等于把他的设置抹了（实测就是这样丢的）。
@@ -118,9 +122,9 @@ if [ -z "${_ENVPROXY_SYNC_READY-}" ]; then
             _envproxy_clear_ours
             return 0
         fi
-        # 路径只算一次：$( ) 每次都是一个 fork，同一行写两次就是两个。
-        # 这条在每次回车时执行，能少一个就少一个（本文件 _envproxy_clear_ours 早就这么做了）。
-        _ep_p="$(_envproxy_home)/proxy.env"
+        # 直接参数展开，不调 _envproxy_home()：那条路径本身就是一个 fork。
+        # 与 _envproxy_clear_ours 同一写法，两处都不许再出现 $( )。
+        _ep_p="${ENVPROXY_HOME:-$HOME/.envproxy}/proxy.env"
         [ -r "$_ep_p" ] && . "$_ep_p"
         unset _ep_p 2>/dev/null || true
         return 0

@@ -458,11 +458,16 @@ _render_help_index() {
     for _rhi_k in "${HELP_TOPIC_KEYS[@]}"; do
         if [ "${#_rhi_k}" -gt "$_rhi_w" ]; then _rhi_w=${#_rhi_k}; fi
     done
+    # 编号与标题之间留够空白、项与项之间空一行（与 Windows 侧同形）：
+    # 原来编号紧贴标题（只隔 3 格），一屏七行读下来是一堵墙，眼睛分不清哪行是新的。
+    _rhi_first=1
     for _rhi_k in "${HELP_TOPIC_KEYS[@]}"; do
+        if [ "$_rhi_first" = "0" ]; then _line_blank; fi
+        _rhi_first=0
         _rhi_pad="$_rhi_k"
         while [ "${#_rhi_pad}" -lt "$_rhi_w" ]; do _rhi_pad=" $_rhi_pad"; done
-        _seg cmd "  $_rhi_pad"
-        _seg value "   $(_help_topic_title "$_rhi_k")"
+        _seg cmd "  $_rhi_pad "
+        _seg value "     $(_help_topic_title "$_rhi_k")"
         _line_flush
     done
     _line_blank
@@ -982,6 +987,14 @@ show_advanced_menu() {
 # 用户打开它的时候心里只有一个问题「我这网到底怎么了」。
 show_rescue_page() {
     clear_screen_safe
+    # 这一屏的读法：范围 -> 结论 -> 明细 -> 兜底 -> 动作。
+    #
+    # 排版只靠空行与缩进分层次，不画横线。原来每一块之间都画一根，
+    # 一屏四根横线把内容切成四张卡片，眼睛不知道该先看哪块。
+    # 与 Windows 侧同一套（那边是 Show-RescuePage）。
+    #
+    # 重心放在**结论**上：用户点进来时心里只有一个问题「我这网怎么了」。
+    # 明细缩进一层，表示它是结论的注脚，不是并列的第二件事。
     style_out title "======== 浏览器代理修复 ========"
     echo ""
     # 第一句就说清它管到哪儿。名字里带「浏览器」，但用户到这里时心里想的是
@@ -989,7 +1002,6 @@ show_rescue_page() {
     # 与 Windows 侧逐字相同（那边是 Show-RescuePage 开头那两句）。
     style_out dim "  只修浏览器走的那个代理设置（Safari、Chrome、Edge 都读它）。"
     style_out dim "  终端里的 git、npm、curl 不归这里管。"
-    echo ""
 
     _rs_layers=$(sysproxy_layers full)
     _rs_fixable=0
@@ -1016,65 +1028,61 @@ show_rescue_page() {
 $_rs_layers
 EOF
 
-    # ---- 先给结论：这一屏最上面那句必须是"你现在是什么情况" ----
+    # ---- 结论 + 明细 ----
+    #
+    # 这一屏只回答三件事：有没有问题、问题出在哪一行、我该敲什么。
+    # 所以结构是「一句话结论 -> 要动的那些行 -> 一条分隔线 -> 动作」。
+    #
+    # 两条硬规矩（改之前先读）：
+    #   1) 不给使用者看内部名词。「系统下载（WinHTTP）」这种词他看不懂，也没法据此行动，
+    #      下面统一说成「浏览器代理 / 自动配置脚本」——那是他自己在系统设置里能看见的东西。
+    #   2) 结论用色块区分严重度：ok 绿（没事）、warn 黄（要修）、dim 灰（说明）。
+    # 与 Windows 侧同一套（那边是 Show-RescuePage）。
+    echo ""
+    _rs_outofscope=0
     if [ "$_rs_blocking" -gt 0 ]; then
-        style_out warn "  查下来：浏览器被指到了一个已经关掉的程序上。"
-        style_out dim  "          所以网页打不开——线没断，是路指错了。"
+        style_out warn "  查完了：浏览器被指到了一个已经关掉的程序上，所以网页打不开。"
+        style_out dim  "          线没断，是路指错了。"
     elif [ "$_rs_slowing" -gt 0 ]; then
-        style_out warn "  查下来：有个设置脚本指向已经关掉的程序。"
+        style_out warn "  查完了：有个自动配置脚本指向已经关掉的程序。"
         style_out dim  "          网页能开，但每次都要先等它几秒。"
     elif [ "$_rs_alivebroken" -gt 0 ]; then
-        # 代理程序还开着、端口也活着，但它连不上外面。
-        # 这一档以前不存在：以前只会说"没发现问题"，用户会以为工具没查出来，然后去动系统代理——
-        # 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。
-        style_out warn "  查下来：代理程序还开着，端口也在，但它连不上外面。"
-        style_out dim  "          这多半是节点的问题，不是设置坏了。"
-        style_out dim  "          关掉重开代理软件、或者换一个节点试试。"
-    elif [ "$_rs_fixable" -eq 0 ]; then
-        style_out ok "  查下来：没发现问题，浏览器这边的设置是好的。"
-        if [ "$_rs_foreign" -gt 0 ]; then
-            echo ""
-            style_out dim "  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。"
-        fi
-        # 必须说清这个工具管不到哪儿，否则用户会以为"它说没事 = 网没问题"。
-        echo ""
-        style_out dim "  这个工具只管「浏览器代理」这一层。"
-        style_out dim "  如果网还是不通，问题可能在别处：虚拟网卡、路由表、或防火墙规则。"
+        # 代理程序还开着、端口也活着，但它连不上外面。这一档必须说清是节点的问题：
+        # 说"没发现问题"会让用户去动系统代理，而删掉设置并不恢复网络（程序还占着端口），
+        # 只会把他能用的那条路删掉。
+        style_out warn "  查完了：设置本身没坏，但代理连不上外面。"
+        style_out dim  "          这多半是节点的问题。关掉重开代理软件，或者换一个节点。"
+        _rs_outofscope=1
+    else
+        style_out ok "  查完了：没发现问题，浏览器能正常联网。"
+        _rs_outofscope=1
     fi
 
-    # ---- 明细：能修的与不能动的分开列，不混在一起 ----
+    # 要动的那些行：只列「地址」，不重复结论里已经说过的那句原因。
     if [ "$_rs_fixable" -gt 0 ]; then
         echo ""
-        style_out heading "  能修的有 $_rs_fixable 项："
-        echo ""
+        style_out warn "  要修的是："
         while IFS="$(printf '\t')" read -r _rs_l2 _rs_svc2 _rs_kind2 _rs_url2 _rs_port2; do
             [ -n "$_rs_svc2" ] || continue
             sysproxy_fixable "$_rs_kind2" || continue
-            if [ "$_rs_kind2" = "$SYSPROXY_KIND_SLOWING" ]; then
-                _rs_why="那个脚本已经不在了"
-            else
-                _rs_why="那个程序已经不在了"
-            fi
-            style_out text "    $_rs_svc2  $_rs_url2"
-            style_out dim  "      $_rs_why"
+            style_out text "    $_rs_url2"
         done <<EOF
 $_rs_layers
 EOF
     fi
+    # 不归我们碰的那些：只报地址，不逐条解释——那是使用者的东西，说清「我没动」就够。
     if [ "$_rs_foreign" -gt 0 ] || [ "$_rs_managed" -gt 0 ]; then
         echo ""
-        style_out heading "  不能动的 $((_rs_foreign + _rs_managed)) 项："
-        echo ""
+        style_out dim "  另外 $((_rs_foreign + _rs_managed)) 项是你自己设的，本工具不碰："
         while IFS="$(printf '\t')" read -r _rs_l3 _rs_svc3 _rs_kind3 _rs_url3 _rs_port3; do
             [ -n "$_rs_svc3" ] || continue
             case "$_rs_kind3" in
                 "$SYSPROXY_KIND_FOREIGN")
-                    style_out text "    $_rs_svc3  $_rs_url3"
-                    style_out dim "      不是本机的地址，多半是公司或学校的，本工具不碰"
+                    # 地址可能是空的，空着印出来用户只看到一行空白。
+                    style_out dim "    ${_rs_url3:-（地址没读到）}"
                     ;;
                 "$SYSPROXY_KIND_MANAGED")
-                    style_out text "    $_rs_svc3"
-                    style_out dim "      这台电脑的设置由管理员统一管着，改了也会被改回去"
+                    style_out dim "    （这台电脑由管理员统一管着）"
                     ;;
             esac
         done <<EOF
@@ -1082,12 +1090,28 @@ $_rs_layers
 EOF
     fi
 
+    # ---- 兜底说明：讲清这一屏查不到什么 ----
+    # Proxifier / Netch / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，
+    # 它们出问题时 Internet Settings 里一个字节都不会变——扫注册表永远扫不出来。
+    if [ "$_rs_outofscope" = "1" ]; then
+        echo ""
+        style_out dim "  如果浏览器还是打不开网页，那问题不在这里："
+        style_out dim "  可能是虚拟网卡（TUN）、路由表、或者防火墙规则。"
+    fi
+
     # ---- 动作 ----
-    echo ""
+    #
+    # 分隔线只在这里用一条：把「上面是情况」和「下面是你要敲什么」分开。
+    # 别处不画线——这一屏上一次画了四根，把内容切成四张卡片，眼睛不知道先看哪块。
+    #
     # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
     # 最常撞上的时序：昨天修过（备份已写），今天客户端换回原端口，现在没有可修项了，
     # 用户想把代理改回原样——若按「可修项为零」提前返回，他只会看到「按回车返回」，
     # r 根本敲不到，而帮助页承诺了那条路。备份在就允许还原，与 fixable 无关。
+    echo ""
+    _rs_rule="  $(printf '%*s' 62 '' | tr ' ' '-')"
+    style_out dim "$_rs_rule"
+    echo ""
     _rs_hasbak=0
     [ -f "$(sysproxy_backup_path)" ] && _rs_hasbak=1
     if [ "$_rs_fixable" -eq 0 ] && [ "$_rs_hasbak" -eq 0 ]; then

@@ -23,16 +23,17 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
 - [3. Everyday commands on one page](#3-everyday-commands-on-one-page)
-- [4. Something is wrong: check in this order](#4-something-is-wrong-check-in-this-order)
-- [5. How it decides whether you are behind a proxy](#5-how-it-decides-whether-you-are-behind-a-proxy)
-- [6. Why it rarely breaks](#6-why-it-rarely-breaks)
-- [7. Performance and traffic](#7-performance-and-traffic)
-- [8. What is in the folder](#8-what-is-in-the-folder)
-- [9. Copying and backing up the folder](#9-copying-and-backing-up-the-folder)
-- [10. Setting it up for a friend or a new machine](#10-setting-it-up-for-a-friend-or-a-new-machine)
-- [11. Technical limits (5)](#11-technical-limits-5)
-- [12. macOS version](#12-macos-version)
-- [13. License and feedback](#13-license-and-feedback)
+- [4. What is inside Advanced (two modules)](#4-what-is-inside-advanced-two-modules)
+- [5. Something is wrong: check in this order](#5-something-is-wrong-check-in-this-order)
+- [6. How it decides whether you are behind a proxy](#6-how-it-decides-whether-you-are-behind-a-proxy)
+- [7. Why it rarely breaks](#7-why-it-rarely-breaks)
+- [8. Performance and traffic](#8-performance-and-traffic)
+- [9. What is in the folder](#9-what-is-in-the-folder)
+- [10. Copying and backing up the folder](#10-copying-and-backing-up-the-folder)
+- [11. Setting it up for a friend or a new machine](#11-setting-it-up-for-a-friend-or-a-new-machine)
+- [12. Technical limits (5)](#12-technical-limits-5)
+- [13. macOS version](#13-macos-version)
+- [14. License and feedback](#14-license-and-feedback)
 
 <!-- toc:end -->
 
@@ -398,21 +399,67 @@ bash envproxy.sh status
 **Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
 
 **Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
-### 3.7 Why proxy-aware shortcuts never need a new address
 
-A proxy app's local port changes now and then: you switch apps, it picks a random port on restart, or the port is taken and the app moves on to the next one. When that happens, some programs keep the old address you gave them and stop connecting — and you have to go into their own settings and fix it.
+## 4. What is inside Advanced (two modules)
 
-This tool opens a **fixed entry** on your machine (an address that never changes). The shortcuts only know that address, and behind it the tool follows the proxy app. So you never deal with a changing port, and you never rebuild a shortcut.
+Menu `5` is where these live. It holds two unrelated things, each solving one concrete annoyance:
 
-Three things worth knowing:
+| Module | When you need it | What it does |
+|---|---|---|
+| **Let one program use the proxy** | A program ignores the proxy | A shortcut that reads the proxy first |
+| **Browser proxy repair** | The browser cannot open pages | Clears a proxy pointing at a closed program |
 
-- **It runs alongside the background program.** No switch to turn on or off. Menu 5 then 3 shows how it is doing (that screen only reports; it changes nothing).
+Each one below.
+
+### Module one: let one program use the proxy
+
+**Where the problem comes from.** Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
+
+**How it helps.** It builds a shortcut for that program. The shortcut reads the current proxy just before launching and hands it straight to the program, sidestepping the "variables never update" step.
+
+**Why the address never needs changing.** A proxy app's local port changes: switch apps, a random port on restart, or the port is taken and the app moves on. When that happens, some programs keep the old address and stop connecting — and you have to fix it in their own settings.
+
+This tool opens a **fixed entry** on your machine (an address that never changes). The shortcuts only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild a shortcut.
+
+**Three things worth knowing:**
+
+- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `3` shows how it is doing (that screen only reports; it changes nothing).
 - **It not working is not a problem.** The shortcut falls back to reading the current address and still works. You only lose the "address never changes" part.
 - **Shortcuts you already made need no rebuild** — every launch reads the current state again.
 
-This exists on Windows only. Mac does not need it; see section 12.1 for why.
+This module exists on Windows only. Mac does not need it: programs launched from the Dock already see the proxy (see section 13.1).
 
-## 4. Something is wrong: check in this order
+### Module two: browser proxy repair
+
+**Where the problem comes from.** A proxy app removes its system proxy setting when it closes normally. But when it is **killed** — a hard shutdown, power loss, End Task, or a crash — it never gets the chance.
+
+The system still says "send browser traffic to `127.0.0.1:7078`", but nothing is listening there any more. Every time the browser goes online it knocks on a door that no longer exists, so **even domestic sites fail**.
+
+**The tell: the terminal is fine, only the browser is broken.** Terminal variables are managed by EnvProxy itself, which is a separate thing from the system proxy setting.
+
+**How it repairs.** It turns off only the switch that is wrong and leaves every other byte alone:
+
+| Situation | What it does |
+|---|---|
+| Loopback address, port already gone | Turns that entry off |
+| Not a loopback address (company, school) | **Leaves it alone** |
+| Port still alive (you are using it) | **Leaves it alone** |
+| Managed by administrator policy | **Leaves it alone** |
+| Cannot tell | **Leaves it alone** |
+
+It saves the original first, so you can put it back (press `r` on that screen).
+
+### What it cannot reach
+
+This matters more than everything above, because it tells you where to look next.
+
+**The repair only looks at "the proxy setting the browser uses".** If it says nothing is wrong, that does not mean your network is fine — only that this one layer is clean.
+
+If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, or firewall rules. It cannot see any of those.
+
+**Terminal variables are not its business either.** If `git`, `npm` or `curl` cannot connect, go to section 5 — that is a different path.
+
+## 5. Something is wrong: check in this order
 
 **Work through the list in order, finishing one step before starting the next.**
 
@@ -443,7 +490,7 @@ If it still fails, the policy is being enforced by Group Policy (common on work 
 
 > Most problems are solved by **picking 1** in the menu. It does not install a second copy, does not cut your network, and does not lose your own settings.
 
-## 5. How it decides whether you are behind a proxy
+## 6. How it decides whether you are behind a proxy
 
 It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does not trust a port just because it exists**. Three conditions must hold:
 
@@ -506,7 +553,7 @@ Windows gets 5, macOS gets 9 (the same 5, plus a lowercase spelling of the 3 add
 
 </details>
 
-## 6. Why it rarely breaks
+## 7. Why it rarely breaks
 
 The rule is: **when unsure, do nothing.**
 
@@ -517,14 +564,14 @@ The rule is: **when unsure, do nothing.**
 - **Re-installing is harmless**: when everything is already right it does not touch your settings.
 - **Uninstalling checks each item**: everything is read back, and any residue is reported as "incomplete" rather than claimed as success.
 
-## 7. Performance and traffic
+## 8. Performance and traffic
 
 - **Almost no overhead once stable**: each port is probed at most once every 15 seconds, reading only response headers, under 1KB each time.
 - **Shorter intervals while gathering evidence**: when failures appear but stay below the threshold it probes every 5 seconds. After the conclusion flips it keeps watching for another 60 seconds at that rate (so it does not flip straight back), then returns to 15 seconds.
 - **No residue after uninstalling**: variables, start at login, the locator script and the sync block are all removed, leaving only the log if you kept it.
 - **Delay at the prompt is imperceptible**: before each prompt it reads the local state once (PowerShell reads the registry, Git Bash reads a small state file, Mac reads `proxy.env`) and starts no external process at all.
 
-## 8. What is in the folder
+## 9. What is in the folder
 
 Unzipping gives roughly this. The folder can be renamed; each package contains only its own platform, so the Windows package has no `mac\` and vice versa.
 
@@ -549,7 +596,7 @@ EnvProxy\
   assets\readme\          images used by the README
 ```
 
-The two sides line up one to one. Only two files are Mac-only: `prompt-sync.sh` and `test-mac-pure.sh` (the Windows terminal sync script is generated by the installer, so it is not in the folder).
+The two sides line up one to one. Only two files are Mac-only: `prompt-sync.sh` and `test-mac-pure.sh` (the Windows terminal sync script is generated by the installer, so it is not in the folder). The `assets` folder holds the pictures the two READMEs use; you can ignore it.
 
 Three areas with different rules:
 
@@ -595,7 +642,7 @@ Uninstalling removes all of the above, keeping only the `monitor.log` you chose 
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder, the runtime folder, and the folder root">
 
-## 9. Copying and backing up the folder
+## 10. Copying and backing up the folder
 
 **It can be copied, renamed and moved.** One thing to know: **once the original location is renamed or moved, the running monitor can no longer find its own program.** It exits by itself and clears the proxy variables, so no stale setting is left behind.
 
@@ -613,7 +660,7 @@ That is why `C:\Projects\EnvProxy` is not found but `D:\Projects\EnvProxy` is. M
 
 A copied backup **is never mistaken for the live one**, since log activity decides which is running, so backups can stay in place.
 
-## 10. Setting it up for a friend or a new machine
+## 11. Setting it up for a friend or a new machine
 
 1. Get the package onto the new machine, either way: click **[Windows download](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)**, or copy the whole unzipped folder over (USB drive, cloud storage, or an archive all work)
 2. Double-click `win\打开菜单.cmd` and pick `1 Install / Repair`
@@ -625,7 +672,7 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 > It holds the run records this machine generated for itself (log, process id, state snapshot),
 > including your timestamps and ports. Deleting it changes nothing: a new machine rebuilds it on first run.
 
-## 11. Technical limits (5)
+## 12. Technical limits (5)
 
 <img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">
 
@@ -643,7 +690,7 @@ Why it does not try to recognise TUN and special-case it: a TUN adapter and a co
 
 Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
 
-## 12. macOS version
+## 13. macOS version
 
 ### 12.1 Difference from the Windows version
 
@@ -764,7 +811,7 @@ One rule applies to all three: `~/.envproxy/` is only removed when it is empty. 
 
 Copy the whole folder over, open `mac`, double-click `打开菜单.command`, pick `1 Install / Repair`, and you are done.
 
-## 13. License and feedback
+## 14. License and feedback
 
 MIT license, free to use and modify.
 

@@ -1370,6 +1370,13 @@ function Show-AdvancedMenu {
 # 与 Mac 侧同形（那边是 show_rescue_page），两平台同一件事必须同一句话。
 function Show-RescuePage {
     Clear-Screen
+    # 这一屏的读法：范围 → 结论 → 明细 → 兜底 → 动作。
+    #
+    # 排版只留标题下一根横线，其余靠空行与缩进分层次。原来每一块之间都画一根，
+    # 一屏四根横线把内容切成四张卡片，眼睛不知道该先看哪块。
+    #
+    # 重心放在**结论**上：用户点进来时心里只有一个问题「我这网怎么了」。
+    # 明细缩进一层，表示它是结论的注脚，不是并列的第二件事。
     Write-Styled 'title' '======== 浏览器代理修复 ========'
     Write-Host ''
     # 第一句就说清它管到哪儿。名字里带「浏览器」，但用户到这里时心里想的是
@@ -1377,7 +1384,6 @@ function Show-RescuePage {
     # 查完没事就以为网络确实没问题，然后往错的方向找。
     Write-Styled 'dim' '  只修浏览器走的那个代理设置（Chrome、Edge、IE 都读它）。'
     Write-Styled 'dim' '  终端里的 git、npm、curl 不归这里管。'
-    Write-Host ''
 
     $layers = @(Get-SystemProxyLayers)
     $fixable = @($layers | Where-Object { Test-SysProxyFixable $_.Kind })
@@ -1385,76 +1391,103 @@ function Show-RescuePage {
     $slowing = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Slowing })
     $foreign = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Foreign })
     $managed = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Managed })
+    # 读不出来的一层不能静默消失，也不能混进「你没动」那一组（那组的语义是
+    # 「东西在那儿、只是不归我碰」，而读不出来连是什么都不知道）。
+    $unreadable = @($layers | Where-Object { $_.Kind -eq $SysProxyKinds.Unreadable })
     # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
     # 拿不到握手（-Quick 或权限不足）时**不算**，绝不凭猜给用户指方向。
     $aliveBroken = @($layers | Where-Object {
         $_.Kind -eq $SysProxyKinds.Alive -and $_.Handshake -eq 'upstream-fail'
     })
 
-    # ---- 先给结论：这一屏最上面那句必须是「你现在是什么情况」 ----
+    # ---- 结论 + 明细 ----
+    #
+    # 这一屏只回答三件事：有没有问题、问题出在哪一行、我该敲什么。
+    # 所以结构是「一句话结论 → 要动的那些行 → 一条分隔线 → 动作」。
+    #
+    # 两条硬规矩（改之前先读）：
+    #   1) 不给使用者看内部名词。「系统下载（WinHTTP）」这种词他看不懂，也没法据此行动，
+    #      下面统一说成「浏览器代理 / 自动配置脚本」——那是他自己在系统设置里能看见的东西。
+    #   2) 结论用色块区分严重度：ok 绿（没事）、warn 黄（要修）、dim 灰（说明）。
+    Write-Host ''
+    $outOfScope = $false
     if ($blocking.Count -gt 0) {
-        Write-Styled 'warn' '  查下来：浏览器被指到了一个已经关掉的程序上。'
-        Write-Styled 'dim'  '          所以网页打不开——线没断，是路指错了。'
+        Write-Styled 'warn' '  查完了：浏览器被指到了一个已经关掉的程序上，所以网页打不开。'
+        Write-Styled 'dim'  '          线没断，是路指错了。'
     } elseif ($slowing.Count -gt 0) {
-        Write-Styled 'warn' '  查下来：有个设置脚本指向已经关掉的程序。'
+        Write-Styled 'warn' '  查完了：有个自动配置脚本指向已经关掉的程序。'
         Write-Styled 'dim'  '          网页能开，但每次都要先等它几秒。'
     } elseif ($aliveBroken.Count -gt 0) {
-        # **这一档以前根本不存在**：代理程序还开着、端口也活着，但它连不上外面。
-        # 以前只会说"没发现问题"，用户会以为工具没查出来，然后去动系统代理——
-        # 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。
-        # 说清"这是节点的问题"才是正确答案。
-        Write-Styled 'warn' '  查下来：代理程序还开着，端口也在，但它连不上外面。'
-        Write-Styled 'dim'  '          这多半是节点的问题，不是设置坏了。'
-        Write-Styled 'dim'  '          关掉重开代理软件、或者换一个节点试试。'
-    } elseif ($fixable.Count -eq 0) {
-        Write-Styled 'ok' '  查下来：浏览器这边的设置没发现问题。'
-        if ($foreign.Count -gt 0) {
-            Write-Host ''
-            Write-Styled 'dim' '  你设了别的代理（公司或学校的），那是你自己的设置，本工具不碰。'
-        }
-        # **必须说清这个工具管不到哪儿**，否则用户会以为"它说没事 = 我网没问题"。
-        # Proxifier / Netch 1.8.3+ / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，
-        # 它们出问题时 Internet Settings 里一个字节都不会变——扫注册表永远扫不出来。
-        # 不把这条说出来，用户就会在真正的原因上找不到方向。
-        Write-Host ''
-        Write-Styled 'dim' '  这个工具只管「浏览器代理」这一层。'
-        Write-Styled 'dim' '  如果网还是不通，问题可能在别处：虚拟网卡、路由表、或防火墙规则。'
+        # 代理程序还开着、端口也活着，但它连不上外面。这一档必须说清是节点的问题：
+        # 说"没发现问题"会让用户去动系统代理，而删掉设置并不恢复网络（程序还占着端口），
+        # 只会把他能用的那条路删掉。
+        Write-Styled 'warn' '  查完了：设置本身没坏，但代理连不上外面。'
+        Write-Styled 'dim'  '          这多半是节点的问题。关掉重开代理软件，或者换一个节点。'
+        $outOfScope = $true
+    } else {
+        Write-Styled 'ok' '  查完了：没发现问题，浏览器能正常联网。'
+        $outOfScope = $true
     }
 
-    # ---- 明细：能修的与不能动的分开列，不混在一起 ----
+    # 要动的那些行：只列「地址」，不重复结论里已经说过的那句原因。
+    # 地址按最长那条对齐，让它们看起来是一列而不是一堆散字。
     if ($fixable.Count -gt 0) {
         Write-Host ''
-        Write-Styled 'heading' ("  能修的有 {0} 项：" -f $fixable.Count)
-        Write-Host ''
-        $label = @{ manual = '浏览器代理'; pac = '设置脚本'; winhttp = '系统下载'; }
+        Write-Styled 'warn' '  要修的是：'
+        $w = 0
+        foreach ($f in $fixable) { $dw = Get-DisplayWidth ([string]$f.Url); if ($dw -gt $w) { $w = $dw } }
         foreach ($f in $fixable) {
-            $why = if ($f.Kind -eq $SysProxyKinds.Slowing) { '那个脚本已经不在了' } else { '那个程序已经不在了' }
-            Write-Styled 'text' ('    ' + $label[$f.Layer] + '  ' + $f.Url)
-            Write-Styled 'dim'  ('      ' + $why)
-        }
-    }
-    if ($foreign.Count -gt 0 -or $managed.Count -gt 0) {
-        Write-Host ''
-        Write-Styled 'heading' ("  不能动的 {0} 项：" -f ($foreign.Count + $managed.Count))
-        Write-Host ''
-        foreach ($f in $foreign) {
-            Write-Styled 'text' ('    浏览器代理  ' + $f.Url)
-            Write-Styled 'dim'  '      不是本机的地址，多半是公司或学校的，本工具不碰'
-        }
-        foreach ($f in $managed) {
-            Write-Styled 'text' '    浏览器代理'
-            Write-Styled 'dim'  '      这台电脑的设置由管理员统一管着，改了也会被改回去'
+            $u = [string]$f.Url
+            # 地址后面的说明只说「它指向的东西没了」，这是使用者唯一需要知道的那句。
+            Write-Styled 'text' ('    ' + $u)
         }
     }
 
+    # 不归我们碰的那些：合并成一句，不逐条展开——那是使用者的东西，说清「我没动」就够。
+    $untouched = $foreign.Count + $managed.Count
+    if ($untouched -gt 0) {
+        Write-Host ''
+        Write-Styled 'dim' ('  另外 {0} 项是你自己设的，本工具不碰：' -f $untouched)
+        foreach ($f in $foreign) {
+            $u = if ($f.Url) { [string]$f.Url } else { '（地址没读到）' }
+            Write-Styled 'dim' ('    ' + $u)
+        }
+        foreach ($f in $managed) {
+            Write-Styled 'dim' '    （这台电脑由管理员统一管着）'
+        }
+    }
+
+    # 读不出来的：如实报「这一层没看到」，不猜、也不装作它是别人的设置。
+    if ($unreadable.Count -gt 0) {
+        Write-Host ''
+        Write-Styled 'dim' '  有一层没读到（不影响上面那些判断）：'
+        foreach ($f in $unreadable) {
+            $why = if ($f.Detail) { [string]$f.Detail } else { '系统工具没给出可读的结果' }
+            Write-Styled 'dim' ('    ' + $why)
+        }
+    }
+
+    # ---- 兜底说明：讲清这一屏查不到什么 ----
+    # Proxifier / Netch / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，
+    # 它们出问题时 Internet Settings 里一个字节都不会变——扫注册表永远扫不出来。
+    if ($outOfScope) {
+        Write-Host ''
+        Write-Styled 'dim' '  如果浏览器还是打不开网页，那问题不在这里：'
+        Write-Styled 'dim' '  可能是虚拟网卡（TUN）、路由表、或者防火墙规则。'
+    }
     # ---- 动作 ----
-    Write-Host ''
-    # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
     #
+    # 分隔线只在这里用一条：把「上面是情况」和「下面是你要敲什么」分开。
+    # 别处不画线——这一屏上一次画了四根，把内容切成四张卡片，眼睛不知道先看哪块。
+    #
+    # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
     # 最容易撞上的正是这个时序：昨天修过（备份已写），今天客户端换回原来的端口，
     # 现在没有可修项了，用户想把代理改回原样——若在这里按「可修项为零」提前返回，
     # 他只会看到「按回车返回」，r 根本敲不到；而帮助页白纸黑字承诺了那条路。
     # 备份在就允许还原，与 fixable 无关。
+    Write-Host ''
+    Write-Styled 'dim' ('  ' + ('-' * 62))
+    Write-Host ''
     $hasBackup = $false
     try { $hasBackup = [bool](Test-Item (Get-SysProxyBackupPath)) } catch { $hasBackup = $false }
     if ($fixable.Count -eq 0 -and -not $hasBackup) {
@@ -1497,7 +1530,7 @@ function Show-RescuePage {
             Write-Styled 'warn' '  [未完成] 修好了一部分，还有没改成的。'
             $leftNames = @($r.Failed | ForEach-Object {
                 switch ($_) {
-                    'winhttp' { '系统下载这一层（要管理员权限）' }
+                    'winhttp' { '系统自带工具那一层（要管理员权限）' }
                     'manual'  { '浏览器代理' }
                     'pac'     { '设置脚本' }
                     default   { [string]$_ }
@@ -1506,7 +1539,7 @@ function Show-RescuePage {
             Write-Styled 'dim' ('  没改成的：' + ($leftNames -join '、'))
             if (@($r.Failed) -contains 'winhttp') {
                 Write-Styled 'dim' '  这一项要管理员权限。用管理员身份打开终端，执行：'
-                Write-Styled 'cmd' '    netsh winhttp reset proxy'
+                Write-Styled 'cmd' '    以管理员身份打开 PowerShell，执行：netsh winhttp reset proxy'
             }
             Write-Styled 'dim' '  其余的可以再试一次。'
         }
@@ -1521,7 +1554,7 @@ function Show-RescuePage {
             Write-Styled 'warn' '  [未完成] 没能改完。'
             if ($r.Detail -eq 'needadmin') {
                 Write-Styled 'dim' '  还有一项要管理员才能改。用管理员身份打开终端，执行这一条：'
-                Write-Styled 'cmd' '    netsh winhttp reset proxy'
+                Write-Styled 'cmd' '    以管理员身份打开 PowerShell，执行：netsh winhttp reset proxy'
             } else {
                 Write-Styled 'dim' '  可以再试一次；还不行就用主菜单的「问题反馈」生成一份报告。'
             }

@@ -194,7 +194,13 @@ Assert-Eq 'rescue: the message points at the node' $true ($rescueSrc -match '多
 # 这一档的台词本身不许出现"删/清掉设置"之类的话——那正是错的指导。
 # 只取**这一段分支**里的字符串，不看注释，也不扫整份文件（别处的"删掉"说的是删快捷方式图标）。
 $branchStart = $rescueSrc.IndexOf('aliveBroken.Count -gt 0')
-$branchEnd = $rescueSrc.IndexOf('elseif ($fixable.Count -eq 0)', [Math]::Max($branchStart, 0))
+# 分支结束点不能写死成某个 elseif 的条件——那一档下面改成 else 之后
+# 定位就失效，测试会报「分支没找到」，看起来像行为坏了、实际只是措辞变了。
+# 改用「这一段之后的第一个收尾」：} else 或 } elseif 都算边界。
+$candElse    = $rescueSrc.IndexOf('} else {', [Math]::Max($branchStart, 0))
+$candElseIf  = $rescueSrc.IndexOf('} elseif', [Math]::Max($branchStart, 0))
+$cands = @($candElse, $candElseIf) | Where-Object { $_ -gt 0 }
+$branchEnd = if ($cands.Count -gt 0) { ($cands | Measure-Object -Minimum).Minimum } else { -1 }
 $branch = if ($branchStart -ge 0 -and $branchEnd -gt $branchStart) { $rescueSrc.Substring($branchStart, $branchEnd - $branchStart) } else { '' }
 Assert-Eq 'rescue: the node-problem branch was located' $true ([bool]$branch)
 $branchStr = (@([regex]::Matches($branch, "'([^']*[\u4e00-\u9fa5][^']*)'") | ForEach-Object { $_.Groups[1].Value }) -join "`n")

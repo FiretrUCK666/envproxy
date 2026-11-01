@@ -33,6 +33,10 @@ $SysProxyKinds = @{
     Alive         = 'alive'            # 回环地址 + 端口活着：翻墙软件正在用，不动
     Foreign       = 'foreign'          # 不是回环：公司/学校代理，工具不碰
     Managed       = 'managed'          # 被组策略、描述文件管着：改了也会被改回，不动
+    # 读不出来：系统工具被拦、权限不足、输出认不出来。**必须与 Foreign 分开**——
+    # Foreign 断言「这是别人的代理」，读不出来时我们连地址都没有，说成 Foreign 是编的。
+    # 它不可修，也不进「不能动」那一组的计数（那组的意思是「东西在那儿，但不归我碰」）。
+    Unreadable    = 'unreadable'
 }
 
 # WinINET 的连接标志位。值与 Windows SDK 一致，改动会导致写进去的开关错位。
@@ -490,13 +494,18 @@ function Get-SystemProxyLayers {
     # DIVERGE(Win): Mac 没有等价的独立层，那边系统代理只有「每个网络服务一份」那套。
     if (-not $Quick) {
         $wh = Get-WinHttpProxy
-        # 读不出来时也要成层（Kind=foreign，不可修），否则这一层会静默消失：
+        # 读不出来时也要成层（不可修），否则这一层会静默消失：
         # 用户报"上不了网"，工具说"没发现问题"，因为最脏的那层根本不在清单里。
+        #
+        # 但**不能借 Foreign 表达"读不出来"**：Foreign 是在断言「地址不是本机，
+        # 是使用者自己设的」，而读不出来的时候连地址都没有，说成 Foreign 就是编的，
+        # 屏幕上还会印出一个只有标签、后面什么都没有的空行，用户完全看不懂。
+        # 单列一个 unreadable 结论词，语义是「这一层没读到，不知道」。
         if ($wh -and $wh.State -eq 'unknown') {
             [void]$out.Add(@{
                 Layer = 'winhttp'; Url = ''; Port = 0
-                Kind = $SysProxyKinds.Foreign
-                Detail = ('读不出来：' + $wh.Detail)
+                Kind = $SysProxyKinds.Unreadable
+                Detail = ('这一层没读到：' + $wh.Detail)
             })
         }
         if ($wh -and $wh.State -eq 'set' -and $wh.Server) {
@@ -608,7 +617,7 @@ function Get-SysProxyReason([string]$Kind, [string]$Url, [int]$Port, $Alive, [st
         }
         'foreign' {
             if (-not $host_) { return '这一项的地址读不出来，所以不动它。' }
-            if ($Layer -eq 'winhttp') { return '这是系统下载那一层的设置，不是浏览器那一层。' }
+            if ($Layer -eq 'winhttp') { return '这一项只有系统自带工具在用，浏览器不读它。' }
             # 本机网卡上的地址（allow LAN 的客户端会这么写）要说清，别笼统说成"公司代理"。
             $isOwnNic = $false
             try { $isOwnNic = Test-LocalInterfaceAddress $host_ } catch { $isOwnNic = $false }
@@ -649,10 +658,10 @@ function Get-WinHttpProxy {
         $raw = & netsh winhttp show proxy 2>$null
         $rc = $LASTEXITCODE
         if ($null -eq $raw -or ($raw -is [array] -and $raw.Count -eq 0)) {
-            return @{ State = 'unknown'; Detail = if ($rc) { "netsh 退出码 $rc" } else { 'netsh 没有输出' } }
+            return @{ State = 'unknown'; Detail = if ($rc) { '查询工具返回了错误（代码 ' + $rc + '），可能被安全软件拦住了' } else { '系统没有给出任何结果' } }
         }
         $text = ($raw | Out-String)
-        if (-not $text.Trim()) { return @{ State = 'unknown'; Detail = 'netsh 输出为空' } }
+        if (-not $text.Trim()) { return @{ State = 'unknown'; Detail = '系统返回了空结果' } }
         # 「直接访问(没有代理服务器)」/ "Direct access (no proxy server)" 都表示没设。
         if ($text -match 'Direct access|直接访问') { return @{ State = 'none' } }
         # 取「主机:端口」。两种形态都要认：
@@ -664,7 +673,7 @@ function Get-WinHttpProxy {
         $m = [regex]::Match($text, '\[[0-9A-Fa-f:]+\]:\d+|[A-Za-z0-9_\.\-]+:\d+')
         # 有输出、但没有"直接访问"字样、也取不到 host:port —— 这是"认不出"，
         # 不是"没设"。报 unknown，让界面如实说这一层没法判断。
-        if (-not $m.Success) { return @{ State = 'unknown'; Detail = 'netsh 输出认不出代理地址' } }
+        if (-not $m.Success) { return @{ State = 'unknown'; Detail = '系统给的格式认不出来' } }
         return @{ State = 'set'; Server = $m.Value }
     } catch {
         return @{ State = 'unknown'; Detail = $_.Exception.Message }

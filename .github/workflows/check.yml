@@ -888,7 +888,9 @@ jobs:
             $lines = Get-Content $f -Encoding UTF8
             $start = -1
             for ($k = 0; $k -lt $lines.Count; $k++) {
-              if ($lines[$k] -match '^##\s*8\.') { $start = $k; break }
+              # 按标题内容定位，不按章号：章号会随着插入新章节整体后移，
+              # 写死 8 会在动过目录结构之后指到一个不相干的章节上（曾指向「性能与流量」）。
+              if ($lines[$k] -match '^##\s*\d+\.\s*(文件夹里都有什么|What is in the folder)') { $start = $k; break }
             }
             if ($start -lt 0) { Write-Host ("{0}：找不到第 8 节（文件夹清单所在节）" -f $f); $fail = 1; continue }
             $inFence = $false
@@ -971,7 +973,10 @@ jobs:
             }
           }
           # g) 第 8 节散文必须点名四个程序目录（只靠代码块里的清单不够：散文不写，进包范围改了用户也不知道）
-          foreach ($pair in @(@('README.md','##\s*8\.'), @('README.en.md','##\s*8\.'))) {
+          # 同上：按标题内容定位。中文与英文的标题文案不同，各给一条。
+          foreach ($pair in @(
+              @('README.md','^##\s*\d+\.\s*文件夹里都有什么'),
+              @('README.en.md','^##\s*\d+\.\s*What is in the folder'))) {
             $fl = Get-Content $pair[0] -Encoding UTF8
             $start = -1
             for ($k = 0; $k -lt $fl.Count; $k++) { if ($fl[$k] -match $pair[1]) { $start = $k; break } }
