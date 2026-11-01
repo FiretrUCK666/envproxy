@@ -131,6 +131,54 @@ new_problem_report() {
         # 用纯文本渲染：报告是给文件看的，不能带颜色控制字符。
         show_status 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g"
         echo ""
+        # 网络体检：与 Windows 侧同一节、同一措辞。
+        # 帮助里写着「报告里已经有网络体检的结论，不用你另外描述」——
+        # 那一句是承诺，这一节是兑现它的地方；缺了它用户会翻遍报告找不到。
+        echo "---------------- 网络体检（浏览器那一侧） ----------------"
+        _npr_layers=$(sysproxy_layers quick 2>/dev/null)
+        _npr_fix=0
+        if [ -z "$_npr_layers" ]; then
+            echo "  没有设任何浏览器代理（干净直连）。"
+        else
+            printf "%s\n" "$_npr_layers" | while IFS="$(printf '\t')" read -r _nl_l _nl_s _nl_k _nl_u _nl_p _nl_b _nl_h; do
+                [ -n "$_nl_s" ] || continue
+                if sysproxy_fixable "$_nl_k"; then _nl_flag="【可修】"; else _nl_flag=""; fi
+                case "$_nl_k" in
+                    alive)    _nl_flag="（正在用）" ;;
+                    managed)  _nl_flag="（被管理员锁定）" ;;
+                    foreign)  _nl_flag="（不是本机的，未动）" ;;
+                esac
+                echo "  $_nl_l  $_nl_u  -> $_nl_k $_nl_flag"
+            done
+            _npr_fix=$(printf "%s\n" "$_npr_layers" | awk -F"\t" 'NF>=3 {print $3}' | while read -r _k; do sysproxy_fixable "$_k" && echo x; done | wc -l | tr -d " ")
+        fi
+        echo "  这一层有没有问题：$([ "${_npr_fix:-0}" -gt 0 ] && echo 有 || echo 没有)"
+        echo ""
+        # 后台程序快照：与 Windows 侧同一节、同一措辞。
+        # 它回答"后台那一刻到底判成了什么"——状态页是实时的，出问题时那份已经过去了。
+        echo "---------------- 后台程序快照（排查用） ----------------"
+        read_state_snapshot >/dev/null 2>&1 || true
+        if [ "$SNAP_STATUS" = "ok" ]; then
+            echo "  最近一次判断：$SNAP_STATE"
+            echo "  写入轮次：$SNAP_ROUND    进程号：$SNAP_PID"
+            echo "  距今：$SNAP_AGE 秒前"
+            if [ -n "$SNAP_PORT_REASON" ]; then
+                echo "  端口扫描：$SNAP_PORT_ENUMERATION（$SNAP_PORT_REASON）"
+            else
+                echo "  端口扫描：$SNAP_PORT_ENUMERATION"
+            fi
+            _npr_live=$(get_monitor_pid 2>/dev/null || echo "")
+            if [ -n "$_npr_live" ] && [ "$_npr_live" != "$SNAP_PID" ]; then
+                echo "  注意：快照是旧进程 $SNAP_PID 写的，现在跑的是 $_npr_live。$(menu_ref install)可重启后台程序。"
+            fi
+        elif [ "$SNAP_STATUS" = "none" ]; then
+            echo "  （没有快照文件：后台程序可能从没跑过）"
+        else
+            echo "  读不出来：$SNAP_STATUS"
+            echo "  （这不影响使用，状态页会自动改用实时探测）"
+        fi
+        echo ""
+
         echo "---------------- 运行日志（最后 30 行） ----------------"
         if [ -f "$LOG_FILE" ]; then
             tail -n 30 "$LOG_FILE" 2>/dev/null | sed 's/^/  /'

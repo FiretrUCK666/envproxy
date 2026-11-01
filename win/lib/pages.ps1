@@ -41,7 +41,7 @@ function Format-StatusLines($st) {
     }
 
     $problems = @(Get-StatusProblems $st)
-    & $line '======== EnvProxy 状态（实时刷新）========' 'title'
+    & $line '======== EnvProxy 状态 ========' 'title'
     # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
     # 与帮助页同一套规矩（标题上下各空一行），两版状态页也一样。
     & $line '' 'text'
@@ -584,10 +584,7 @@ function New-ProblemReport {
             $plain = Remove-AnsiColor $ln
             if ($plain -match '^\s*(正在实时刷新|按 0 或 Esc)') { continue }
             if ($plain -match '^\s*=+\s*$') { continue }
-            if ($plain -match '^\s*======== EnvProxy 状态') {
-                & $add '======== EnvProxy 状态 ========'
-                continue
-            }
+            # 标题两版已经统一（都是不带「（实时刷新）」的那句），这里不再改写。
             & $add $plain
         }
     } catch {
