@@ -185,6 +185,7 @@ NODE_USE_ENV_PROXY_VALUE="1"
 PROXY_MODES="proxy direct"
 
 # 按模式 Id 取图标名后缀。取不到返回非零。
+# @explain 「走代理」「固定直连」是图标的显示名（用户按这两个词找图标），不是解释机制
 proxy_mode_suffix() {
     case "$1" in
         proxy)  printf '%s\n' '（走代理）' ;;
@@ -195,6 +196,7 @@ proxy_mode_suffix() {
 }
 
 # 按模式 Id 取给用户看的短名（不带括号）。取不到返回非零。
+# @explain 「走代理」「固定直连」是管理页里的显示名，与图标名同一套叫法
 proxy_mode_label() {
     case "$1" in
         proxy)  printf '%s\n' '走代理' ;;

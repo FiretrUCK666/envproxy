@@ -885,6 +885,7 @@ show_menu() {
 #
 # 为什么必须有 Handler 列：分派若写成「编号在表里就打开某个固定页面」，
 # 加第二项的那天，敲任何有效编号都会打开同一个页面——不报错、也没有提示。
+# @explain 「走代理」「固定直连」是菜单项的名字，用户按这两个词找菜单；不是解释机制
 ADVANCED_ITEMS=(
     '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建走代理的快捷方式|挑一个已装的程序'
     '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不走代理'

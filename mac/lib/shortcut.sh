@@ -81,15 +81,17 @@ _shortcut_launcher_body() {
             done
             ;;
         *)
-            # 走代理：从中继端口记录读当前地址，读不到就退回 proxy.env 里的值。
+            # 走代理：从 proxy.env 读当前地址。
             # **不把地址写死在这里**：翻墙软件会换端口，写死的壳子换一次就废了，
             # 而"每次点击重新决定"正是壳子这一层的价值。
+            #
+            # 只读 proxy.env 一个来源。Windows 侧还有一个 relay.port（固定入口）兜底，
+            # 但 Mac 侧没有中继——那个文件在 macOS 上从来不会被创建，
+            # 留着这段判断只会让"提到 relay.port"这件事传进文档与门禁，
+            # 于是一份不存在的文件被写进 README，用户照着找会找不到。
             printf 'ENVPROXY_HOME="${ENVPROXY_HOME:-$HOME/.envproxy}"\n'
             printf '_ep=""\n'
-            printf 'if [ -r "$ENVPROXY_HOME/relay.port" ]; then\n'
-            printf '    _ep="http://127.0.0.1:$(cat "$ENVPROXY_HOME/relay.port" 2>/dev/null)"\n'
-            printf 'fi\n'
-            printf 'if [ -z "$_ep" ] && [ -r "$ENVPROXY_HOME/proxy.env" ]; then\n'
+            printf 'if [ -r "$ENVPROXY_HOME/proxy.env" ]; then\n'
             # 从 proxy.env 摘 HTTP_PROXY 的值。文件里那一行形如
             #   export HTTP_PROXY="http://127.0.0.1:7078"
             # 要拿到的是两端的引号去掉、只剩地址。
@@ -505,6 +507,7 @@ _shortcut_confirm_and_build() {
     style_out dim  "          $_scb_target"
     echo ""
     style_out text "  规矩    $_scb_label"
+    # @explain 下面两行说的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制
     if [ "$_scb_mode" = "direct" ]; then
         style_out dim "          双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。"
     else

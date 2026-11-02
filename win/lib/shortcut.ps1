@@ -879,8 +879,9 @@ function Get-InstalledPrograms {
 #
 # 为什么 Action 与 Handler 分开：Action 是「这一项是什么」，Handler 是
 # 「这一项怎么实现」。换实现只改 Handler，用户的提示文案一个字不动。
+#
+# @explain 「走代理」「固定直连」是菜单项的名字，用户按这两个词找菜单；不是解释机制。
 $AdvancedItems = @(
-    # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
     @{ Key='1'; Action='NewProxyIcon';  Module='icon';   Kind='do'
        Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径'
        Handler='Invoke-NewProxyShortcutFlow' }
@@ -1433,6 +1434,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     Write-Host ''
     Write-Styled 'text' ('  规矩    ' + $mode.Label)
     # 一句话说清这条规矩的后果。直接回显模式的意图，不让用户从名字去猜。
+    # @explain 下面两句里的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制。
     $modeNote = if ($isDirect) {
         '双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。'
     } else {

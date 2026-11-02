@@ -2139,11 +2139,56 @@ jobs:
               if (-not $hasCjk) { continue }
               if ($line -match $term) {
                 $exempt = $false
-                if ($ln -ge 2 -and $lines[$ln - 2] -match '@explain') {
-                  $decl = $lines[$ln - 2]
-                  foreach ($tk in ($term -split '\|')) {
-                    if ($decl -match [regex]::Escape($tk) -and $line -match [regex]::Escape($tk)) { $exempt = $true }
+                # 豁免：向上找**最近的** @explain，穿过同一段声明的骨架行，遇到真正的语句就停。
+                #
+                # 为什么不能只认正上一行：一张表常常是这样写的
+                #   注释  @explain ...
+                #   $表 = @(
+                #       @{ ... }        ← 违规在这里，隔了两行
+                # 只认正上一行的话，每一行都得单独写 @explain，那张表就没法读了。
+                #
+                # 为什么必须有一个"停"的判据：否则豁免会顺着文件往下无限传播，
+                # 一个 @explain 就给整段开了后门。所以只穿过同一声明的骨架行
+                # （表声明、表项、case 分支、函数签名），遇到真正的语句就停。
+                $exempt = $false
+                $j = $ln - 2
+                $steps = 0
+                while ($j -ge 0 -and $steps -lt 40) {
+                  $up = $lines[$j]
+                  if ($up -match '@explain') {
+                    foreach ($tk in ($term -split '\|')) {
+                      if ($up -match [regex]::Escape($tk) -and $line -match [regex]::Escape($tk)) { $exempt = $true }
+                    }
+                    break
                   }
+                  # 下面这些是同一段声明的骨架行，可以穿过去继续往上找。
+                  $passthru = $false
+                  if ($up -match '^\s*#') { $passthru = $true }
+                  elseif (-not $up.Trim()) { $passthru = $true }
+                  elseif ($up -match '^\s*\$?[A-Za-z_][\w]*\s*=\s*@\(\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*[A-Z_][A-Z0-9_]*=\(\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*(function\s+)?[\w-]+\s*(\([^)]*\))?\s*\{\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*(''|"|@\{)') { $passthru = $true }
+                  elseif ($up -match '^\s*[A-Za-z*][\w|*]*\)') { $passthru = $true }
+                  # case ... in 与 if ... then 也是"同一段声明"的骨架行：
+                  # 显示名常常写在 case 分支里，或写在 if 的某个分支里。
+                  elseif ($up -match '^\s*case\s+.*\s+in\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*(if|elif).*\bthen\s*$') { $passthru = $true }
+                  # PowerShell 的「赋值 + 内联 if」也属同一声明：
+                  #   $desc = if (...) {        ← 声明在上一行，值在分支里
+                  #       '通过 EnvProxy 走代理启动'
+                  #   }
+                  elseif ($up -match '^\s*\$?[\w.]+\s*=\s*(if|switch)\s*\(.*\)\s*\{\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*\}\s*else\s*\{\s*$') { $passthru = $true }
+                  # 表项的"续行"与"收尾行"：@{ 开在多行里，值在下一行、} 在再下一行。
+                  # 这三行都属于同一条表项，必须能穿过它们找到表头的 @explain。
+                  elseif ($up -match '^\s*[\w]+\s*=') { $passthru = $true }
+                  elseif ($up -match '^\s*[\w]+\s*=.*\}\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*\}\s*$') { $passthru = $true }
+                  elseif ($up -match '^\s*else\s*$') { $passthru = $true }
+                  if (-not $passthru) { break }
+                  $j--
+                  $steps++
                 }
                 if ($exempt) { continue }
                 Write-Host ("{0}:{1} 用了机制词，用户看不懂：{2}" -f $s[0], $ln, $line.Trim())
@@ -2444,6 +2489,11 @@ jobs:
                 $dvgBad += ("{0}:{1} DIVERGE 后面没有写原因" -f $df.Name, $ln)
               }
             }
+          }
+          foreach ($d in $dvgBad) { Write-Host ("DIVERGE 标记不合规：" + $d); $fail = 1 }
+          if ($fail) { exit 1 }
+          Write-Host '两侧帮助与菜单结构一致'
+
       - name: 门禁 16：高级功能表与处理器一致
         shell: pwsh
         run: |
@@ -2474,7 +2524,7 @@ jobs:
           # 表项在源码里跨多行写（一行放不下），所以模式必须 (?s) 让 . 与 \s 跨行。
                     # Handler 名里含连字符（Invoke-NewProxyShortcutFlow），所以字符类是 [\w-] 而不是 \w。
           # 用 \w 匹配不到，模式会静默一条都不命中——门禁看起来"通过"，其实什么都没查。
-          foreach ($m in [regex]::Matches($ps, ""(?s)@\{ Key='(\d+)'; Action='(\w+)';\s*Module='(\w+)';\s*Kind='(\w+)'\s*Name='([^']+)';\s*Hint='([^']*)'\s*Handler='([\w-]+)'"")) {
+          foreach ($m in [regex]::Matches($ps, "(?s)@\{ Key='(\d+)'; Action='(\w+)';\s*Module='(\w+)';\s*Kind='(\w+)'\s*Name='([^']+)';\s*Hint='([^']*)'\s*Handler='([\w-]+)'")) {
             $winItems += [pscustomobject]@{
               Key = $m.Groups[1].Value; Action = $m.Groups[2].Value
               Module = $m.Groups[3].Value; Kind = $m.Groups[4].Value
@@ -2582,11 +2632,6 @@ jobs:
 
           if ($fail) { exit 1 }
           Write-Host ("高级功能表与处理器一致（Win {0} 项 / Mac {1} 项 / 共有 {2} 项）" -f $winItems.Count, $macItems.Count, $sharedCount)
-
-          }
-          foreach ($d in $dvgBad) { Write-Host ("DIVERGE 标记不合规：" + $d); $fail = 1 }
-          if ($fail) { exit 1 }
-          Write-Host '两侧帮助与菜单结构一致'
 
       - name: 门禁 7：AGENTS.md 体量上限
         shell: pwsh
