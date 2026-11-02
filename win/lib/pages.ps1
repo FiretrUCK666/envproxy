@@ -26,7 +26,10 @@
 #   - 结论行、问题清单、参考项：同一份 $st
 #   - 判断逻辑：调同一个 Get-StatusProblems（下面抽出来的）
 # 内容一旦不一致，自检里有断言逐步比对两版。
-function Format-StatusLines($st) {
+function Format-StatusLines($st, [switch]$NoLog) {
+    # $NoLog：省略「最近日志」区。实时刷新在窗口放不下整帧时用它——
+    # 这一屏的主角是状态结论，日志只在排查时才看；放不下时砍日志、保住结论，
+    # 比整帧不画（屏幕空白两秒）或硬画（滚屏导致绝对定位错位）都好。
     $out = New-Object System.Collections.ArrayList
     # 一行的标准形态：标签固定用 key 色，内容按状态取角色。
     # 与 Write-StatusRow（静态页）同一条契约，只是这里产出字符串而不是直接打印。
@@ -132,8 +135,9 @@ function Format-StatusLines($st) {
     # 于是同一份状态在静态页是「已注入但没人维护(黄)」、在这里是「已注入(绿)」。
     $pvt = Get-ProxyVarsText $st
     & $row $StatusLabels.Vars $pvt.Text $pvt.Role
+    # 提示有几条就说几条。**不补空行**：补了会在正常状态下留出一片空白，
+    # 把帧顶高两行——而帧每高一行，撞到窗口底边、触发滚屏的风险就多一分。
     foreach ($h in @($pvt.Hints)) { & $line ('  ' + $h.Text) $h.Role }
-
 
     # ---- 第三组之二：更新中断 / 系统代理残留 ----
     # 这两段静态页有、实时帧曾经没有——同一份状态，按回车看和等它刷新，
@@ -203,6 +207,10 @@ function Format-StatusLines($st) {
     # 按字符数裁 78 会让中文密集的行实际占 90+ 格，折行——而这一层是按逻辑行
     # 做绝对定位的，折行会让后面每一行都错位。Get-DisplayWidth 就是为此存在的，
     # 静态页的 Show-RecentLog 已经这么做了，这里必须用同一个判据。
+    #
+    # $NoLog 时整段跳过（含上面那个空行）：窗口放不下整帧时靠砍它把高度降下来。
+    # 日志只用于排查，状态结论才是这一屏的主角，取舍时保结论。
+    if (-not $NoLog) {
     & $line '' 'text'
     & $line '---------------- 最近日志 ----------------' 'title'
     $tail = ''
@@ -212,12 +220,24 @@ function Format-StatusLines($st) {
     try { $logW = (Get-ConsoleWidth) - 2 } catch { $logW = 78 }
     if ($logW -lt 20) { $logW = 20 }
     if ($tail) {
-        foreach ($ln in @($tail -split "`n")) {
-            if (-not $ln) { continue }
+        # 日志行数**固定取最后 3 条**，多的一条都不要。
+        #
+        # 这一屏是绝对定位逐行重画的，帧的高度必须稳定：快照里存的日志条数
+        # 会随运行时长变化，帧一旦忽高忽低，光标那一行的位置就跟着跳。
+        # 帧高撞到窗口底边时终端会滚屏，绝对坐标全部错位——实测表现为
+        # 底部提示行被重复画出来。少显示一条日志，换帧高恒定，值得。
+        $logLines = @($tail -split "`n" | Where-Object { $_ } | Select-Object -Last 3)
+        foreach ($ln in $logLines) {
             & $line ('  ' + (Limit-DisplayText $ln $logW)) 'dim'
         }
+        # 不足 3 条时补齐空行：同样是让帧高恒定，不然任务刚装好时帧比稳定态矮两行。
+        for ($i = $logLines.Count; $i -lt 3; $i++) { & $line '' 'dim' }
     } else {
+        # 一条都没有时也占满 3 行：帧高不随"有没有日志"变化。
         & $line '  （暂无日志）' 'dim'
+        & $line '' 'dim'
+        & $line '' 'dim'
+    }
     }
 
     & $line '==================================' 'title'
@@ -403,11 +423,24 @@ function Show-StatusLive {
     $st = Get-StatusSnapshot
     $frame = @(Format-StatusLines $st)
 
+    # 先按完整帧试一次；放不下就换紧凑帧（砍掉日志区）再试。
+    #
+    # 为什么要有这一步：窗口高度刚好卡在「完整帧放不下、又够放状态」这一档时，
+    # 旧行为是直接降级成一次性输出——用户明明能看实时页，却被踢成静态的。
+    # 而硬画完整帧更糟：画到最后一行光标贴底，终端滚屏，绝对定位全部错位
+    # （实测表现为底部提示行被重复画出来）。砍日志是这两者之间唯一体面的选择。
     $need = Measure-ScreenFrame $frame
     if (-not (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width)) {
-        # 降级：退回今天的一次性输出
-        Show-StatusSnapshot $st
-        return
+        $compact = @(Format-StatusLines $st -NoLog)
+        $need2 = Measure-ScreenFrame $compact
+        if (Test-CanDrawScreen -NeedLines $need2.Lines -NeedWidth $need2.Width) {
+            $frame = $compact
+            $need = $need2
+        } else {
+            # 连紧凑帧都放不下：退回一次性输出
+            Show-StatusSnapshot $st
+            return
+        }
     }
 
     if (-not (Enter-Screen)) {
@@ -429,6 +462,16 @@ function Show-StatusLive {
                 try { $st = Get-StatusSnapshot } catch { $st = $null }
                 try { $frame = @(Format-StatusLines $st) } catch { $frame = $prev }
                 $need = Measure-ScreenFrame $frame
+                # 放不下时先试紧凑帧（砍日志），再决定要不要放弃这一帧。
+                # 与进入时同一套判据——用户可能在看的过程中把窗口拉小了。
+                if (-not (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width)) {
+                    try { $compact = @(Format-StatusLines $st -NoLog) } catch { $compact = $frame }
+                    $need2 = Measure-ScreenFrame $compact
+                    if (Test-CanDrawScreen -NeedLines $need2.Lines -NeedWidth $need2.Width) {
+                        $frame = $compact
+                        $need = $need2
+                    }
+                }
                 if (Test-CanDrawScreen -NeedLines $need.Lines -NeedWidth $need.Width) {
                     $null = Write-ScreenFrame -Old $prev -New $frame
                     $prev = $frame

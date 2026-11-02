@@ -260,7 +260,7 @@ new_problem_report() {
 # 与 show_status 同一份内容，只是这里产出字符串而不是直接打印——
 # 屏幕渲染层要按行比较，所以必须先拿到"这一帧是什么"。
 format_status_lines() {
-    _fsl_out=$(show_status 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g")
+    _fsl_out=$(show_status "${1:-}" 2>/dev/null | sed "s/$(printf '\033')\[[0-9;]*m//g")
     printf '%s' "$_fsl_out"
 }
 
@@ -283,10 +283,30 @@ $_ssl_hint"
 $_ssl_frame
 EOF
 
+    # 放不下先试紧凑帧（砍掉日志区）再决定降级。
+    # 窗口高度卡在「完整帧放不下、又够放状态」这一档时，旧行为直接踢成一次性输出——
+    # 用户明明能看实时页却看不了。砍日志是这两者之间唯一体面的选择。
     if ! test_can_draw_screen "$_ssl_need" "$_ssl_width"; then
-        # 降级：退回一次性输出，与今天的行为一致
-        show_status
-        return 0
+        _ssl_c_frame=$(format_status_lines compact)
+        _ssl_c_frame="$_ssl_c_frame
+$_ssl_hint"
+        _ssl_c_need=$(printf '%s\n' "$_ssl_c_frame" | grep -c '' || true)
+        _ssl_c_width=0
+        while IFS= read -r _ssl_l; do
+            _ssl_w=$(_display_width "$_ssl_l")
+            [ "$_ssl_w" -gt "$_ssl_c_width" ] && _ssl_c_width="$_ssl_w"
+        done <<EOF
+$_ssl_c_frame
+EOF
+        if test_can_draw_screen "$_ssl_c_need" "$_ssl_c_width"; then
+            _ssl_frame="$_ssl_c_frame"
+            _ssl_need="$_ssl_c_need"
+            _ssl_width="$_ssl_c_width"
+        else
+            # 连紧凑帧都放不下：退回一次性输出
+            show_status
+            return 0
+        fi
     fi
     enter_screen || { show_status; return 0; }
 
@@ -635,6 +655,11 @@ show_status() {
         _status_row "$STATUS_LABEL_VERSION" "$_local_text（$_state）$_age_text" "$_role"
     fi
 
+    # $1 = compact：省略「最近日志」区。实时刷新在窗口放不下整帧时用它——
+    # 这一屏的主角是状态结论，日志只在排查时才看；放不下时砍日志、保住结论，
+    # 比整帧不画（屏幕空白两秒）或硬画（滚屏导致绝对定位错位）都好。
+    # 与 Windows 侧 Format-StatusLines -NoLog 同一套。
+    if [ "${1:-}" != "compact" ]; then
     style_out title "---------------- 最近日志 ----------------"
     if [ -f "$LOG_FILE" ]; then
         # 日志行按终端宽度裁：日志文件里的长行是给"搜"用的（不折行才好 grep），
@@ -655,6 +680,7 @@ show_status() {
         done
     else
         style_out dim "  （暂无日志）"
+    fi
     fi
     style_out title "=================================="
 }
