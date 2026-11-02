@@ -23,7 +23,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
 - [3. Everyday commands on one page](#3-everyday-commands-on-one-page)
-- [4. What is inside Advanced (two modules)](#4-what-is-inside-advanced-two-modules)
+- [4. What is inside Advanced (three modules)](#4-what-is-inside-advanced-three-modules)
 - [5. Something is wrong: check in this order](#5-something-is-wrong-check-in-this-order)
 - [6. How it decides whether you are behind a proxy](#6-how-it-decides-whether-you-are-behind-a-proxy)
 - [7. Why it rarely breaks](#7-why-it-rarely-breaks)
@@ -31,7 +31,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [9. What is in the folder](#9-what-is-in-the-folder)
 - [10. Copying and backing up the folder](#10-copying-and-backing-up-the-folder)
 - [11. Setting it up for a friend or a new machine](#11-setting-it-up-for-a-friend-or-a-new-machine)
-- [12. Technical limits (5)](#12-technical-limits-5)
+- [12. Technical limits (6)](#12-technical-limits-6)
 - [13. macOS version](#13-macos-version)
 - [14. License and feedback](#14-license-and-feedback)
 
@@ -99,7 +99,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | Shortcut / proxy fix | Adds one icon; the fix edits browser proxy only |
+| **5 Advanced** (`高级功能`) | Program rules / browser fix / WSL | Adds an icon; fix edits browser proxy |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -400,34 +400,46 @@ bash envproxy.sh status
 
 **Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
 
-## 4. What is inside Advanced (two modules)
+## 4. What is inside Advanced (three modules)
 
-Menu `5` is where these live. It holds two unrelated things, each solving one concrete annoyance:
+Menu `5` is where these live. It holds three unrelated things, each solving one concrete annoyance:
 
 | Module | When you need it | What it does |
 |---|---|---|
-| **Let one program use the proxy** | A program ignores the proxy | A shortcut that reads the proxy first |
-| **Browser proxy repair** | The browser cannot open pages | Clears a proxy pointing at a closed program |
+| **One program, one rule** | One program should use the proxy, or not | Builds an icon that sets up the env |
+| **Browser proxy repair** | The browser cannot open pages | Clears a proxy to a closed program |
+| **Places this tool cannot reach** | You want WSL or Docker to use it too | Explains only, changes nothing |
 
 Each one below.
 
-### Module one: let one program use the proxy
+### Module one: give one program its own rule
 
-**Where the problem comes from.** Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
+**Where the problem comes from.** This setting is all-or-nothing: it defines one proxy for the whole machine, and every program gets the same one. That leaves two situations awkward:
 
-**How it helps.** It builds a shortcut for that program. The shortcut reads the current proxy just before launching and hands it straight to the program, sidestepping the "variables never update" step.
+- Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
+- The opposite case: you do **not** want a particular program to use the proxy (online banking, an intranet tool), yet the machine-wide setting drags it along.
+
+**How it helps.** It builds an icon for that program. Double-clicking it prepares the environment first (setting what should be set, clearing what should be cleared), then hands control to the real program. Two rules to pick from:
+
+| Rule | What happens on double-click |
+|---|---|
+| **Use the proxy** | The program starts with the current proxy, following your proxy app |
+| **Always direct** | The program never uses a proxy, even while everything else does |
+
+**One program can have both.** The two icons do not fight each other: `WeChat (proxy)` and `WeChat (direct)` are independent icons, each minding its own business, and your original WeChat is untouched. Remove them under "Manage" when you no longer want them.
 
 **Why the address never needs changing.** A proxy app's local port changes: switch apps, a random port on restart, or the port is taken and the app moves on. When that happens, some programs keep the old address and stop connecting — and you have to fix it in their own settings.
 
-This tool opens a **fixed entry** on your machine (an address that never changes). The shortcuts only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild a shortcut.
+This tool opens a **fixed entry** on your machine (an address that never changes). Proxy icons only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild an icon.
 
-**Three things worth knowing:**
+**Four things worth knowing:**
 
-- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `3` shows how it is doing (that screen only reports; it changes nothing).
-- **It not working is not a problem.** The shortcut falls back to reading the current address and still works. You only lose the "address never changes" part.
-- **Shortcuts you already made need no rebuild** — every launch reads the current state again.
+- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `4` shows how it is doing (that screen only reports; it changes nothing).
+- **It not working is not a problem.** A proxy icon falls back to reading the current address and still works. You only lose the "address never changes" part.
+- **Icons you already made need no rebuild** — every launch reads the current state again.
+- **Chromium-based programs need one extra tick.** Chrome, Edge, VS Code and Discord ignore environment variables and only honour a launch flag, so the flow asks whether to add that flag. Answer "no" when unsure — the wrong answer can stop a program from opening.
 
-This module exists on Windows only. Mac does not need it: programs launched from the Dock already see the proxy (see section 13.1).
+Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
 ### Module two: browser proxy repair
 
@@ -458,6 +470,38 @@ This matters more than everything above, because it tells you where to look next
 If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, or firewall rules. It cannot see any of those.
 
 **Terminal variables are not its business either.** If `git`, `npm` or `curl` cannot connect, go to section 5 — that is a different path.
+
+
+### Module three: places this tool cannot reach
+
+**This item only explains; it changes nothing of yours.** It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
+
+**The short version:** your computer has three separate rooms.
+
+```
+Your Windows      your own room, the one this tool manages
+WSL               the next room, a real Linux
+Docker            one more room, where Docker Desktop lives
+```
+
+Each room **manages its own network settings**. The note you stick on your own door (environment variables) is invisible to the next room.
+
+So:
+
+| Who | Who decides whether it uses the proxy |
+|---|---|
+| `git` / `npm` / `curl` | This tool (they read the note on your door) |
+| Browsers / desktop apps | Your proxy app (they only read the system-wide notice board) |
+| Things inside WSL | WSL's own settings |
+| Things inside Docker | Docker's own settings |
+
+**To make WSL use the proxy**, the right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer). **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
+
+**To make Docker use the proxy**, slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+
+The exact commands are on screen under menu `5` then `6` / `7` on Windows, ready to copy.
+**This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac,
+it simply has no dedicated page there.
 
 ## 5. Something is wrong: check in this order
 
@@ -601,6 +645,7 @@ The two sides line up one to one. Only two files are Mac-only: `prompt-sync.sh` 
 Three areas with different rules:
 
 - **Program files**: `win\`, `mac\`, `release-notes\`, `assets\`. Updates overwrite these — **do not put your own files there**.
+- **Repo only, not in the package**: `docs\`, `tests\`, `.github\`. Read `docs\` for design notes.
 - **Runtime folder**: `monitor\`. Logs and run markers, **never overwritten, never deleted**.
 - **Top level**: only files of the same name are overwritten, **your own things are never deleted**.
 
@@ -672,9 +717,9 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 > It holds the run records this machine generated for itself (log, process id, state snapshot),
 > including your timestamps and ports. Deleting it changes nothing: a new machine rebuilds it on first run.
 
-## 12. Technical limits (5)
+## 12. Technical limits (6)
 
-<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Six technical limits">
 
 | Limit | Reason | Effect |
 |---|---|---|
@@ -683,20 +728,26 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
+| **One copy acts at a time** | Several would edit the same settings | Open as many as you like (below) |
 
 One thing worth stating plainly about TUN: **most apps keep their local proxy port open in TUN mode**, so this tool detects them and keeps working, and you do nothing. **A few apps close that port.** Then there is nothing to detect. That is not a defect: it is how those apps work, and in that mode the app itself already carries all traffic, so whether terminal tools need a proxy is up to that app.
 
+**Several copies open at once is fine.** Two windows on the same folder, or one copy on D: and another on E: — all of them can be open.
+
+They edit the same settings (your environment variables, start-at-login, the system proxy, the icons on your Desktop), so this tool makes them **queue**: only one actually acts at any moment. The other says plainly that another install is running and that nothing was changed, then changes nothing.
+
+The background monitor works the same way: ten open menus still produce **one** monitor (the extras exit by themselves), so you never get ten monitors fighting over your environment variables.
 Why it does not try to recognise TUN and special-case it: a TUN adapter and a corporate VPN adapter look the same. A wrong call there would declare a live proxy dead and remove your only proxy path. The two mistakes do not cost the same, so it does nothing.
 
 Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
 
 ## 13. macOS version
 
-### 12.1 Difference from the Windows version
+### 13.1 Difference from the Windows version
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
 
-**That is why Mac needs no "fixed entry"** (the thing section 3.7 describes for Windows): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
+**That is why Mac needs no "fixed entry"** (the thing described under module one in section 4): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
 
 On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped.
 
@@ -706,7 +757,7 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="Two write paths on macOS: proxy.env for terminals, launchctl for Dock-launched apps">
 
-### 12.2 Install (3 steps)
+### 13.2 Install (3 steps)
 
 1. Put the Mac package (`EnvProxy-mac.tar.gz`) anywhere on the Mac, or copy the whole folder that contains `mac\` (USB drive, AirDrop, or an archive all work)
 2. Open `mac` and double-click `打开菜单.command`, then pick `1 Install / Repair`
@@ -714,17 +765,21 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with macOS 12 and later is enough. (Mac only: download [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz).)
 
-### 12.3 Menu (same as Windows)
+### 13.3 Menu (same as Windows)
 
-The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). `5 Advanced` exists on both platforms, but holds different things: Windows has "shortcut that goes through the proxy", "manage shortcuts", "view relay" and "browser proxy repair"; Mac has only "browser proxy repair" because programs launched from the Dock already see the proxy and need no launcher. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
-### 12.4 What is in the `mac` folder
+**`5 Advanced` has one fewer item on Mac.** "Give one program a rule" exists on both (the mechanics differ,
+see module one in section 4), and so does "browser proxy repair". What Mac does not have is the third one —
+"places this tool cannot reach" (WSL and Docker setup) is Windows-only: WSL is a Windows thing and does not exist on a Mac.
 
-See the folder structure in section 8. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
+### 13.4 What is in the `mac` folder
+
+See the folder structure in section 9. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
 
 The locator has a source file on each platform — `locator.sh` on Mac, `win\locator.ps1` on Windows. The installer uses it to generate the copy that actually runs at login, in a fixed location (Windows: `%LOCALAPPDATA%\EnvProxy\launcher.ps1`).
 
-### 12.5 Three problems you may hit on first install on a Mac
+### 13.5 Three problems you may hit on first install on a Mac
 
 <img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on a first Mac install">
 
@@ -750,7 +805,7 @@ Two possible causes. After fixing either one, open the menu and pick **1 安装 
 - **The background item was blocked**: System Settings, General, Login Items & Extensions, allow it to run
 - **The "access your Documents folder" prompt was denied**: System Settings, Privacy & Security, Files and Folders
 
-### 12.6 What the installer adds
+### 13.6 What the installer adds
 
 Installing writes files to three places. **None of them is the folder you downloaded.**
 
@@ -764,6 +819,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `prev.env` | the original values saved at install time, restored on uninstall |
 | | `monitor.stdout.log` | what the background program prints (look here when login start-up misbehaves) |
 | | `monitor.stderr.log` | errors the background program reports |
+| | `apps/` | app wrappers are built here, then copied to the Desktop (only exists once you use menu 5) |
 | `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
@@ -807,7 +863,7 @@ One rule applies to all three: `~/.envproxy/` is only removed when it is empty. 
 
 **Uninstalling is the only irreversible action**, so it asks first. When it cannot ask (a pipe, a script) it **will not decide for you**: it refuses and requires `--yes`.
 
-### 12.7 Setting it up for a friend or a new Mac
+### 13.7 Setting it up for a friend or a new Mac
 
 Copy the whole folder over, open `mac`, double-click `打开菜单.command`, pick `1 Install / Repair`, and you are done.
 

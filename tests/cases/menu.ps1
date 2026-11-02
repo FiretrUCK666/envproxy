@@ -240,3 +240,73 @@ Assert-Eq 'Test-CanPrompt reads IsInputRedirected' $true ($canPromptSrc -match '
 # Same class of mistake, other direction: a guard that always says "no prompt" would make the
 # menu unreachable too. Pin that the redirect check is a plain property read, in a single line.
 Assert-Eq 'Test-CanPrompt has no nested function' $false ($canPromptSrc -match 'function\s+Test-CanPrompt')
+
+# ---------------------------------------------------------------------------
+# 按程序定规矩：模式表的派生关系与身份唯一性
+#
+# 这一层最危险的失效是"屏幕上看不出来"：两个模式的图标行为一旦相同，
+# 用户双击任何一个都是同一个结果，而画面、文件名、图标名全都正常。
+# ---------------------------------------------------------------------------
+Write-Host '[10c] per-program rules: identity is path + mode'
+
+# 身份必须带模式这一维。少这一维时，同一程序的两个模式会算出同一个启动脚本
+# 文件名，后建的覆盖先建的，两个图标行为相同——而桌面上看着是两个不同的图标。
+$modeIdList = @($global:ShortcutModes | ForEach-Object { $_.Id })
+Assert-Eq '至少两种模式' $true ($modeIdList.Count -ge 2)
+Assert-Eq '模式 Id 唯一' $true (($modeIdList | Select-Object -Unique).Count -eq $modeIdList.Count)
+Assert-Eq '默认模式在表里' $true ($modeIdList -contains $DefaultShortcutMode)
+
+foreach ($m in @($global:ShortcutModes)) {
+    # 四个派生点都必须非空：缺一个就会让某个界面露出空白或报错。
+    Assert-Eq ("模式 {0} 有 Action" -f $m.Id) $false ([string]::IsNullOrWhiteSpace($m.Action))
+    Assert-Eq ("模式 {0} 有 Suffix" -f $m.Id) $false ([string]::IsNullOrWhiteSpace($m.Suffix))
+    Assert-Eq ("模式 {0} 有 Label" -f $m.Id) $false ([string]::IsNullOrWhiteSpace($m.Label))
+    Assert-Eq ("模式 {0} 有 Note" -f $m.Id) $false ([string]::IsNullOrWhiteSpace($m.Note))
+    Assert-Eq ("模式 {0} 有 Desc" -f $m.Id) $false ([string]::IsNullOrWhiteSpace($m.Desc))
+    Assert-Eq ("模式 {0} 的 Role 合法" -f $m.Id) $true (@('text','dim','key','ok','warn') -contains $m.Role)
+}
+
+# Action 是行为类别，不是 Id 的副本：直连与代理必须落在不同的 Action 上，
+# 否则启动脚本的 if 分支永远只走一支（两个图标的实际行为将完全相同）。
+$actionList = @($global:ShortcutModes | ForEach-Object { $_.Action })
+Assert-Eq 'Action 覆盖两种行为' $true (($actionList -contains 'proxy') -and ($actionList -contains 'direct'))
+
+# 取不到的模式必须返回 $null，不许静默回落到默认模式——
+# 那会把"模式名传错"变成"按默认做了"，而用户以为它生效了。
+Assert-Eq '未知模式返回 $null' $null (Get-ShortcutMode 'no-such-mode')
+Assert-Eq '空模式返回 $null' $null (Get-ShortcutMode '')
+
+# 启动脚本正文必须体现两种行为：直连那支清变量，代理那支设变量。
+$scSrc = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\shortcut.ps1'), [System.Text.Encoding]::UTF8)
+# 清变量只认进程级删除。另两种写法实测都删不掉（$env:X = $null 五个变量统统失效），
+# 删不掉就等于直连没生效——而屏幕上一切正常。
+# 生成出来的那一行长这样（$n 已被替换成真实变量名）：
+#   [Environment]::SetEnvironmentVariable('HTTP_PROXY',$null,'Process');
+Assert-Eq '直连用进程级删除' $true ($scSrc -match "SetEnvironmentVariable\(''' \+ \`$n \+ '''\,\`$null,''Process''\)")
+# 不许用 $env:X = $null 那个写法：实测五个变量统统删不掉，子进程照样读到代理。
+# 判据只数**真正的赋值**（左边是 $env:，右边是 $null），不数注释里提到它的地方。
+$envAssign = 0
+foreach ($sl in ($scSrc -split "`r?`n")) {
+    $slTrim = $sl.Trim()
+    if (-not $slTrim) { continue }
+    if ($slTrim.StartsWith('#')) { continue }
+    if ($slTrim -match '\$env:\w+\s*=\s*\$null') { $envAssign++ }
+}
+Assert-Eq '直连不用 $env:X = $null' 0 $envAssign
+# 启动脚本里那行模式标记是扫描时的唯一身份依据（用户能改图标名，改不了脚本内容）。
+Assert-Eq '启动脚本带模式标记' $true ($scSrc -match 'envproxy-mode:')
+
+# 表自检必须真会失败：它守的是"表里写了处理器但函数不存在"这类静默失效。
+# 只断言"现在能过"证明不了这一点——必须造一个坏表看它是否抛。
+$assertFn = Get-Command Assert-AdvancedTable -ErrorAction SilentlyContinue
+Assert-Eq 'Assert-AdvancedTable 存在' $true ($null -ne $assertFn)
+$advList = @($global:AdvancedItems)
+Assert-Eq '高级功能表非空' $true ($advList.Count -gt 0)
+$keys = @($advList | ForEach-Object { [int]$_.Key })
+Assert-Eq '编号从 1 连续' $true (($keys -join ',') -eq ((1..$keys.Count) -join ','))
+Assert-Eq '编号不重复' $true ((($keys | Select-Object -Unique).Count) -eq $keys.Count)
+# 每个处理器必须真存在——这正是门禁 16 的 G-A 在纯函数层的同一判据。
+foreach ($it in $advList) {
+    Assert-Eq ("处理器 {0} 存在" -f $it.Handler) $true ($null -ne (Get-Command $it.Handler -ErrorAction SilentlyContinue))
+    Assert-Eq ("项 {0} 的 Kind 合法" -f $it.Key) $true (@('do','read') -contains $it.Kind)
+}

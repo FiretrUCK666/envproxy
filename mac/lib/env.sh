@@ -61,7 +61,7 @@ set_user_env_vars() {
         printf 'export all_proxy="%s"\n' "$_http"
         printf 'export NO_PROXY=%s\n' "$_npq"
         printf 'export no_proxy=%s\n' "$_npq"
-        printf 'export NODE_USE_ENV_PROXY="1"\n'
+        printf 'export NODE_USE_ENV_PROXY="%s"\n' "$NODE_USE_ENV_PROXY_VALUE"
     } > "$_tmp" 2>/dev/null && mv "$_tmp" "$PROXY_ENV" 2>/dev/null || rm -f "$_tmp" 2>/dev/null || true
     # 把"我们写下的值"另存一份：off 哨兵要据此写守卫，而 proxy.env 那时已经被替换成哨兵了。
     # 这份文件与 on 态同生，永不参与 on/off 切换——它记的是"我们拥有哪些值"，不是"当前状态"。

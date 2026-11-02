@@ -22,6 +22,12 @@ PATH_CONF="$ENVPROXY_HOME/path.conf"
 # 与 Windows 侧 Test-IsOwnedProxyValue 的第一条判据（查 Owned 注册表）对齐。
 OWNED_ENV="$ENVPROXY_HOME/owned.env"
 
+# 操作锁与监控锁的目录。**必须与文件夹无关**，否则同一用户的两份拷贝各拿各的锁、
+# 却能同时改同一批文件（~/.envproxy 下的变量、launchctl 的环境、LaunchAgent）。
+# 放在 ~/.envproxy 而不是 $SCRIPT_DIR/monitor：后者跟文件夹走，两份拷贝就是两把锁。
+# 与 Windows 侧 Global\...-<SID> 同一语义：按用户隔离，同一用户的全机器一份。
+LOCK_DIR="$ENVPROXY_HOME/locks"
+
 # 运行时目录与日志文件：住在 base 而不是 runtime，理由是 log_msg 必须在这里。
 # 写日志是横切能力：env / probe / runtime 三层都要写，任何一层都不该"反过来"
 # 依赖另一层去拿它。
@@ -162,6 +168,83 @@ get_local_version() {
 # 生成非法模式，反而让每一次请求都抛 `InvalidURL: Invalid port: ':1]'`。
 # 也就是说方括号属于 URL 字面量的写法，在 NO_PROXY 里是写错了位置。
 DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
+
+# Node.js 认的开关：设成 1 它才读 HTTP_PROXY 这一类变量（否则完全不看）。
+# 单独成一个常量而不是各处写字面量 '1'：启动脚本与主流程都要用到它，
+# 两处各写一遍的话，将来判断依据一变就会有一处漏改，而症状是"Node 在图标里
+# 和终端里行为不一样"——最难查的一类。
+NODE_USE_ENV_PROXY_VALUE="1"
+
+# ------------------------------------------------------------------------------
+# 模式表：一个程序可以被指定成哪几种「规矩」
+# ------------------------------------------------------------------------------
+#
+# **这是模式的唯一权威处**，与 Windows 侧 $ShortcutModes 逐项同形（门禁 16 核对）。
+# 图标名后缀、壳子目录名、启动脚本行为、管理页显示，四处全部从这里派生。
+#
+# 为什么必须做成表：一个程序可以有不止一种模式，而「身份 = 程序路径 + 模式」。
+# 少了模式这一维，「同一个程序走代理」和「同一个程序固定直连」会被算成同一件事——
+# 壳子目录同名、互相覆盖，用户点哪个图标都只按最后建的那个跑，而屏幕上看不出异常。
+#
+# bash 3.2 没有关联数组（declare -A 要 bash 4），所以用空白分隔的 Id 列表 +
+# 两个按 Id 取值的函数。线性查找对 2-3 项完全正当（git 的 commands[] 也是这么做的）。
+PROXY_MODES="proxy direct"
+
+# 按模式 Id 取图标名后缀。取不到返回非零。
+# @explain 「走代理」「固定直连」是图标的显示名（用户按这两个词找图标），不是解释机制
+proxy_mode_suffix() {
+    case "$1" in
+        proxy)  printf '%s\n' '（翻墙）' ;;
+        direct) printf '%s\n' '（直连）' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 按模式 Id 取给用户看的短名（不带括号）。取不到返回非零。
+# @explain 「走代理」「固定直连」是管理页里的显示名，与图标名同一套叫法
+proxy_mode_label() {
+    case "$1" in
+        proxy)  printf '%s\n' '翻墙' ;;
+        direct) printf '%s\n' '直连' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 按模式 Id 取交给启动器的作用方式。取不到返回非零。
+# 与后缀/label 分开的理由：那两样是给人看的措辞，这一样是给代码的行为，
+# 改措辞不该动行为，改行为也不该动措辞。
+proxy_mode_action() {
+    case "$1" in
+        proxy)  printf '%s\n' 'proxy' ;;
+        direct) printf '%s\n' 'direct' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 默认模式：不给参数时按这个来。
+DEFAULT_PROXY_MODE="proxy"
+
+# 全部代理变量名（不含 NO_PROXY 系列）。启动脚本用它决定"要设/要清哪些"。
+# 从 PROXY_VAR_NAMES 派生，不另写一份——两处各写一遍必然会漂移。
+proxy_var_names() {
+    for _pvn in $PROXY_VAR_NAMES; do
+        case "$_pvn" in
+            NO_PROXY|no_proxy) continue ;;
+        esac
+        printf '%s\n' "$_pvn"
+    done
+    return 0
+}
+
+# 默认的 NO_PROXY 值。包一层函数是为了让调用点不必记住常量名，
+# 也让将来换实现（比如按客户端决定）只改这一处。
+default_no_proxy() {
+    printf '%s\n' "$DEFAULT_NO_PROXY"
+    return 0
+}
 
 # 终端同步要检查/写入/摘除的那些 shell 配置文件。
 #
@@ -497,6 +580,18 @@ style_color() {
 # 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
 # stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。
 style_out() {
+
+# 屏幕刷新：菜单与帮助都是"一屏一页"，切换时清屏。
+# 只在真有终端时清：没有终端时 clear 会往输出里塞控制字符，把日志刷脏。
+#
+# 为什么住在 base：这是纯终端能力，与"帮助内容"无关。
+# 留在 help 里会让 shortcut 反过来依赖 help（它要清屏），
+# 而 help 的表又指向 shortcut 的处理器——两个方向都有边，就是一个环。
+# 环的毛病不是跑不起来，是单独读任何一个文件都看不出它依赖什么。
+clear_screen_safe() {
+    [ -t 1 ] || return 0
+    clear 2>/dev/null || true
+}
     _so_role="$1"; shift
     if [ ! -t 1 ]; then printf '%s\n' "$*"; return 0; fi
     _so_c=$(style_color "$_so_role")
@@ -922,7 +1017,7 @@ wait_screen_key() {
 #
 # 标签本身不随状态变化（只有右侧内容按 ok/warn/dim 上色），所以是常量不是变量。
 # 与 Windows 侧 $StatusLabels 逐项对齐，差的一项是 Advanced：mac 没有启动器，
-# 那一行在 mac 上不存在（DIVERGE(Mac): mac 没有启动器，不需要给它建图标）。
+# 那一行在 mac 上不存在。
 # ------------------------------------------------------------------------------
 STATUS_LABEL_MONITOR="监控进程"
 STATUS_LABEL_AUTORUN="开机自启"
@@ -956,9 +1051,10 @@ STATUS_LABEL_VERSION="版本"
 # 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
 #
 # 两侧共用同一套编号：同名项在两台机器上必须是同一个数字（用户可能两台都用）。
-# 编号 5「高级功能」两侧同名同号；里面装的东西按平台不同（mac 没有启动器需求，
-# 那边只放「浏览器代理修复」）。DIVERGE(Mac): 从 Dock 启动的程序本来就拿得到 launchctl
-# 设的变量，不需要额外做启动器——所以这边的高级功能里没有建图标那一项。
+# 编号 5「高级功能」两侧同名同号；里面装的东西按平台不同。
+# DIVERGE(Mac): 「给程序定规矩」这一层两端都有，但做法不同——Mac 造的是一个独立的小
+#   程序壳子（独立的 .app），Windows 造的是 .lnk + 启动脚本。改动原 app 会破坏代码签名，
+#   系统直接拒绝打开，所以只能另造壳子。这不是缺项，是必然的机制分叉。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'

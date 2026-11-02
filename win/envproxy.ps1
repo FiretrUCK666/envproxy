@@ -94,7 +94,25 @@ $LibDir = Join-Path $ScriptDir "lib"
 # relay 只依赖 base（它用的是固定安装目录，不是 monitor 目录），所以排在 runtime 之前
 # 也可以；排在 package 之前是因为建快捷方式那一段要用它算端口记录的位置。
 # doctor 排在 ops 之前：菜单与高级功能页要调它给结论，而它自己不调界面。
-$CoreLibs = @("base", "screen", "probe", "env", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "report", "help", "shortcut")
+$CoreLibs = @("base", "screen", "probe", "env", "shell", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "report", "help", "shortcut")
+# ------------------------------------------------------------------------------
+# 先看这台的 PowerShell 允不允许我们干活
+# ------------------------------------------------------------------------------
+# 有些受管机器用 AppLocker / WDAC 把 PowerShell 限制成 ConstrainedLanguage：
+# 那种模式下不许调用 .NET 类型（本项目大量用到 SHA256、Sockets、注册表 API），
+# 一跑就是满屏"方法调用不被允许"，而用户完全看不出这是策略拦的、不是程序坏了。
+#
+# 判据只能读 $ExecutionContext.SessionState.LanguageMode：它是运行时事实，
+# 比去查注册表猜策略更准（策略的组合方式很多，猜必漏）。
+#
+# 这一处**只报错、不降级**：本项目没有 ConstrainedLanguage 下可用的实现，
+# 装作能跑只会把"被策略拦了"变成"时好时坏的怪故障"。
+if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+    Write-BootWarn "这台电脑的 PowerShell 被限制成了受限模式（$($ExecutionContext.SessionState.LanguageMode)）。"
+    Write-BootWarn "多半是公司或学校的安全策略（AppLocker / WDAC）设的，本工具在这种模式下跑不起来。"
+    Write-BootWarn "如果你不归这类策略管，检查一下是不是杀毒软件或安全软件开了「脚本防护」。"
+    exit 1
+}
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 $missingLib = @()
 foreach ($libName in $CoreLibs) {
