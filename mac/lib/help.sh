@@ -866,25 +866,101 @@ show_menu() {
 # ==============================================================================
 
 # 高级功能二级菜单。编号从这张表派生，散文里不写死数字。
-# 高级功能里的菜单项表。**打印与分派共用这一张**：加一项就自动出现在屏幕上、
-# 也自动能敲，不会出现"表里加了、打印忘了"或"打印有、敲了没反应"。
-# 与主菜单的 MENU_ITEMS 同一条道理。
+# 高级功能里的菜单项表。**打印与分派共用这一张**。
 #
-# 第 2 列是模块：同一个功能的几种操作归一组，插在这里只影响分组显示，
-# 不影响编号——编号是用户要敲的数字。
+# 与主菜单的 MENU_ITEMS 同一条道理：加一项就自动出现在屏幕上、也自动能敲，
+# 不会出现"表里加了、打印忘了"或"打印有、敲了没反应"。与 Windows 同形。
+#
+# 七列，管道分隔。列序「机器列在前」的理由：解析只需要知道前几段，
+# 后面加人读列不影响解析偏移；反过来的话，中间插一列就要改每一处取字段的循环，
+# 而这类改动在屏幕上看不出错，只是每行都少显示一个字。
+#
+#   1 Key      用户敲的数字，该侧连续
+#   2 Action   稳定语义标识（Windows 侧叫 Switch），与显示编号无关
+#   3 Handler  处理器函数名。**分派只认这一列**
+#   4 Module   分组，只影响打印顺序，不影响编号
+#   5 Kind     do = 会改东西 / read = 只看不改
+#   6 Name     术语表的唯一权威。别处出现必须派生，不许手抄
+#   7 Hint     一句决策依据
+#
+# 为什么必须有 Handler 列：分派若写成「编号在表里就打开某个固定页面」，
+# 加第二项的那天，敲任何有效编号都会打开同一个页面——不报错、也没有提示。
 ADVANCED_ITEMS=(
-    '1|rescue|浏览器代理修复|浏览器打不开网页的时候，先来这里查一下'
+    '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建走代理的快捷方式|挑一个已装的程序'
+    '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不走代理'
+    '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
+    '4|Rescue|show_rescue_page|rescue|do|浏览器代理修复|浏览器打不开网页的时候，先来这里查一下'
 )
 
-# 模块顺序与各自的说明。加一个模块只改这张表。
+# 取一行里第 N 段，结果写进 _adv_out。段不存在时返回 1。
+#
+# 不用 $(...) 取字段：命令替换会 fork 子 shell，而渲染一屏要取几十次。
+_adv_field() {
+    _adv_s=$1
+    _adv_n=$2
+    while [ "$_adv_n" -gt 1 ]; do
+        case "$_adv_s" in
+            *'|'*) _adv_s=${_adv_s#*|} ;;
+            *) _adv_out=''; return 1 ;;
+        esac
+        _adv_n=$((_adv_n - 1))
+    done
+    _adv_out=${_adv_s%%|*}
+    return 0
+}
+
+# 按编号取处理器函数名。取不到返回 1。
+# **这是整张表唯一的分派点**，加一项不需要改任何分派代码。
+_advanced_handler_for() {
+    for _ahf_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+        _adv_field "$_ahf_i" 1 || continue
+        if [ "$_adv_out" = "$1" ]; then
+            _adv_field "$_ahf_i" 3 || return 1
+            _ahf_out=$_adv_out
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 表自检：每个 Handler 必须是本侧真存在的函数。
+# 用 declare -F 而不是 command -v：后者会搜 PATH，
+# 同名的可执行文件会让这项检查假通过。
+_assert_advanced_table() {
+    for _aat_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
+        _adv_field "$_aat_i" 3 || { echo "高级功能表格式错误：$_aat_i" >&2; return 1; }
+        _aat_h=$_adv_out
+        _adv_field "$_aat_i" 1
+        _aat_k=$_adv_out
+        if ! declare -F "$_aat_h" >/dev/null 2>&1; then
+            echo "高级功能表：编号 $_aat_k 指向不存在的处理器 $_aat_h" >&2
+            return 1
+        fi
+    done
+    return 0
+}
+
+# 模块顺序与各自的说明。加一个模块只改这两张表。
+# 分两段：icon 是「给某个程序定规矩」，rescue 是「出问题了先来查」。
 ADVANCED_MODULES=(
+    'icon|给某个程序定规矩'
     'rescue|浏览器上不了网的时候'
 )
 
-# 某个模块的"为什么需要它"。三条以 | 分隔，与上面的表分开维护：
+# 某个模块的"为什么需要它"。与上面的表分开维护：
 # 说明是整段散文，塞进表格行会把那张表读成一团。
+#
+# **每个 case 分支都必须有，缺了不会报错**：函数返回空、渲染处 `grep -q .` 判为
+# "这个模块不需要解释"，于是页面上只有标题没有说明，看起来像本来就这样，不像 bug。
+# 加模块时这条最容易漏——所以门禁 16 之外，渲染处也留着"没有说明就不印"的行为，
+# 让它至少在视觉上不至于空一块。
 _advanced_module_why() {
     case "$1" in
+        icon) printf '%s\n' \
+            '有些程序只认启动那一刻的环境变量，不会自己去找代理。' \
+            '从 Dock 启动的程序拿到的是一整台机器共用的那份设置，' \
+            '没法让某一个程序单独走、或者单独不走。' \
+            '这里的壳子会在启动前把环境准备好，再交给真正的程序。' ;;
         rescue) printf '%s\n' \
             '翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统的那条设置' \
             '可能没来得及撤掉。浏览器照旧把请求发给一个已经不存在的程序，' \
@@ -895,6 +971,10 @@ _advanced_module_why() {
 # 某个模块的"要注意"。与 why 同一个理由分开维护。
 _advanced_module_note() {
     case "$1" in
+        icon) printf '%s\n' \
+            '程序已经开着的，点了不会换规矩，必须先关掉再点。' \
+            '第一次打开时 macOS 可能会问你确不确定，那是正常现象。' \
+            '不想要了就在「管理已建的」里删掉，原来的 app 一个字节都没动。' ;;
         rescue) printf '%s\n' \
             '只修「指向本机、但那个程序已经不在」的那一种。' \
             '公司/学校给你的代理，它一个字节都不碰。' ;;
@@ -903,6 +983,9 @@ _advanced_module_note() {
 
 # 高级功能二级菜单。编号、名字、说明全部从 ADVANCED_ITEMS 取，不手写。
 show_advanced_menu() {
+    # 表与函数名的一致性自检：编号指向不存在的函数时立刻说清楚，
+    # 而不是等用户敲下去才"什么都没发生"。
+    _assert_advanced_table || return 1
     while :; do
         clear_screen_safe
         style_out title "======== 高级功能 ========"
@@ -910,9 +993,8 @@ show_advanced_menu() {
         # 错位之后「编号—名字—说明」三列的读法就散了。
         _adm_nw=0
         for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-            _adm_rest=${_adm_i#*|}; _adm_rest=${_adm_rest#*|}
-            _adm_nm=${_adm_rest%%|*}
-            _adm_w=$(_display_width "$_adm_nm")
+            _adv_field "$_adm_i" 6 || continue
+            _adm_w=$(_display_width "$_adv_out")
             [ "$_adm_w" -gt "$_adm_nw" ] && _adm_nw="$_adm_w"
         done
         for _adm_m in ${ADVANCED_MODULES[@]+"${ADVANCED_MODULES[@]}"}; do
@@ -921,8 +1003,8 @@ show_advanced_menu() {
             # 这个模块下有没有项？没有就整段不印（表里留着也不会出现空标题）。
             _adm_has=0
             for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-                _adm_k=${_adm_i%%|*}; _adm_r=${_adm_i#*|}; _adm_mo=${_adm_r%%|*}
-                [ "$_adm_mo" = "$_adm_mid" ] && _adm_has=1
+                _adv_field "$_adm_i" 4 || continue
+                [ "$_adv_out" = "$_adm_mid" ] && _adm_has=1
             done
             [ "$_adm_has" = "1" ] || continue
             echo ""
@@ -933,10 +1015,11 @@ show_advanced_menu() {
             done
             echo ""
             for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-                _adm_k=${_adm_i%%|*}; _adm_r=${_adm_i#*|}
-                _adm_mo=${_adm_r%%|*}; _adm_r=${_adm_r#*|}
-                _adm_nm=${_adm_r%%|*}; _adm_hint=${_adm_r#*|}
-                [ "$_adm_mo" = "$_adm_mid" ] || continue
+                _adv_field "$_adm_i" 4 || continue
+                [ "$_adv_out" = "$_adm_mid" ] || continue
+                _adv_field "$_adm_i" 1; _adm_k=$_adv_out
+                _adv_field "$_adm_i" 6; _adm_nm=$_adv_out
+                _adv_field "$_adm_i" 7 || _adm_out=''; _adm_hint=$_adv_out
                 _adm_gap=$((_adm_nw - $(_display_width "$_adm_nm"))); [ "$_adm_gap" -lt 0 ] && _adm_gap=0; _adm_pad=$(printf "%*s" "$_adm_gap" "")
                 # 只给**编号**上色（绿 = 你要敲的东西），名字与说明用正文色。
                 # 整行同色会让编号混进正文里，用户得逐字找；与 Windows 侧同一条规则。
@@ -964,17 +1047,16 @@ show_advanced_menu() {
         case "$_adm_ans" in
             ''|0|q|Q) return 0 ;;
         esac
-        # 分派查同一张表：屏幕上有的编号一定敲得到，没有的一定敲不到。
-        _adm_hit=0
-        for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-            if [ "${_adm_i%%|*}" = "$_adm_ans" ]; then _adm_hit=1; fi
-        done
-        if [ "$_adm_hit" = "1" ]; then
-            show_rescue_page
+        # 分派：编号 -> 处理器函数名，**只查表，不认任何具体页面的名字**。
+        # 旧写法是"编号存在就调用 show_rescue_page"，只有一项时碰巧正确；
+        # 加第二项的那天，敲任何有效编号都会打开修复页，而且不报错。
+        if _advanced_handler_for "$_adm_ans"; then
+            "$_ahf_out"
         else
             _adm_keys=""
             for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-                _adm_keys="$_adm_keys ${_adm_i%%|*}"
+                _adv_field "$_adm_i" 1
+                _adm_keys="$_adm_keys $_adv_out"
             done
             style_out warn "  没有这个编号：$_adm_ans（可用的有$_adm_keys，0 = 返回）"
         fi

@@ -2444,6 +2444,145 @@ jobs:
                 $dvgBad += ("{0}:{1} DIVERGE 后面没有写原因" -f $df.Name, $ln)
               }
             }
+      - name: 门禁 16：高级功能表与处理器一致
+        shell: pwsh
+        run: |
+          # 高级功能是一张表驱动的菜单。表是唯一权威，处理器是实现。
+          # 这条门禁守三件事，每件都对应一种"屏幕上看不出来"的故障：
+          #
+          #   G-A 表里每个 Handler 在本侧能解析到真函数
+          #       —— 否则屏幕上有一个编号，敲下去什么都不发生（或报"没有这个编号"）。
+          #   G-B Kind='read' 的项不许写东西
+          #       —— 否则用户以为只是看看，实际改了系统设置，而且没有心理准备。
+          #   G-C 两侧共有的项，Key/Action/Name/Kind 必须逐项相等
+          #       —— 否则同一个功能在两个平台有两套说法。
+          #
+          # 抽取必须锚定表名。项目里同形状的表不止一张（MENU_ITEMS 也是 "数字|名字|"），
+          # 全局扫 '数字|' 会跨表命中，拿 A 表的名字去比 B 表，必然假红。
+          $fail = 0
+          $ps = Get-Content 'win/lib/shortcut.ps1' -Raw
+          $sh = Get-Content 'mac/lib/help.sh' -Raw
+          # 查 Handler 存在性要扫**全部**库，不能只看 help.sh：
+          # 处理器的自然归属是各功能自己的库（mac 侧的快捷方式在 shortcut.sh）。
+          # 只看一个文件会把"实现了但放在别处"误判成"没实现"，而门禁一旦假红，
+          # 下一个人就会把函数搬进 help.sh 去迎合它——那是让代码迁就门禁。
+          $shAll = (Get-ChildItem 'mac/lib/*.sh' | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+          $psAll = (Get-ChildItem 'win/lib/*.ps1' | ForEach-Object { Get-Content $_.FullName -Raw }) -join "`n"
+
+          # ---- Win 侧：解析 @{ Key='N'; Action='X'; ... Handler='Y' } ----
+          $winItems = @()
+          # 表项在源码里跨多行写（一行放不下），所以模式必须 (?s) 让 . 与 \s 跨行。
+                    # Handler 名里含连字符（Invoke-NewProxyShortcutFlow），所以字符类是 [\w-] 而不是 \w。
+          # 用 \w 匹配不到，模式会静默一条都不命中——门禁看起来"通过"，其实什么都没查。
+          foreach ($m in [regex]::Matches($ps, ""(?s)@\{ Key='(\d+)'; Action='(\w+)';\s*Module='(\w+)';\s*Kind='(\w+)'\s*Name='([^']+)';\s*Hint='([^']*)'\s*Handler='([\w-]+)'"")) {
+            $winItems += [pscustomobject]@{
+              Key = $m.Groups[1].Value; Action = $m.Groups[2].Value
+              Module = $m.Groups[3].Value; Kind = $m.Groups[4].Value
+              Name = $m.Groups[5].Value; Handler = $m.Groups[7].Value
+            }
+          }
+          if ($winItems.Count -eq 0) { Write-Host 'Win 侧高级功能表没解析出任何条目'; $fail = 1 }
+
+          # ---- Mac 侧：解析 'N|Action|Handler|Module|Kind|Name|Hint' ----
+          $macItems = @()
+          $macTable = [regex]::Match($sh, "(?s)ADVANCED_ITEMS=\((.*?)\n\)").Groups[1].Value
+          if (-not $macTable) { Write-Host 'Mac 侧找不到 ADVANCED_ITEMS 表'; $fail = 1 }
+          foreach ($line in ($macTable -split "`n")) {
+            $t = $line.Trim()
+            if (-not $t -or -not $t.StartsWith("'")) { continue }
+            $t = $t.Trim("'")
+            $cols = $t -split '\|'
+            if ($cols.Count -ne 7) {
+              Write-Host ("Mac 侧高级功能表列数不是 7：{0}" -f $t); $fail = 1; continue
+            }
+            $macItems += [pscustomobject]@{
+              Key = $cols[0]; Action = $cols[1]; Handler = $cols[2]
+              Module = $cols[3]; Kind = $cols[4]; Name = $cols[5]
+            }
+          }
+          if ($macItems.Count -eq 0) { Write-Host 'Mac 侧高级功能表没解析出任何条目'; $fail = 1 }
+
+          # ---- 编号必须连续，从 1 开始 ----
+          # 编号是用户要敲的数字，跳号会让用户以为漏了什么。
+          foreach ($side in @(@('Win', $winItems), @('Mac', $macItems))) {
+            $n = 0
+            foreach ($it in $side[1]) {
+              $n++
+              if ([int]$it.Key -ne $n) {
+                Write-Host ("{0} 侧高级功能编号不连续：期望 {1}，实际 {2}" -f $side[0], $n, $it.Key); $fail = 1
+              }
+            }
+          }
+
+          # ---- G-A：每个 Handler 在本侧真存在（静态查函数定义） ----
+          foreach ($it in $winItems) {
+            if ($psAll -notmatch ("(?m)^function\s+" + [regex]::Escape($it.Handler) + "\b")) {
+              Write-Host ("Win 侧 G-A：编号 {0} 指向不存在的处理器 {1}" -f $it.Key, $it.Handler); $fail = 1
+            }
+          }
+          foreach ($it in $macItems) {
+            # shell 函数两种写法都算：name() { 与 function name {
+            $pat = "(?m)^(" + [regex]::Escape($it.Handler) + "\(\)|function\s+" + [regex]::Escape($it.Handler) + "\b)"
+            if ($shAll -notmatch $pat) {
+              Write-Host ("Mac 侧 G-A：编号 {0} 指向不存在的处理器 {1}" -f $it.Key, $it.Handler); $fail = 1
+            }
+          }
+
+          # ---- G-B：Kind='read' 的处理器体内不许写东西、不许提问 ----
+          # 判据是"处理器函数的正文"，从函数头到下一个顶层 } 或下一个函数头。
+          # 只读的项一旦开始写文件/改变量/弹提问，用户就没有"我只是看看"的安全感了。
+          $writeHints = @('Set-ItemProperty', 'New-Item', 'Remove-Item', 'Set-Content',
+                          'Add-Content', 'Out-File', 'Read-Host', 'WriteAllText', 'WriteAllBytes',
+                          'SetEnvironmentVariable', 'Remove-ItemProperty')
+          foreach ($it in $winItems) {
+            if ($it.Kind -ne 'read') { continue }
+            $fn = [regex]::Match($ps, "(?s)function\s+" + [regex]::Escape($it.Handler) + "\b(.*?)\n\}")
+            if (-not $fn.Success) { continue }
+            $body = $fn.Groups[1].Value
+            foreach ($h in $writeHints) {
+              if ($body -match [regex]::Escape($h)) {
+                Write-Host ("Win 侧 G-B：只读项 {0}（{1}）里出现了写操作 {2}" -f $it.Key, $it.Handler, $h); $fail = 1
+              }
+            }
+          }
+          foreach ($it in $macItems) {
+            if ($it.Kind -ne 'read') { continue }
+            $fn = [regex]::Match($sh, "(?s)(?:^|\n)" + [regex]::Escape($it.Handler) + "\(\)\s*\{(.*?)\n\}")
+            if (-not $fn.Success) { continue }
+            $body = $fn.Groups[1].Value
+            foreach ($h in @('mkdir', 'rm ', 'rmdir', 'touch ', 'tee ', '>', 'read -r')) {
+              # '>' 单独查会撞上 2>/dev/null 这种合法重定向，只认无 fd 前缀的写文件
+              if ($h -eq '>') { continue }
+              if ($body -match [regex]::Escape($h)) {
+                Write-Host ("Mac 侧 G-B：只读项 {0}（{1}）里出现了写操作 {2}" -f $it.Key, $it.Handler, $h); $fail = 1
+              }
+            }
+          }
+
+          # ---- G-C：两侧共有的项（按 Action 配对）必须逐项相等 ----
+          # 比 Action 而不是比 Key：两侧的 Key 是"该侧连续"，某侧多一项就会整体错位。
+          # Action 是稳定语义标识，正是为跨侧配对而存在的。
+          $winByAction = @{}
+          foreach ($it in $winItems) { $winByAction[$it.Action] = $it }
+          $sharedCount = 0
+          foreach ($mit in $macItems) {
+            if (-not $winByAction.ContainsKey($mit.Action)) { continue }
+            $sharedCount++
+            $wit = $winByAction[$mit.Action]
+            if ($wit.Name -ne $mit.Name) {
+              Write-Host ("G-C：{0} 的名字两侧不一致：Win「{1}」/ Mac「{2}」" -f $mit.Action, $wit.Name, $mit.Name); $fail = 1
+            }
+            if ($wit.Kind -ne $mit.Kind) {
+              Write-Host ("G-C：{0} 的 Kind 两侧不一致：Win {1} / Mac {2}" -f $mit.Action, $wit.Kind, $mit.Kind); $fail = 1
+            }
+          }
+          if ($sharedCount -eq 0) {
+            Write-Host 'G-C：两侧没有任何同 Action 的项，说明表结构没对齐'; $fail = 1
+          }
+
+          if ($fail) { exit 1 }
+          Write-Host ("高级功能表与处理器一致（Win {0} 项 / Mac {1} 项 / 共有 {2} 项）" -f $winItems.Count, $macItems.Count, $sharedCount)
+
           }
           foreach ($d in $dvgBad) { Write-Host ("DIVERGE 标记不合规：" + $d); $fail = 1 }
           if ($fail) { exit 1 }

@@ -163,6 +163,81 @@ get_local_version() {
 # 也就是说方括号属于 URL 字面量的写法，在 NO_PROXY 里是写错了位置。
 DEFAULT_NO_PROXY="localhost,127.0.0.1,::1"
 
+# Node.js 认的开关：设成 1 它才读 HTTP_PROXY 这一类变量（否则完全不看）。
+# 单独成一个常量而不是各处写字面量 '1'：启动脚本与主流程都要用到它，
+# 两处各写一遍的话，将来判断依据一变就会有一处漏改，而症状是"Node 在图标里
+# 和终端里行为不一样"——最难查的一类。
+NODE_USE_ENV_PROXY_VALUE="1"
+
+# ------------------------------------------------------------------------------
+# 模式表：一个程序可以被指定成哪几种「规矩」
+# ------------------------------------------------------------------------------
+#
+# **这是模式的唯一权威处**，与 Windows 侧 $ShortcutModes 逐项同形（门禁 16 核对）。
+# 图标名后缀、壳子目录名、启动脚本行为、管理页显示，四处全部从这里派生。
+#
+# 为什么必须做成表：一个程序可以有不止一种模式，而「身份 = 程序路径 + 模式」。
+# 少了模式这一维，「同一个程序走代理」和「同一个程序固定直连」会被算成同一件事——
+# 壳子目录同名、互相覆盖，用户点哪个图标都只按最后建的那个跑，而屏幕上看不出异常。
+#
+# bash 3.2 没有关联数组（declare -A 要 bash 4），所以用空白分隔的 Id 列表 +
+# 两个按 Id 取值的函数。线性查找对 2-3 项完全正当（git 的 commands[] 也是这么做的）。
+PROXY_MODES="proxy direct"
+
+# 按模式 Id 取图标名后缀。取不到返回非零。
+proxy_mode_suffix() {
+    case "$1" in
+        proxy)  printf '%s\n' '（走代理）' ;;
+        direct) printf '%s\n' '（固定直连）' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 按模式 Id 取给用户看的短名（不带括号）。取不到返回非零。
+proxy_mode_label() {
+    case "$1" in
+        proxy)  printf '%s\n' '走代理' ;;
+        direct) printf '%s\n' '固定直连' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 按模式 Id 取交给启动器的作用方式。取不到返回非零。
+# 与后缀/label 分开的理由：那两样是给人看的措辞，这一样是给代码的行为，
+# 改措辞不该动行为，改行为也不该动措辞。
+proxy_mode_action() {
+    case "$1" in
+        proxy)  printf '%s\n' 'proxy' ;;
+        direct) printf '%s\n' 'direct' ;;
+        *)      return 1 ;;
+    esac
+    return 0
+}
+
+# 默认模式：不给参数时按这个来。
+DEFAULT_PROXY_MODE="proxy"
+
+# 全部代理变量名（不含 NO_PROXY 系列）。启动脚本用它决定"要设/要清哪些"。
+# 从 PROXY_VAR_NAMES 派生，不另写一份——两处各写一遍必然会漂移。
+proxy_var_names() {
+    for _pvn in $PROXY_VAR_NAMES; do
+        case "$_pvn" in
+            NO_PROXY|no_proxy) continue ;;
+        esac
+        printf '%s\n' "$_pvn"
+    done
+    return 0
+}
+
+# 默认的 NO_PROXY 值。包一层函数是为了让调用点不必记住常量名，
+# 也让将来换实现（比如按客户端决定）只改这一处。
+default_no_proxy() {
+    printf '%s\n' "$DEFAULT_NO_PROXY"
+    return 0
+}
+
 # 终端同步要检查/写入/摘除的那些 shell 配置文件。
 #
 # **写成函数，不写成常量**：常量在 source 那一刻就把 $HOME 固化进去了。

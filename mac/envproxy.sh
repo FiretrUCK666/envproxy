@@ -71,7 +71,7 @@ SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 LIB_DIR="$SCRIPT_DIR/lib"
 # 库清单是唯一权威处：新增或改名库只改这里，门禁核对它与 lib/ 实际内容一致。
 # doctor 排在 ops 之前：菜单要调它给结论，而它自己不调界面。
-CORE_LIBS="base probe env runtime package update doctor ops pages help"
+CORE_LIBS="base probe env runtime package update doctor ops pages help shortcut"
 # 加载前先验完整性：缺文件时说人话，而不是抛一句看不懂的语法错误。
 _missing_lib=""
 for _lib_name in $CORE_LIBS; do
@@ -181,6 +181,24 @@ esac
 
 case "$_CMD_NORM" in
     install|update|stop|uninstall)
+        # TCC 提醒：装在「下载 / 桌面 / 文稿」这类受保护目录下，登录自启会静默失效。
+        #
+        # 背景：macOS 的 TCC（隐私保护）不允许开机自启的 LaunchAgent 访问
+        # 桌面、文稿、下载这三个目录。装在那些地方时，安装本身会成功，
+        # 但下次登录自启的监控读不到自己的目录，于是"什么都没发生"——
+        # 状态页会说监控没在跑，而用户完全不知道原因在目录位置。
+        #
+        # **只提醒、不阻断**：这三个目录确实是能用的（手动点菜单照样跑），
+        # 阻断会把一个"有办法用"的情况说成"不能用"。而且判断依据是路径前缀，
+        # 万一 macOS 将来放宽了，我们也不该拦着。
+        case "$SCRIPT_DIR" in
+            "$HOME/Downloads"*|"$HOME/Desktop"*|"$HOME/Documents"*)
+                echo "提醒：这个文件夹在「下载 / 桌面 / 文稿」里面。" >&2
+                echo "macOS 的隐私保护不允许装在这样位置的程序开机自动启动，" >&2
+                echo "所以重启之后它可能就不干活了。建议把它挪到别处，比如 ~/Applications。" >&2
+                echo "" >&2
+                ;;
+        esac
         # 操作锁：这四个动作都会改文件或删变量，同一时刻只允许一个在跑。撞上就提示退出、不做任何改动。
         # 陈旧锁（持有者已经不在）会被接管；子进程收尾前会把锁交出去（见 update_envproxy）。
         # 拿锁用 ln 而不是 mkdir（理由见 runtime 层的 acquire_op_lock）：

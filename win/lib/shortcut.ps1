@@ -26,16 +26,79 @@
 # 唯一可靠的办法是**在启动前把代理环境直接交给程序**，绕开资源管理器这条继承链。
 # 本节做的就是这个：给程序配一个启动脚本，脚本先读代理、再带着环境启动程序。
 
-# 快捷方式文件名后缀。放进名字而不是"另存到别的目录"，是为了在任务栏和开始
-# 菜单里一眼分辨：同一个程序的两个图标各自身份明确，用户不会点错。
-# 用户会在桌面和开始菜单里逐字看到它，换成别的说法就对不上了。
+# ------------------------------------------------------------------------------
+# 模式表：一个程序可以被指定成哪几种「规矩」
+# ------------------------------------------------------------------------------
+#
+# **这是模式的唯一权威处。** 图标名后缀、启动脚本名、启动器行为、管理页显示，
+# 四处全部从这张表派生，任何一处都不许再手写模式的名字或行为。
+#
+# 为什么必须做成表而不是两段 if：
+#   一个程序可以有不止一种模式，而「身份 = 程序路径 + 模式」。少了模式这一维，
+#   「WeChat 走代理」和「WeChat 固定直连」会被算成同一件事——启动脚本同名、
+#   互相覆盖，最后点哪个图标都只按最后建的那个跑，而屏幕上看不出任何异常。
+#   以后要加第三种模式（比如「走另一个代理」「阻断」），只往这张表里加一行。
+#
+# 字段：
+#   Id      稳定标识。进文件名、进记录、进命令行开关都用它，**永不随显示变**
+#   Suffix  图标名的后缀。用户会在桌面/任务栏逐字看到，换成别的说法就对不上
+#   Label   在管理页和确认框里给用户看的短名（不带括号）
+#   Mode    交给启动器的作用方式：proxy = 注入代理变量；direct = 清空代理变量
+#
 # @explain 「走代理」「固定直连」都是图标的显示名（走代理 / 固定直连 两种图标），不是解释机制
-$ProxyShortcutSuffix = '（走代理）'
+$ShortcutModes = @(
+    @{ Id = 'proxy';  Suffix = '（走代理）';   Label = '走代理';   Mode = 'proxy' }
+    @{ Id = 'direct'; Suffix = '（固定直连）'; Label = '固定直连'; Mode = 'direct' }
+)
+
+# 默认模式：不给开关时按这个来，保持老行为不变。
+$DefaultShortcutMode = 'proxy'
+
+# 按 Id 取模式定义。取不到返回 $null，由调用方决定怎么报——
+# 静默回落成默认模式会让「传错了模式名」变成「静默按默认做」，那是最坏的一种误导。
+function Get-ShortcutMode([string]$Id) {
+    if (-not $Id) { return $null }
+    foreach ($m in $ShortcutModes) {
+        if ($m.Id -eq $Id) { return $m }
+    }
+    return $null
+}
+
+# 全部模式的后缀清单，供扫描时剥离文件名用。
+# 必须按长度降序：'（固定直连）' 比 '（走代理）' 长，先剥短的会让长后缀剥不干净。
+function Get-ShortcutSuffixes {
+    return @($ShortcutModes | ForEach-Object { $_.Suffix } | Sort-Object { $_.Length } -Descending)
+}
+
+# 从图标名里剥离模式后缀，返回程序名。
+# 一个都剥不掉时原样返回——那说明这个图标不是本工具建的，调用方会据此跳过它。
+function Get-ShortcutBaseName([string]$Name) {
+    if (-not $Name) { return '' }
+    foreach ($sfx in (Get-ShortcutSuffixes)) {
+        if ($Name.EndsWith($sfx, [StringComparison]::Ordinal)) {
+            return $Name.Substring(0, $Name.Length - $sfx.Length)
+        }
+    }
+    return $Name
+}
+
+# 从图标名里认出是哪种模式。认不出返回 $null。
+function Get-ShortcutModeFromName([string]$Name) {
+    if (-not $Name) { return $null }
+    foreach ($m in $ShortcutModes) {
+        if ($Name.EndsWith($m.Suffix, [StringComparison]::Ordinal)) { return $m }
+    }
+    return $null
+}
 
 # 启动脚本里那一行「它服务的程序是哪个」的标记名。写与读共用这一个常量：
 # 两处各写一遍字面量的话，改一处会让所有已生成的图标静默读不出目标路径——
 # 症状是管理页里"目标程序"一栏全空，而没有任何报错。
 $ProxyLauncherMark = 'envproxy-target-hex:'
+
+# 启动脚本里那一行「它用的是哪种模式」的标记名。写与读共用这一个常量。
+# 老脚本没有这一行——读出来是空串，调用方按"未知"处理（不删、只提示）。
+$ProxyLauncherModeMark = 'envproxy-mode:'
 
 # ------------------------------------------------------------------------------
 # 生成与扫描（无界面：不读输入、不画屏幕，可以脱离终端单独测）
@@ -145,12 +208,66 @@ function Compress-ToBase64([string]$Text) {
 #      更实际的理由是——运行在裸 powershell 里，验错了也没有人能看到错误。
 # 建快捷方式时会用 ConvertTo-ProxyUrl 看一眼当前值（结果放在 ProxyOk 里给界面用），
 # 那是为了"建完之后告诉用户现在没有可用代理"，不是为了拦住建不成。
-function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
+function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir, $Mode, [string]$ExtraArgs = "") {
     if (-not $TargetPath) { throw '目标路径为空' }
     if (-not $WorkingDir) { $WorkingDir = Split-Path -Parent $TargetPath }
+    if (-not $Mode) { $Mode = Get-ShortcutMode $DefaultShortcutMode }
+    if (-not $Mode) { throw '模式表为空，无法生成启动器' }
     # PowerShell 单引号串里的单引号要写成两个
     $t = $TargetPath.Replace("'", "''")
     $w = $WorkingDir.Replace("'", "''")
+    # 额外参数：原样追加到目标程序后面。
+    # 它写在启动器里而不是 .lnk 的 Arguments 里——.lnk 的参数位只放得下启动脚本本身，
+    # 再塞目标程序的参数会让 `wscript.exe "脚本.vbs" --proxy-server=...` 变成
+    # 传给 wscript 的参数，启动器根本收不到。
+    # 拼进命令时整段放在一对单引号里，内部的单引号照 PowerShell 规矩写两遍。
+    $argPart = ''
+    if ($ExtraArgs) {
+        # 占位符 __ENVPROXY_CURRENT__ 要换成**生成出来的脚本里**的变量引用 $p，
+        # 而不是在这里求值。这个区别是致命的：
+        #   写 "('--proxy-server=' + $p)"（$ 不转义）—— $p 在当前上下文求值，
+        #       此刻它还不存在，拼出来是 ('--proxy-server=' + )，连语法都不完整；
+        #   写 "('--proxy-server=' + `$p)"（反引号转义）—— 字面保留 $p，
+        #       脚本运行时那一行才取值，那正是"点击那一刻才知道地址"要的效果。
+        if ($ExtraArgs -eq '--proxy-server=__ENVPROXY_CURRENT__') {
+            $argPart = " -ArgumentList ('--proxy-server=' + `$p)"
+        } else {
+            $argPart = " -ArgumentList '" + $ExtraArgs.Replace("'", "''") + "'"
+        }
+    }
+
+    # ---- 固定直连：先把代理变量清干净，再原样启动 ----
+    #
+    # 为什么"清空"就够了：环境变量在进程启动那一刻从父进程继承，而这一层是**唯一**
+    # 能改变某个进程拿到的环境的时机（见本文件开头那段实测）。清掉之后这个程序
+    # 及其所有子进程都看不到代理，等于直连。
+    #
+    # 这一支**不读代理、不碰中继、不弹窗**——它跟代理是否存在完全无关，
+    # 翻墙软件开没开都不影响它工作。
+    if ($Mode.Mode -eq 'direct') {
+        $clear = ''
+        # 用 [Environment]::SetEnvironmentVariable(名, $null, 'Process')。三种写法实测对比：
+        #
+        #   `$env:NAME = $null`   —— **五个变量统统删不掉**（进程环境块里值还在，
+        #                            子进程照样读到代理）。它看起来最像"清空"，
+        #                            所以很容易被当成对的写下去。
+        #   `Remove-Item Env:NAME`—— **不稳定**：五个里 NO_PROXY 删不掉。
+        #   本方法                —— 五个全部删干净，子进程确认看不到。
+        #
+        # 为什么这条差别致命：直连模式的全部机制就是"让子进程看不到代理变量"。
+        # 删不掉 = 直连没生效，而屏幕上一切正常，用户只会觉得"这个图标没用"，
+        # 且没有任何线索指向真正的原因。
+        #
+        # 第三个参数 'Process' 必须写：省略时目标依 .NET 版本而定，
+        # 写成 'User' 会去改注册表——那是删用户的全局设置，性质完全不同。
+        foreach ($n in @($ProxyVarNames)) {
+            $clear += ('[Environment]::SetEnvironmentVariable(''' + $n + ''',$null,''Process'');')
+        }
+        $psd = $clear + "Start-Process -FilePath '$t'" + $argPart + " -WorkingDirectory '$w'"
+        return (Compress-ToBase64 $psd)
+    }
+
+    # ---- 走代理：读当前代理值，注入后启动 ----
     # 弹窗里要点名是哪个程序——用户往往点了一堆图标之后才发现不对，不点名就不知道关哪个。
     # 只取文件名、去掉扩展名，并且截断：可执行文件名偶尔很长，整段塞进弹窗会把排版撑坏。
     # 单引号必须转义（它要进单引号串），这一点与路径同样处理。
@@ -205,7 +322,7 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
           "[Windows.MessageBox]::Show('没找到可用的代理，《" + $appLabel + "》已经按直连打开了。`n`n" +
           "翻墙软件开着的话：打开菜单选 1（安装 / 修复），再点这个图标。`n" +
           "翻墙软件没开的话：先开它，再点这个图标。','EnvProxy')|Out-Null}catch{}};" +
-          "Start-Process -FilePath '$t' -WorkingDirectory '$w'"
+          "Start-Process -FilePath '$t'" + $argPart + " -WorkingDirectory '$w'"
     # ---------------------------------------------------------------------------
     # 这段弹窗的三条约束，每条都对应一次真实的误用
     # ---------------------------------------------------------------------------
@@ -229,7 +346,7 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir) {
 
 # 生成启动脚本（.vbs）的内容。
 # 纯 ASCII：VBS 文件带 BOM 或中文都可能被某些旧版 WSH 读错，而 base64 本来就没有中文。
-function New-ProxyLauncherVbs([string]$EncodedBody, [string]$TargetPath = "") {
+function New-ProxyLauncherVbs([string]$EncodedBody, [string]$TargetPath = "", $Mode = $null) {
     if (-not $EncodedBody) { throw '启动命令为空' }
     $cmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command ' +
            '"$b=''' + $EncodedBody + ''';' +
@@ -255,7 +372,27 @@ function New-ProxyLauncherVbs([string]$EncodedBody, [string]$TargetPath = "") {
             $body += "' " + $ProxyLauncherMark + " " + $hex + "`r`n"
         } catch {}
     }
+    # 模式标记。**孤儿脚本清理要靠它分辨「同一个程序的两个模式」**：
+    # 没有这一行时，两个模式的脚本长得完全一样，清理逻辑无法判断哪个还有图标在用。
+    # 值只用 ASCII 的 Id（不加中文），保持整个 .vbs 纯 ASCII。
+    if ($Mode -and $Mode.Id) {
+        $body += "' " + $ProxyLauncherModeMark + " " + $Mode.Id + "`r`n"
+    }
     return $body
+}
+
+# 从一个启动脚本里读出它用的模式 Id。读不出来返回空串（老脚本没有这一行）。
+function Get-ProxyLauncherMode([string]$LauncherPath) {
+    if (-not $LauncherPath) { return '' }
+    try {
+        if (-not (Test-Path -LiteralPath $LauncherPath)) { return '' }
+        foreach ($ln in @(Get-Content -LiteralPath $LauncherPath -ErrorAction SilentlyContinue)) {
+            if ($ln -match ('^''\s*' + [regex]::Escape($ProxyLauncherModeMark) + '\s+(\S+)')) {
+                return $Matches[1]
+            }
+        }
+        return ''
+    } catch { return '' }
 }
 
 # 从一个启动脚本里读出它服务的程序路径。读不出来返回空串。
@@ -277,9 +414,14 @@ function Get-ProxyLauncherTarget([string]$LauncherPath) {
 }
 
 # 为一个程序生成启动脚本，返回脚本路径。
-# 文件名带路径哈希：两个不同目录下同名的程序（都叫 app.exe）不会互相覆盖，
-# 而同一个程序反复建仍然是同一个文件（不会越积越多）。
-function New-ProxyLauncherScript([string]$TargetPath, [string]$WorkingDir) {
+#
+# 文件名 = 程序名 + 哈希(程序路径 + 模式)。两个维度都必须进哈希：
+#   只哈希路径 —— 「同一个程序走代理」和「同一个程序固定直连」会得到同一个文件名，
+#                后建的覆盖先建的，两个图标行为相同，而屏幕上看不出异常。
+#   只哈希模式 —— 两个目录下同名的程序（都叫 app.exe）会互相覆盖。
+function New-ProxyLauncherScript([string]$TargetPath, [string]$WorkingDir, [string]$ModeId = $DefaultShortcutMode, [string]$ExtraArgs = "") {
+    $mode = Get-ShortcutMode $ModeId
+    if (-not $mode) { throw ("未知的模式：{0}" -f $ModeId) }
     $dir = Get-ProxyLauncherDir
     if (-not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null
@@ -287,17 +429,19 @@ function New-ProxyLauncherScript([string]$TargetPath, [string]$WorkingDir) {
     $base = Get-PathBaseName $TargetPath
     foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) { $base = $base.Replace([string]$ch, '') }
     if (-not $base) { $base = 'app' }
-    # 取路径 sha256 的前 8 位做区分；同一路径永远得到同一个名字
+    # 哈希的输入是「路径 + 模式」。分隔符用 \n：
+    # 路径里不会出现换行，所以「a\nproxy」与「a\nproxy」之外不可能拼出同一串。
+    $key = $TargetPath.ToLower() + "`n" + $mode.Id
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($TargetPath.ToLower()))
+        $hash = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($key))
     } finally { $sha.Dispose() }
     $sb = New-Object System.Text.StringBuilder
     for ($i = 0; $i -lt 4; $i++) { [void]$sb.Append($hash[$i].ToString('x2')) }
     $vbsPath = Join-Path $dir ($base + '_' + $sb.ToString() + '.vbs')
 
-    $enc = New-ProxyLauncherBody $TargetPath $WorkingDir
-    $vbs = New-ProxyLauncherVbs $enc $TargetPath
+    $enc = New-ProxyLauncherBody $TargetPath $WorkingDir $mode $ExtraArgs
+    $vbs = New-ProxyLauncherVbs $enc $TargetPath $mode
     # 先写临时文件再整体替换：中途失败不会留下半个脚本。
     # 临时文件名带 PID：两个进程同时给同一个程序建快捷方式时不会撞同一个临时文件。
     #
@@ -334,18 +478,27 @@ function Test-WshEnabled {
     return $true
 }
 
-# 建一个「走代理」的快捷方式。
-# 返回 Ok / Path / LauncherPath / Reason。
+# 建一个「走代理」或「固定直连」的快捷方式。
+# 返回 Ok / Path / LauncherPath / Reason / Mode。
 function New-ProxyShortcut {
     param(
         [Parameter(Mandatory=$true)][string]$TargetPath,
         [string]$WorkingDirectory = "",
         [string]$DestinationDir = "",
         [string]$Name = "",
+        [string]$ModeId = $DefaultShortcutMode,
+        [string]$ExtraArgs = "",
         [switch]$Force
     )
     $res = [pscustomobject]@{ Ok = $false; Path = ""; LauncherPath = ""; Reason = ""; Existed = $false
-                              ProxyOk = $false; ProxyRaw = "" }
+                              ProxyOk = $false; ProxyRaw = ""; Mode = $ModeId }
+
+    $mode = Get-ShortcutMode $ModeId
+    if (-not $mode) {
+        $res.Reason = "未知的模式：$ModeId"
+        return $res
+    }
+    $res.Mode = $mode.Id
 
     if (-not (Test-Path -LiteralPath $TargetPath)) {
         $res.Reason = "找不到这个程序：$TargetPath"
@@ -371,7 +524,10 @@ function New-ProxyShortcut {
     if (-not $Name) { $Name = Get-PathBaseName $TargetPath }
     foreach ($ch in [System.IO.Path]::GetInvalidFileNameChars()) { $Name = $Name.Replace([string]$ch, '') }
     if (-not $Name) { $Name = '程序' }
-    $lnkPath = Join-Path $DestinationDir ($Name + $ProxyShortcutSuffix + '.lnk')
+    # 图标名 = 程序名 + 模式后缀。**后缀从模式表来，不写字面量**：
+    # 写死 '（走代理）' 的话，加「固定直连」时这一行会静默沿用旧后缀，
+    # 两个模式的图标在桌面上长得一模一样，用户点哪个都说不清。
+    $lnkPath = Join-Path $DestinationDir ($Name + $mode.Suffix + '.lnk')
     if ((Test-Path -LiteralPath $lnkPath) -and -not $Force) {
         $res.Existed = $true
         $res.Path = $lnkPath
@@ -381,7 +537,7 @@ function New-ProxyShortcut {
 
     $vbsPath = $null
     try {
-        $vbsPath = New-ProxyLauncherScript $TargetPath $WorkingDirectory
+        $vbsPath = New-ProxyLauncherScript $TargetPath $WorkingDirectory $mode.Id $ExtraArgs
     } catch {
         $res.Reason = "生成启动脚本失败：$($_.Exception.Message)"
         return $res
@@ -400,8 +556,13 @@ function New-ProxyShortcut {
         # 工作目录照原样传：很多程序靠它找自己的资源文件，改成别处会打不开。
         $lnk.WorkingDirectory = $WorkingDirectory
         $lnk.IconLocation = $TargetPath + ',0'
-        # @explain 「走代理」是产品的固定叫法（图标名的一部分），不是解释机制；快捷方式的属性里就显示这行字。
-$lnk.Description = ('通过 EnvProxy 走代理启动：' + $Name)
+        # @explain 「走代理」「固定直连」是产品的固定叫法（图标名的一部分），不是解释机制；快捷方式的属性里就显示这行字。
+        $desc = if ($mode.Mode -eq 'direct') {
+            '通过 EnvProxy 固定直连启动：' + $Name
+        } else {
+            '通过 EnvProxy 走代理启动：' + $Name
+        }
+        $lnk.Description = $desc
         $lnk.WindowStyle = 1
         $lnk.Save()
     } catch {
@@ -512,7 +673,17 @@ function Get-ProxyShortcutRecords {
                 # 从参数里取出 .vbs 路径（判据里已经校验过归属，这里只要原值显示给用户）
                 $vbsPath = $args.Trim().Trim('"')
 
-                $name = $f.BaseName -replace [regex]::Escape($ProxyShortcutSuffix) + '$', ''
+                # 名字与模式都从文件名剥：后缀表住在那张模式表里，不在这里手抄。
+                # 认不出后缀 = 不是本工具建的名字（可能用户改过名），按"未知模式"处理：
+                # 仍然列出来（它有我们的启动脚本），但不给它编一个假模式。
+                $name = Get-ShortcutBaseName $f.BaseName
+                $nameMode = Get-ShortcutModeFromName $f.BaseName
+                # 文件名里的模式优先，其次读启动脚本里那行标记，最后才是"未知"。
+                # 为什么要读脚本：用户可能把图标改了名（后缀就没了），
+                # 而脚本里那行标记是从生成那一刻就定死的，改不了。
+                $modeId = ''
+                if ($nameMode) { $modeId = $nameMode.Id }
+                elseif (Test-Path -LiteralPath $vbsPath) { $modeId = Get-ProxyLauncherMode $vbsPath }
                 # 三种状态，都要能判出来：
                 #   no-launcher   —— 启动脚本被删了，点了必定失败
                 #   broken-target —— 脚本在，但它要启动的程序被卸载/搬走了，点了也会失败
@@ -536,6 +707,8 @@ function Get-ProxyShortcutRecords {
                     LnkPath      = $f.FullName
                     LauncherPath = $vbsPath
                     Name         = $name
+                    ModeId       = $modeId
+                    Mode         = (Get-ShortcutMode $modeId)
                     State        = $state
                     Where        = $d.Where
                     ProgramPath  = $targetPath
@@ -693,19 +866,81 @@ function Get-InstalledPrograms {
 # 模块这一列是给「分组」用的：1-3 是同一个功能的三种操作（都围绕"给程序建图标"），
 # 4 是另一件事（修浏览器代理），所以两模块分开显示、各带一句说明。
 # 分组只影响打印顺序，不影响编号——编号是用户要敲的数字，按表顺序连续排。
+# 高级功能表。**打印与分派共用这一张。**
+#
+# 七列，缺一不可。每列的存在理由：
+#   Key      用户敲的数字。**不是标识**——重排会变，所以分派不许按它查身份
+#   Action   稳定语义标识。分派、提示派生、「这是哪一项」一律靠它
+#   Handler  处理器函数名。分派查这一列，查不到就大声失败
+#   Module   分组，只影响打印顺序，不影响编号
+#   Kind     do = 会改东西 / read = 只看不改。门禁靠它强制「只读项不许写」
+#   Name     术语表的唯一权威。别处出现必须派生，不许手抄
+#   Hint     一句决策依据
+#
+# 为什么 Action 与 Handler 分开：Action 是「这一项是什么」，Handler 是
+# 「这一项怎么实现」。换实现只改 Handler，用户的提示文案一个字不动。
 $AdvancedItems = @(
     # @explain 「走代理的快捷方式」是这个功能的名字，用户按它逐字找菜单项；不是解释机制。
-    @{ Key='1'; Module='icon';   Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径' }
-    @{ Key='2'; Module='icon';   Name='管理已建的';               Hint='看状态、删掉不要的' }
-    @{ Key='3'; Module='icon';   Name='查看中继';                 Hint='图标用的那个固定地址，现在怎么样' }
-    @{ Key='4'; Module='rescue'; Name='浏览器代理修复';                 Hint='浏览器打不开网页的时候，先来这里查一下' }
+    @{ Key='1'; Action='NewProxyIcon';  Module='icon';   Kind='do'
+       Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径'
+       Handler='Invoke-NewProxyShortcutFlow' }
+    @{ Key='2'; Action='NewDirectIcon'; Module='icon';   Kind='do'
+       Name='给程序建固定直连的快捷方式'; Hint='适合不想翻墙的软件，双击它一定不走代理'
+       Handler='Invoke-DirectShortcutFlow' }
+    @{ Key='3'; Action='ManageIcons';   Module='icon';   Kind='do'
+       Name='管理已建的';               Hint='看状态、删掉不要的'
+       Handler='Invoke-ManageProxyShortcuts' }
+    @{ Key='4'; Action='ViewRelay';     Module='icon';   Kind='read'
+       Name='查看中继';                 Hint='图标用的那个固定地址，现在怎么样；只看不改'
+       Handler='Show-RelayPage' }
+    @{ Key='5'; Action='Rescue';        Module='rescue'; Kind='do'
+       Name='浏览器代理修复';           Hint='浏览器打不开网页的时候，先来这里查一下'
+       Handler='Show-RescuePage' }
+    @{ Key='6'; Action='WslGuide';      Module='guide';  Kind='read'
+       Name='WSL 里也想翻墙';           Hint='要改一个系统设置，这里只讲怎么改'
+       Handler='Show-WslGuidePage' }
+    @{ Key='7'; Action='DockerGuide';   Module='guide';  Kind='read'
+       Name='Docker 里也想翻墙';        Hint='要改 Docker 自己的设置，这里只讲怎么改'
+       Handler='Show-DockerGuidePage' }
 )
 
-# 模块顺序与各自的说明。加一个模块只改这张表。
-# 分成两段的原因：1-3 是"让某个程序能翻墙"，4 是"浏览器上不了网怎么修"——
-# 前者是主动配置，后者是出问题后的急救，混在一列里会让人分不清该看哪一段。
+# 按 Action 取项。分派与「按语义名找编号」都走它。
+# 取不到返回 $null，由调用方决定怎么报——静默回落会让「传错了名字」
+# 变成「静默按默认做」，那是最坏的一种误导。
+function Get-AdvancedItem([string]$Action) {
+    if (-not $Action) { return $null }
+    foreach ($ai in $AdvancedItems) {
+        if ($ai.Action -eq $Action) { return $ai }
+    }
+    return $null
+}
+
+# 表与代码的一致性自检：每个 Handler 必须是本侧真存在的函数。
+# 在菜单入口处跑，不在加载期跑（库加载期不许有对外副作用）。
+# 用 Test-Path function: 而不是 Get-Command：后者会触发模块自动加载，
+# 而本项目的契约明确说自动加载会挑版本、让命令静默缺失。
+function Assert-AdvancedTable {
+    foreach ($ai in $AdvancedItems) {
+        if (-not $ai.Handler) {
+            throw ("高级功能表：{0}「{1}」没有 Handler" -f $ai.Key, $ai.Name)
+        }
+        if (-not (Test-Path -LiteralPath ('function:' + $ai.Handler))) {
+            throw ("高级功能表：{0}「{1}」指向不存在的处理器 {2}" -f $ai.Key, $ai.Name, $ai.Handler)
+        }
+    }
+}
+
+# 模块顺序与各自的说明。加一个模块只改这两张表。
+#
+# 分三段的原因：icon 是「给某个程序定规矩」，rescue 是「出问题了先来查」，
+# guide 是「本工具管不到的地方怎么自己配」——三者的意图完全不同，
+# 混在一列里会让人分不清该看哪一段。
+#
+# guide 段的两项**只讲解、不动手**（表里 Kind='read'）：WSL 的 .wslconfig 和
+# Docker Desktop 的设置改了会让它们起不来，而本工具没有能力验证改得对不对。
+# 只讲不改是这里唯一负责的做法。
 $AdvancedModules = @(
-    @{ Id='icon';   Title='让某个程序能翻墙'
+    @{ Id='icon';   Title='给某个程序定规矩'
        Why=@('有些程序只认启动那一刻的环境变量，不会自己去找代理。',
              '而资源管理器的环境可能在开机时就固定了，之后代理怎么变它都收不到。',
              '这里的快捷方式会在启动前先读一次代理，直接交给程序，绕开那一环。')
@@ -717,6 +952,11 @@ $AdvancedModules = @(
              '于是连国内网站都打不开——线没断，是路指错了。')
        Note=@('只修「指向本机、但那个程序已经不在」的那一种。',
               '公司/学校给你的代理，它一个字节都不碰。') }
+    @{ Id='guide';  Title='本工具管不到的地方'
+       Why=@('浏览器和桌面应用看的是「系统代理」，不是这里的设置——那一层由你的翻墙软件管。',
+             'WSL 和 Docker 各自是一套独立的系统，读的是它们自己的设置。',
+             '下面两项只讲怎么改，不会替你动任何配置。')
+       Note=@('这两项按回车只会看到说明，不会改你的设置。') }
 )
 
 # 按模块取项。打印用，分派不用（分派只按编号查）。
@@ -1051,10 +1291,30 @@ function Show-ProgramPicker {
 }
 
 # 建快捷方式的完整流程：选程序 -> 选位置 -> 确认 -> 建 -> 报结果
-function Invoke-NewProxyShortcutFlow {
+function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
+    # 模式在这里定下来，之后整条流程都用它。**模式决定这一屏的所有措辞**：
+    # 走代理要说"它会带上当前代理"，固定直连要说"它一定不走代理"——
+    # 两种意图相反的操作用同一套话术，用户会在确认页看不出自己要建的是哪个。
+    $mode = Get-ShortcutMode $ModeId
+    if (-not $mode) {
+        Write-Styled 'warn' ("  未知的模式：{0}" -f $ModeId)
+        Start-Sleep -Milliseconds 900
+        return
+    }
+    $isDirect = ($mode.Mode -eq 'direct')
+
     $progs = @(Get-InstalledPrograms)
     $chosen = Show-ProgramPicker -Programs $progs
     if (-not $chosen) { return }
+
+    # 同一个程序可能已经有别的模式的图标了。提前说一句，用户才知道桌面上会多一个。
+    $existing = @()
+    try {
+        $existing = @(Get-ProxyShortcutRecords | Where-Object {
+            $_.ProgramPath -and ($_.ProgramPath -ieq $chosen.TargetPath) -and $_.State -ne 'no-launcher'
+        })
+    } catch {}
+    $otherMode = @($existing | Where-Object { $_.ModeId -and $_.ModeId -ne $mode.Id })
 
     # 选放哪里。默认桌面——用户最容易看到也最容易拖到任务栏。
     Clear-Screen
@@ -1062,6 +1322,15 @@ function Invoke-NewProxyShortcutFlow {
     Write-Host ''
     Write-Styled 'text' ('  程序：' + $chosen.Name)
     Write-Styled 'dim'  ('  路径：' + $chosen.TargetPath)
+    # 规矩也要写在这一屏：用户刚选完程序，这时的第一件事是确认"我要给它定什么规矩"。
+    $modeRole = if ($isDirect) { 'dim' } else { 'text' }
+    Write-Styled $modeRole ('  规矩：' + $mode.Label)
+    if ($otherMode.Count -gt 0) {
+        $names = ($otherMode | ForEach-Object {
+            if ($_.Mode) { $_.Mode.Label } else { '别的规矩' }
+        } | Sort-Object -Unique) -join '、'
+        Write-Styled 'dim' ('  它已经有「' + $names + '」的图标了，这次会再多一个，两个并存')
+    }
     Write-Host ''
     Write-Styled 'item' '    1  桌面（默认）'
     Write-Styled 'item' '    2  开始菜单'
@@ -1103,6 +1372,56 @@ function Invoke-NewProxyShortcutFlow {
         return
     }
 
+    # ---- 浏览器内核的桌面应用：要不要额外带参数 ----
+    #
+    # 为什么必须问、不能自动判断：Chromium 系（Chrome/Edge/VSCode/Discord 等）
+    # 只读系统代理，不看环境变量，所以上面那套变量注入对它们无效，得靠
+    # --proxy-server 启动参数。而「这个程序是不是 Chromium 系」在通用层面
+    # **判断不出来**——实测过四种办法全部不可靠：
+    #   查进程模块     需要管理员权限，普通用户读不到
+    #   扫目录特征文件 Chrome 的文件藏在版本号子目录里，各应用布局不同
+    #   扫 exe 字符串   Chrome 能命中，Edge 命中不了
+    #   跑一次试探     有副作用（可能弹窗、可能启动）
+    # 而且盲目加参数会出事：git 收到不认识的 --proxy-server 会直接报错退出。
+    # 所以交给使用者勾选，**默认不勾**。
+    $extraArgs = ''
+    Clear-Screen
+    Write-Styled 'title' '======== 要不要额外带参数 ========'
+    Write-Host ''
+    Write-Styled 'text' ('  程序：' + $chosen.Name)
+    Write-Host ''
+    Write-Styled 'text' '  浏览器内核做的桌面应用（Chrome、Edge、VS Code、Discord 这类）'
+    Write-Styled 'text' '  不看环境变量，只认启动参数。要让它们也按这个规矩走，得额外带参数。'
+    Write-Host ''
+    Write-Styled 'item' '    1  不是 / 不确定（默认，绝大多数程序选这个）'
+    Write-Styled 'item' '    2  是浏览器内核做的，请帮我带上参数'
+    Write-Host ''
+    Write-Styled 'dim' '  选错了会怎样：给一个普通程序带上这个参数，它可能报错打不开。'
+    Write-Styled 'dim' '  拿不准就选 1。'
+    Write-Host ''
+    Write-Styled 'dim' '  输编号后回车    直接回车 = 1（不带）'
+    $useChromiumArgs = $false
+    while ($true) {
+        $ca = ''
+        try { $ca = "$(Read-Host '选择')".Trim() } catch { return }
+        if (-not $ca -or $ca -eq '1') { break }
+        if ($ca -eq '2') { $useChromiumArgs = $true; break }
+        Write-Styled 'warn' '  只有 1 和 2 两个键。'
+        Start-Sleep -Milliseconds 800
+    }
+    if ($useChromiumArgs) {
+        if ($isDirect) {
+            # 强制直连：direct:// 让它彻底不用代理，bypass-list=* 是双保险
+            # （有些版本在 direct:// 下仍会去读一遍绕过列表）。
+            $extraArgs = '--proxy-server=direct:// --proxy-bypass-list=*'
+        } else {
+            # 走代理这一支要写成占位符，由启动器在**点击那一刻**替换成当时的代理地址。
+            # 不在这里写死端口：翻墙软件换端口后写死的图标就废了，
+            # 而"每次点击重新决定"正是启动器这一层的价值。
+            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__'
+        }
+    }
+
     # 确认
     # 三段用同一套"标签 + 值"排版。原来「程序」只有标签、值另起一行，
     # 而下面两段是同一行，三段格式不一致，最像"界面坏了"的位置恰好是最后确认这屏。
@@ -1112,7 +1431,16 @@ function Invoke-NewProxyShortcutFlow {
     Write-Styled 'text' ('  程序    ' + $chosen.Name)
     Write-Styled 'dim'  ('          ' + $chosen.TargetPath)
     Write-Host ''
-    Write-Styled 'text' ('  图标名  ' + (Get-PathBaseName $chosen.TargetPath) + $ProxyShortcutSuffix)
+    Write-Styled 'text' ('  规矩    ' + $mode.Label)
+    # 一句话说清这条规矩的后果。直接回显模式的意图，不让用户从名字去猜。
+    $modeNote = if ($isDirect) {
+        '双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。'
+    } else {
+        '双击它启动的程序会带上当前代理，跟着翻墙软件走。'
+    }
+    Write-Styled 'dim'  ('          ' + $modeNote)
+    Write-Host ''
+    Write-Styled 'text' ('  图标名  ' + (Get-PathBaseName $chosen.TargetPath) + $mode.Suffix)
     Write-Styled 'text' ('  放在    ' + $dest)
     Write-Host ''
     # 先探一次同名：把"会覆盖"直接写进这一屏，让用户一次 y 就完成。
@@ -1122,7 +1450,7 @@ function Invoke-NewProxyShortcutFlow {
     # 第二屏顺手回车 → 旧图标原样留着 → 他回到桌面点一下还是坏的 →
     # 得出结论"这个修复功能没用"。两个 y 表达同一个意图，本身就是设计错误。
     $lnkName = Get-PathBaseName $chosen.TargetPath
-    $wouldBe = Join-Path $dest ($lnkName + $ProxyShortcutSuffix + '.lnk')
+    $wouldBe = Join-Path $dest ($lnkName + $mode.Suffix + '.lnk')
     $willOverwrite = Test-Path -LiteralPath $wouldBe
     if ($willOverwrite) {
         Write-Styled 'warn' '  这个位置已经有同名图标了，确认后会覆盖它。'
@@ -1142,7 +1470,7 @@ function Invoke-NewProxyShortcutFlow {
 
     # 建。用户在上一屏已经确认过"要覆盖"，这里直接用 -Force，不再问第二遍。
     $r = New-ProxyShortcut -TargetPath $chosen.TargetPath -WorkingDirectory $chosen.WorkingDirectory `
-                           -DestinationDir $dest -Name $lnkName -Force:$willOverwrite
+                           -DestinationDir $dest -Name $lnkName -ModeId $mode.Id -ExtraArgs $extraArgs -Force:$willOverwrite
     Clear-Screen
     if ($r.Ok) {
         Write-Styled 'ok' ('  [完成] ' + $(if($willOverwrite){'已覆盖：'}else{'已创建：'}))
@@ -1173,7 +1501,7 @@ function Invoke-NewProxyShortcutFlow {
         try { $ov = "$(Read-Host '覆盖')".Trim() } catch {}
         if ($ov -match '^(y|yes|是)$') {
             $r2 = New-ProxyShortcut -TargetPath $chosen.TargetPath -WorkingDirectory $chosen.WorkingDirectory `
-                                    -DestinationDir $dest -Name (Get-PathBaseName $chosen.TargetPath) -Force
+                                    -DestinationDir $dest -Name (Get-PathBaseName $chosen.TargetPath) -ModeId $mode.Id -ExtraArgs $extraArgs -Force
             Write-Host ''
             if ($r2.Ok) {
                 Write-Styled 'ok' '  [完成] 已覆盖：'
@@ -1200,56 +1528,63 @@ function Invoke-ManageProxyShortcuts {
         $recs = @(Get-ProxyShortcutRecords)
         $orphans = @(Get-OrphanProxyLaunchers)
         Clear-Screen
-        # @explain 「管理走代理的快捷方式」是这个页面的名字（与菜单项同一个名字），不是解释机制。
-Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
+        Write-Styled 'title' '======== 管理已建的 ========'
         Write-Host ''
         if ($recs.Count -eq 0 -and $orphans.Count -eq 0) {
-            Write-Styled 'dim' '  还没有建过。先回上一页选 1 建一个。'
+            Write-Styled 'dim' '  还没有建过。先回上一页选 1 或 2 建一个。'
             Write-Host ''
             Write-Styled 'dim' '  按回车返回'
             try { $null = Read-Host '' } catch {}
             return
         }
+        # 按程序名排序，同一程序的两种规矩自然挨在一起。
+        # 这样「WeChat 走代理」和「WeChat 固定直连」上下相邻，一眼看出是同一程序的两个版本；
+        # 不排序则按扫描顺序散落各处，看起来像两个无关的图标。
+        $sorted = @($recs | Sort-Object { $_.Name }, { $_.ModeId })
         $idx = 0
-        if ($recs.Count -gt 0) {
-            foreach ($r in $recs) {
+        if ($sorted.Count -gt 0) {
+            # 程序名列宽按内容算，不写死：写死会让短名字后面空一大片、长名字把后面两列顶出屏幕。
+            $nameW = 0
+            foreach ($r in $sorted) {
+                $w = Get-DisplayWidth $r.Name
+                if ($w -gt $nameW) { $nameW = $w }
+            }
+            # 规矩列也按内容对齐：'走代理' 与 '固定直连' 宽度差两格，
+            # 不对齐的话后面"位置"那一列会参差，扫读时眼睛要重新找起点。
+            $modeW = 0
+            foreach ($r in $sorted) {
+                $ml = if ($r.Mode) { $r.Mode.Label } else { '（未知）' }
+                $w = Get-DisplayWidth $ml
+                if ($w -gt $modeW) { $modeW = $w }
+            }
+            foreach ($r in $sorted) {
                 $idx++
-                $stateText = switch ($r.State) {
-                    'ok'           { '正常' }
-                    'no-launcher'  { '启动脚本被删了，图标点了会失败' }
-                    'broken-target' { '程序已经不在了（被卸载或搬走），图标点了会失败' }
-                    default        { $r.State }
-                }
-                $stateRole = if ($r.State -eq 'ok') { 'ok' } else { 'warn' }
-                # 名字后面跟位置：同一个程序可以同时出现在桌面和任务栏
-                # （固定到任务栏时 Windows 会复制一份），不带位置的话两行内容一模一样。
-                # 名字本身可能已经带括号（''Antigravity（走代理）''），后面再接一个''（桌面）''
-                # 连成三个括号读着别扭。中间加分隔点，两段身份各自清楚。
-                # 缩进与帮助页同一套：条目 2 格、明细 4 格。
-                # 原来是 4/8 格，加上"状态  "这种两字标签后，值被推到屏幕中段偏右，
-                # 长路径一折行就贴到右边框——观感上整块内容都在飘。左对齐才稳。
-                Write-Styled 'item' ('  ' + $idx.ToString().PadLeft(2) + '  ' + $r.Name + '  ·  ' + $r.Where)
-                Write-Styled $stateRole ('    状态  ' + $stateText)
-                # 完整路径 + 位置都写出来。路径长到折行也照写：
-                # 截短了用户就没法照着去找、也没法复制，而这一屏的作用正是"我要删哪一个"。
-                # 折行自己来（续行对齐到值那一列）：交给终端折的话续行从第 0 列开始，
-                # 那半截路径看起来像另一个条目的内容，反而更容易认错行。
-                # 续行缩进 10 = "    图标  " 的可见宽度（4 空格 + 图标两字 + 2 空格）。
-                $wrapW = (Get-ConsoleWidth) - 12
-                $lnkLines = @(Split-DisplayText $r.LnkPath $wrapW 10)
-                for ($k = 0; $k -lt $lnkLines.Count; $k++) {
-                    if ($k -eq 0) { Write-Styled 'dim' ('    图标  ' + $lnkLines[$k].TrimStart()) }
-                    else { Write-Styled 'dim' $lnkLines[$k] }
-                }
-                # 启动脚本被多个图标共用时说清楚：删掉这条不会弄坏别人。
-                $shareCount = @($recs | Where-Object { $_.LauncherPath -eq $r.LauncherPath }).Count
-                $shareNote = if ($shareCount -gt 1) { ('（' + $shareCount + ' 个图标共用）') } else { '' }
-                $vbsLines = @(Split-DisplayText ($r.LauncherPath + $shareNote) $wrapW 10)
-                for ($k = 0; $k -lt $vbsLines.Count; $k++) {
-                    if ($k -eq 0) { Write-Styled 'dim' ('    脚本  ' + $vbsLines[$k].TrimStart()) }
-                    else { Write-Styled 'dim' $vbsLines[$k] }
+                # 一行说清：编号、哪个程序、什么规矩、在哪。
+                # 规矩单列而不揉进名字：名字里的括号是图标文件名的一部分，
+                # 而用户在这一屏要回答的是"我给这个程序定了什么规矩"，那是独立的事实。
+                $modeLabel = if ($r.Mode) { $r.Mode.Label } else { '（未知）' }
+                $modeRole = if ($r.Mode -and $r.Mode.Mode -eq 'direct') { 'dim' } else { 'text' }
+                $pad = ' ' * [Math]::Max(0, $nameW - (Get-DisplayWidth $r.Name))
+                $mpad = ' ' * [Math]::Max(0, $modeW - (Get-DisplayWidth $modeLabel))
+                Write-Styled 'cmd'  ('  ' + $idx.ToString().PadLeft(2) + '  ')
+                Write-Styled 'item' ($r.Name + $pad + '   ')
+                Write-Styled $modeRole ($modeLabel + $mpad + '   ')
+                Write-Styled 'dim' ($r.Where)
+                # 状态只在**不正常**时单独占一行：正常是常态，每行都写会把页面撑长一倍，
+                # 而用户真正要找的恰恰是那几个不正常的。
+                if ($r.State -ne 'ok') {
+                    $stateText = switch ($r.State) {
+                        'no-launcher'   { '启动脚本被删了，点了会失败' }
+                        'broken-target' { '程序已经不在了（被卸载或搬走），点了会失败' }
+                        default         { $r.State }
+                    }
+                    Write-Styled 'warn' ('      状态  ' + $stateText)
                 }
             }
+            Write-Host ''
+            # 统计一句话说清"我总共建了多少"。用户在一长列里数不出来。
+            $progCount = @($sorted | ForEach-Object { $_.Name } | Sort-Object -Unique).Count
+            Write-Styled 'dim' ('  一共 ' + $sorted.Count + ' 个图标，涉及 ' + $progCount + ' 个程序。')
         }
         if ($orphans.Count -gt 0) {
             Write-Host ''
@@ -1285,14 +1620,17 @@ Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
             Start-Sleep -Milliseconds 700
             continue
         }
-        # 定位到具体那一条
+        # 定位到具体那一条。
+        # **必须用 $sorted，不能用 $recs**：屏幕上的编号是按程序名排过序的，
+        # 而 $recs 是扫描顺序。两处用不同的序，用户选 1、实际删的却是另一个——
+        # 而这个错误在屏幕上看不出来，直到他发现删错了图标。
         $targetLnk = $null
         $targetVbs = $null
-        if ($n -le $recs.Count) {
-            $targetLnk = $recs[$n-1].LnkPath
-            $targetVbs = $recs[$n-1].LauncherPath
+        if ($n -le $sorted.Count) {
+            $targetLnk = $sorted[$n-1].LnkPath
+            $targetVbs = $sorted[$n-1].LauncherPath
         } else {
-            $targetVbs = $orphans[$n - $recs.Count - 1].LauncherPath
+            $targetVbs = $orphans[$n - $sorted.Count - 1].LauncherPath
         }
 
         Write-Host ''
@@ -1335,32 +1673,125 @@ Write-Styled 'title' '======== 管理走代理的快捷方式 ========'
 
 # 高级功能的总入口：菜单选 5 进来就是这里。
 function Show-AdvancedMenu {
-    # 分派也查 $AdvancedItems：屏幕上有的编号就一定能敲，屏幕上没有的一定敲不到。
-    # 编号 → 动作的映射写在这里一处，而"有哪些编号"由表算出来，两边不会分叉。
-    $actions = @{
-        '1' = { Invoke-NewProxyShortcutFlow }
-        '2' = { Invoke-ManageProxyShortcuts }
-        # 只读的一屏：看完按回车回来。不提供任何"开关"——
-        # 中继跟监控同生共死，没有可拨的开关，给一个假开关只会让人困惑。
-        # 这一屏自己就地实时刷新、自己收退出键，所以这里不再补一次 Read-Host：
-        # 那会让用户按回车回到这一屏，再按一次才真的返回（多按一次、看不出所以然）。
-        '3' = { Show-RelayPage }
-        '4' = { Show-RescuePage }
+    # 先自检：表里指的处理器都真实存在。放在这里而不是加载期——
+    # 库加载期不许有对外副作用（本项目契约），而且进这一屏才需要它。
+    try {
+        Assert-AdvancedTable
+    } catch {
+        Write-Styled 'warn' ('  ' + $_.Exception.Message)
+        Start-Sleep -Milliseconds 1200
+        return
     }
     while ($true) {
         Show-AdvancedPage
         $ans = ''
         try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
         if (-not $ans -or $ans -eq '0' -or $ans -match '^[Qq]$') { return }
-        if ($actions.ContainsKey($ans)) {
-            & $actions[$ans]
+        # 分派：编号 -> 行 -> Handler。**只查表，不认识任何具体功能的名字。**
+        #
+        # 为什么不能写一张「编号 → 动作」的哈希表：那是同一件事的第二份描述。
+        # 表里加一项而这里忘了加，屏幕上有那个编号、敲下去却说"没有这个编号"；
+        # 插入一项让编号重排时，这里每一行都要改，改错一处就是静默执行错的动作。
+        # 现在加一项只需要在表里加一行，分派代码一个字不动。
+        $hit = $null
+        foreach ($ai in $AdvancedItems) {
+            if ([string]$ai.Key -eq $ans) { $hit = $ai; break }
+        }
+        if ($hit) {
+            # Handler 名字已经在入口处自检过存在性，这里直接调用。
+            & $hit.Handler
         } else {
-            # 可用编号从表里算，不写死"1、2、3、4"：加一项后提示会自动跟上来。
+            # 可用编号从表里算，不写死：加一项后提示会自动跟上来。
             $keys = @($AdvancedItems | ForEach-Object { $_.Key })
             Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 ' + ($keys -join '、') + '，0 = 返回）')
             Start-Sleep -Milliseconds 700
         }
     }
+}
+
+# 「给程序建固定直连的快捷方式」的入口。
+#
+# 为什么是独立的一个函数而不是给上面那个加个参数：
+# 表里每一项的 Handler 都必须是**无参、自成一屏、自己收键**的形状（这是表能成立的前提）。
+# 带参数的入口会让分派要么加 if、要么这一项单独开分支，表的假设就破了。
+function Invoke-DirectShortcutFlow {
+    Invoke-NewProxyShortcutFlow -ModeId 'direct'
+}
+
+# ------------------------------------------------------------------------------
+# 本工具管不到的地方：只讲解、不动手
+# ------------------------------------------------------------------------------
+#
+# 这两个页面共享同一套结构：先说清「为什么管不到」，再给可照抄的做法，
+# 最后明说「我没改任何东西」。
+#
+# 为什么不做成自动配置：WSL 的 .wslconfig 改错会让 WSL 起不来；
+# Docker Desktop 的设置文件官方没公开格式。改坏了我无法验证，用户会连"去下载修复版"
+# 都做不到——那正是最不该制造的状态。
+
+# 通用的一屏讲解渲染。$Blocks 是若干 { Role; Text } 行的数组。
+function Show-GuidePage([string]$Title, [object[]]$Blocks, [string]$Footer) {
+    Clear-Screen
+    Write-Styled 'title' ('======== ' + $Title + ' ========')
+    Write-Host ''
+    foreach ($b in $Blocks) {
+        Write-Styled $b.Role ($b.Text)
+    }
+    Write-Host ''
+    Write-Styled 'dim' ('  ' + $Footer)
+    Write-Host ''
+    Write-Styled 'dim' '  按回车返回'
+    try { $null = Read-Host } catch {}
+}
+
+function Show-WslGuidePage {
+    $blocks = @(
+        @{ Role='text'; Text='  WSL 是另一套系统，装在你 Windows 里面。' }
+        @{ Role='text'; Text='  它有自己的网络设置，看不到这里设的代理变量。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  想让 WSL 里也能翻墙，改一个设置就行' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  1. 打开这个文件（没有就新建）：' }
+        @{ Role='cmd'; Text='       C:\Users\你的用户名\.wslconfig' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  2. 写入下面两行：' }
+        @{ Role='cmd'; Text='       [wsl2]' }
+        @{ Role='cmd'; Text='       networkingMode=mirrored' }
+        @{ Role='cmd'; Text='       autoProxy=true' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  3. 存盘，然后在 PowerShell 里执行一次：' }
+        @{ Role='cmd'; Text='       wsl --shutdown' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  之后 WSL 会自己跟着 Windows 的代理走，不用再管。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='dim'; Text='  要 Windows 11 22H2 或更新的版本才支持这两行。' }
+        @{ Role='dim'; Text='  旧版本会忽略它们，不会出问题，但也就不生效。' }
+    )
+    Show-GuidePage 'WSL 里也想翻墙' $blocks '这一页只讲解，没有改你的任何设置。'
+}
+
+function Show-DockerGuidePage {
+    $blocks = @(
+        @{ Role='text'; Text='  Docker 的代理分三层，各有各的设置位置。' }
+        @{ Role='text'; Text='  这里只讲最常用的两种，都不受本工具影响。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  一、拉镜像慢或拉不下来（docker pull）' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  改 Docker Desktop 自己的设置：' }
+        @{ Role='text'; Text='    Settings → Resources → Proxies' }
+        @{ Role='text'; Text='  填 http://127.0.0.1:端口号，端口号看菜单选 2（查看状态）。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='dim'; Text='  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  二、容器里面的程序要翻墙' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去）：' }
+        @{ Role='cmd'; Text='       docker run -e HTTP_PROXY=http://host.docker.internal:7078 镜像名' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。' }
+        @{ Role='dim'; Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
+    )
+    Show-GuidePage 'Docker 里也想翻墙' $blocks '这一页只讲解，没有改你的任何设置。'
 }
 
 # 浏览器代理修复页：查出问题 -> 说清 -> 问一句 -> 修 -> 回读 -> 报结果。
