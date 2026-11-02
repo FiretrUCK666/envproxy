@@ -224,7 +224,19 @@ _shortcut_build_app() {
     # 放到目标位置。用 ditto 而不是 cp -R：ditto 保留扩展属性与符号链接，
     # 而 cp -R 在某些 macOS 版本上会把壳子弄成"已损坏"。
     mkdir -p "$_sba_dest" 2>/dev/null || return 1
-    rm -rf "$_sba_app" 2>/dev/null || true
+    # 覆盖前必须确认那个 app 是**我们造的**。
+    # rm -rf 会连名字恰好撞上的真 app 一起删掉，而这一步发生在「建一个图标」
+    # 这种看起来无害的动作里，用户不会预料到自己的东西没了。
+    # 判据与 _shortcut_remove 完全一致（同一个标记行），两处不许各写一套。
+    if [ -e "$_sba_app" ]; then
+        if [ -f "$_sba_app/Contents/MacOS/launcher" ] && grep -q '这个文件由 EnvProxy 生成' "$_sba_app/Contents/MacOS/launcher" 2>/dev/null; then
+            rm -rf "$_sba_app" 2>/dev/null || true
+        else
+            # 同名但不是我们造的：一个字节都不动，把这个情况交给调用方去说。
+            echo "同名的东西已经存在，而且不是本工具建的：$_sba_app" >&2
+            return 2
+        fi
+    fi
     if command -v ditto >/dev/null 2>&1; then
         ditto "$_sba_work" "$_sba_app" 2>/dev/null || return 1
     else

@@ -123,8 +123,9 @@ Pick `4` for help: one entry answers one question, chosen by what you are stuck 
 | 3 | Keep this window off the proxy / use a corporate proxy |
 | 4 | Make one command skip the proxy |
 | 5 | One program still cannot reach blocked sites |
-| 6 | Something is wrong: how to check, how to report |
-| 7 | No internet after closing the proxy app |
+| 6 | The other way round: one program should not go through the proxy |
+| 7 | Something is wrong: how to check, how to report |
+| 8 | No internet after closing the proxy app |
 
 Once inside, the bottom line lists every number, with the one you are reading in brackets.
 
@@ -820,6 +821,10 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `monitor.stdout.log` | what the background program prints (look here when login start-up misbehaves) |
 | | `monitor.stderr.log` | errors the background program reports |
 | | `apps/` | app wrappers are built here, then copied to the Desktop (only exists once you use menu 5) |
+| | `locks/monitor.lock` | single-instance lock, so two copies never run at once |
+| | `locks/op.lock` | one install/uninstall/stop/update at a time |
+
+These locks live here rather than in the project folder because they must cover **every** copy: two windows on the same folder, or one copy on D: and another on E:, all queue on the same lock. Keep them in the project folder and each copy would take its own lock, which is no lock at all.
 | `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
@@ -831,8 +836,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
 | | `notify.last` | the state last warned about; keeps the same change from being reported twice |
-| | `.lock` | single-instance lock, so two copies never run at once |
-| | `.op.lock` | one install/uninstall/stop/update at a time |
+
 
 Your shell config files (`~/.zshrc`, `~/.bashrc` and the like) also gain one small block, marked `EnvProxy` at both ends; removing that block turns off auto-follow for that terminal.
 

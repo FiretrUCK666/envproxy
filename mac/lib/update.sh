@@ -1185,7 +1185,9 @@ _ENVPROXY_PKG_
     # 不会指向马上要被删掉的解压目录（那会让监控起来后立刻自退、"切换为正式安装"变成假的）。
     # 用子进程而不是 exec：失败时还能用当前（旧）代码兜底把监控拉起来，不让它停在停用状态。
     # 交出手里的操作锁：收尾子进程跑的是同一个安装动作，它会自己去拿锁。
-    rm -rf "$MONITOR_DIR/.op.lock" 2>/dev/null || true
+    # 锁的位置必须与入口拿锁时**同一个来源**（LOCK_DIR），不许在这里另写一个路径：
+    # 写错的后果是这把锁没交出去，收尾子进程被自己拦住，更新静默失败。
+    rm -f "$LOCK_DIR/op.lock" 2>/dev/null || true
     trap - EXIT
     if ! /bin/bash "$_uroot/mac/envproxy.sh" install; then
         style_out warn "收尾没走完，正在按当前文件重启监控..."

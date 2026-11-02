@@ -57,10 +57,15 @@ $ShortcutModes = @(
     # @explain 「走代理」「固定直连」是产品的固定叫法（图标名的一部分），不是解释机制
     @{ Id = 'proxy';  Action = 'proxy'
        Suffix = '（翻墙）';   Label = '翻墙'
+       # 曾经用过的后缀。用户桌面上那些老图标还带着它们，删不掉也改不了名——
+       # 只认当前后缀的话，改一次措辞就把所有已建的图标变成「认不出来」，
+       # 而那些图标其实完全能用。认旧名是为了让改名不伤到已经发出去的东西。
+       AliasSuffixes = @('（走代理）')
        Note = '双击它启动的程序会翻墙，跟着翻墙软件走。'
        Desc = '通过 EnvProxy 翻墙启动：'; Role = 'text' }
     @{ Id = 'direct'; Action = 'direct'
        Suffix = '（直连）';   Label = '直连'
+       AliasSuffixes = @('（固定直连）')
        Note = '双击它启动的程序一定不翻墙，哪怕别的程序都在翻墙。'
        Desc = '通过 EnvProxy 直连启动：'; Role = 'dim' }
 )
@@ -87,7 +92,14 @@ function Get-ShortcutModeList {
 # 全部模式的后缀清单，供扫描时剥离文件名用。
 # 必须按长度降序：'（固定直连）' 比 '（走代理）' 长，先剥短的会让长后缀剥不干净。
 function Get-ShortcutSuffixes {
-    return @($ShortcutModes | ForEach-Object { $_.Suffix } | Sort-Object { $_.Length } -Descending)
+    # 当前后缀与全部历史后缀一起返回。漏掉旧后缀会让老图标在扫描时剥不干净，
+    # 名字里留着「（走代理）」而被当成程序名的一部分。
+    $all = @()
+    foreach ($m in $ShortcutModes) {
+        $all += @($m.Suffix)
+        $all += @($m.AliasSuffixes)
+    }
+    return @($all | Where-Object { $_ } | Sort-Object { $_.Length } -Descending)
 }
 
 # 从图标名里剥离模式后缀，返回程序名。
@@ -106,7 +118,12 @@ function Get-ShortcutBaseName([string]$Name) {
 function Get-ShortcutModeFromName([string]$Name) {
     if (-not $Name) { return $null }
     foreach ($m in $ShortcutModes) {
-        if ($Name.EndsWith($m.Suffix, [StringComparison]::Ordinal)) { return $m }
+        # 当前后缀和所有历史后缀都认。只认当前的话，改一次措辞就把用户桌面上
+        # 已经建好的图标全变成「认不出来」——而那些图标完全能用。
+        foreach ($sfx in @($m.Suffix) + @($m.AliasSuffixes)) {
+            if (-not $sfx) { continue }
+            if ($Name.EndsWith($sfx, [StringComparison]::Ordinal)) { return $m }
+        }
     }
     return $null
 }
@@ -622,6 +639,11 @@ function New-ProxyShortcut {
         return $res
     }
 
+    # 记下落点。只在**回读通过之后**记：回读失败的分支上面已经把 .lnk 删掉了，
+    # 那时记下来只会让扫描去翻一个空目录。
+    # 标准目录也会走到这里，但 Register-ShortcutExtraDir 自己会跳过它们。
+    try { Register-ShortcutExtraDir $DestinationDir } catch {}
+
     $res.Ok = $true
     $res.Path = $lnkPath
     return $res
@@ -806,6 +828,112 @@ function Remove-ProxyShortcuts {
 #   - 候选程序那份**不能**含任务栏：那里放的都是已经在别处出现过的图标，
 #     扫进来只会让同一个程序在候选列表里出现两次。
 # 合成一份的后果是两种场景必有一边错，所以差异是有意的。
+# 按**显示宽度**取前 N 格，用于把长路径手动断行。
+#
+# 与 pages 层的 Limit-DisplayText 不同：那个会补省略号（它是"只显示一行"的场合），
+# 这里要的是"分段显示完整内容"，所以只切、不加标记，切点在字符边界上。
+# 为什么不能用 .Substring($n)：中文一字两格，按字符数切会让中文行超宽。
+function Limit-DisplayTextWithTail([string]$Text, [int]$Width) {
+    if (-not $Text) { return '' }
+    if ($Width -le 1) { return $Text.Substring(0, 1) }
+    $accW = 0
+    $i = 0
+    foreach ($ch in $Text.ToCharArray()) {
+        $cw = Get-CharWidth $ch
+        if ($accW + $cw -gt $Width) { break }
+        $accW += $cw
+        $i++
+    }
+    if ($i -le 0) { $i = 1 }
+    return $Text.Substring(0, $i)
+}
+
+# 判断一个程序是不是浏览器内核做的（Chrome / Edge / Electron 应用）。
+#
+# 为什么这件事能自动做：这类程序有个**结构上的**共同点，不是猜的——
+#   Electron 应用必有 resources\app.asar（它的前端代码就打包在那个文件里）
+#   Chrome/Edge 本体旁边必有 chrome.dll 或 msedge.dll
+# 这两个都是"没有它就跑不起来"的东西，不是可选的附带文件。
+#
+# 为什么要排除系统目录：System32 下面装着 Edge 的 WebView 组件
+# （Microsoft-Edge-WebView\msedge.dll），不排除的话 cmd.exe、notepad.exe
+# 全都会被判成浏览器内核——而给它们加 --proxy-server 会直接打不开。
+#
+# 判错的代价不对称：漏判只是这个图标不走代理（用户还能用），
+# 误判是那个程序根本打不开。所以判据只在"确认无误"时才说"是"。
+function Test-ChromiumApp([string]$ExePath) {
+    if (-not $ExePath) { return $false }
+    if (-not (Test-Path -LiteralPath $ExePath)) { return $false }
+    $dir = Split-Path -Parent $ExePath
+    if (-not $dir) { return $false }
+    foreach ($s in @($env:SystemRoot, "$env:SystemRoot\System32", "$env:SystemRoot\SysWOW64", "$env:SystemRoot\WinSxS")) {
+        if ($s -and $dir.StartsWith($s, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+    }
+    # Electron：resources\app.asar
+    if (Test-Path -LiteralPath (Join-Path $dir 'resources\app.asar')) { return $true }
+    $subs = @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)
+    foreach ($sub in $subs) {
+        if (Test-Path -LiteralPath (Join-Path $sub.FullName 'resources\app.asar')) { return $true }
+    }
+    # Chrome/Edge：核心 dll（本级或版本号子目录里）
+    $dlls = @('chrome.dll', 'chrome_elf.dll', 'msedge.dll', 'msedge_elf.dll')
+    foreach ($n in $dlls) {
+        if (Test-Path -LiteralPath (Join-Path $dir $n)) { return $true }
+    }
+    foreach ($sub in $subs) {
+        foreach ($n in $dlls) {
+            if (Test-Path -LiteralPath (Join-Path $sub.FullName $n)) { return $true }
+        }
+    }
+    return $false
+}
+
+# 曾经用过的自定义落点，存在 launchers 旁边的一行一个文件里。
+#
+# 为什么必须记：图标建到别处之后，扫描那四个标准目录就看不见它了，
+# 而"找不到对应图标的启动脚本"会被当成孤儿——用户在管理页删掉那条孤儿，
+# 桌面上的图标就变成双击报错（启动脚本没了）。一个合法选项变成无声陷阱。
+# 记下落点则扫描和孤儿判定都用同一份清单，放哪儿都找得到。
+function Get-ShortcutExtraDirsFile {
+    return (Join-Path (Get-InstallDir) 'shortcut-dirs.txt')
+}
+
+function Get-ShortcutExtraDirs {
+    $f = Get-ShortcutExtraDirsFile
+    if (-not (Test-Path -LiteralPath $f)) { return @() }
+    $out = @()
+    try {
+        foreach ($l in @(Get-Content -LiteralPath $f -Encoding UTF8 -ErrorAction Stop)) {
+            $s = "$l".Trim()
+            # 目录已经不在了就跳过，但不删记录：外接硬盘拔了就属于这种，
+            # 插回来图标还在，记录不该因为一次"暂时找不到"而丢。
+            if ($s -and (Test-Path -LiteralPath $s)) { $out += $s }
+        }
+    } catch {}
+    return @($out | Select-Object -Unique)
+}
+
+# 记一个落点。标准目录不记：它们在扫描清单里本来就有，记了只是重复。
+function Register-ShortcutExtraDir([string]$Dir) {
+    if (-not $Dir) { return }
+    if (-not (Test-Path -LiteralPath $Dir)) { return }
+    $full = (Resolve-Path -LiteralPath $Dir).Path.TrimEnd('\')
+    # 已经是标准目录之一就不必记
+    foreach ($d in @(Get-ShortcutDirList -WithTaskBar $true)) {
+        if ($d.Path -and ((Resolve-Path -LiteralPath $d.Path -ErrorAction SilentlyContinue).Path.TrimEnd('\') -eq $full)) { return }
+    }
+    $f = Get-ShortcutExtraDirsFile
+    $cur = @()
+    if (Test-Path -LiteralPath $f) {
+        try { $cur = @(Get-Content -LiteralPath $f -Encoding UTF8 -ErrorAction Stop | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) } catch { $cur = @() }
+    }
+    if ($cur -contains $full) { return }
+    $cur += $full
+    $dir = Split-Path -Parent $f
+    if (-not (Test-Path -LiteralPath $dir)) { $null = New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue }
+    try { Set-Content -LiteralPath $f -Value $cur -Encoding UTF8 -ErrorAction Stop } catch {}
+}
+
 function Get-ShortcutDirList([bool]$WithTaskBar = $false) {
     $dirs = @(
         @{ Path = [Environment]::GetFolderPath('Desktop'); Where = '桌面' },
@@ -819,6 +947,17 @@ function Get-ShortcutDirList([bool]$WithTaskBar = $false) {
             @{ Path = [Environment]::GetFolderPath('Programs'); Where = '开始菜单' },
             @{ Path = [Environment]::GetFolderPath('CommonPrograms'); Where = '开始菜单（所有用户）' }
         )
+    }
+    # 用户自选过的落点也要扫。漏掉它们的话，建到别处的图标在管理页里看不见，
+    # 而它的启动脚本会被当成"没有对应图标的孤儿"——用户在管理页删掉那条孤儿，
+    # 那个图标就变成双击报错。一个合法的落点选项变成无声的陷阱。
+    $known = @()
+    foreach ($d in $dirs) { if ($d.Path) { $known += ($d.Path.TrimEnd('\')) } }
+    foreach ($x in @(Get-ShortcutExtraDirs)) {
+        if (-not $x) { continue }
+        if ($known -contains $x.TrimEnd('\')) { continue }
+        # 位置名用最后一级目录：用户认得出"我的快捷方式"，认不出完整路径。
+        $dirs += @{ Path = $x; Where = (Split-Path -Leaf $x) }
     }
     return $dirs
 }
@@ -1397,41 +1536,47 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         return
     }
 
-    # ---- 浏览器内核的桌面应用：要不要额外带参数 ----
+    # ---- 浏览器内核做的程序：只问一句，而且先替用户判断好 ----
     #
-    # 为什么必须问、不能自动判断：Chromium 系（Chrome/Edge/VSCode/Discord 等）
-    # 只读系统代理，不看环境变量，所以上面那套变量注入对它们无效，得靠
-    # --proxy-server 启动参数。而「这个程序是不是 Chromium 系」在通用层面
-    # **判断不出来**——实测过四种办法全部不可靠：
-    #   查进程模块     需要管理员权限，普通用户读不到
-    #   扫目录特征文件 Chrome 的文件藏在版本号子目录里，各应用布局不同
-    #   扫 exe 字符串   Chrome 能命中，Edge 命中不了
-    #   跑一次试探     有副作用（可能弹窗、可能启动）
-    # 而且盲目加参数会出事：git 收到不认识的 --proxy-server 会直接报错退出。
-    # 所以交给使用者勾选，**默认不勾**。
+    # 这类程序（Chrome / Edge / VS Code / Electron 应用）只认系统代理，
+    # 不看环境变量，所以要让它按这个规矩走，得给它带上 --proxy-server 启动参数。
+    #
+    # 判断由 Test-ChromiumApp 做，判据是结构性的（见那个函数的注释），实测准确。
+    # 但**结果仍要用户点头**：判错了那个程序会打不开，而用户是唯一知道
+    # "我这个程序本来能不能用"的人。所以是"我先猜到，你确认一下"，
+    # 不是"你来告诉我它是什么内核"——那是把内部概念摊给用户看。
+    $isChromium = Test-ChromiumApp $chosen.TargetPath
     $extraArgs = ''
     Clear-Screen
-    Write-Styled 'title' '======== 要不要额外带参数 ========'
+    Write-Styled 'title' '======== 再确认一件事 ========'
     Write-Host ''
     Write-Styled 'text' ('  程序：' + $chosen.Name)
     Write-Host ''
-    Write-Styled 'text' '  浏览器内核做的桌面应用（Chrome、Edge、VS Code、Discord 这类）'
-    Write-Styled 'text' '  不看环境变量，只认启动参数。要让它们也按这个规矩走，得额外带参数。'
+    if ($isChromium) {
+        # 猜是的：说清猜的依据（用的是用户看得见的事实，不是内核名字）
+        Write-Styled 'text' '  这个程序是浏览器内核做的（Chrome、Edge、VS Code 这类）。'
+        Write-Styled 'text' '  它不认这里的设置，得单独告诉它走哪儿。'
+        Write-Host ''
+        Write-Styled 'dim'  '  帮你打开这一项，图标才能生效。'
+    } else {
+        Write-Styled 'text' '  一般程序直接就能用，不需要额外设置。'
+        Write-Host ''
+        Write-Styled 'dim'  '  只有 Chrome、Edge、VS Code 这一类需要单独指定，'
+        Write-Styled 'dim'  '  它们长得像浏览器，自己不听这里的招呼。'
+    }
     Write-Host ''
-    Write-Styled 'item' '    1  不是 / 不确定（默认，绝大多数程序选这个）'
-    Write-Styled 'item' '    2  是浏览器内核做的，请帮我带上参数'
+    Write-Styled 'item' '    1  就这样（默认）'
+    Write-Styled 'item' '    2  反过来：它是 / 它不是（我改一下）'
     Write-Host ''
-    Write-Styled 'dim' '  选错了会怎样：给一个普通程序带上这个参数，它可能报错打不开。'
-    Write-Styled 'dim' '  拿不准就选 1。'
-    Write-Host ''
-    Write-Styled 'dim' '  输编号后回车    直接回车 = 1（不带）'
-    $useChromiumArgs = $false
+    Write-Styled 'dim' '  直接回车即可    N = 取消'
+    $useChromiumArgs = $isChromium
     while ($true) {
         $ca = ''
         try { $ca = "$(Read-Host '选择')".Trim() } catch { return }
         if (-not $ca -or $ca -eq '1') { break }
-        if ($ca -eq '2') { $useChromiumArgs = $true; break }
-        Write-Styled 'warn' '  只有 1 和 2 两个键。'
+        if ($ca -eq '2') { $useChromiumArgs = -not $isChromium; break }
+        if ($ca -match '^[Nn]$') { return }
+        Write-Styled 'warn' '  只有 1、2 两个键（N 取消）。'
         Start-Sleep -Milliseconds 800
     }
     if ($useChromiumArgs) {
@@ -1504,14 +1649,14 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         Write-Styled 'dim'  '  注意别删掉上面那个启动脚本，删了图标就失效。'
         # 代理值不合法时要说一句：快捷方式本身建好了，只是它读不到能用的代理。
         # 不说的话用户点了图标发现没走代理，会以为这个功能坏了。
-        if (-not $r.ProxyOk) {
+        # 只在**走代理**的模式下提醒。直连模式本来就不读代理，
+        # 对它说"开好代理软件再点一次"是把人往错的方向推——
+        # 他会以为直连图标也需要代理，甚至真的去开代理重做一遍。
+        if (-not $r.ProxyOk -and $r.Mode.Action -eq 'proxy') {
             Write-Host ''
             Write-Styled 'warn' '  注意：现在没有检测到有效的代理地址。'
             Write-Styled 'dim'  '  这个图标仍然能用，但启动时会直连。开好代理软件再点一次就正常了。'
         }
-    } elseif ($r.Existed) {
-        Write-Styled 'warn' '  [已有] 同名快捷方式已经存在：'
-        Write-Styled 'dim'  ('         ' + $r.Path)
         Write-Host ''
         # 直接在这里给覆盖选项。让用户"去管理页删掉再回来重建"要走十来步
         # （返回、进管理、找编号、确认、退出、再选程序），中途按错就回起点；
@@ -1545,6 +1690,8 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
 # 管理页：列出所有我们建的快捷方式，可以逐个删。
 # 按程序分组显示：同一个程序的图标和启动脚本是配套的，分开列会让人以为它们无关。
 function Invoke-ManageProxyShortcuts {
+    # 翻页状态留在循环外：每轮重画时不能把它重置，否则按 N 只会闪一下回到第一页。
+    $page = 0
     while ($true) {
         $recs = @(Get-ProxyShortcutRecords)
         $orphans = @(Get-OrphanProxyLaunchers)
@@ -1559,55 +1706,109 @@ function Invoke-ManageProxyShortcuts {
             return
         }
         # 按程序名排序，同一程序的两种规矩自然挨在一起。
-        # 这样「WeChat 走代理」和「WeChat 固定直连」上下相邻，一眼看出是同一程序的两个版本；
+        # 这样「WeChat 翻墙」和「WeChat 直连」上下相邻，一眼看出是同一程序的两个版本；
         # 不排序则按扫描顺序散落各处，看起来像两个无关的图标。
         $sorted = @($recs | Sort-Object { $_.Name }, { $_.ModeId })
+
+        # 分页：每个图标占 2-4 行（标题、状态、图标路径、脚本路径），
+        # 十几个图标就会滚出屏幕，顶部的标题和底部的提示都看不见，
+        # 用户反而找不到自己刚看到的那个编号。与选程序页同一套做法。
+        $pageSize = 6
+        $pageCount = [Math]::Max(1, [Math]::Ceiling($sorted.Count / $pageSize))
+        if ($page -ge $pageCount) { $page = $pageCount - 1 }
+        if ($page -lt 0) { $page = 0 }
+
         $idx = 0
         if ($sorted.Count -gt 0) {
-            # 程序名列宽按内容算，不写死：写死会让短名字后面空一大片、长名字把后面两列顶出屏幕。
-            $nameW = 0
-            foreach ($r in $sorted) {
-                $w = Get-DisplayWidth $r.Name
-                if ($w -gt $nameW) { $nameW = $w }
-            }
-            # 规矩列也按内容对齐：'走代理' 与 '固定直连' 宽度差两格，
-            # 不对齐的话后面"位置"那一列会参差，扫读时眼睛要重新找起点。
-            $modeW = 0
-            foreach ($r in $sorted) {
-                $ml = if ($r.Mode) { $r.Mode.Label } else { '（未知）' }
-                $w = Get-DisplayWidth $ml
-                if ($w -gt $modeW) { $modeW = $w }
-            }
-            foreach ($r in $sorted) {
+            $pageStart = $page * $pageSize
+            $pageEnd = [Math]::Min($pageStart + $pageSize, $sorted.Count) - 1
+            # 编号用全局连续编号（第 2 页从 7 开始），不用每页从 1 起：
+            # 分页只是少画几条，编号是"这个图标叫什么"的身份，跳来跳去会让人以为选错了。
+            $idx = $pageStart
+            for ($pi = $pageStart; $pi -le $pageEnd; $pi++) {
+                $r = $sorted[$pi]
                 $idx++
-                # 一行说清：编号、哪个程序、什么规矩、在哪。
-                # 规矩单列而不揉进名字：名字里的括号是图标文件名的一部分，
-                # 而用户在这一屏要回答的是"我给这个程序定了什么规矩"，那是独立的事实。
-                $modeLabel = if ($r.Mode) { $r.Mode.Label } else { '（未知）' }
-                $modeRole = if ($r.Mode) { $r.Mode.Role } else { 'text' }
-                $pad = ' ' * [Math]::Max(0, $nameW - (Get-DisplayWidth $r.Name))
-                $mpad = ' ' * [Math]::Max(0, $modeW - (Get-DisplayWidth $modeLabel))
+
+                # 标题行：编号 + 哪个程序 + 什么规矩 + 在哪。
+                # 这四样是"我在看什么"的全部，必须一条横着读完。
+                $modeLabel = if ($r.Mode) { $r.Mode.Label } else { '认不出来' }
+                $modeRole = if ($r.Mode) { $r.Mode.Role } else { 'warn' }
                 Write-Styled 'cmd'  ('  ' + $idx.ToString().PadLeft(2) + '  ') -NoNewline
-                Write-Styled 'item' ($r.Name + $pad) -NoNewline
-                Write-Styled 'dim'  '   ' -NoNewline
-                Write-Styled $modeRole ($modeLabel + $mpad) -NoNewline
-                Write-Styled 'dim'  ('   ' + $r.Where)
-                # 状态只在**不正常**时单独占一行：正常是常态，每行都写会把页面撑长一倍，
-                # 而用户真正要找的恰恰是那几个不正常的。
-                if ($r.State -ne 'ok') {
-                    $stateText = switch ($r.State) {
-                        'no-launcher'   { '启动脚本被删了，点了会失败' }
-                        'broken-target' { '程序已经不在了（被卸载或搬走），点了会失败' }
-                        default         { $r.State }
-                    }
-                    Write-Styled 'warn' ('      状态  ' + $stateText)
+                Write-Styled 'item' $r.Name -NoNewline
+                Write-Styled 'dim'  '  ·  ' -NoNewline
+                Write-Styled $modeRole $modeLabel -NoNewline
+                Write-Styled 'dim'  ('  ·  ' + $r.Where)
+                Write-Host ''
+
+                # 详情一律另起缩进行。**每行都必须一行放得下**：
+                # 路径比窗口宽时，PowerShell 会在任意位置硬折行，
+                # 后半截顶到最左边——看起来像另一条无关的内容，整屏结构就散了。
+                # 所以按"窗口宽度减去缩进"裁，末尾补省略号，宁可少看几个字符。
+                $indent = '      '
+                $avail = (Get-ConsoleWidth) - (Get-DisplayWidth $indent) - 2
+
+                $stateText = switch ($r.State) {
+                    'ok'            { '正常' }
+                    'no-launcher'   { '启动脚本被删了，点了会失败' }
+                    'broken-target' { '程序已经不在了（被卸载或搬走），点了会失败' }
+                    default         { $r.State }
                 }
+                $stateRole = if ($r.State -eq 'ok') { 'ok' } else { 'warn' }
+                Write-Styled 'key'   $indent -NoNewline
+                Write-Styled 'key'   '状态  ' -NoNewline
+                Write-Styled $stateRole $stateText
+                Write-Host ''
+
+                # 认不出规矩时说明为什么，而不是只给两个字。
+                # 用户看到"认不出来"会以为是坏了；实际多半是旧版本建的图标，
+                # 删掉重建就正常——这个补救办法必须说出来，否则他不知道怎么办。
+                if (-not $r.Mode) {
+                    Write-Styled 'dim' ($indent + '      ' + '（旧版建的，改名后对不上号；删了重建就好）')
+                    Write-Host ''
+                }
+
+                # 路径单独占一行，标签固定宽（4 格），冒号与路径的起点永远对齐。
+                # 标签不对齐时两条路径的起点参差，眼睛要重新找位置。
+                foreach ($pair in @(@('图标', $r.LnkPath), @('脚本', $r.LauncherPath))) {
+                    $lbl = $pair[0]
+                    $val = [string]$pair[1]
+                    if (-not $val) { continue }
+                    $label = $indent + $lbl + '  '
+                    $labelW = Get-DisplayWidth $label
+                    # 路径给完整的，一个字都不省——用户要看的就是"到底在哪个文件"。
+                    # 代价是比窗口宽时会折行，所以这里按窗口宽度自己断行、
+                    # 并给续行补上与路径起点对齐的缩进：
+                    # 交给终端自然折行的话，后半截会顶到最左边，看起来像另一条内容。
+                    # 留 2 格余量：在最后一格写字符终端会提前折行。
+                    $wrapW = [Math]::Max(16, (Get-ConsoleWidth) - $labelW - 2)
+                    $rest = $val
+                    $first = $true
+                    while ($rest) {
+                        if ($first) {
+                            Write-Styled 'key' $label -NoNewline
+                            $first = $false
+                        } else {
+                            Write-Styled 'dim' (' ' * $labelW) -NoNewline
+                        }
+                        $chunk = Limit-DisplayTextWithTail $rest $wrapW
+                        Write-Styled 'dim' $chunk
+                        Write-Host ''
+                        $rest = $rest.Substring($chunk.Length)
+                    }
+                }
+                # 图标之间空一行：不空的话上一个的脚本路径和下一个的标题连成一片，
+                # 分不清哪个路径属于哪个图标。
+                Write-Host ''
             }
             Write-Host ''
             # 统计一句话说清"我总共建了多少"。用户在一长列里数不出来。
             $progCount = @($sorted | ForEach-Object { $_.Name } | Sort-Object -Unique).Count
-            Write-Styled 'dim' ('  一共 ' + $sorted.Count + ' 个图标，涉及 ' + $progCount + ' 个程序。')
-        }
+            $summary = '  一共 ' + $sorted.Count + ' 个图标，涉及 ' + $progCount + ' 个程序。'
+            if ($pageCount -gt 1) {
+                $summary += ('  第 ' + ($page + 1) + '/' + $pageCount + ' 页（N 下一页，B 上一页）。')
+            }
+            Write-Styled 'dim' $summary
+            }
         if ($orphans.Count -gt 0) {
             Write-Host ''
             # 这一段的意思是"还有启动脚本，但它的图标我找不到"。
@@ -1636,6 +1837,19 @@ function Invoke-ManageProxyShortcuts {
         $ans = ''
         try { $ans = "$(Read-Host '选择')".Trim() } catch { return }
         if (-not $ans -or $ans -eq '0' -or $ans -match '^[Qq]$') { return }
+        # 翻页要在编号解析之前判：否则 'N' 会被当成非法编号，报"没有这个编号：N"。
+        if ($ans -match '^[Nn]$') {
+            if ($page -lt $pageCount - 1) { $page++; continue }
+            Write-Styled 'warn' '  已经是最后一页了。'
+            Start-Sleep -Milliseconds 900
+            continue
+        }
+        if ($ans -match '^[Bb]$') {
+            if ($page -gt 0) { $page--; continue }
+            Write-Styled 'warn' '  已经是第一页了。'
+            Start-Sleep -Milliseconds 900
+            continue
+        }
         $n = 0
         if (-not [int]::TryParse($ans, [ref]$n) -or $n -lt 1 -or $n -gt $idx) {
             Write-Styled 'warn' ('  没有这个编号：' + $ans + '（可用的有 1-' + $idx + '）')
@@ -1787,10 +2001,13 @@ function Show-GuidePage([string]$Title, [object[]]$Blocks, [string]$Footer) {
     foreach ($b in $Blocks) {
         Write-Styled $b.Role ($b.Text)
     }
+    # 结尾这两行不能和正文挤在一起，也不能太暗：
+    # "我没改你的东西"是这一页的结论，"按回车返回"是唯一的出路，
+    # 两者都写成 dim 时会混进上面的讲解里，用户读完不知道这一步算完了没有。
     Write-Host ''
-    Write-Styled 'dim' ('  ' + $Footer)
+    Write-Styled 'text' ('  ' + $Footer)
     Write-Host ''
-    Write-Styled 'dim' '  按回车返回'
+    Write-Styled 'key' '  按回车返回'
     try { $null = Read-Host } catch {}
 }
 
@@ -1802,15 +2019,15 @@ function Show-WslGuidePage {
         @{ Role='heading'; Text='  想让 WSL 里也能翻墙，改一个设置就行' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  1. 打开这个文件（没有就新建）：' }
-        @{ Role='cmd'; Text='       C:\Users\你的用户名\.wslconfig' }
+        @{ Role='cmd'; Text='    C:\Users\你的用户名\.wslconfig' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  2. 写入下面两行：' }
-        @{ Role='cmd'; Text='       [wsl2]' }
-        @{ Role='cmd'; Text='       networkingMode=mirrored' }
-        @{ Role='cmd'; Text='       autoProxy=true' }
+        @{ Role='cmd'; Text='    [wsl2]' }
+        @{ Role='cmd'; Text='    networkingMode=mirrored' }
+        @{ Role='cmd'; Text='    autoProxy=true' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  3. 存盘，然后在 PowerShell 里执行一次：' }
-        @{ Role='cmd'; Text='       wsl --shutdown' }
+        @{ Role='cmd'; Text='    wsl --shutdown' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  之后 WSL 会自己跟着 Windows 的代理走，不用再管。' }
         @{ Role='blank'; Text='' }
@@ -1828,15 +2045,16 @@ function Show-DockerGuidePage {
         @{ Role='heading'; Text='  一、拉镜像慢或拉不下来（docker pull）' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  改 Docker Desktop 自己的设置：' }
-        @{ Role='text'; Text='    Settings → Resources → Proxies' }
-        @{ Role='text'; Text='  填 http://127.0.0.1:端口号，端口号看菜单选 2（查看状态）。' }
+        @{ Role='cmd';  Text='    Settings → Resources → Proxies' }
+        @{ Role='text'; Text='  地址填 http://127.0.0.1:端口号。端口号看菜单选 2（查看状态）。' }
         @{ Role='blank'; Text='' }
         @{ Role='dim'; Text='  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。' }
         @{ Role='blank'; Text='' }
         @{ Role='heading'; Text='  二、容器里面的程序要翻墙' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去）：' }
-        @{ Role='cmd'; Text='       docker run -e HTTP_PROXY=http://host.docker.internal:7078 镜像名' }
+        @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去），' }
+        @{ Role='text'; Text='  把下面的端口号换成菜单 2 显示的那个：' }
+        @{ Role='cmd';  Text='    docker run -e HTTP_PROXY=http://host.docker.internal:端口号 镜像名' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。' }
         @{ Role='dim'; Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
