@@ -257,8 +257,26 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   边界：只写作用域内文件；`monitor\` 永不备份/覆盖/删除；
   新包没有的文件按清单删除；安装根只覆盖同名文件、绝不删东西；有 `.git` = 开发副本，只读。
   权威来源：两侧 `update` 层。
+- **同一用户的多份拷贝必须共用同一把锁**：锁的标识只含"哪台机器的哪个用户"，
+  **绝不含文件夹路径**。用户完全可能同时开着两份（甚至四份）本工具——同一个文件夹开两次、
+  或者 D 盘一份 E 盘一份——它们写的是**同一批全局位置**：
+  `%LOCALAPPDATA%\EnvProxy\`（定位器、terminal.env、launchers、relay.port）、
+  `HKCU\Environment`、`HKCU\Software\EnvProxy`、自启动项；macOS 侧是
+  `~/.envproxy/`、`launchctl` 的环境、LaunchAgent。
+  **锁跟着文件夹走就等于没锁**：两份各拿各的，却能同时改同一批文件，各写一半、
+  谁对谁错取决于时序——而屏幕上看不出来。故 Windows 用 `Global\…-<SID>`；
+  macOS 用 `~/.envproxy/locks/`（**不是** `$SCRIPT_DIR/monitor/`，那里跟文件夹走）。
+  权威来源：`Get-MutexName`、`mac/lib/base.sh` 的 `LOCK_DIR`。
+- **凡是会写全局位置的动作，一律先拿操作锁**：入口的 install/uninstall/stop/update，
+  以及**高级功能里 Kind=do 的每一项**（建图标写 launchers、浏览器代理修复写系统代理）。
+  判据取自表里的 `Kind` 列，不写死编号——以后加新项只要标了 `do` 就自动受保护；
+  标错（只读项里写了东西）由门禁 16 的 G-B 拦住。
+  **拿不到锁就一个字节都不改**，并且明确告诉用户「另一个安装正在进行」，
+  不许静默降级重试——那会让两次写入交错。
+  菜单里的安装/停止/恢复是**起子进程走入口开关**，因此自动继承这把锁；
+  在本进程里直接跑的动作只有「查看状态」（只读，不需要锁）。
 - **安装、更新、卸载、停止共用一把操作锁**：都改同一批文件或变量，同一时刻只允许一个在跑
-  （Windows 命名互斥体 `Global\EnvProxyInstallOp-<用户SID>`，macOS `<monitor>/.op.lock` + 陈旧 PID 接管）；
+  （Windows 命名互斥体 `Global\EnvProxyInstallOp-<用户SID>`，macOS `~/.envproxy/locks/op.lock` + 陈旧 PID 接管）；
   撞上就提示退出。更新把收尾交给子进程前**先交出锁**，否则子进程会拦下自己。
   **拿锁要原子**：锁一出现就得是完整的，否则"拿锁成功到写入持有者"之间的空窗会让另一个进程
   把它当成陈旧的接管掉。

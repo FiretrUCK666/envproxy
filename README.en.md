@@ -31,7 +31,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [9. What is in the folder](#9-what-is-in-the-folder)
 - [10. Copying and backing up the folder](#10-copying-and-backing-up-the-folder)
 - [11. Setting it up for a friend or a new machine](#11-setting-it-up-for-a-friend-or-a-new-machine)
-- [12. Technical limits (5)](#12-technical-limits-5)
+- [12. Technical limits (6)](#12-technical-limits-6)
 - [13. macOS version](#13-macos-version)
 - [14. License and feedback](#14-license-and-feedback)
 
@@ -717,9 +717,9 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 > It holds the run records this machine generated for itself (log, process id, state snapshot),
 > including your timestamps and ports. Deleting it changes nothing: a new machine rebuilds it on first run.
 
-## 12. Technical limits (5)
+## 12. Technical limits (6)
 
-<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Six technical limits">
 
 | Limit | Reason | Effect |
 |---|---|---|
@@ -728,9 +728,15 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
+| **One copy acts at a time** | Several would edit the same settings | Open as many as you like (below) |
 
 One thing worth stating plainly about TUN: **most apps keep their local proxy port open in TUN mode**, so this tool detects them and keeps working, and you do nothing. **A few apps close that port.** Then there is nothing to detect. That is not a defect: it is how those apps work, and in that mode the app itself already carries all traffic, so whether terminal tools need a proxy is up to that app.
 
+**Several copies open at once is fine.** Two windows on the same folder, or one copy on D: and another on E: — all of them can be open.
+
+They edit the same settings (your environment variables, start-at-login, the system proxy, the icons on your Desktop), so this tool makes them **queue**: only one actually acts at any moment. The other says plainly that another install is running and that nothing was changed, then changes nothing.
+
+The background monitor works the same way: ten open menus still produce **one** monitor (the extras exit by themselves), so you never get ten monitors fighting over your environment variables.
 Why it does not try to recognise TUN and special-case it: a TUN adapter and a corporate VPN adapter look the same. A wrong call there would declare a live proxy dead and remove your only proxy path. The two mistakes do not cost the same, so it does nothing.
 
 Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so the monitor writes it again every 30 rounds and it returns by itself after a restart.
