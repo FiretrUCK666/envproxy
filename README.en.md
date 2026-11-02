@@ -23,7 +23,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
 - [3. Everyday commands on one page](#3-everyday-commands-on-one-page)
-- [4. What is inside Advanced (two modules)](#4-what-is-inside-advanced-two-modules)
+- [4. What is inside Advanced (three modules)](#4-what-is-inside-advanced-three-modules)
 - [5. Something is wrong: check in this order](#5-something-is-wrong-check-in-this-order)
 - [6. How it decides whether you are behind a proxy](#6-how-it-decides-whether-you-are-behind-a-proxy)
 - [7. Why it rarely breaks](#7-why-it-rarely-breaks)
@@ -99,7 +99,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 | **3 Check for updates** (`检查更新`) | Shows what changed, then installs | Program files, then restart |
 | **4 Help** (`帮助`) | Read it when you forget how it works | Prints text only |
 | **Advanced** | | |
-| **5 Advanced** (`高级功能`) | Shortcut / proxy fix | Adds one icon; the fix edits browser proxy only |
+| **5 Advanced** (`高级功能`) | Program rules / browser fix / WSL | Adds an icon; fix edits browser proxy |
 | **Upkeep** | | |
 | **6 Stop monitoring** (`停止监控`) | Temporary; returns at next login | Monitor + variables |
 | **7 Full restore** (`一键恢复`) | Complete uninstall | Everything (log optional) |
@@ -400,34 +400,46 @@ bash envproxy.sh status
 
 **Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
 
-## 4. What is inside Advanced (two modules)
+## 4. What is inside Advanced (three modules)
 
-Menu `5` is where these live. It holds two unrelated things, each solving one concrete annoyance:
+Menu `5` is where these live. It holds three unrelated things, each solving one concrete annoyance:
 
 | Module | When you need it | What it does |
 |---|---|---|
-| **Let one program use the proxy** | A program ignores the proxy | A shortcut that reads the proxy first |
-| **Browser proxy repair** | The browser cannot open pages | Clears a proxy pointing at a closed program |
+| **One program, one rule** | One program should use the proxy, or not | Builds an icon that sets up the env |
+| **Browser proxy repair** | The browser cannot open pages | Clears a proxy to a closed program |
+| **Places this tool cannot reach** | You want WSL or Docker to use it too | Explains only, changes nothing |
 
 Each one below.
 
-### Module one: let one program use the proxy
+### Module one: give one program its own rule
 
-**Where the problem comes from.** Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
+**Where the problem comes from.** This setting is all-or-nothing: it defines one proxy for the whole machine, and every program gets the same one. That leaves two situations awkward:
 
-**How it helps.** It builds a shortcut for that program. The shortcut reads the current proxy just before launching and hands it straight to the program, sidestepping the "variables never update" step.
+- Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
+- The opposite case: you do **not** want a particular program to use the proxy (online banking, an intranet tool), yet the machine-wide setting drags it along.
+
+**How it helps.** It builds an icon for that program. Double-clicking it prepares the environment first (setting what should be set, clearing what should be cleared), then hands control to the real program. Two rules to pick from:
+
+| Rule | What happens on double-click |
+|---|---|
+| **Use the proxy** | The program starts with the current proxy, following your proxy app |
+| **Always direct** | The program never uses a proxy, even while everything else does |
+
+**One program can have both.** The two icons do not fight each other: `WeChat (proxy)` and `WeChat (direct)` are independent icons, each minding its own business, and your original WeChat is untouched. Remove them under "Manage" when you no longer want them.
 
 **Why the address never needs changing.** A proxy app's local port changes: switch apps, a random port on restart, or the port is taken and the app moves on. When that happens, some programs keep the old address and stop connecting — and you have to fix it in their own settings.
 
-This tool opens a **fixed entry** on your machine (an address that never changes). The shortcuts only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild a shortcut.
+This tool opens a **fixed entry** on your machine (an address that never changes). Proxy icons only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild an icon.
 
-**Three things worth knowing:**
+**Four things worth knowing:**
 
-- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `3` shows how it is doing (that screen only reports; it changes nothing).
-- **It not working is not a problem.** The shortcut falls back to reading the current address and still works. You only lose the "address never changes" part.
-- **Shortcuts you already made need no rebuild** — every launch reads the current state again.
+- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `4` shows how it is doing (that screen only reports; it changes nothing).
+- **It not working is not a problem.** A proxy icon falls back to reading the current address and still works. You only lose the "address never changes" part.
+- **Icons you already made need no rebuild** — every launch reads the current state again.
+- **Chromium-based programs need one extra tick.** Chrome, Edge, VS Code and Discord ignore environment variables and only honour a launch flag, so the flow asks whether to add that flag. Answer "no" when unsure — the wrong answer can stop a program from opening.
 
-This module exists on Windows only. Mac does not need it: programs launched from the Dock already see the proxy (see section 13.1).
+Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
 ### Module two: browser proxy repair
 
@@ -459,6 +471,35 @@ If the network still fails, the cause may be elsewhere: a virtual adapter (TUN),
 
 **Terminal variables are not its business either.** If `git`, `npm` or `curl` cannot connect, go to section 5 — that is a different path.
 
+
+### Module three: places this tool cannot reach
+
+**This item only explains; it changes nothing of yours.** It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
+
+**The short version:** your computer has three separate rooms.
+
+```
+Your Windows      your own room, the one this tool manages
+WSL               the next room, a real Linux
+Docker            one more room, where Docker Desktop lives
+```
+
+Each room **manages its own network settings**. The note you stick on your own door (environment variables) is invisible to the next room.
+
+So:
+
+| Who | Who decides whether it uses the proxy |
+|---|---|
+| `git` / `npm` / `curl` | This tool (they read the note on your door) |
+| Browsers / desktop apps | Your proxy app (they only read the system-wide notice board) |
+| Things inside WSL | WSL's own settings |
+| Things inside Docker | Docker's own settings |
+
+**To make WSL use the proxy**, the right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer). **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
+
+**To make Docker use the proxy**, slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+
+The exact commands for all three are on screen under menu `5` then `6` / `7`, ready to copy.
 ## 5. Something is wrong: check in this order
 
 **Work through the list in order, finishing one step before starting the next.**
@@ -764,6 +805,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `prev.env` | the original values saved at install time, restored on uninstall |
 | | `monitor.stdout.log` | what the background program prints (look here when login start-up misbehaves) |
 | | `monitor.stderr.log` | errors the background program reports |
+| | `apps/` | app wrappers are built here, then copied to the Desktop (only exists once you use menu 5) |
 | `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |

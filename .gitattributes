@@ -17,4 +17,4 @@
 
 # 研究笔记：留在仓库供后续参考，不进安装包
 .research-proxy-channels.md export-ignore
-docs/research-*.md export-ignore
+/docs/            export-ignore

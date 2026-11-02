@@ -142,8 +142,8 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 
 | 职责 | 入口文件 | 说明 |
 | --- | --- | --- |
-| 两端核心（入口 + 库，同语义；Win 14 库 / Mac 10 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
-| 各库的职责 | `lib\` 下两侧共有 `base` `probe` `env` `runtime` `package` `update` `doctor` `ops` `pages` `help`，Win 另有 `screen` `report` `relay` `shortcut` | base 契约常量（含菜单表）与纯函数；probe 端口发现与判定；env 变量读写与快照；runtime 日志/进程/自启动/hook/快照；package 覆盖与回滚；update 版本检查与确认；doctor 系统代理各层判定与修复；ops 安装/卸载/日常操作编排；pages 状态页；help 菜单/帮助/高级；Win 独有：screen 屏幕渲染（有状态）、report 问题报告（唯一会写文件、会提问）、relay 固定入口、shortcut 走代理的快捷方式 |
+| 两端核心（入口 + 库，同语义；Win 14 库 / Mac 11 库） | `win\envproxy.ps1` + `win\lib\*.ps1`；`mac\envproxy.sh` + `mac\lib\*.sh` | 入口只做四件事：解析参数、挂操作锁、加载完整性自检、分派；无参数进监控模式；mac 侧另有 `self-test` 沙箱回归 |
+| 各库的职责 | `lib\` 下两侧共有 `base` `probe` `env` `runtime` `package` `update` `doctor` `ops` `pages` `help` `shortcut`，Win 另有 `screen` `report` `relay` | base 契约常量（含菜单表与模式表）与纯函数；probe 端口发现与判定；env 变量读写与快照；runtime 日志/进程/自启动/hook/快照；package 覆盖与回滚；update 版本检查与确认；doctor 系统代理各层判定与修复；ops 安装/卸载/日常操作编排；pages 状态页；help 菜单/帮助/高级；shortcut 按程序定规矩（两侧机制不同：Win 造 .lnk + .vbs，Mac 造 wrapper .app）；Win 独有：screen 屏幕渲染（有状态）、report 问题报告（唯一会写文件、会提问）、relay 固定入口 |
 | 库清单与库边界 | 入口里的 `$CoreLibs` / `CORE_LIBS` + 入口发布的 `$ScriptDir`、`$ScriptPath`（Mac 侧 `SCRIPT_DIR`、`SCRIPT_PATH`） | 唯一权威处，门禁核对它与 `lib\` 实际内容一致；**只有入口能回答"这个程序在哪里"**：库不得引用 `$PSCommandPath` / `$PSScriptRoot`（库里的它们指向库文件自己），一律用入口发布的全局；库必须加载期安全（无对外副作用：不写文件、不改环境变量、不起外部进程；进程内类型定义与常量初始化可以） |
 | 模板（安装时生成到固定位置的） | `win\locator.ps1`、`mac\locator.sh`、`mac\prompt-sync.sh`；win 的 Git Bash 同步脚本内嵌在 `runtime` 层的 `Get-PromptSyncContent` | 定位器生成到固定位置（win 是 `%LOCALAPPDATA%\EnvProxy\launcher.ps1`，mac 是 `~/.envproxy/`）后按日志活跃度选新位置；同步脚本让每次提示符重读状态（内容比对自愈）。win 的 `.sh` 不随包发，内嵌代价是语法检查看不见它（门禁 1 单独验） |
 | 在线更新 | `win\envproxy.ps1 -Update` / `mac\envproxy.sh update` | 状态显示只读，动手只在更新入口（默认 N 确认、非交互不等待）；其余见「关键不变量」 |
@@ -226,14 +226,44 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
   | 终端钩子 | 只认归属记录 | 热路径不能读快照，只能比对"值是否仍等于我们写的" |
   表外：主流程没有快照时**看安装记录**——装过才认领回环地址，没装过就不动；终端钩子没有记录时也不动。
   权威来源：`mac/prompt-sync.sh`、`Install-ShellProfile`、`Sync-UserEnvVars`、`Test-HasInstallRecord`。
-- **只碰用户级环境变量，不碰系统代理**：Windows 写 `HKCU\Environment` + 广播
-  （`SendMessageTimeout`），macOS 写 `~/.envproxy/proxy.env` + `launchctl setenv`；
+- **默认只碰用户级环境变量；系统代理只在「浏览器代理修复」里按严格判据动**：
+  常规注入/清理写用户级变量——Windows 写 `HKCU\Environment` + 广播（`SendMessageTimeout`），
+  macOS 写 `~/.envproxy/proxy.env` + `launchctl setenv`；
   自退（文件夹被移动/删除）先清变量再清目录；定位器找不到新位置时同样清残留变量——
   没有活着的组件会再纠正，过期代理不能留给新终端。
   卸载必须先杀监控再清自启动，否则下个自查周期（每 30 轮）自愈会重建它。**快照权限 0600**（可能带账号密码）。
+  **唯一的越界点是系统代理修复，它的边界写在 `doctor` 层**：只修「指向本机回环、且端口不通」的那一层，
+  非回环（公司/学校代理）一个字节不碰；动手前留底、写后回读、部分失败不许报成修好。
+  Windows 侧写的是 WinINET 的 `INTERNET_PER_CONN_OPTION`（真正生效的是
+  `Connections` 下的二进制值，只改 `ProxyEnable` 不生效）。**这条边界不许扩散**：
+  新增任何要改系统代理的功能，先问它是否符合那套判据，不符合就不要做。
   **Windows 侧写用户变量只能走 `Write-UserEnvValues` / `Remove-UserEnvNames` 这一条通道**（内部直写注册表，保留原 `REG_EXPAND_SZ` 类型）。不许再用
   `[Environment]::SetEnvironmentVariable(..., "User")`：它每写一个变量就同步等一次
   `WM_SETTINGCHANGE` 广播结束，而本项目的契约是整批写完后统一广播一次，前面每次等待都是白等。广播由调用方在整批结束后做一次，不放进写入函数。
+- **按程序定规矩这一层，身份 = 程序路径 + 模式**：两侧都有一张 `ShortcutModes` / `PROXY_MODES`
+  模式表（`proxy` 走代理 / `direct` 固定直连），**它是模式措辞与行为的唯一权威处**；
+  图标名后缀、启动脚本/壳子目录名、启动器行为、管理页显示四处全部从它派生。
+  **少一维就会互相覆盖**：只按路径算身份的启动脚本，会让"同一程序走代理"和"同一程序固定直连"
+  得到同一个文件名，后建的覆盖先建的，两个图标行为相同而屏幕上看不出异常。
+  启动脚本里记一行模式标记（`envproxy-mode:`），供扫描时分辨——用户可能改图标名，
+  但改不了脚本里的那行标记。
+  **直连模式的唯一机制是"让子进程看不到代理变量"**，所以清变量只能用
+  `[Environment]::SetEnvironmentVariable(名, $null, 'Process')`：`$env:X = $null` 实测删不掉
+  （变量仍在、子进程照样读到），`Remove-Item Env:X` 不稳定。**这三种写法的差别是这个功能的
+  生死线**——删不掉就等于直连没生效，而屏幕一切正常。
+  macOS 侧的做法是造**独立的 wrapper `.app`**（`Contents/Info.plist` + `Contents/MacOS/launcher`），
+  **不许改原 app 的 bundle**：改它会破坏代码签名、Gatekeeper 直接拒绝打开，且原 app 一更新就被覆盖。
+  壳子目标是 `.app` 时 exec 前必须解析出真实可执行文件（读 `CFBundleExecutable`，
+  读不到退回同名文件）——`.app` 是目录，直接 exec 会报 `Is a directory`。
+- **高级功能是一张表驱动的菜单，表是唯一权威**：`$AdvancedItems` / `ADVANCED_ITEMS` 七列
+  （Key/Action/Module/Kind/Name/Hint/Handler），**分派只查 Handler，不认识任何具体功能的名字**。
+  加一项 = 表里加一行 + 写一个处理器，分派代码一个字不动。
+  **Kind 是契约不是注释**：`do` 会改东西、`read` 只看不改，门禁 16 静态查只读项的处理器体
+  里有没有写操作与提问——只靠文案约定必然失效，因为散文没有编译器。
+  **Action 是稳定语义标识**，两侧按它配对（不按 Key：Key 是"该侧连续"，某侧多一项就整体错位）。
+  门禁 16 守三件事：G-A 每个 Handler 在本侧真存在（扫全部库，不只看一个文件）、
+  G-B 只读项不写、G-C 两侧共有项的名字与 Kind 逐项相等。
+  权威来源：`win/lib/shortcut.ps1`、`mac/lib/help.sh`、`check.yml` 门禁 16。
 - **自启动 = 登录时拉起一次，不保活**：Windows 侧是 Run 键，macOS 侧是 LaunchAgent 的
   `RunAtLoad`——两边都刻意**不用**“常驻保活”语义：若写 `KeepAlive`，监控已由 `nohup`
   启动时还会每 10 秒 fork 一次。
@@ -423,6 +453,7 @@ EnvProxy 是一个零依赖的终端代理环境变量自动切换工具：常�
 | 10 | 功能自检：纯函数与沙箱回归（5.1/7 双跑；含更新源表、失败分类、入口退出码）＋**跨端行为核对** | 硬门禁 |
 | 14 | 面向用户的文字说人话：帮助/菜单/提示不出现机制词，确需时上一行 @explain 点名 | 硬门禁 |
 | 15 | 两侧结构一致：主题/菜单项编号、快照字段与三档阈值、端口表、进程名表 | 硬门禁 |
+| 16 | 高级功能表与处理器一致：G-A 每个 Handler 在本侧真存在（扫全部库）、G-B 只读项不写不提问、G-C 两侧共有项的名字与 Kind 逐项相等 | 硬门禁 |
 | 11 | Windows 打开菜单选一次"查看状态"（或 `bash mac/envproxy.sh status`） | 人工冒烟 |
 | 12 | 改完核心逻辑后选"安装 / 修复"重载，再看一轮状态翻转 | 人工冒烟 |
 | 13 | 改更新流程后真跑一次升级，再让覆盖失败一次，确认回滚 | 人工冒烟 |
