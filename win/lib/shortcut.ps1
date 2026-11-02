@@ -47,8 +47,22 @@
 #
 # @explain 「走代理」「固定直连」都是图标的显示名（走代理 / 固定直连 两种图标），不是解释机制
 $ShortcutModes = @(
-    @{ Id = 'proxy';  Suffix = '（走代理）';   Label = '走代理';   Mode = 'proxy' }
-    @{ Id = 'direct'; Suffix = '（固定直连）'; Label = '固定直连'; Mode = 'direct' }
+    # Id      身份的一部分（启动脚本按它算文件名，两模式不能撞）
+    # Action  行为类别。分派只看这一列：proxy = 启动前设上代理，direct = 启动前清掉代理
+    # Suffix  图标名的后缀。加在程序名后面，所以带括号和全角空格
+    # Label   管理页与确认页里的短名
+    # Note    一句话说清这条规矩的后果。直接回显模式的意图，不让用户从名字去猜
+    # Desc    快捷方式「备注」字段里的前缀
+    # Role    管理页里这条记录用什么颜色。proxy 是常规色，direct 是弱化色（它不是默认选择）
+    # @explain 「走代理」「固定直连」是产品的固定叫法（图标名的一部分），不是解释机制
+    @{ Id = 'proxy';  Action = 'proxy'
+       Suffix = '（走代理）'; Label = '走代理'
+       Note = '双击它启动的程序会带上当前代理，跟着翻墙软件走。'
+       Desc = '通过 EnvProxy 走代理启动：'; Role = 'text' }
+    @{ Id = 'direct'; Action = 'direct'
+       Suffix = '（固定直连）'; Label = '固定直连'
+       Note = '双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。'
+       Desc = '通过 EnvProxy 固定直连启动：'; Role = 'dim' }
 )
 
 # 默认模式：不给开关时按这个来，保持老行为不变。
@@ -244,7 +258,8 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir, $Mode, 
     #
     # 这一支**不读代理、不碰中继、不弹窗**——它跟代理是否存在完全无关，
     # 翻墙软件开没开都不影响它工作。
-    if ($Mode.Mode -eq 'direct') {
+    # 分派只看 Action 这一列：加一种模式不必改这里，只要它有各自的 Action 实现。
+    if ($Mode.Action -eq 'direct') {
         $clear = ''
         # 用 [Environment]::SetEnvironmentVariable(名, $null, 'Process')。三种写法实测对比：
         #
@@ -556,12 +571,8 @@ function New-ProxyShortcut {
         # 工作目录照原样传：很多程序靠它找自己的资源文件，改成别处会打不开。
         $lnk.WorkingDirectory = $WorkingDirectory
         $lnk.IconLocation = $TargetPath + ',0'
-        # @explain 「走代理」「固定直连」是产品的固定叫法（图标名的一部分），不是解释机制；快捷方式的属性里就显示这行字。
-        $desc = if ($mode.Mode -eq 'direct') {
-            '通过 EnvProxy 固定直连启动：' + $Name
-        } else {
-            '通过 EnvProxy 走代理启动：' + $Name
-        }
+        # 前缀取自模式表，加一种模式不必改这里。
+        $desc = $mode.Desc + $Name
         $lnk.Description = $desc
         $lnk.WindowStyle = 1
         $lnk.Save()
@@ -1302,7 +1313,8 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         Start-Sleep -Milliseconds 900
         return
     }
-    $isDirect = ($mode.Mode -eq 'direct')
+    # 行为类别取自表里的 Action，不是从 Id 猜。
+    $isDirect = ($mode.Action -eq 'direct')
 
     $progs = @(Get-InstalledPrograms)
     $chosen = Show-ProgramPicker -Programs $progs
@@ -1324,7 +1336,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     Write-Styled 'text' ('  程序：' + $chosen.Name)
     Write-Styled 'dim'  ('  路径：' + $chosen.TargetPath)
     # 规矩也要写在这一屏：用户刚选完程序，这时的第一件事是确认"我要给它定什么规矩"。
-    $modeRole = if ($isDirect) { 'dim' } else { 'text' }
+    $modeRole = $mode.Role
     Write-Styled $modeRole ('  规矩：' + $mode.Label)
     if ($otherMode.Count -gt 0) {
         $names = ($otherMode | ForEach-Object {
@@ -1433,13 +1445,8 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     Write-Styled 'dim'  ('          ' + $chosen.TargetPath)
     Write-Host ''
     Write-Styled 'text' ('  规矩    ' + $mode.Label)
-    # 一句话说清这条规矩的后果。直接回显模式的意图，不让用户从名字去猜。
-    # @explain 下面两句里的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制。
-    $modeNote = if ($isDirect) {
-        '双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。'
-    } else {
-        '双击它启动的程序会带上当前代理，跟着翻墙软件走。'
-    }
+    # 后果说明取自模式表，与图标名、短名同一个来源，不会各说一套。
+    $modeNote = $mode.Note
     Write-Styled 'dim'  ('          ' + $modeNote)
     Write-Host ''
     Write-Styled 'text' ('  图标名  ' + (Get-PathBaseName $chosen.TargetPath) + $mode.Suffix)
@@ -1565,7 +1572,7 @@ function Invoke-ManageProxyShortcuts {
                 # 规矩单列而不揉进名字：名字里的括号是图标文件名的一部分，
                 # 而用户在这一屏要回答的是"我给这个程序定了什么规矩"，那是独立的事实。
                 $modeLabel = if ($r.Mode) { $r.Mode.Label } else { '（未知）' }
-                $modeRole = if ($r.Mode -and $r.Mode.Mode -eq 'direct') { 'dim' } else { 'text' }
+                $modeRole = if ($r.Mode) { $r.Mode.Role } else { 'text' }
                 $pad = ' ' * [Math]::Max(0, $nameW - (Get-DisplayWidth $r.Name))
                 $mpad = ' ' * [Math]::Max(0, $modeW - (Get-DisplayWidth $modeLabel))
                 Write-Styled 'cmd'  ('  ' + $idx.ToString().PadLeft(2) + '  ')
