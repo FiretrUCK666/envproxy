@@ -134,11 +134,17 @@ function New-ProblemReport {
             & $add '  没有设任何浏览器代理（干净直连）。'
         } else {
             foreach ($dl in $docLayers) {
+                # 报告是给排查的人看的，标记可以直白写内部语义。
+                # 关键是 unreadable 单独一档：它没有地址、也不参与判断，
+                # 落进「不是本机的，未动」会把「探测失败」说成「别人的设置」。
                 $flag = if (Test-SysProxyFixable $dl.Kind) { '【可修】' }
                         elseif ($dl.Kind -eq $SysProxyKinds.Alive) { '（正在用）' }
                         elseif ($dl.Kind -eq $SysProxyKinds.Managed) { '（被管理员锁定）' }
+                        elseif ($dl.Kind -eq $SysProxyKinds.Unreadable) { '（这一层没读到）' }
                         else { '（不是本机的，未动）' }
-                & $add ('  ' + $dl.Layer + '  ' + $dl.Url + '  -> ' + $dl.Kind + ' ' + $flag)
+                $addr = if ($dl.Url) { [string]$dl.Url } else { '（无地址）' }
+                $extra = if ($dl.Detail) { '  ' + [string]$dl.Detail } else { '' }
+                & $add ('  ' + $dl.Layer + '  ' + $addr + '  -> ' + $dl.Kind + ' ' + $flag + $extra)
             }
         }
         $fixCount = @($docLayers | Where-Object { Test-SysProxyFixable $_.Kind }).Count

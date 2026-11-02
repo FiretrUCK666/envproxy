@@ -1457,15 +1457,12 @@ function Show-RescuePage {
         }
     }
 
-    # 读不出来的：如实报「这一层没看到」，不猜、也不装作它是别人的设置。
-    if ($unreadable.Count -gt 0) {
-        Write-Host ''
-        Write-Styled 'dim' '  有一层没读到（不影响上面那些判断）：'
-        foreach ($f in $unreadable) {
-            $why = if ($f.Detail) { [string]$f.Detail } else { '系统工具没给出可读的结果' }
-            Write-Styled 'dim' ('    ' + $why)
-        }
-    }
+    # 读不出来的那一层**不在这里显示**。
+    #
+    # 它不参与任何判断（既不可修，也不改变结论），纯粹是探测本身失败。
+    # 印出来只会让使用者看到「系统给的格式认不出来」这种他无法行动、也无需知道的话——
+    # 而这一屏的职责是回答「我要不要按 y」。诊断信息归问题报告（`8 问题反馈`），
+    # 那里读者是排查的人，不是正在看病的使用者。
 
     # ---- 兜底说明：讲清这一屏查不到什么 ----
     # Proxifier / Netch / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，

@@ -1078,8 +1078,8 @@ EOF
             [ -n "$_rs_svc3" ] || continue
             case "$_rs_kind3" in
                 "$SYSPROXY_KIND_FOREIGN")
-                    # 地址可能是空的，空着印出来用户只看到一行空白。
-                    style_out dim "    ${_rs_url3:-（地址没读到）}"
+                    # 地址不会为空：doctor.sh 里空地址已经判成 clean，不会走到这一档。
+                    style_out dim "    $_rs_url3"
                     ;;
                 "$SYSPROXY_KIND_MANAGED")
                     style_out dim "    （这台电脑由管理员统一管着）"
