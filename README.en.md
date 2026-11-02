@@ -642,6 +642,7 @@ The two sides line up one to one. Only two files are Mac-only: `prompt-sync.sh` 
 Three areas with different rules:
 
 - **Program files**: `win\`, `mac\`, `release-notes\`, `assets\`. Updates overwrite these — **do not put your own files there**.
+- **Repo only, not in the package**: `docs\`, `tests\`, `.github\`. Read `docs\` for design notes.
 - **Runtime folder**: `monitor\`. Logs and run markers, **never overwritten, never deleted**.
 - **Top level**: only files of the same name are overwritten, **your own things are never deleted**.
 

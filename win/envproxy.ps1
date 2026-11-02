@@ -94,7 +94,7 @@ $LibDir = Join-Path $ScriptDir "lib"
 # relay 只依赖 base（它用的是固定安装目录，不是 monitor 目录），所以排在 runtime 之前
 # 也可以；排在 package 之前是因为建快捷方式那一段要用它算端口记录的位置。
 # doctor 排在 ops 之前：菜单与高级功能页要调它给结论，而它自己不调界面。
-$CoreLibs = @("base", "screen", "probe", "env", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "report", "help", "shortcut")
+$CoreLibs = @("base", "screen", "probe", "env", "shell", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "report", "help", "shortcut")
 # ------------------------------------------------------------------------------
 # 先看这台的 PowerShell 允不允许我们干活
 # ------------------------------------------------------------------------------
