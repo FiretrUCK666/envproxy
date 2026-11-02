@@ -499,7 +499,10 @@ So:
 
 **To make Docker use the proxy**, slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
 
-The exact commands for all three are on screen under menu `5` then `6` / `7`, ready to copy.
+The exact commands are on screen under menu `5` then `6` / `7` on Windows, ready to copy.
+**This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac,
+it simply has no dedicated page there.
+
 ## 5. Something is wrong: check in this order
 
 **Work through the list in order, finishing one step before starting the next.**
@@ -734,11 +737,11 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 
 ## 13. macOS version
 
-### 12.1 Difference from the Windows version
+### 13.1 Difference from the Windows version
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
 
-**That is why Mac needs no "fixed entry"** (the thing section 3.7 describes for Windows): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
+**That is why Mac needs no "fixed entry"** (the thing described under module one in section 4): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
 
 On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped.
 
@@ -748,7 +751,7 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="Two write paths on macOS: proxy.env for terminals, launchctl for Dock-launched apps">
 
-### 12.2 Install (3 steps)
+### 13.2 Install (3 steps)
 
 1. Put the Mac package (`EnvProxy-mac.tar.gz`) anywhere on the Mac, or copy the whole folder that contains `mac\` (USB drive, AirDrop, or an archive all work)
 2. Open `mac` and double-click `打开菜单.command`, then pick `1 Install / Repair`
@@ -756,17 +759,21 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with macOS 12 and later is enough. (Mac only: download [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz).)
 
-### 12.3 Menu (same as Windows)
+### 13.3 Menu (same as Windows)
 
-The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). `5 Advanced` exists on both platforms, but holds different things: Windows has "shortcut that goes through the proxy", "manage shortcuts", "view relay" and "browser proxy repair"; Mac has only "browser proxy repair" because programs launched from the Dock already see the proxy and need no launcher. Pressing Enter directly means show status.
+The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
-### 12.4 What is in the `mac` folder
+**`5 Advanced` has one fewer item on Mac.** "Give one program a rule" exists on both (the mechanics differ,
+see module one in section 4), and so does "browser proxy repair". What Mac does not have is the third one —
+"places this tool cannot reach" (WSL and Docker setup) is Windows-only: WSL is a Windows thing and does not exist on a Mac.
 
-See the folder structure in section 8. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
+### 13.4 What is in the `mac` folder
+
+See the folder structure in section 9. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
 
 The locator has a source file on each platform — `locator.sh` on Mac, `win\locator.ps1` on Windows. The installer uses it to generate the copy that actually runs at login, in a fixed location (Windows: `%LOCALAPPDATA%\EnvProxy\launcher.ps1`).
 
-### 12.5 Three problems you may hit on first install on a Mac
+### 13.5 Three problems you may hit on first install on a Mac
 
 <img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on a first Mac install">
 
@@ -792,7 +799,7 @@ Two possible causes. After fixing either one, open the menu and pick **1 安装 
 - **The background item was blocked**: System Settings, General, Login Items & Extensions, allow it to run
 - **The "access your Documents folder" prompt was denied**: System Settings, Privacy & Security, Files and Folders
 
-### 12.6 What the installer adds
+### 13.6 What the installer adds
 
 Installing writes files to three places. **None of them is the folder you downloaded.**
 
@@ -850,7 +857,7 @@ One rule applies to all three: `~/.envproxy/` is only removed when it is empty. 
 
 **Uninstalling is the only irreversible action**, so it asks first. When it cannot ask (a pipe, a script) it **will not decide for you**: it refuses and requires `--yes`.
 
-### 12.7 Setting it up for a friend or a new Mac
+### 13.7 Setting it up for a friend or a new Mac
 
 Copy the whole folder over, open `mac`, double-click `打开菜单.command`, pick `1 Install / Repair`, and you are done.
 

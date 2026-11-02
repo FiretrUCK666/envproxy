@@ -255,7 +255,7 @@ jobs:
           # 目录级通配（根下新增 .sh 自动纳入；根下本就不该多文件，门禁 1 另有拦截）。
           for f in mac/*.sh mac/lib/*.sh; do
             [ -f "$f" ] || continue
-            hits=$(grep -nE '(declare|local)[[:space:]]+-A|(^|[^[:alnum:]_])(mapfile|readarray)([[:space:]]|$)|(^|[[:space:];|&()])wait[[:space:]]+-n([[:space:];]|$)|local[[:space:]]+-n[[:space:]]|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(\^\^|,,)|\$\{[^}]*@(Q|U|u|E|a|A)\}|\bcoproc\b|globstar|EPOCHSECONDS|EPOCHREALTIME|SRANDOM|BASHPID|\[\[[[:space:]]*-v([[:space:]]|;)|&>>|\|&' "$f" 2>/dev/null || true)
+            hits=$(grep -vE '^[[:space:]]*#' "$f" 2>/dev/null | grep -nE '(declare|local)[[:space:]]+-A|(^|[^[:alnum:]_])(mapfile|readarray)([[:space:]]|$)|(^|[[:space:];|&()])wait[[:space:]]+-n([[:space:];]|$)|local[[:space:]]+-n[[:space:]]|\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?(\^\^|,,)|\$\{[^}]*@(Q|U|u|E|a|A)\}|\bcoproc\b|globstar|EPOCHSECONDS|EPOCHREALTIME|SRANDOM|BASHPID|\[\[[[:space:]]*-v([[:space:]]|;)|&>>|\|&' 2>/dev/null || true)
             if [ -n "$hits" ]; then
               echo "$f 出现 bash 4+ 专有写法（macOS 自带 3.2 会失败）："
               echo "$hits"

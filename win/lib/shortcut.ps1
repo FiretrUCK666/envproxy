@@ -56,13 +56,13 @@ $ShortcutModes = @(
     # Role    管理页里这条记录用什么颜色。proxy 是常规色，direct 是弱化色（它不是默认选择）
     # @explain 「走代理」「固定直连」是产品的固定叫法（图标名的一部分），不是解释机制
     @{ Id = 'proxy';  Action = 'proxy'
-       Suffix = '（走代理）'; Label = '走代理'
-       Note = '双击它启动的程序会带上当前代理，跟着翻墙软件走。'
-       Desc = '通过 EnvProxy 走代理启动：'; Role = 'text' }
+       Suffix = '（翻墙）';   Label = '翻墙'
+       Note = '双击它启动的程序会翻墙，跟着翻墙软件走。'
+       Desc = '通过 EnvProxy 翻墙启动：'; Role = 'text' }
     @{ Id = 'direct'; Action = 'direct'
-       Suffix = '（固定直连）'; Label = '固定直连'
-       Note = '双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。'
-       Desc = '通过 EnvProxy 固定直连启动：'; Role = 'dim' }
+       Suffix = '（直连）';   Label = '直连'
+       Note = '双击它启动的程序一定不翻墙，哪怕别的程序都在翻墙。'
+       Desc = '通过 EnvProxy 直连启动：'; Role = 'dim' }
 )
 
 # 默认模式：不给开关时按这个来，保持老行为不变。
@@ -76,6 +76,12 @@ function Get-ShortcutMode([string]$Id) {
         if ($m.Id -eq $Id) { return $m }
     }
     return $null
+}
+
+# 全部模式的清单。测试与自检用它遍历，不直接抓 $ShortcutModes：
+# 直接抓变量会让"表改名"变成"测试静默读到空数组"（空数组上的循环一条断言都不跑，看着全绿）。
+function Get-ShortcutModeList {
+    return @($ShortcutModes)
 }
 
 # 全部模式的后缀清单，供扫描时剥离文件名用。
@@ -894,10 +900,10 @@ function Get-InstalledPrograms {
 # @explain 「走代理」「固定直连」是菜单项的名字，用户按这两个词找菜单；不是解释机制。
 $AdvancedItems = @(
     @{ Key='1'; Action='NewProxyIcon';  Module='icon';   Kind='do'
-       Name='给程序建走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径'
+       Name='给程序建固定走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径'
        Handler='Invoke-NewProxyShortcutFlow' }
     @{ Key='2'; Action='NewDirectIcon'; Module='icon';   Kind='do'
-       Name='给程序建固定直连的快捷方式'; Hint='适合不想翻墙的软件，双击它一定不走代理'
+       Name='给程序建固定直连的快捷方式'; Hint='适合不想翻墙的软件，双击它一定不翻墙'
        Handler='Invoke-DirectShortcutFlow' }
     @{ Key='3'; Action='ManageIcons';   Module='icon';   Kind='do'
        Name='管理已建的';               Hint='看状态、删掉不要的'
@@ -970,6 +976,12 @@ $AdvancedModules = @(
              '下面两项只讲怎么改，不会替你动任何配置。')
        Note=@('这两项按回车只会看到说明，不会改你的设置。') }
 )
+# 全部项。测试与自检用它遍历，不直接抓 $AdvancedItems：
+# 直接抓变量会让"表改名"变成"测试读到空数组、循环一条都不跑、看着全绿"。
+function Get-AdvancedItemList {
+    return @($AdvancedItems)
+}
+
 
 # 按模块取项。打印用，分派不用（分派只按编号查）。
 function Get-AdvancedItemsByModule([string]$Module) {
@@ -1575,10 +1587,11 @@ function Invoke-ManageProxyShortcuts {
                 $modeRole = if ($r.Mode) { $r.Mode.Role } else { 'text' }
                 $pad = ' ' * [Math]::Max(0, $nameW - (Get-DisplayWidth $r.Name))
                 $mpad = ' ' * [Math]::Max(0, $modeW - (Get-DisplayWidth $modeLabel))
-                Write-Styled 'cmd'  ('  ' + $idx.ToString().PadLeft(2) + '  ')
-                Write-Styled 'item' ($r.Name + $pad + '   ')
-                Write-Styled $modeRole ($modeLabel + $mpad + '   ')
-                Write-Styled 'dim' ($r.Where)
+                Write-Styled 'cmd'  ('  ' + $idx.ToString().PadLeft(2) + '  ') -NoNewline
+                Write-Styled 'item' ($r.Name + $pad) -NoNewline
+                Write-Styled 'dim'  '   ' -NoNewline
+                Write-Styled $modeRole ($modeLabel + $mpad) -NoNewline
+                Write-Styled 'dim'  ('   ' + $r.Where)
                 # 状态只在**不正常**时单独占一行：正常是常态，每行都写会把页面撑长一倍，
                 # 而用户真正要找的恰恰是那几个不正常的。
                 if ($r.State -ne 'ok') {
@@ -1708,7 +1721,35 @@ function Show-AdvancedMenu {
         }
         if ($hit) {
             # Handler 名字已经在入口处自检过存在性，这里直接调用。
-            & $hit.Handler
+            #
+            # 会改动东西的项（Kind='do'）要先拿操作锁：它们写的是**全局位置**
+            # （%LOCALAPPDATA%\EnvProxy\launchers、系统代理注册表），
+            # 而不只是这个文件夹。另一个窗口正在安装/卸载时同时改这些地方，
+            # 两边各写一半，最后谁对谁错取决于时序——那是屏幕上看不出来的坏状态。
+            #
+            # 判据取自表里的 Kind，不写死编号：以后加新项只要标了 do 就自动受保护，
+            # 忘了标门禁 16 会拦住（只读项里出现写操作直接红）。
+            if ($hit.Kind -eq 'do') {
+                $opLock = $null
+                try {
+                    $opLock = New-Object System.Threading.Mutex($false, (Get-MutexName 'EnvProxyInstallOp'))
+                    if (-not $opLock.WaitOne(0)) {
+                        Write-Styled 'warn' '  另一个安装/卸载正在进行，请等它结束再试（没有做任何改动）。'
+                        Start-Sleep -Milliseconds 1400
+                        $hit = $null
+                    }
+                } catch { $opLock = $null }
+                if ($hit) {
+                    try { & $hit.Handler }
+                    finally {
+                        if ($opLock) { try { $opLock.ReleaseMutex() } catch {} }
+                    }
+                } else {
+                    if ($opLock) { try { $opLock.ReleaseMutex() } catch {} }
+                }
+            } else {
+                & $hit.Handler
+            }
         } else {
             # 可用编号从表里算，不写死：加一项后提示会自动跟上来。
             $keys = @($AdvancedItems | ForEach-Object { $_.Key })

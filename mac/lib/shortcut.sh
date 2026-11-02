@@ -174,6 +174,13 @@ _shortcut_plist() {
     printf '  <key>CFBundlePackageType</key><string>APPL</string>\n'
     printf '  <key>CFBundleVersion</key><string>1.0</string>\n'
     printf '  <key>CFBundleShortVersionString</key><string>1.0</string>\n'
+    # 记下真实目标。**必须写在这里**，不能让扫描去反解启动脚本：
+    # .app 目标的启动脚本里是 `exec "$_app/Contents/MacOS/$_exe"` 这样的变量引用，
+    # 反解出来是一串带 $ 的字面量、永远不指向真实文件，于是每个 .app 图标
+    # 都会被判成「程序已经不在了」——一个把真警报一起淹掉的假警报。
+    # 转义规则与显示名相同（XML 实体）。
+    _sp_txml=$(printf '%s' "$_sp_target" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+    printf '  <key>EnvProxyTarget</key><string>%s</string>\n' "$_sp_txml"
     # 让它不出现在 Dock（壳子只是中转，用户要看到的是真程序的图标）。
     printf '  <key>LSUIElement</key><true/>\n'
     printf '  <key>LSBackgroundOnly</key><false/>\n'
@@ -241,8 +248,25 @@ _shortcut_records() {
             [ -f "$_sr_launcher" ] || continue
             # 启动脚本里必须有我们写的那句注释，否则不是我们造的。
             grep -q '这个文件由 EnvProxy 生成' "$_sr_launcher" 2>/dev/null || continue
-            _sr_target=$(sed -n 's/^exec .*//p' "$_sr_launcher" 2>/dev/null)
-            _sr_target=$(grep '^exec ' "$_sr_launcher" 2>/dev/null | head -1 | sed -e "s/^exec //" -e "s/ \"\\\$@\"$//" -e "s/^'//" -e "s/'$//")
+            # 目标路径优先从 Info.plist 的 EnvProxyTarget 读（造壳子时写进去的）。
+            # 反解启动脚本只能兜底：.app 目标的脚本里是变量引用，
+            # 反解出来是 "$_app/Contents/MacOS/$_exe" 这样的字面量，
+            # [ -e ] 必然为假，于是每个 .app 图标都显示「程序已经不在了」——
+            # 假警报会把真警报一起淹掉，这就是这条判据不能靠反解的理由。
+            _sr_target=""
+            if [ -r "$_sr_app/Contents/Info.plist" ]; then
+                if command -v /usr/libexec/PlistBuddy >/dev/null 2>&1; then
+                    _sr_target=$(/usr/libexec/PlistBuddy -c "Print :EnvProxyTarget" "$_sr_app/Contents/Info.plist" 2>/dev/null)
+                fi
+                if [ -z "$_sr_target" ]; then
+                    _sr_target=$(sed -n 's|.*<key>EnvProxyTarget</key><string>\(.*\)</string>.*|\1|p' "$_sr_app/Contents/Info.plist" 2>/dev/null | head -1)
+                    _sr_target=$(printf '%s' "$_sr_target" | sed -e 's/&amp;/\&/g' -e 's/&lt;/</g' -e 's/&gt;/>/g')
+                fi
+            fi
+            # 老版本造的壳子没有那个键，才回落到反解启动脚本。
+            if [ -z "$_sr_target" ]; then
+                _sr_target=$(grep '^exec ' "$_sr_launcher" 2>/dev/null | head -1 | sed -e "s/^exec //" -e "s/ \"\$@\"$//" -e "s/^'//" -e "s/'$//")
+            fi
             _sr_name=$(basename "$_sr_app" .app)
             _sr_mode=""
             for _sr_m in $PROXY_MODES; do
@@ -350,7 +374,7 @@ _shortcut_manage_page() {
         _sm_sorted=$(printf '%s\n' "$_sm_recs" | sort -t"$(printf '\t')" -k2,2 -k3,3)
         _sm_idx=0
         _sm_old_ifs=$IFS
-        IFS=$(printf '\n')
+        IFS=$'\n'
         for _sm_line in $_sm_sorted; do
             [ -n "$_sm_line" ] || continue
             _sm_idx=$((_sm_idx + 1))
@@ -359,7 +383,7 @@ _shortcut_manage_page() {
             _sm_name=$(printf '%s' "$_sm_line" | cut -f2)
             _sm_mode=$(printf '%s' "$_sm_line" | cut -f3)
             _sm_state=$(printf '%s' "$_sm_line" | cut -f4)
-            IFS=$(printf '\n')
+            IFS=$'\n'
             _sm_label=$(proxy_mode_label "$_sm_mode" 2>/dev/null)
             [ -n "$_sm_label" ] || _sm_label="（未知）"
             style_out_nonewline cmd "  $(printf '%2s' "$_sm_idx")  "
@@ -422,7 +446,7 @@ _shortcut_new_flow() {
     _snf_apps=$(_shortcut_pick_program "")
     _snf_n=0
     _snf_old_ifs=$IFS
-    IFS=$(printf '\n')
+    IFS=$'\n'
     for _snf_a in $_snf_apps; do
         [ -n "$_snf_a" ] || continue
         _snf_n=$((_snf_n + 1))
@@ -430,7 +454,7 @@ _shortcut_new_flow() {
         IFS=$_snf_old_ifs
         style_out_nonewline cmd "  $(printf '%2s' "$_snf_n")  "
         style_out item "$(basename "$_snf_a" .app)"
-        IFS=$(printf '\n')
+        IFS=$'\n'
     done
     IFS=$_snf_old_ifs
     echo ""
@@ -472,14 +496,14 @@ _shortcut_new_flow_filtered() {
     echo ""
     _snff_i=0
     _snff_old_ifs=$IFS
-    IFS=$(printf '\n')
+    IFS=$'\n'
     for _snff_a in $_snff_apps; do
         [ -n "$_snff_a" ] || continue
         _snff_i=$((_snff_i + 1))
         IFS=$_snff_old_ifs
         style_out_nonewline cmd "  $(printf '%2s' "$_snff_i")  "
         style_out item "$(basename "$_snff_a" .app)"
-        IFS=$(printf '\n')
+        IFS=$'\n'
     done
     IFS=$_snff_old_ifs
     echo ""
@@ -513,8 +537,8 @@ _shortcut_confirm_and_build() {
     # 后果说明按行为类别取，与图标名、短名同一个来源，不会各说一套。
     # @explain 下面两行说的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制
     case "$(proxy_mode_action "$_scb_mode")" in
-        direct) style_out dim "          双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。" ;;
-        *)      style_out dim "          双击它启动的程序会带上当前代理，跟着翻墙软件走。" ;;
+        direct) style_out dim "          双击它启动的程序一定不翻墙，哪怕别的程序都在翻墙。" ;;
+        *)      style_out dim "          双击它启动的程序会翻墙，跟着翻墙软件走。" ;;
     esac
     echo ""
     style_out text "  图标名  ${_scb_name}${_scb_suffix}"

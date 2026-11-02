@@ -204,8 +204,10 @@ case "$_CMD_NORM" in
         # 拿锁用 ln 而不是 mkdir（理由见 runtime 层的 acquire_op_lock）：
         # mkdir 成功到"把 pid 写进去"之间有个空窗，那个空窗里另一个进程
         # 读到空的 pid，会把锁当成陈旧的接管掉——两个安装同时跑就互相覆盖文件。
-        mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-        OP_LOCK="$MONITOR_DIR/.op.lock"
+        # 锁放在全局目录（见 base.sh 的 LOCK_DIR）：跟文件夹走的话，
+        # 同一用户的两份拷贝各拿各的锁，却能同时改同一批文件。
+        mkdir -p "$LOCK_DIR" 2>/dev/null || true
+        OP_LOCK="$LOCK_DIR/op.lock"
         acquire_op_lock "$OP_LOCK" || exit 1
         # shellcheck disable=SC2064
         trap 'rm -f "$OP_LOCK" 2>/dev/null || true' EXIT

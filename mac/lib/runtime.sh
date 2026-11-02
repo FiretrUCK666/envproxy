@@ -992,7 +992,7 @@ run_monitor_loop() {
     # 运行时目录必须在这里就建：安装包不带 monitor/（不入库），全新安装时这是它第一次被用到。
     # 少了这一句，锁目录就建不出来、函数直接 return，监控永远起不来——而安装界面照样打印"已启动"。
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-    _lockdir="$MONITOR_DIR/.lock"
+    _lockdir="$LOCK_DIR/monitor.lock"
     if ! mkdir "$_lockdir" 2>/dev/null; then
         _e=$(get_monitor_pid || true)
         [ -n "$_e" ] && return 0

@@ -22,6 +22,12 @@ PATH_CONF="$ENVPROXY_HOME/path.conf"
 # 与 Windows 侧 Test-IsOwnedProxyValue 的第一条判据（查 Owned 注册表）对齐。
 OWNED_ENV="$ENVPROXY_HOME/owned.env"
 
+# 操作锁与监控锁的目录。**必须与文件夹无关**，否则同一用户的两份拷贝各拿各的锁、
+# 却能同时改同一批文件（~/.envproxy 下的变量、launchctl 的环境、LaunchAgent）。
+# 放在 ~/.envproxy 而不是 $SCRIPT_DIR/monitor：后者跟文件夹走，两份拷贝就是两把锁。
+# 与 Windows 侧 Global\...-<SID> 同一语义：按用户隔离，同一用户的全机器一份。
+LOCK_DIR="$ENVPROXY_HOME/locks"
+
 # 运行时目录与日志文件：住在 base 而不是 runtime，理由是 log_msg 必须在这里。
 # 写日志是横切能力：env / probe / runtime 三层都要写，任何一层都不该"反过来"
 # 依赖另一层去拿它。
@@ -188,8 +194,8 @@ PROXY_MODES="proxy direct"
 # @explain 「走代理」「固定直连」是图标的显示名（用户按这两个词找图标），不是解释机制
 proxy_mode_suffix() {
     case "$1" in
-        proxy)  printf '%s\n' '（走代理）' ;;
-        direct) printf '%s\n' '（固定直连）' ;;
+        proxy)  printf '%s\n' '（翻墙）' ;;
+        direct) printf '%s\n' '（直连）' ;;
         *)      return 1 ;;
     esac
     return 0
@@ -199,8 +205,8 @@ proxy_mode_suffix() {
 # @explain 「走代理」「固定直连」是管理页里的显示名，与图标名同一套叫法
 proxy_mode_label() {
     case "$1" in
-        proxy)  printf '%s\n' '走代理' ;;
-        direct) printf '%s\n' '固定直连' ;;
+        proxy)  printf '%s\n' '翻墙' ;;
+        direct) printf '%s\n' '直连' ;;
         *)      return 1 ;;
     esac
     return 0
@@ -574,6 +580,18 @@ style_color() {
 # 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
 # stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。
 style_out() {
+
+# 屏幕刷新：菜单与帮助都是"一屏一页"，切换时清屏。
+# 只在真有终端时清：没有终端时 clear 会往输出里塞控制字符，把日志刷脏。
+#
+# 为什么住在 base：这是纯终端能力，与"帮助内容"无关。
+# 留在 help 里会让 shortcut 反过来依赖 help（它要清屏），
+# 而 help 的表又指向 shortcut 的处理器——两个方向都有边，就是一个环。
+# 环的毛病不是跑不起来，是单独读任何一个文件都看不出它依赖什么。
+clear_screen_safe() {
+    [ -t 1 ] || return 0
+    clear 2>/dev/null || true
+}
     _so_role="$1"; shift
     if [ ! -t 1 ]; then printf '%s\n' "$*"; return 0; fi
     _so_c=$(style_color "$_so_role")
@@ -999,7 +1017,7 @@ wait_screen_key() {
 #
 # 标签本身不随状态变化（只有右侧内容按 ok/warn/dim 上色），所以是常量不是变量。
 # 与 Windows 侧 $StatusLabels 逐项对齐，差的一项是 Advanced：mac 没有启动器，
-# 那一行在 mac 上不存在（DIVERGE(Mac): mac 没有启动器，不需要给它建图标）。
+# 那一行在 mac 上不存在。
 # ------------------------------------------------------------------------------
 STATUS_LABEL_MONITOR="监控进程"
 STATUS_LABEL_AUTORUN="开机自启"
@@ -1033,9 +1051,10 @@ STATUS_LABEL_VERSION="版本"
 # 用户看到的却是错的内容）。所以下面带一道校验，格式不对就当场报错。
 #
 # 两侧共用同一套编号：同名项在两台机器上必须是同一个数字（用户可能两台都用）。
-# 编号 5「高级功能」两侧同名同号；里面装的东西按平台不同（mac 没有启动器需求，
-# 那边只放「浏览器代理修复」）。DIVERGE(Mac): 从 Dock 启动的程序本来就拿得到 launchctl
-# 设的变量，不需要额外做启动器——所以这边的高级功能里没有建图标那一项。
+# 编号 5「高级功能」两侧同名同号；里面装的东西按平台不同。
+# DIVERGE(Mac): 「给程序定规矩」这一层两端都有，但做法不同——Mac 造的是一个独立的小
+#   程序壳子（独立的 .app），Windows 造的是 .lnk + 启动脚本。改动原 app 会破坏代码签名，
+#   系统直接拒绝打开，所以只能另造壳子。这不是缺项，是必然的机制分叉。
 MENU_ITEMS=(
     '1|安装 / 修复|第一次用选它；觉得不对劲也选它|日常|install'
     '2|查看状态|现在什么情况，一眼看清|日常|status'

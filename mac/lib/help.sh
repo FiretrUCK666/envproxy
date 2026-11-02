@@ -579,13 +579,6 @@ EOF
     return 0
 }
 
-# 屏幕刷新：菜单与帮助都是"一屏一页"，切换时清屏。
-# 只在真有终端时清：没有终端时 clear 会往输出里塞控制字符，把日志刷脏。
-clear_screen_safe() {
-    [ -t 1 ] || return 0
-    clear 2>/dev/null || true
-}
-
 # 带配色地打一个主题。与 format_help_topic 同一个渲染函数，只差上不上色。
 show_help_topic_colored() {
     # 没终端就不上色，直接给纯文本（与菜单同一判据）。
@@ -887,8 +880,8 @@ show_menu() {
 # 加第二项的那天，敲任何有效编号都会打开同一个页面——不报错、也没有提示。
 # @explain 「走代理」「固定直连」是菜单项的名字，用户按这两个词找菜单；不是解释机制
 ADVANCED_ITEMS=(
-    '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建走代理的快捷方式|挑一个已装的程序'
-    '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不走代理'
+    '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建固定走代理的快捷方式|挑一个已装的程序'
+    '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
     '4|Rescue|show_rescue_page|rescue|do|浏览器代理修复|浏览器打不开网页的时候，先来这里查一下'
 )
@@ -912,12 +905,17 @@ _adv_field() {
 
 # 按编号取处理器函数名。取不到返回 1。
 # **这是整张表唯一的分派点**，加一项不需要改任何分派代码。
+#
+# 同时带回这一项的 Kind（第 5 列，do / read）：调用方据此决定要不要拿操作锁。
+# 从表里取而不是在分派处写死编号——以后加新项只要标了 do 就自动受保护。
 _advanced_handler_for() {
+    _ahf_kind=""
     for _ahf_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
         _adv_field "$_ahf_i" 1 || continue
         if [ "$_adv_out" = "$1" ]; then
             _adv_field "$_ahf_i" 3 || return 1
             _ahf_out=$_adv_out
+            _adv_field "$_ahf_i" 5 && _ahf_kind=$_adv_out
             return 0
         fi
     done
@@ -1052,7 +1050,24 @@ show_advanced_menu() {
         # 旧写法是"编号存在就调用 show_rescue_page"，只有一项时碰巧正确；
         # 加第二项的那天，敲任何有效编号都会打开修复页，而且不报错。
         if _advanced_handler_for "$_adm_ans"; then
-            "$_ahf_out"
+            # 会改动东西的项（Kind=do）要先拿操作锁：它们写的是**全局位置**
+            # （~/.envproxy 下的启动器、launchctl 的环境、系统代理），
+            # 而不只是这个文件夹。另一个窗口正在安装/卸载时同时改这些地方，
+            # 两边各写一半，谁对谁错取决于时序——那是屏幕上看不出来的坏状态。
+            #
+            # 判据取自表里的 Kind，不写死编号：以后加新项只要标了 do 就自动受保护。
+            if [ "$_ahf_kind" = "do" ]; then
+                mkdir -p "$LOCK_DIR" 2>/dev/null || true
+                if acquire_op_lock "$LOCK_DIR/op.lock"; then
+                    "$_ahf_out"
+                    rm -f "$LOCK_DIR/op.lock" 2>/dev/null || true
+                else
+                    style_out warn "  另一个安装/卸载正在进行，请等它结束再试（没有做任何改动）。"
+                    sleep 1
+                fi
+            else
+                "$_ahf_out"
+            fi
         else
             _adm_keys=""
             for _adm_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
