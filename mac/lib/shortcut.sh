@@ -64,6 +64,9 @@ _shortcut_sq() {
 _shortcut_launcher_body() {
     _slb_target=$1
     _slb_mode=$2
+    # 行为类别从 mode_action 取，不看 mode id 的字面值：
+    # 加一种模式时只要它在表里有 action，这里一个字都不用改。
+    _slb_action=$(proxy_mode_action "$_slb_mode") || return 1
     _slb_target_q=$(_shortcut_sq "$_slb_target") || return 1
 
     printf '#!/bin/sh\n'
@@ -71,7 +74,7 @@ _shortcut_launcher_body() {
     printf '# 它只做一件事：把环境准备好，然后把控制权交给真程序。\n'
     printf '\n'
 
-    case "$_slb_mode" in
+    case "$_slb_action" in
         direct)
             # 清空：让这个程序及其所有子进程都看不到代理。
             # 变量清单直接用 PROXY_VAR_NAMES（mac 侧它**已含大小写两种拼写**），
@@ -507,12 +510,12 @@ _shortcut_confirm_and_build() {
     style_out dim  "          $_scb_target"
     echo ""
     style_out text "  规矩    $_scb_label"
+    # 后果说明按行为类别取，与图标名、短名同一个来源，不会各说一套。
     # @explain 下面两行说的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制
-    if [ "$_scb_mode" = "direct" ]; then
-        style_out dim "          双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。"
-    else
-        style_out dim "          双击它启动的程序会带上当前代理，跟着翻墙软件走。"
-    fi
+    case "$(proxy_mode_action "$_scb_mode")" in
+        direct) style_out dim "          双击它启动的程序一定不走代理，哪怕别的程序都在翻墙。" ;;
+        *)      style_out dim "          双击它启动的程序会带上当前代理，跟着翻墙软件走。" ;;
+    esac
     echo ""
     style_out text "  图标名  ${_scb_name}${_scb_suffix}"
     style_out text "  放在    $(_shortcut_default_dest)"
