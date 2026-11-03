@@ -2412,6 +2412,53 @@ jobs:
               Write-Host ("两侧客户端目录的进程名特征不同：Win [{0}] / Mac [{1}]" -f ($wp2 -join ','), ($mp2 -join ','))
               $fail = 1
             }
+            # 上面两条只比"展平后的集合"，**看不见归属差异**：
+            # 同一批进程名分散在两条不同记录里时，两边的集合仍然相等。
+            # 真实事故就是这样：stash / quantumult 在 win 侧归 clash、在 mac 侧归 surge，
+            # 门禁全绿，而 Get-ClientByProcessName 在两端给出不同分类——
+            # 用户看到的是"同一个程序两个平台显示成不同客户端"。
+            # 所以这里按 Id 逐条比对：名称、端口集、进程名集三项都必须一致。
+            $winRows = @{}
+            foreach ($m in [regex]::Matches($winCat.Groups[1].Value, "Id='([^']+)'\s*;\s*Name='([^']*)'\s*;\s*Ports=@\(([^)]*)\)\s*;\s*Patterns=@\(([^)]*)\)")) {
+              $id = $m.Groups[1].Value
+              $winRows[$id] = @{
+                Name  = $m.Groups[2].Value
+                Ports = ((@($m.Groups[3].Value -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object { [int]$_ } | Sort-Object -Unique)) -join ',')
+                Pats  = ((@([regex]::Matches($m.Groups[4].Value, "'([^']+)'") | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)) -join ',')
+              }
+            }
+            $macRows = @{}
+            foreach ($ln2 in ($macCat.Groups[1].Value -split "`n")) {
+              if ($ln2 -notmatch '\|') { continue }
+              $f = $ln2 -split '\|'
+              if ($f.Count -lt 4) { continue }
+              $macRows[$f[0].Trim()] = @{
+                Name  = $f[1].Trim()
+                Ports = ((@($f[2] -split '\s+' | Where-Object { $_ } | ForEach-Object { [int]$_ } | Sort-Object -Unique)) -join ',')
+                Pats  = ((@($f[3] -split '\s+' | Where-Object { $_ } | Sort-Object -Unique)) -join ',')
+              }
+            }
+            if (($winRows.Keys | Sort-Object) -join ',' -ne (($macRows.Keys | Sort-Object) -join ',')) {
+              Write-Host ("两侧客户端目录的条目 Id 不同：Win [{0}] / Mac [{1}]" -f (($winRows.Keys | Sort-Object) -join ','), (($macRows.Keys | Sort-Object) -join ','))
+              $fail = 1
+            } else {
+              foreach ($id in ($winRows.Keys | Sort-Object)) {
+                $w = $winRows[$id]; $m2 = $macRows[$id]
+                if ($w.Name -ne $m2.Name) {
+                  Write-Host ("客户端 {0} 的名字不同：Win [{1}] / Mac [{2}]" -f $id, $w.Name, $m2.Name)
+                  $fail = 1
+                }
+                if ($w.Ports -ne $m2.Ports) {
+                  Write-Host ("客户端 {0} 的端口集不同：Win [{1}] / Mac [{2}]" -f $id, $w.Ports, $m2.Ports)
+                  $fail = 1
+                }
+                if ($w.Pats -ne $m2.Pats) {
+                  Write-Host ("客户端 {0} 的进程名特征不同：Win [{1}] / Mac [{2}]" -f $id, $w.Pats, $m2.Pats)
+                  Write-Host '  （这一条挡的是"同一程序在两端被认成不同客户端"，上面比集合时看不见）'
+                  $fail = 1
+                }
+              }
+            }
 
           # Mac 帮助正文住在 `cat <<'TOPIC'` 里——单引号 heredoc 不展开，
           # 所以那里的「选 N（名字）」只能写字面量，不能派生。写死的部分必须由门禁兜住：

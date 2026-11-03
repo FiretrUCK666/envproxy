@@ -229,16 +229,22 @@ Assert-Eq 'advanced: cmd role is green' 'green' ([string]$StyleMap['cmd'])
 # 临时目录必须用 .NET 的 GetTempPath：Linux 上没有 $env:TEMP（那是 Windows 才有的变量），
 # Join-Path 收到 null 会让自检在这一步就崩掉——而那会被报成"快照功能坏了"，方向全错。
 $snapFile = Join-Path ([System.IO.Path]::GetTempPath()) ('snaptest-' + [guid]::NewGuid().ToString('N') + '.txt')
+# 改写全局落点必须**成对**：用完还原，写在 finally 里。
+#
+# 原来只改了不还原。当前 `doctor` 恰好是最后一个用例，所以现在看不出问题——
+# 但那是执行顺序的巧合，不是契约：任何排在它后面的用例都会读到一个**已被删除**
+# 的快照路径（Write-StateSnapshot 会往那个路径写，Read-StateSnapshot 读不到）。
+# 症状会是"新加的用例莫名其妙红"，而根因在另一个文件里。
+$__savedSnapFile = $global:StateSnapshotFile
 $global:StateSnapshotFile = $snapFile
-
-
-Write-StateSnapshot -State 'on:7078' -PrevState 'off' -PendingState '' -PendingCount 0 `
-    -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok' -NodeHandshake 'upstream-fail'
-$snapNew = Read-StateSnapshot
-Assert-Eq 'snapshot: node_handshake survives a round trip' 'upstream-fail' ([string]$snapNew.NodeHandshake)
-Assert-Eq 'snapshot: status is ok' 'ok' ([string]$snapNew.Status)
-# 模拟老版本监控写下的快照（没有这个字段）：必须仍判 ok，字段留空 = 不知道。
-$oldBody = @"
+try {
+    Write-StateSnapshot -State 'on:7078' -PrevState 'off' -PendingState '' -PendingCount 0 `
+        -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok' -NodeHandshake 'upstream-fail'
+    $snapNew = Read-StateSnapshot
+    Assert-Eq 'snapshot: node_handshake survives a round trip' 'upstream-fail' ([string]$snapNew.NodeHandshake)
+    Assert-Eq 'snapshot: status is ok' 'ok' ([string]$snapNew.Status)
+    # 模拟老版本监控写下的快照（没有这个字段）：必须仍判 ok，字段留空 = 不知道。
+    $oldBody = @"
 # envproxy-snapshot 1
 written=$(([DateTimeOffset]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ'))
 round=5
@@ -253,12 +259,15 @@ vars_match=yes
 apply_result=ok
 log_tail=hi
 "@
-[System.IO.File]::WriteAllText($snapFile, $oldBody, (New-Object System.Text.UTF8Encoding($false)))
-Get-Content $snapFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("    [" + $_ + "]") }
-$snapOld = Read-StateSnapshot
-Assert-Eq 'snapshot: an older snapshot is not judged damaged' 'ok' ([string]$snapOld.Status)
-Assert-Eq 'snapshot: a missing handshake reads as unknown, not as fine' '' ([string]$snapOld.NodeHandshake)
-Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($snapFile, $oldBody, (New-Object System.Text.UTF8Encoding($false)))
+    Get-Content $snapFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("    [" + $_ + "]") }
+    $snapOld = Read-StateSnapshot
+    Assert-Eq 'snapshot: an older snapshot is not judged damaged' 'ok' ([string]$snapOld.Status)
+    Assert-Eq 'snapshot: a missing handshake reads as unknown, not as fine' '' ([string]$snapOld.NodeHandshake)
+} finally {
+    $global:StateSnapshotFile = $__savedSnapFile
+    Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
+}
 
 # ③ 状态页那条提示只在拿到 upstream-fail 证据时出现。
 $mkSt = {

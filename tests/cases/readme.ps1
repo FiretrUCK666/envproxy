@@ -918,25 +918,21 @@ try {
     if ($script:SavedLogFile) { $LogFile = $script:SavedLogFile }
 } catch {}
 
-# 注册表沙箱：删掉临时键、把四个子键复原。
-# 两件事都要做——只删键不够，因为 Get-*KeyPath 是现算的，
-# 变量还指着沙箱时，后面任何清理都会打到沙箱而不是真实位置。
-if ($env:OS -eq 'Windows_NT' -and $script:SavedRegSandbox) {
-    try {
-        foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
-            Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        # 父键只在空了的时候删（它可能装着使用者的真实数据）
-        if ((Test-Path 'HKCU:\Software\EnvProxy') -and
-            -not (@(Get-ChildItem 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue).Count)) {
-            Remove-Item 'HKCU:\Software\EnvProxy' -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        $UserEnvSubKey       = $script:SavedRegSandbox.UserEnv
-        $OwnedRegSubKey      = $script:SavedRegSandbox.Owned
-        $PrevEnvSubKey       = $script:SavedRegSandbox.PrevEnv
-        $ScriptPathRegSubKey = $script:SavedRegSandbox.ScriptPathReg
-    } catch {}
-}
+# 注册表沙箱：**本文件不清理、不复原**。
+#
+# 沙箱是外层 test-win-pure.ps1 建的，只有它有资格拆——它要等**全部**用例跑完
+# （本文件之后还有 doctor）才动手。这里顺手清一遍看着无害，实际是灾难：
+#
+#   1. 本文件把四个子键变量还原成真实路径（HKCU\Environment 等）；
+#   2. 外层收尾时 `Remove-Item (Get-RegPath $UserEnvSubKey)` 取到的就是**真实键**；
+#   3. 用户整个 HKCU\Environment 被删空——PATH/TEMP 连同代理变量一起没了。
+#
+# 这不是推测：实测跑一次自检，跑完 `HKCU:\Environment` 直接消失。
+#
+# 另一个理由更基本：**本文件后面还有用例**（[22] 监控目录、[23] 操作锁），
+# 它们理应在沙箱里跑。提前拆掉沙箱，后面的用例就开始碰真实位置了。
+#
+# 所以清理与复原只有一个地方：外层末尾，且包在 try/finally 里。
 
 Write-Host '[22] Monitor directory self-heals and stays idempotent'
 # 契约：monitor\ 被清理工具整份删掉后，进程还在干活、pid 文件却写不出来，
@@ -1005,14 +1001,6 @@ if ($lk) {
     try { $lk.Dispose() } catch {}
 }
 
-# 安装目录沙箱：复原 override、删掉临时目录。
-# 顺序与注册表那段同理：先把落点指回真实位置，再删沙箱，免得清理本身打到沙箱。
-try {
-    $InstallDirOverride = $script:SavedInstallDir
-    $ToolHomeDirOverride = $script:SavedToolHomeDir
-    if ($null -ne $script:SavedLauncherDir) { $LauncherDir = $script:SavedLauncherDir }
-    if ($script:TestInstallDir -and (Test-Path -LiteralPath $script:TestInstallDir)) {
-        Remove-Item -LiteralPath $script:TestInstallDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
-} catch {}
+# 安装目录沙箱：**同样不在这里复原**，理由与上面注册表那段一模一样——
+# 本文件之后还有用例，它们该在沙箱里跑；拆沙箱只有一个地方（外层末尾）。
 

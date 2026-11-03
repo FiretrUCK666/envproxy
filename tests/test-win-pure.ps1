@@ -272,15 +272,37 @@ foreach ($caseName in @('env', 'probe', 'package', 'menu', 'update', 'ports', 't
 # 残留的注册表键会让「装过/没装过」的判断读错，残留的临时安装目录会被定位器
 # 当成一个候选。键名带唯一后缀之后，不清也就只脏自己这一次——但清干净是更简单的心智模型。
 if ($env:OS -eq 'Windows_NT') {
-    foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
-        try { Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue } catch {}
-    }
-    if (Test-RegKey 'HKCU:\Software\EnvProxy') {
-        # 父键只在空了才删：别的进程（或使用者自己）可能有别的内容在下面。
-        try {
-            $left = @(Get-ChildItem -LiteralPath 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue)
-            if ($left.Count -eq 0) { Remove-Item -LiteralPath 'HKCU:\Software\EnvProxy' -Force -ErrorAction SilentlyContinue }
-        } catch {}
+    # 护栏：只删「确实是本次沙箱」的键。
+    #
+    # 这条不是防御性冗余，它挡的是一次真实事故：用例文件（readme.ps1）曾经
+    # 在文件中间把四个子键变量还原成真实路径，于是这里 Get-RegPath 取到的
+    # 是 HKCU\Environment，Remove-Item -Recurse 把使用者整个用户环境变量键
+    # 删空（PATH/TEMP 全没），后台监控随后反复报「变量被人改坏了」。
+    # 症状离根因太远，一直没人往测试上想。
+    #
+    # 判据：四个子键名里必须含本进程生成的那个唯一后缀。变量被改坏时它不再
+    # 指向沙箱子键，这里就一个字节都不删，并且明确报出来——而不是安静地
+    # 删掉别人的东西。RegSandboxSuffix 本身就含 __t_ 前缀，别再拼一次。
+    $expectedSuffix = $script:RegSandboxSuffix
+    $unsafe = @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey) |
+        Where-Object { $_ -notlike "*$expectedSuffix*" }
+    if ($unsafe.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'SANDBOX BROKEN: 收尾时沙箱子键变量已不指向本次沙箱，跳过注册表清理'
+        foreach ($u in $unsafe) { Write-Host ("  {0}" -f $u) }
+        Write-Host '  说明：有用例文件提前还原了沙箱变量。清理只许在 test-win-pure.ps1 末尾做。'
+        $script:fails++
+    } else {
+        foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
+            try { Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        if (Test-RegKey 'HKCU:\Software\EnvProxy') {
+            # 父键只在空了才删：别的进程（或使用者自己）可能有别的内容在下面。
+            try {
+                $left = @(Get-ChildItem -LiteralPath 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue)
+                if ($left.Count -eq 0) { Remove-Item -LiteralPath 'HKCU:\Software\EnvProxy' -Force -ErrorAction SilentlyContinue }
+            } catch {}
+        }
     }
 }
 if ($script:TestInstallDir -and (Test-Path -LiteralPath $script:TestInstallDir)) {

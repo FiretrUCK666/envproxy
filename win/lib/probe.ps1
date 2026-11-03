@@ -34,7 +34,7 @@ $ClientCatalog = @(
     #   Clash Nyanpasu 默认 7890（端口策略可选 Random，每次启动可能不同）；
     #   Mihomo Party 三个默认全开：mixed=7890 / socks=7891 / http=7892。
     # 9090 是外部控制口（API），不是代理口，但常被用户误填，留着便于识别"这不是代理口"。
-    @{ Id='clash';      Name='Clash 系';        Ports=@(7890, 7891, 7892, 7897, 7898, 7899, 9090); Patterns=@('clash','mihomo','verge','nyanpasu','party','stash','quantumult') }
+    @{ Id='clash';      Name='Clash 系';        Ports=@(7890, 7891, 7892, 7897, 7898, 7899, 9090); Patterns=@('clash','mihomo','verge','nyanpasu','party') }
     # v2rayN 的端口是「基址 + 枚举偏移」算出来的（AppManager.GetLocalPort），不是各自独立的：
     #   基址 10808 时 socks=10808 / socks2=10809(HTTP) / socks3=10810 / pac=10811 /
     #   api=10812 / api2=10813 / mixed=10814。
@@ -47,7 +47,11 @@ $ClientCatalog = @(
     # 1086/1087/1089 是 SSX-NG（mac 上常见）的 socks/http/PAC 三个口；
     # Windows 版 Shadowsocks-windows 用 1080，且写的是 `localhost:1080` 而不是 127.0.0.1。
     @{ Id='ss';         Name='Shadowsocks 系';  Ports=@(1080, 1086, 1087, 1089, 8118);   Patterns=@('shadowsocks','ss-local','trojan','hysteria') }
-    @{ Id='surge';      Name='Surge / Stash';   Ports=@(6152, 6153);                      Patterns=@('surge') }
+    # 名字里写着 Stash，Patterns 就必须含 stash——否则「Stash 的进程」会被认成
+    # Clash 系（端口表也一起错），而屏幕上只会显示一个"另一个客户端"的名字。
+    # 两端原先就是这里分叉的：mac 侧归 surge，win 侧归 clash，门禁 15 只比
+    # 展平后的集合（两边都含 stash，所以全绿），归属差异看不见。
+    @{ Id='surge';      Name='Surge / Stash';   Ports=@(6152, 6153);                      Patterns=@('surge','stash','quantumult') }
     @{ Id='netch';      Name='Netch';           Ports=@(2801, 2802);                      Patterns=@('netch') }
     @{ Id='outline';    Name='Outline';         Ports=@(8888);                            Patterns=@('outline') }
     # 抓包工具：Fiddler 默认 8888、Charles 默认 8888/8889、Proxyman 默认 9090。
@@ -795,9 +799,20 @@ function Connect-Loopback([int]$Port, [int]$TimeoutMs = 500) {
                 [System.Net.Sockets.AddressFamily]::InterNetwork
             }
             $c = New-Object System.Net.Sockets.TcpClient($family)
-            $c.ReceiveTimeout = $TimeoutMs
-            $c.SendTimeout = $TimeoutMs
-            $c.Connect([System.Net.IPAddress]::Parse($addr), $Port)
+            # **连接阶段必须自己限时**：ReceiveTimeout / SendTimeout 只约束连接**建立之后**
+            # 的流读写，对 TCP 三次握手没有任何作用（.NET 既定语义）。同步 Connect() 在
+            # 对端不回 RST 时会一直阻塞到系统级 TCP 超时——本机端口处于半开状态或
+            # 防火墙静默丢包时就是这种情形，实测数秒到 20 秒。
+            # 后果不是"慢一点"：探测循环被这个调用顶住，每轮从 2–3 秒变成十几秒，
+            # 状态翻转明显滞后，而屏幕上看不出任何异常。
+            # 用 BeginConnect + WaitOne 自己卡时限（与同文件 Test-TcpAlive 同一写法），
+            # 超时就把 socket 关掉——不关会一直握下去，留下看不见的连接。
+            $iar = $c.BeginConnect([System.Net.IPAddress]::Parse($addr), $Port, $null, $null)
+            if (-not $iar.AsyncWaitHandle.WaitOne($TimeoutMs)) {
+                try { $c.Close() } catch {}
+                continue
+            }
+            $c.EndConnect($iar)
             if ($c.Connected) { return @{ Client = $c; Address = $addr } }
             try { $c.Close() } catch {}
         } catch {
