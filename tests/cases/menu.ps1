@@ -310,3 +310,29 @@ foreach ($it in $advList) {
     Assert-Eq ("处理器 {0} 存在" -f $it.Handler) $true ($null -ne (Get-Command $it.Handler -ErrorAction SilentlyContinue))
     Assert-Eq ("项 {0} 的 Kind 合法" -f $it.Key) $true (@('do','read') -contains $it.Kind)
 }
+# ---------------------------------------------------------------------------
+# 空字符串不能当 Read-Host 的提示词。
+#
+# `Read-Host ''` 不等待输入，而是直接抛「name 不能为 NULL 或为空」。
+# 外面套着 catch {} 时错误被吞掉，屏幕上的效果是那一页闪一下就退回上一层——
+# 用户以为这个功能坏了（「管理已建的」在没有任何图标时正是这样）。
+#
+# 只靠人工看代码看不出来：那行读起来像"等一次回车"，完全合理。
+# 而它只在"没有任何图标"这条路径上出现，平时测不到。
+#
+# 不传参数（`Read-Host`）是合法的、会真等回车，不在拦截范围。
+$script:bareReadHostHits = @()
+$script:libDir = Join-Path $ScriptDir 'lib'
+foreach ($libFile in @(Get-ChildItem -LiteralPath $script:libDir -Filter '*.ps1' -File -ErrorAction SilentlyContinue)) {
+    $libLines = @(Get-Content -LiteralPath $libFile.FullName -ErrorAction SilentlyContinue)
+    for ($li = 0; $li -lt $libLines.Count; $li++) {
+        # 匹配 Read-Host 后面紧跟一个空字符串字面量（单引号或双引号成对）。
+        if ($libLines[$li] -match "Read-Host\s+''" -or $libLines[$li] -match 'Read-Host\s+""') {
+            $script:bareReadHostHits += ("{0}:{1}" -f $libFile.Name, ($li + 1))
+        }
+    }
+}
+Assert-Eq '没有 Read-Host 传空提示词（空提示会直接报错、不等待）' 0 $script:bareReadHostHits.Count
+if ($script:bareReadHostHits.Count -gt 0) {
+    Write-Host ("    命中: " + ($script:bareReadHostHits -join ', '))
+}

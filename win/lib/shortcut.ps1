@@ -1719,8 +1719,7 @@ function Invoke-ManageProxyShortcuts {
         if ($recs.Count -eq 0 -and $orphans.Count -eq 0) {
             Write-Styled 'dim' '  还没有建过。先回上一页选 1 或 2 建一个。'
             Write-Host ''
-            Write-Styled 'dim' '  按回车返回'
-            try { $null = Read-Host '' } catch {}
+            try { $null = Read-Host '  （按回车返回）' } catch {}
             return
         }
         # 按程序名排序，同一程序的两种规矩自然挨在一起。
