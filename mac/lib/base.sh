@@ -646,8 +646,12 @@ curl_direct() {
     for _cd_v in $PROXY_VAR_NAMES; do
         _cd_args="$_cd_args -u $_cd_v"
     done
+    # `--` 不能省：`env` 会把后面的 `--disable`（curl 的选项）当成**自己的**选项，
+    # 报 "unknown option -- disable" 然后退出，curl 一次都没跑。
+    # 症状是调用方拿到的永远是空输出 + 非零退出码——看起来像"网络不通"，
+    # 实际是工具没启动。`--` 让 env 停止解析，后面全部交给 curl。
     # shellcheck disable=SC2086
-    env $_cd_args curl "$@"
+    env $_cd_args -- curl "$@"
 }
 
 # NO_PROXY 只增不减：已存在的条目原样保留，缺失的默认条目补上。

@@ -275,11 +275,19 @@ nc_supports_G() {
         0) return 1 ;;
     esac
     NC_HAS_G=0
+    # **先确认 nc 这个命令存在**。少了这一步，"机器上根本没有 nc"会被判成"支持 -G"：
+    # 那时 stderr 是 "command not found"，一个 invalid/usage 之类的词都没有，
+    # 于是落进下面的通路当成"认 -G"，后续每次判活都 rc=127 → 活端口全被判死。
+    # 这个判错方向很要命：'没装工具' 与 '工具不认这个开关' 必须分开处理。
+    if ! command -v nc >/dev/null 2>&1; then
+        [ "$NC_HAS_G" = "1" ]
+        return 1
+    fi
     # 拿一个必然连不上的端口探语法：认 -G 的 nc 会安静失败（退出码非 0 但没有 usage 报错），
-    # 不认的会打印 "invalid option" 之类。判据是"错误输出里有没有提到 G"。
+    # 不认的会打印 "invalid option" 之类。判据是"错误输出里有没有提到 invalid/usage"。
     _ncg_err=$(printf '' | nc -G 1 -w 1 127.0.0.1 1 2>&1 >/dev/null)
     case "$_ncg_err" in
-        *[Ii]nvalid*|*[Ii]llegal*|*[Uu]nknown*|*usage*|*Usage*) NC_HAS_G=0 ;;
+        *[Ii]nvalid*|*[Ii]llegal*|*[Uu]nknown*|*usage*|*Usage*|*not\ found*) NC_HAS_G=0 ;;
         *) NC_HAS_G=1 ;;
     esac
     unset _ncg_err 2>/dev/null || true
@@ -949,6 +957,42 @@ get_current_state() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# TCP 判活：连得上吗？**只连端口，绝不建隧道。**
+#
+# 语义：0 = 活着，1 = 不在。三处都走这一个函数（见文件里的调用点），
+# 同一件事只许有一处判据——否则"状态页说活着、修复页说死了"这种分叉迟早出现。
+#
+# ## 为什么必须只用 /dev/tcp（不许退回 curl -p / -x）
+# 曾经的写法是 `curl -p -x <proxy> http://127.0.0.1:9/`，它做的是「让代理去连
+# 127.0.0.1:9」——判的不是"端口在不在"，而是"代理能不能带你访问那个目标"。
+# 两者不等价，差别是要命的那种：代理端口活着、但翻墙节点挂了 / 目标被墙 →
+# 隧道失败 → 判 dead → 救援把使用者**正在用**的代理关掉。
+# `/dev/tcp` 是 bash 内建，语义就是 connect()，零 fork、无输出、不可能是隧道。
+#
+# ## 超时
+# `/dev/tcp` 走内核 connect()，没有自己的时限。本机死端口实测稳定在 2 秒左右
+# （立刻被拒或被丢弃后回退），没有出现"卡到系统级超时"的量级。这个函数会在
+# 「浏览器代理修复」里被每个网络服务 × 每一层各调一次，2 秒 × 十几个调用确实
+# 拖得久，但它换来的是"不可能误判"——判错的代价是删掉活着的代理。
+# 要提速就减少调用次数，不是换成一个可能建隧道的实现。
+#
+# IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西（冒号当分隔符）。
+# ------------------------------------------------------------------------------
+port_alive_bounded() {
+    _pab_addr="$1"; _pab_port="$2"
+    [ -n "$_pab_addr" ] && [ -n "$_pab_port" ] || return 1
+    case "$_pab_addr" in
+        *:*) _pab_host="[$_pab_addr]" ;;
+        *)   _pab_host="$_pab_addr" ;;
+    esac
+    if (exec 3<>"/dev/tcp/${_pab_host}/${_pab_port}") 2>/dev/null; then
+        exec 3<&- 2>/dev/null || true
+        return 0
+    fi
+    return 1
+}
+
 # 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
 # 状态页用它判两件事：注入的代理变量指向的端口、系统代理指向的端口。
 # 与 Windows 侧 Test-TcpAlive 同一判据（那边按地址族建套接字，这边同样只连一次）。
@@ -963,15 +1007,7 @@ get_current_state() {
 #
 # IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西（冒号当分隔符）。
 _port_alive() {
-    _pa_addr="$1"; _pa_port="$2"
-    [ -n "$_pa_addr" ] && [ -n "$_pa_port" ] || return 1
-    case "$_pa_addr" in
-        *:*) _pa_host="[$_pa_addr]" ;;
-        *)   _pa_host="$_pa_addr" ;;
-    esac
-    if (exec 3<>"/dev/tcp/${_pa_host}/${_pa_port}") 2>/dev/null; then
-        exec 3<&- 2>/dev/null || true
-        return 0
-    fi
-    return 1
+    # 与 port_alive_bounded 同一实现：同一件事只许有一处判据，
+    # 否则"状态页说活着、另一处说死了"这种分叉迟早出现。
+    port_alive_bounded "$1" "$2"
 }

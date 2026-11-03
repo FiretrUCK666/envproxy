@@ -84,19 +84,13 @@ sysproxy_verdict() {
 # 实测由子 agent 用真监听端口复现过（假代理回 502，curl 退出码非 0）。
 # Windows 侧一直只做 TCP 连接，所以那边不会误判；两端判据必须同形。
 #
-# 用 bash 内建的 /dev/tcp 而不是 curl/nc：
-#   - 零依赖、零 fork、无输出，语义就是"连得上吗"，与 Test-TcpAlive 严格对齐；
-#   - nc -G 在部分 macOS 版本不存在，要探它就得先进 probe 层，那是反向依赖。
+# 判活委托给 probe 层的 port_alive_bounded：同一件事只许有一处判据。
+# 那个函数用的就是 bash 内建的 `/dev/tcp/`——只 connect()，不可能是隧道。
+# 依赖方向是单向的：doctor 用 probe，probe 不用 doctor。
 sysproxy_port_state() {
     _sps_addr="${1:-}"; _sps_port="${2:-0}"
     [ -n "$_sps_addr" ] && [ "$_sps_port" -gt 0 ] 2>/dev/null || { printf 'unknown'; return 0; }
-    # IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西。
-    case "$_sps_addr" in
-        *:*) _sps_host="[$_sps_addr]" ;;
-        *)   _sps_host="$_sps_addr" ;;
-    esac
-    if (exec 3<>"/dev/tcp/${_sps_host}/${_sps_port}") 2>/dev/null; then
-        exec 3<&- 2>/dev/null || true
+    if port_alive_bounded "$_sps_addr" "$_sps_port"; then
         printf 'alive'
     else
         printf 'dead'

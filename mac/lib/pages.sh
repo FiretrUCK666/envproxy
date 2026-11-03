@@ -845,7 +845,9 @@ EOF
         _cur_addr=$(printf '%s' "$_cur_hostport" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
         if [ -n "$_cur_port" ]; then
             _cur_alive=1
-            _port_alive "$_cur_addr" "$_cur_port" || _cur_alive=0
+            # 用带超时的版本：状态页是用户盯着看的，不能因为路径上有设备丢包就卡住不动。
+            # _port_alive 没有时限（/dev/tcp 走内核 connect()，会等到系统级超时，实测 85 秒量级）。
+            port_alive_bounded "$_cur_addr" "$_cur_port" || _cur_alive=0
         fi
     fi
 
