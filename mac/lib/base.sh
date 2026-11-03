@@ -227,24 +227,6 @@ proxy_mode_action() {
 # 默认模式：不给参数时按这个来。
 DEFAULT_PROXY_MODE="proxy"
 
-# 全部代理变量名（不含 NO_PROXY 系列）。启动脚本用它决定"要设/要清哪些"。
-# 从 PROXY_VAR_NAMES 派生，不另写一份——两处各写一遍必然会漂移。
-proxy_var_names() {
-    for _pvn in $PROXY_VAR_NAMES; do
-        case "$_pvn" in
-            NO_PROXY|no_proxy) continue ;;
-        esac
-        printf '%s\n' "$_pvn"
-    done
-    return 0
-}
-
-# 默认的 NO_PROXY 值。包一层函数是为了让调用点不必记住常量名，
-# 也让将来换实现（比如按客户端决定）只改这一处。
-default_no_proxy() {
-    printf '%s\n' "$DEFAULT_NO_PROXY"
-    return 0
-}
 
 # 终端同步要检查/写入/摘除的那些 shell 配置文件。
 #

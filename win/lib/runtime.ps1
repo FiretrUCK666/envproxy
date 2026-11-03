@@ -55,10 +55,33 @@ function Get-LauncherCommand {
     return ('powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $LauncherPath)
 }
 
+# 写开机自启动，并**回读确认**。返回 $true = 确认写成功，$false = 没成功。
+#
+# 为什么自己也要验一遍，而不是靠调用方：安装流程（ops.ps1）确实会复读一次，
+# 但那是"调用方记得验"——同一个函数在别处被调用时就没有这层保护了。
+# 自愈路径 Repair-AutoRun 一直是自己验的（写完读回），两条路走同一件事却只有
+# 一条设防，迟早会在新调用点上出"报成功其实没写"的故障。
+#
+# 验证判据与 Repair-AutoRun 完全一致：读回的值等于期望值，且定位器内容是当前版本。
+# 两处判据必须同源，否则会出现"自愈说修好了、安装说没成功"这种自相矛盾的屏幕。
 function Set-AutoRun {
-    New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-    [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
-    Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value (Get-LauncherCommand) -ErrorAction Stop
+    $expected = Get-LauncherCommand
+    try {
+        New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+        [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
+        Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction Stop
+    } catch {
+        # 写失败不抛：调用方靠返回值判断，不靠捕获异常。
+        # 抛的话，安装流程第 1 步会中断后面三步（那段 try 只兜自己，兜不住这里）。
+        return $false
+    }
+    # 回读：装上没装上由复读决定，不由"我调用了写入"决定。
+    try {
+        $actual = (Get-ItemProperty $RunKeyPath -ErrorAction Stop).$RunKeyName
+        return (($actual -eq $expected) -and (Test-LauncherCurrent))
+    } catch {
+        return $false
+    }
 }
 
 function Remove-AutoRun {

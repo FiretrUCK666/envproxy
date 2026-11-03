@@ -6,7 +6,7 @@
 #  留在 ops 里会让以后每一次动 ops 都得先绕过它，也让这一块的边界看不见。
 #
 #  依赖只有 base：常量、纯函数、配色输出（Write-Styled）、清屏（Clear-Screen）、
-#  屏幕宽度与折行（Get-ConsoleWidth / Split-DisplayText）都住在 base。
+#  屏幕宽度（Get-ConsoleWidth / Get-DisplayWidth）都住在 base。
 #  本库**不依赖 ops**；反向依赖是 ops -> shortcut——卸载流程要在删目录之前
 #  扫出这些快捷方式、问用户留不留。依赖是单向的，所以本库在 CoreLibs 里排在
 #  ops 之后只是书写顺序，不代表它需要 ops 先加载。
@@ -83,11 +83,6 @@ function Get-ShortcutMode([string]$Id) {
     return $null
 }
 
-# 全部模式的清单。测试与自检用它遍历，不直接抓 $ShortcutModes：
-# 直接抓变量会让"表改名"变成"测试静默读到空数组"（空数组上的循环一条断言都不跑，看着全绿）。
-function Get-ShortcutModeList {
-    return @($ShortcutModes)
-}
 
 # 全部模式的后缀清单，供扫描时剥离文件名用。
 # 必须按长度降序：'（固定直连）' 比 '（走代理）' 长，先剥短的会让长后缀剥不干净。
@@ -1145,12 +1140,6 @@ $AdvancedModules = @(
              '下面两项只讲怎么改，不会替你动任何配置。')
        Note=@('这两项按回车只会看到说明，不会改你的设置。') }
 )
-# 全部项。测试与自检用它遍历，不直接抓 $AdvancedItems：
-# 直接抓变量会让"表改名"变成"测试读到空数组、循环一条都不跑、看着全绿"。
-function Get-AdvancedItemList {
-    return @($AdvancedItems)
-}
-
 
 # 按模块取项。打印用，分派不用（分派只按编号查）。
 function Get-AdvancedItemsByModule([string]$Module) {
@@ -1168,10 +1157,20 @@ function Get-AdvancedPageLines {
         if ($w -gt $nameWidth) { $nameWidth = $w }
     }
     $out = New-Object System.Collections.ArrayList
-    [void]$out.Add(@{ Role='title';   Text='======== 高级功能 ========' })
+    [void]$out.Add(@{ Role='title';   Text=(Format-TitleRule '高级功能') })
+    # 模块之间画一条分隔线：三块内容各讲一件事，全靠 heading 区分时，
+    # 眼睛要扫到下一行的颜色才能判断"这是新的一段"，而 heading 与正文的
+    # 视觉重量太接近，那个边界看不出来。第一个模块前不画——
+    # 标题下面紧跟一条线会像"标题被划掉了"。
+    $advModIndex = 0
     foreach ($mod in $AdvancedModules) {
         $items = @(Get-AdvancedItemsByModule $mod.Id)
         if ($items.Count -eq 0) { continue }
+        if ($advModIndex -gt 0) {
+            [void]$out.Add(@{ Role='blank'; Text='' })
+            [void]$out.Add(@{ Role='dim';   Text=(Format-PlainRule '高级功能') })
+        }
+        $advModIndex++
         [void]$out.Add(@{ Role='blank';   Text='' })
         [void]$out.Add(@{ Role='heading'; Text=('  ' + $mod.Title) })
         [void]$out.Add(@{ Role='blank';   Text='' })
@@ -1195,7 +1194,7 @@ function Get-AdvancedPageLines {
         }
     }
     [void]$out.Add(@{ Role='blank';   Text='' })
-    [void]$out.Add(@{ Role='dim';     Text='  输编号后回车执行    0 = 返回主菜单' })
+    [void]$out.Add(@{ Role='dim';     Text=(Format-ListExitHint '输编号后回车执行') })
     return $out
 }
 
@@ -1252,7 +1251,7 @@ function Get-RelayPageLines {
     # 曾经把"去选 1 修它"放在这里，同屏又写着"什么都不用做"——
     # 给了动作又立刻收回，读者会在"要不要管"之间反复，那比不说更糟。
     $lines = @(
-        @{ Role='title';   Text='======== 查看中继 ========' },
+        @{ Role='title';   Text=(Format-TitleRule '查看中继') },
         @{ Role='blank';   Text='' },
         @{ Role='heading'; Text='  它是什么' },
         @{ Role='blank';   Text='' },
@@ -1283,7 +1282,7 @@ function Get-RelayPageLines {
     }
     $lines += @(
         @{ Role='blank';   Text='' },
-        @{ Role='dim';     Text='  这里没有开关要拨。看完按回车返回。' }
+        @{ Role='dim';     Text='  这里没有开关要拨。' }
     )
     return $lines
 }
@@ -1380,7 +1379,7 @@ function Show-ProgramPicker {
         # 只是他永远没机会按。能看见的提示必须配一个能应答的输入。
         while ($true) {
             Clear-Screen
-            Write-Styled 'title' '======== 选一个程序 ========'
+            Write-Styled 'title' (Format-TitleRule '选一个程序')
             Write-Host ''
             Write-Styled 'warn' '  没找到可以建快捷方式的程序。'
             Write-Host ''
@@ -1417,7 +1416,7 @@ function Show-ProgramPicker {
     $totalPages = [math]::Ceiling($Programs.Count / $PageSize)
     while ($true) {
         Clear-Screen
-        Write-Styled 'title' '======== 选一个程序 ========'
+        Write-Styled 'title' (Format-TitleRule '选一个程序')
         Write-Host ''
         $start = $page * $PageSize
         $end = [Math]::Min($start + $PageSize - 1, $Programs.Count - 1)
@@ -1450,7 +1449,7 @@ function Show-ProgramPicker {
             if (-not $p) { continue }
             if (-not (Test-Path -LiteralPath $p)) {
                 Write-Styled 'warn' '  找不到这个文件。'
-                try { $null = Read-Host '  按回车继续' } catch { return $null }
+                try { $null = Read-Host (Format-PromptHint '回车继续') } catch { return $null }
                 continue
             }
             return ([pscustomobject]@{
@@ -1512,7 +1511,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
 
     # 选放哪里。默认桌面——用户最容易看到也最容易拖到任务栏。
     Clear-Screen
-    Write-Styled 'title' '======== 放在哪里 ========'
+    Write-Styled 'title' (Format-TitleRule '放在哪里')
     Write-Host ''
     Write-Styled 'text' ('  程序：' + $chosen.Name)
     Write-Styled 'dim'  ('  路径：' + $chosen.TargetPath)
@@ -1562,7 +1561,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     }
     if (-not $dest -or -not (Test-Path -LiteralPath $dest)) {
         Write-Styled 'warn' '  这个文件夹用不了，已取消。'
-        try { $null = Read-Host '  按回车继续' } catch {}
+        try { $null = Read-Host (Format-PromptHint '回车继续') } catch {}
         return
     }
 
@@ -1594,7 +1593,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     # 三段用同一套"标签 + 值"排版。原来「程序」只有标签、值另起一行，
     # 而下面两段是同一行，三段格式不一致，最像"界面坏了"的位置恰好是最后确认这屏。
     Clear-Screen
-    Write-Styled 'title' '======== 确认 ========'
+    Write-Styled 'title' (Format-TitleRule '确认')
     Write-Host ''
     Write-Styled 'text' ('  程序    ' + $chosen.Name)
     Write-Styled 'dim'  ('          ' + $chosen.TargetPath)
@@ -1678,7 +1677,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         Write-Styled 'dim'  ('         ' + $r.Reason)
     }
     Write-Host ''
-    try { $null = Read-Host '  按回车返回' } catch {}
+    try { $null = Read-Host (Format-PromptHint '回车返回') } catch {}
 }
 
 # 管理页：列出所有我们建的快捷方式，可以逐个删。
@@ -1690,12 +1689,12 @@ function Invoke-ManageProxyShortcuts {
         $recs = @(Get-ProxyShortcutRecords)
         $orphans = @(Get-OrphanProxyLaunchers)
         Clear-Screen
-        Write-Styled 'title' '======== 管理已建的 ========'
+        Write-Styled 'title' (Format-TitleRule '管理已建的')
         Write-Host ''
         if ($recs.Count -eq 0 -and $orphans.Count -eq 0) {
             Write-Styled 'dim' '  还没有建过。先回上一页选 1 或 2 建一个。'
             Write-Host ''
-            try { $null = Read-Host '  （按回车返回）' } catch {}
+            try { $null = Read-Host (Format-PromptHint '回车返回') } catch {}
             return
         }
         # 按程序名排序，同一程序的两种规矩自然挨在一起。
@@ -2000,7 +1999,7 @@ function Show-GuidePage([string]$Title, [object[]]$Blocks, [string]$Footer) {
     Write-Host ''
     Write-Styled 'text' ('  ' + $Footer)
     Write-Host ''
-    Write-Styled 'key' '  按回车返回'
+    Write-Styled 'key' (Format-ExitHint 'BackToMenu')
     try { $null = Read-Host } catch {}
 }
 
@@ -2069,7 +2068,7 @@ function Show-RescuePage {
     #
     # 重心放在**结论**上：用户点进来时心里只有一个问题「我这网怎么了」。
     # 明细缩进一层，表示它是结论的注脚，不是并列的第二件事。
-    Write-Styled 'title' '======== 浏览器代理修复 ========'
+    Write-Styled 'title' (Format-TitleRule '浏览器代理修复')
     Write-Host ''
     # 第一句就说清它管到哪儿。名字里带「浏览器」，但用户到这里时心里想的是
     # 「我整个网都不行」——不说清，他会以为这一屏能修所有上网问题，
@@ -2180,7 +2179,7 @@ function Show-RescuePage {
     $hasBackup = $false
     try { $hasBackup = [bool](Test-Item (Get-SysProxyBackupPath)) } catch { $hasBackup = $false }
     if ($fixable.Count -eq 0 -and -not $hasBackup) {
-        Write-Styled 'dim' '  按回车返回'
+        Write-Styled 'dim' (Format-ExitHint 'BackToMenu')
         try { [void](Read-Host) } catch { return }
         return
     }
@@ -2199,7 +2198,7 @@ function Show-RescuePage {
         Write-Host ''
         if ($ok) { Write-Styled 'ok' '  [完成] 已经改回第一次修之前的样子。' }
         else { Write-Styled 'warn' '  [未完成] 没能改回去。可以再试一次。' }
-        Write-Styled 'dim' '  按回车返回'
+        Write-Styled 'dim' (Format-ExitHint 'BackToMenu')
         try { [void](Read-Host) } catch { }
         return
     }
@@ -2263,7 +2262,7 @@ function Show-RescuePage {
         foreach ($cn in $otherConns) { Write-Styled 'text' ('    ' + $cn) }
         Write-Styled 'dim'  '  如果你在用拨号或 VPN 上网，请在上面那个连接里看一下代理设置。'
     }
-    Write-Styled 'dim' '  按回车返回'
+    Write-Styled 'dim' (Format-ExitHint 'BackToMenu')
     try { [void](Read-Host) } catch { }
     return
 }

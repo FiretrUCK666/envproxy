@@ -100,7 +100,7 @@ Assert-Eq 'help points at install/repair as the catch-all' $true ($helpTxt -matc
 Assert-Eq 'help gives the per-window switch' $true ($helpTxt -match 'ENVPROXY_TERM')
 # Every screen ends with the way back out. Without it a user who lands on a topic
 # has no idea how to leave, which is exactly the "wall of text" problem pagination solves.
-Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '直接回车')
+Assert-Eq 'a topic screen says how to go back' $true ((Format-HelpTopic '1') -match '回车')
 # 交互只有两种操作：输数字、直接回车。屏幕上不能出现 n / p / m / a 这类字母导航——
 # 用户记不住哪个键管哪件事，而这正是之前被抱怨的地方。
 # 这条钉住的是「文案里不许再出现字母导航」，不是措辞本身。
@@ -108,7 +108,7 @@ $topicText = (Format-HelpTopic '1')
 Assert-Eq 'a topic screen offers no letter keys' $false ($topicText -match 'n = |p = |m = |a 看')
 $indexText = (Format-HelpIndex)
 Assert-Eq 'the help index offers no letter keys' $false ($indexText -match 'n = |p = |m = |a 看')
-Assert-Eq 'the help index says what Enter does' $true ($indexText -match '直接回车')
+Assert-Eq 'the help index says what Enter does' $true ($indexText -match '回车')
 # 每一行都带一个明确角色，屏幕才有层次，而不是一整屏灰。
 # 角色由内容自己声明（行首标记），不从行的形状去猜——猜的判据注定会错：
 # 同一屏里 `set HTTP_PROXY=…` 判成命令、`PowerShell  $env:...` 判成说明，

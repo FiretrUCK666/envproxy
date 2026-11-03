@@ -543,7 +543,7 @@ function Get-BashBlockLines {
 # 标记注释就是给那条门禁定位用的，不要删。
 function Get-PromptSyncContent {
     # <<<PROMPT_SYNC_BEGIN>>>
-    return @'
+    $tpl = @'
 # ==============================================================================
 #  prompt-sync.sh — 让 Git Bash 里"已经开着的窗口"跟着代理状态走
 #  由 bash 启动时加载一次（~/.bashrc 里那一行）；它自己注册"每次提示符前重读"的钩子。
@@ -610,7 +610,7 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
         _epc_want=""
         while IFS='=' read -r _epc_k _epc_v; do
             case "$_epc_k" in
-                owned_HTTP_PROXY|owned_HTTPS_PROXY|owned_ALL_PROXY|owned_NO_PROXY|owned_NODE_USE_ENV_PROXY) ;;
+                __ENVPROXY_OWNED_KEYS__) ;;
                 *) continue ;;
             esac
             _epc_n="${_epc_k#owned_}"
@@ -637,18 +637,18 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
             # 而使用者以为"敲回车就跟上了"——状态文件明明写的是断开。
             _epc_lc=""
             case "$_epc_n" in
-                HTTP_PROXY)  eval "_epc_lc=\"\${http_proxy-}\"" ;;
-                HTTPS_PROXY) eval "_epc_lc=\"\${https_proxy-}\"" ;;
-                ALL_PROXY)   eval "_epc_lc=\"\${all_proxy-}\"" ;;
-                NO_PROXY)    eval "_epc_lc=\"\${no_proxy-}\"" ;;
+                __ENVPROXY_LC_CASES_READ__
+
+
+
             esac
             if [ "$_epc_cur" = "$_epc_want" ] || { [ -n "$_epc_lc" ] && [ "$_epc_lc" = "$_epc_want" ]; }; then
                 unset "$_epc_n" 2>/dev/null || true
                 case "$_epc_n" in
-                    HTTP_PROXY)  unset http_proxy 2>/dev/null || true ;;
-                    HTTPS_PROXY) unset https_proxy 2>/dev/null || true ;;
-                    ALL_PROXY)   unset all_proxy 2>/dev/null || true ;;
-                    NO_PROXY)    unset no_proxy 2>/dev/null || true ;;
+                    __ENVPROXY_LC_CASES_UNSET__
+
+
+
                 esac
             fi
         done < "$_ENVPROXY_GB_STATE"
@@ -720,7 +720,43 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
     _envproxy_gb_apply
 fi
 '@
+    # 把占位符换成真实清单。
+    #
+    # 为什么不在 here-string 里直接写：这里是单引号 here-string，不插值；
+    # 换成双引号的话整个 bash 脚本里的每个 $ 都要转义，一处漏掉就是一个
+    # 静默失效的变量引用——代价远大于收益。
+    #
+    # 为什么必须换：这段 bash 里原本手抄了三份变量清单（归属键、大小写读取、
+    # 大小写清除）。抄写与 $ProxyVarNames 是两处独立的事实，新增第 6 个变量时
+    # 漏改任何一处都不会报错：Git Bash 窗口里那个变量永远清不掉（case 落到
+    # `*) continue`），而 Windows 主流程一切正常。这正是"同一判断只准有一处
+    # 实现"要防的事。
+    #
+    # 大小写映射只对"有对应小写拼写"的变量生成。Windows 变量名不区分大小写，
+    # 但 Git Bash 里 export 出来的名字是逐字节比较的，curl 只认小写那套，
+    # 所以这里要显式处理成对的名字；$ProxyVarNames 里没有小写拼写，
+    # 对不上的就跳过（NODE_USE_ENV_PROXY 就是这种）。
+    $tpl = $tpl.Replace('__ENVPROXY_OWNED_KEYS__', (($ProxyVarNames | ForEach-Object { 'owned_' + $_ }) -join '|'))
+    $lcRead = @()
+    $lcUnset = @()
+    foreach ($n in $ProxyVarNames) {
+        $lc = $n.ToLowerInvariant()
+        # 必须用 -cne（区分大小写）：PowerShell 的 -eq 对字符串不区分大小写，
+        # `'HTTP_PROXY' -eq 'http_proxy'` 返回 True，于是这条映射一条都生成不出来。
+        # 实测踩过：生成出来的脚本里只有一个空的 _epc_lc=""，小写那套永远清不掉。
+        if ($lc -ceq $n) { continue }
+        # 缩进按最长名字对齐：$n 之后补到第 12 列，让 case 分支的右括号对齐。
+        # 补到第 20 列：最长的是 NODE_USE_ENV_PROXY（18 字符），再留一格空格。
+        $pad = ' ' * [Math]::Max(0, 20 - $n.Length)
+        # 塞进格式串必须双写成 {{ }}，而那正是上一版生成出空映射的原因——
+        # 一个转义写错，整条 case 分支变成空行，脚本语法还在、功能没了。
+        $lcRead  += ('                ' + $n + ')' + $pad + 'eval "_epc_lc=\"' + '${' + $lc + '-}\"" ;;')
+        $lcUnset += ('                    ' + $n + ')' + $pad + 'unset ' + $lc + ' 2>/dev/null || true ;;')
+    }
+    $tpl = $tpl.Replace('                __ENVPROXY_LC_CASES_READ__', ($lcRead -join "`n"))
+    $tpl = $tpl.Replace('                    __ENVPROXY_LC_CASES_UNSET__', ($lcUnset -join "`n"))
     # <<<PROMPT_SYNC_END>>>
+    return $tpl
 }
 
 # 把模板复制到 ~/.envproxy/prompt-sync.sh。

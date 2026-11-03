@@ -920,6 +920,56 @@ function Get-DisplayWidth([string]$Text) {
     return $w
 }
 
+# ------------------------------------------------------------------------------
+# 屏幕横线：全站唯一来源
+# ------------------------------------------------------------------------------
+#
+# 为什么要有这一层：以前每个页面自己敲等号。实测同一屏里能同时出现三种宽度
+# （状态页曾是 29 / 38 / 34），看起来像三个不同层级的组件拼在一起。
+#
+# 规则只有一条：**一根线的宽度由它的标题决定，且有下限**。
+# 下限 40 是因为标题常常很短（"EnvProxy 状态"只有 29 列），
+# 而 29 列的段标题显得局促；40 列能容纳常见短句，又不会在窄窗口折行。
+#
+# 必须按**显示宽度**算，不能按字符数：中文一个字占两格。
+# 按字符数算出来的三条线字符数相同，但显示宽度是 42 / 44 / 40——终端里就是没对齐。
+$script:RuleMinWidth = 40
+
+# 造一根等号线：文字居中，两侧补等号，显示宽度恰好 max(文字+2, 40)。
+function Format-TitleRule([string]$Text) {
+    $textW = Get-DisplayWidth $Text
+    $w = [Math]::Max($textW + 2, $script:RuleMinWidth)
+    $need = $w - $textW - 2
+    $left = [Math]::Floor($need / 2)
+    $right = $need - $left
+    return (('=' * $left) + ' ' + $Text + ' ' + ('=' * $right))
+}
+
+# 造一根横杠线：文字居中，两侧补横杠，宽度规则同上。
+# 用于"这一屏之内的段落分界"，与等号线（屏标题）区分开。
+function Format-SectionRule([string]$Text) {
+    $textW = Get-DisplayWidth $Text
+    $w = [Math]::Max($textW + 2, $script:RuleMinWidth)
+    $need = $w - $textW - 2
+    $left = [Math]::Floor($need / 2)
+    $right = $need - $left
+    return (('-' * $left) + ' ' + $Text + ' ' + ('-' * $right))
+}
+
+# 纯等号收尾线，宽度与同屏标题线一致。
+function Format-BottomRule([string]$TitleText) {
+    $textW = Get-DisplayWidth $TitleText
+    $w = [Math]::Max($textW + 2, $script:RuleMinWidth)
+    return ('=' * $w)
+}
+
+# 一根不带文字的分隔线（用于内容块之间），与屏标题同宽，用横杠。
+function Format-PlainRule([string]$TitleText) {
+    $textW = Get-DisplayWidth $TitleText
+    $w = [Math]::Max($textW + 2, $script:RuleMinWidth)
+    return ('-' * $w)
+}
+
 # 去掉一行里的 ANSI 颜色序列，只留可见文字。
 # 需要按"可见字符位置"切分的场合用它；纯算宽度用 Get-DisplayWidth 即可。
 function Remove-AnsiColor([string]$Text) {
@@ -946,54 +996,6 @@ function Get-ConsoleWidth([int]$Fallback = 80) {
     return [Math]::Max(40, $Fallback)
 }
 
-# 把一行长文字折成多行，续行保持缩进。
-#
-# 为什么要这个：管理页要显示快捷方式的完整路径，而任务栏那条路径有 130 多个字符，
-# 在普通终端里必然折行。系统自动折行的续行从第 0 列开始，于是"图标"和它下面那半截
-# 路径看起来是两行无关的东西——而这一屏的全部作用正是"认准要删哪一个"。
-# 自己折行，续行就能对齐到值那一列。
-#
-# 折行点优先选空格与反斜杠（路径在这些位置断开最好读）；一段里找不到合适的位置
-# 就硬切，保证宽度一定不超。
-function Split-DisplayText([string]$Text, [int]$Width, [int]$Indent = 0) {
-    if (-not $Text) { return @() }
-    # 宽度太小就别折了：硬折成每行一两个字符反而更难读。这是有意的降级，
-    # 不是「折到这个宽度」——调用方要保证宽度够（Get-ConsoleWidth 最小给 40）。
-    if ($Width -lt 8) { return @((' ' * $Indent) + $Text) }
-    $out = @()
-    $rest = $Text
-    $pad = ' ' * $Indent
-    $first = $true
-    while ($true) {
-        # 续行至少留 8 格：缩进接近或超过总宽时，减出来的宽度会小到只剩一两个字符。
-        $avail = if ($first) { $Width } else { [Math]::Max(8, $Width - $Indent) }
-        if ((Get-DisplayWidth $rest) -le $avail) {
-            $out += $(if ($first) { $rest } else { $pad + $rest })
-            break
-        }
-        # 逐字符累加到刚好超宽为止，记下最后见到的可断点
-        $acc = 0
-        $cut = -1
-        $break = -1
-        for ($i = 0; $i -lt $rest.Length; $i++) {
-            $cw = Get-CharWidth $rest[$i]
-            if ($acc + $cw -gt $avail) { break }
-            $acc += $cw
-            $cut = $i
-            if ($rest[$i] -eq ' ' -or $rest[$i] -eq '\' -or $rest[$i] -eq '/') { $break = $i }
-        }
-        if ($cut -lt 0) { $cut = 0 }
-        # 断点太靠前就不用它（会切出很短的一段，反而更难读）
-        if ($break -gt 0 -and $break -ge [int]($cut * 0.6)) { $cut = $break }
-        $piece = $rest.Substring(0, $cut + 1).TrimEnd()
-        if (-not $piece) { $piece = $rest.Substring(0, $cut + 1) }
-        $out += $(if ($first) { $piece } else { $pad + $piece })
-        $rest = $rest.Substring($cut + 1).TrimStart()
-        $first = $false
-        if (-not $rest) { break }
-    }
-    return $out
-}
 
 # 为什么必须带判断：Clear-Host 在输出被重定向时（管道、日志、CI）会抛
 # "设置 CursorPosition 时出现异常：句柄无效"——它依赖真实控制台缓冲区。
@@ -1088,3 +1090,52 @@ $MenuItems = @(
     @{ Key = "8"; Name = "问题反馈";   Switch = "Report";    Group = "支持"; Hint = "出问题了，一键生成一份报告" },
     @{ Key = "0"; Name = "退出";       Switch = "";          Group = "退出"; Hint = "关掉这个窗口" }
 )
+
+# ------------------------------------------------------------------------------
+# 退出提示：全站唯一措辞来源
+# ------------------------------------------------------------------------------
+#
+# 为什么要有这一层：同一件事（"怎么离开这一屏"）原来有八种写法——
+#   `0 = 返回主菜单` / `0 = 返回` / `按回车返回` / `按回车继续` /
+#   `按回车回菜单` / `（按回车返回）` / `按 0 或 Esc 返回` / `看完按回车返回`
+# 用户每换一屏就要重新认一遍"这句话是什么意思"，而它说的其实是同一件事。
+#
+# 现在按"回到哪里"分三档，措辞由这里定，各页只选调用哪一个：
+#   BackToMenu   -> 回主菜单（顶层页面用）
+#   BackToParent -> 回上一级（二级页面用）
+#   BackToQuit   -> 退出（没有上一级时用）
+#
+# 不合并"回车"与"编号"两种交互：编号列表页的回车是"不选、退出去"，
+# 说明页的回车是"看完了、退出去"，二者的动作一样但语境不同，
+# 硬写成同一句会让编号页的人以为要输 0 才能退。
+
+# 说明页的退出提示（看完就回车）。返回可直接打印的一行文字。
+function Format-ExitHint([string]$Where = 'BackToMenu') {
+    switch ($Where) {
+        'BackToMenu'   { return '  看完按回车，回主菜单' }
+        'BackToParent' { return '  看完按回车，回上一级' }
+        default        { return '  看完按回车退出' }
+    }
+}
+
+# 编号列表页的退出提示。$Key 是这个页面接受的退出编号（通常是 '0'）。
+function Format-ListExitHint([string]$Action, [string]$Key = '0', [string]$Where = 'BackToMenu') {
+    $target = switch ($Where) {
+        'BackToMenu'   { '回主菜单' }
+        'BackToParent' { '回上一级' }
+        default        { '退出' }
+    }
+    # 两个数字都要说：$Key 是"这个编号也能退"，"直接回车"是"这个动作也能退"。
+    # 少了任一半，用户就得猜怎么确认输入；实测写出"输编号查看    0 = 回主菜单"
+    # 之后，屏幕上根本找不到"回车"这个词，而那一屏的全部交互就是"输编号后回车"。
+    $tail = ''
+    if ($Key) { $tail = '    ' + $Key + ' 也一样' }
+    return ('  ' + $Action + '    直接回车 = ' + $target + $tail)
+}
+
+# 输入框的提示文字（Read-Host 的 prompt）。$Key 为空表示"只认回车"。
+# 注意：Read-Host 的提示**不能为空**——空串会抛"name 不能为 NULL 或为空"，
+# 而调用处普遍用 try{}catch{} 兜，于是那一屏闪一下就退出了（实测踩过）。
+function Format-PromptHint([string]$Action = '回车继续') {
+    return ('  ' + $Action)
+}

@@ -399,11 +399,18 @@ _repair_hooks() {
 # 互相矛盾的结论，其中一个后果是修复入口看不见问题、那条补救路变成死路（实测过）。
 # 判据只认"去掉首尾空白后逐字节相等"。
 _hook_marker_present() {
-    _hmp_file="$1"
-    _hmp_mark="$2"
-    [ -f "$_hmp_file" ] || return 1
-    # 用 awk 而不是 grep：需要按行去首尾空白再比。awk 是 POSIX 自带，无依赖。
-    awk -v m="$_hmp_mark" '{ line=$0; gsub(/^[ \t]+|[ \t]+$/, "", line); if (line == m) { found=1; exit } } END { exit found ? 0 : 1 }' "$_hmp_file" 2>/dev/null
+    # 判据只有一处实现：交给 _hook_marker_line 取行号，取到了就是"在"。
+    #
+    # 为什么不再各写一段 awk：这两处的判据必须逐字节相同（去首尾空白后相等），
+    # 而两份 awk 里那句 gsub 是本函数全部的逻辑。改一处漏一处，会让"判定存在"
+    # 与"取行号"对同一个文件给出矛盾结论——症状正是下面 _hook_block_paired 注释里
+    # 描述的那个死状态：存在=true、行号取不到、于是判不成对、补救路走不通。
+    # 合并之后"严格度"只由 _hook_marker_line 决定，没有第二种可能。
+    #
+    # 成本：多一层函数调用。它是 shell 函数调用（不是 fork），且只在这几个
+    # 安装/卸载/状态路径上用，不在每 2 秒一次的热路径上。
+    _hmp_line=$(_hook_marker_line "$1" "$2") || return 1
+    [ -n "$_hmp_line" ] || return 1
 }
 
 repair_hook_markers() {

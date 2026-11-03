@@ -56,7 +56,7 @@ function New-ProblemReport {
     # 顺序不能反：只把环境收齐、却不问症状，作者拿到的是一份"这台机器当时长什么样"，
     # 而不是"哪里坏了"——三十行状态值一条也用不上，还得反问用户，一来一回一天。
     Write-Host ''
-    Write-Styled 'title' '======== 问题反馈 ========'
+    Write-Styled 'title' (Format-TitleRule '问题反馈')
     Write-Host ''
     Write-Styled 'text' '  下面问你四句话，一句话一行，随手写就行。'
     Write-Styled 'dim'  '  写完会自动补上这台机器的情况，生成一份可以贴到网页上的报告。'
@@ -225,7 +225,7 @@ function New-ProblemReport {
         return
     }
 
-    Write-Styled 'title' '======== 报告已生成 ========'
+    Write-Styled 'title' (Format-TitleRule '报告已生成')
     Write-Host ''
     Write-Styled 'ok' '  报告文件：'
     Write-Styled 'value' ('  ' + $saved)

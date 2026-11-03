@@ -42,9 +42,29 @@ jobs:
           # 所以这里把它抽出来单独解析一遍。生成式代码必须有这道检查，否则改坏了没人知道。
           _pstpl=$(mktemp "${TMPDIR:-/tmp}/envproxy_pstpl.XXXXXX" 2>/dev/null) || { echo "临时文件建不出来"; fail=1; }
           if [ -n "${_pstpl:-}" ]; then
-            # 标记注释夹住整段：去掉两行标记、再去掉 return @' 与 '@ 两行，剩下的就是脚本正文。
-            sed -n '/<<<PROMPT_SYNC_BEGIN>>>/,/<<<PROMPT_SYNC_END>>>/p' win/lib/shell.ps1 \
-              | sed '1d;$d' | sed '1d;$d' > "$_pstpl"
+            # 标记注释夹住整段。要抽的是 here-string 的**正文**：
+            #   L545  # <<<PROMPT_SYNC_BEGIN>>>
+            #   L546  $tpl = @'            <- 正文从这里开始（不含这一行）
+            #   L722  '@                    <- 正文到这里结束（不含这一行）
+            #   L758  # <<<PROMPT_SYNC_END>>>
+            # 两行标记之间还有一段 PowerShell 插值代码（把占位符换成变量清单），
+            # 它不是 bash，混进来会让 bash -n 报"unexpected token"。
+            #
+            # 用「先取行号、再按行号切」而不是一条 sed 范围：范围表达式要匹配
+            # 以单引号开头的行（'@），而单引号在 bash 与 YAML 两层里都要转义，
+            # 实测写错过两次——两次都是抽出来的内容带着 PowerShell 语法，
+            # 报错行号指向完全无关的行，排查方向全错。行号运算是纯数字，没有这个问题。
+            _ps_t=$(grep -n '^    \$tpl = @' win/lib/shell.ps1 | head -1 | cut -d: -f1)
+            _ps_e=$(grep -n "^'@$" win/lib/shell.ps1 | head -1 | cut -d: -f1)
+            if [ -z "$_ps_t" ] || [ -z "$_ps_e" ] || [ "$_ps_t" -ge "$_ps_e" ]; then
+              echo "找不到 Git Bash 同步脚本的正文边界（win/lib/shell.ps1 的 here-string 被改了？）"
+              fail=1
+            else
+              sed -n "$((_ps_t+1)),$((_ps_e-1))p" win/lib/shell.ps1 \
+                | sed 's/^                __ENVPROXY_LC_CASES_READ__$/                PLACEHOLDER) ;;/' \
+                | sed 's/^                    __ENVPROXY_LC_CASES_UNSET__$/                    PLACEHOLDER) ;;/' \
+                | sed 's/__ENVPROXY_OWNED_KEYS__/owned_PLACEHOLDER/' > "$_pstpl"
+            fi
             if [ ! -s "$_pstpl" ]; then
               echo "抽不出 Git Bash 同步脚本模板（win/lib/shell.ps1 里的标记被改了？）"
               fail=1
@@ -2047,7 +2067,7 @@ jobs:
           #   ③ 判活的语义一致：只连 TCP 端口，不建隧道、不访问目标。
           $winDoc = Get-CodeOnly 'win/lib/doctor.ps1'
           $macDoc = Get-CodeOnly 'mac/lib/doctor.sh'
-          $kindNames = @('clean', 'residue-blocking', 'residue-slowing', 'alive', 'foreign', 'managed')
+          $kindNames = @('clean', 'residue-blocking', 'residue-slowing', 'alive', 'foreign', 'managed', 'unreadable')
           # 两端各按自己的写法取：Win 是哈希表里的值（'clean' = …），Mac 是常量赋值（…="clean"）。
           # 不按各自写法取，这条断言就只是在检查"字面量长什么样"，不是检查结论词本身。
           foreach ($k in $kindNames) {

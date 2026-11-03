@@ -28,6 +28,13 @@ SYSPROXY_KIND_SLOWING="residue-slowing"      # 自动配置脚本指向死端口
 SYSPROXY_KIND_ALIVE="alive"                  # 回环地址 + 端口活着：翻墙软件正在用，不动
 SYSPROXY_KIND_FOREIGN="foreign"              # 不是回环：公司/学校代理，工具不碰
 SYSPROXY_KIND_MANAGED="managed"              # 被描述文件/策略管着：改了也会被改回，不动
+# 读不出来：networksetup 被拦、权限不足、输出认不出来。
+# **必须与 foreign 分开**——foreign 断言「这是别人的代理」，而读不出来时
+# 我们连地址都没拿到，说成 foreign 就是编的。
+# 它不可修，也不进「不能动」那一组的计数（那组的意思是「东西在那儿，但不归我碰」）。
+# 少了这个词，读失败的那一层会在清单里**整层消失**：使用者报上不了网，
+# 工具却说「没发现问题」——最难被当成故障的一类失效。
+SYSPROXY_KIND_UNREADABLE="unreadable"
 
 # 「哪个结论允许被修」只有一处：**只有 residue 两类**。
 # 界面要判断「这项能不能修」时调这个，不许自己写字符串比较——
@@ -204,7 +211,15 @@ sysproxy_layers() {
     sysproxy_list_services | while IFS= read -r _gspl_svc; do
         [ -n "$_gspl_svc" ] || continue
         for _gspl_kind in web secureweb socksfirewall autoproxy; do
-            _gspl_raw=$(_sysproxy_read_one "$_gspl_svc" "$_gspl_kind") || continue
+            # 读失败**不许静默跳过**：跳过意味着那一层从清单里消失，
+            # 界面上就成了「这个服务没有任何代理设置」，而真相是「读不出来」。
+            # 两者对使用者的含义完全相反：前者是没事，后者是"工具也看不见，得人工查"。
+            # 所以产出一条 unreadable 记录，字段填占位值，让界面能如实说一句。
+            if ! _gspl_raw=$(_sysproxy_read_one "$_gspl_svc" "$_gspl_kind"); then
+                printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+                    "unknown" "$_gspl_svc" "$SYSPROXY_KIND_UNREADABLE" "" "" "$_gspl_kind"
+                continue
+            fi
             _gspl_en=$(printf '%s\n' "$_gspl_raw" | sed -n '1p')
             _gspl_host=$(printf '%s\n' "$_gspl_raw" | sed -n '2p')
             _gspl_port=$(printf '%s\n' "$_gspl_raw" | sed -n '3p')

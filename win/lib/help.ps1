@@ -11,8 +11,8 @@ function Get-MenuRenderedLines {
     $hl = Get-MonitorProcess
     $verText = Get-LocalVersion
     if (-not $verText) { $verText = "未知" }
-    $out += [pscustomobject]@{ Role = 'title'; Text = '======== EnvProxy 菜单 ========'
-                               Segments = @(@{ Role = 'title'; Text = '======== EnvProxy 菜单 ========' }) }
+    $out += [pscustomobject]@{ Role = 'title'; Text = (Format-TitleRule 'EnvProxy 菜单')
+                               Segments = @(@{ Role = 'title'; Text = (Format-TitleRule 'EnvProxy 菜单') }) }
     # 抬头是这一屏最该被看到的一行：用户打开菜单九成的目的是"我现在正常吗"，
     # 答案就在这里（监控在跑 = 正常，未运行 = 有问题）。
     # 早先整行用 dim（暗灰），等于把答案压到最暗、还给它贴了"背景信息"的标签；
@@ -489,8 +489,8 @@ function Get-HelpIndexRenderedLines {
     $ver = Get-LocalVersion
     if ([string]::IsNullOrWhiteSpace($ver)) { $ver = '未知' }
     $out = @()
-    $out += [pscustomobject]@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================'
-                               Segments = @(@{ Role = 'title'; Text = '================ EnvProxy 帮助 ================' }) }
+    $out += [pscustomobject]@{ Role = 'title'; Text = (Format-TitleRule 'EnvProxy 帮助')
+                               Segments = @(@{ Role = 'title'; Text = (Format-TitleRule 'EnvProxy 帮助') }) }
     $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
     # 引导语与下面的清单之间空一行：不然"按你遇到的问题挑一条"会被读成清单的第一条。
     # 与帮助正文同一套规矩——标题/引导语负责起头，内容另起一段。
@@ -523,8 +523,8 @@ function Get-HelpIndexRenderedLines {
     $out += [pscustomobject]@{ Role = 'dim'; Text = ('  本机版本 v' + $ver)
                                Segments = @(@{ Role = 'dim'; Text = ('  本机版本 v' + $ver) }) }
     $out += [pscustomobject]@{ Role = 'blank'; Text = ''; Segments = @() }
-    $out += [pscustomobject]@{ Role = 'dim'; Text = '  输编号查看    直接回车 = 回主菜单'
-                               Segments = @(@{ Role = 'dim'; Text = '  输编号查看    直接回车 = 回主菜单' }) }
+    $out += [pscustomobject]@{ Role = 'dim'; Text = (Format-ListExitHint '输编号查看')
+                               Segments = @(@{ Role = 'dim'; Text = (Format-ListExitHint '输编号查看') }) }
     return $out
 }
 
@@ -599,7 +599,7 @@ function Format-HelpTopic([string]$Key) {
     foreach ($r in (Get-HelpRenderedLines $t.Lines)) { [void]$out.Add($r.Text) }
     [void]$out.Add('')
     [void]$out.Add((Format-HelpNavLine $t.Key))
-    [void]$out.Add('  输编号看别的    直接回车 = 回目录')
+    [void]$out.Add((Format-ListExitHint '输编号看别的' '0' 'BackToParent'))
     return ($out -join "`n")
 }
 
@@ -620,7 +620,7 @@ function Show-HelpTopicColored([string]$Key) {
     }
     Write-Host ''
     Write-Styled 'dim' (Format-HelpNavLine $t.Key)
-    Write-Styled 'dim' '  输编号看别的    直接回车 = 回目录'
+    Write-Styled 'dim' (Format-ListExitHint '输编号看别的' '0' 'BackToParent')
     return $true
 }
 
@@ -747,7 +747,7 @@ function Show-Menu {
             Write-Styled 'warn' ("启动失败：{0}" -f $_.Exception.Message)
         }
         # 子命令跑完先停一下：下一轮开头就要清屏，不等一下就把它刚打印的内容抹掉了。
-        try { $null = Read-Host '按回车回菜单' } catch { return }
+        try { $null = Read-Host (Format-PromptHint '回车回主菜单') } catch { return }
         $mode = "menu"
     }
 }

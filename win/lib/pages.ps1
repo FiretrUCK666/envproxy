@@ -25,48 +25,6 @@
 # 两边会不会分叉？会，所以这个函数的输出必须由 Show-StatusSnapshot 的同源数据算出：
 #   - 结论行、问题清单、参考项：同一份 $st
 #   - 判断逻辑：调同一个 Get-StatusProblems（下面抽出来的）
-# 状态页所有横线的宽度统一由这里算，不许各处手敲等号。
-#
-# 为什么：这一屏同时存在三根横线——顶部标题、「最近日志」段标题、底部收尾。
-# 原来它们分别是 29 / 38 / 34 个字符，全是手敲的，于是三根线互不相干，
-# 看起来像三个不同层级的组件拼在一起。
-#
-# 规则只有一条：**本屏所有横线同一个宽度**，取「标题自然宽度」与下限 40 的较大者。
-# 下限的存在是因为标题常常很短（"EnvProxy 状态"只有 29 列），
-# 而 29 列的日志区显得局促；40 列是一个能容纳常见状态短句、又不会在窄窗口折行的长度。
-$script:StatusRuleMinWidth = 40
-
-# 造一根等号线：文字居中，两侧补等号，总宽恰好 $Width。
-# 造一根等号线：文字居中，两侧补等号，**显示宽度**恰好 $MinWidth。
-#
-# 必须按显示宽度算，不能按字符数：中文一个字占两格。
-# 按字符数算出来的三条线字符数相同（都是 40），但显示宽度是 42 / 44 / 40——
-# 在终端里看就是没对齐。这个坑实测踩过一次。
-function Format-StatusTitleRule([string]$Text) {
-    $textW = Get-DisplayWidth $Text
-    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
-    $need = $w - $textW - 2
-    $left = [Math]::Floor($need / 2)
-    $right = $need - $left
-    return (('=' * $left) + ' ' + $Text + ' ' + ('=' * $right))
-}
-
-# 造一根横杠线：文字居中，两侧补横杠，显示宽度与等号线相同。
-function Format-StatusSectionRule([string]$Text) {
-    $textW = Get-DisplayWidth $Text
-    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
-    $need = $w - $textW - 2
-    $left = [Math]::Floor($need / 2)
-    $right = $need - $left
-    return (('-' * $left) + ' ' + $Text + ' ' + ('-' * $right))
-}
-
-# 纯等号收尾线，显示宽度与标题线一致。
-function Format-StatusBottomRule([string]$TitleText) {
-    $textW = Get-DisplayWidth $TitleText
-    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
-    return ('=' * $w)
-}
 
 # 内容一旦不一致，自检里有断言逐步比对两版。
 function Format-StatusLines($st, [switch]$NoLog) {
@@ -87,7 +45,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     }
 
     $problems = @(Get-StatusProblems $st)
-    & $line (Format-StatusTitleRule 'EnvProxy 状态') 'title'
+    & $line (Format-TitleRule 'EnvProxy 状态') 'title'
     # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
     # 与帮助页同一套规矩（标题上下各空一行），两版状态页也一样。
     & $line '' 'text'
@@ -263,7 +221,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     # 日志只用于排查，状态结论才是这一屏的主角，取舍时保结论。
     if (-not $NoLog) {
     & $line '' 'text'
-    & $line (Format-StatusSectionRule '最近日志') 'title'
+    & $line (Format-SectionRule '最近日志') 'title'
     $tail = ''
     if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') { $tail = [string]$st.Snapshot.LogTail }
     if (-not $tail) { try { $tail = [string](Get-LogTailText 3) } catch { $tail = '' } }
@@ -291,7 +249,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     }
     }
 
-    & $line (Format-StatusBottomRule 'EnvProxy 状态') 'title'
+    & $line (Format-BottomRule 'EnvProxy 状态') 'title'
     # 底部提示与结束框之间空一行：紧贴着会被读成框里的内容，
     # 而它是这一屏的操作说明——"按 0 返回"要让人一眼看到，不能被边框糊进去。
     & $line '' 'text'
@@ -769,7 +727,7 @@ function Show-StatusSnapshot($st) {
     # ---- 先把结论算出来（判断在 Get-StatusProblems 里，与实时刷新那版共用）----
     $problems = @(Get-StatusProblems $st)
 
-    Write-Styled 'title' (Format-StatusTitleRule 'EnvProxy 状态')
+    Write-Styled 'title' (Format-TitleRule 'EnvProxy 状态')
     # 标题下空一行，与实时刷新那版、帮助页同一套规矩。
     Write-Host ''
     if ($problems.Count -eq 0) {
@@ -1002,7 +960,7 @@ function Show-RecentLog {
     # 日志块与上面的状态分组之间空一行：这是两块不同性质的东西（当前状态 vs 历史记录），
     # 紧贴着会让"最近日志"看起来像状态的一部分。
     Write-Host ''
-    Write-Styled 'title' (Format-StatusSectionRule '最近日志')
+    Write-Styled 'title' (Format-SectionRule '最近日志')
     if (-not (Test-Item $LogFile)) {
         Write-Styled 'dim' "  （暂无日志）"
         return
@@ -1028,5 +986,5 @@ function Show-RecentLog {
         $shown = Limit-DisplayText $shown $logW
         Write-Styled 'dim' "  $shown"
     }
-    Write-Styled 'title' (Format-StatusBottomRule 'EnvProxy 状态')
+    Write-Styled 'title' (Format-BottomRule 'EnvProxy 状态')
 }
