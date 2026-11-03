@@ -885,7 +885,12 @@ function Run-MonitorLoop {
                 #   ③ **问不到就留空**，不许写成"没问题"。空 = 这一轮不知道，
                 #      状态页据此不作任何判断（宁可不说，也不能猜）。
                 $snapHs = ""
-                if ($snapState -like 'on *') {
+                # 状态串的格式是 `on:7078`（冒号），不是 `on 7078`（空格）。
+    # 写成 `-like 'on *'` 永远不成立，于是这个字段恒为空、状态页那条
+    # 「代理在跑但连不上外面（多半是节点问题）」从来没显示过——一个被静默禁用
+    # 的用户可见功能。同一份代码里其余 7 处都用 StartsWith('on:') 或正则，
+    # 只有这里写成了空格，改成同一个判据（契约：同一判断只准有一处实现）。
+    if ($snapState -and $snapState.StartsWith('on:')) {
                     $snapPort = 0
                     try { if ([int]::TryParse($snapState.Substring(3), [ref]$snapPort)) { } else { $snapPort = 0 } } catch { $snapPort = 0 }
                     if ($snapPort -gt 0) {

@@ -307,8 +307,13 @@ function Get-HelpTopics {
                 'rc PowerShell|$env:ENVPROXY_TERM = ''off''',
                 'rc Git Bash|export ENVPROXY_TERM=off',
                 't 下次回到提示符才生效，别的窗口照旧跟着翻墙软件走。',
-                't cmd 没这个开关，只能自己清 5 个变量（& 两边别留空格）：',
-                ('rc cmd|set ' + ((@($ProxyVarNames) | ForEach-Object { $_ + '=' }) -join '&set ')),
+                't cmd 没这个开关，只能自己清 5 个变量（& 两边别留空格）。下面清三个，'
+                't NO_PROXY 和 NODE_USE_ENV_PROXY 照同样写法补上：'
+                # 一行放不下 5 个变量（100 格），而 cmd 的窗口通常是 80 列。
+                # 拆成两条：每条都在 80 格内，且各自独立可跑。
+                # 5 个变量全串一行有 100 格，80 列的 cmd 窗口会折行、后半截顶到最左边。
+                # 拆成「照同样写法清掉剩下两个」：行宽安全，且用户知道还剩哪些要清。
+                'rc cmd|set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=',
                 'w 别用 unset HTTP_PROXY：大写清不掉小写，curl 照样用代理。',
                 'h 二、让这个窗口用公司的代理',
                 't 公司代理和自动跟随只能选一个，先做第一节再设地址（反了会被盖掉）。',
@@ -324,8 +329,7 @@ function Get-HelpTopics {
                 'rc PowerShell|Remove-Item Env:ENVPROXY_TERM',
                 'rc Git Bash|unset ENVPROXY_TERM',
                 'r cmd|重开一个窗口',
-                't 清掉 ENVPROXY_TERM 就都撤回了。改回来公司地址会被盖掉——那是对的，',
-                't 表示回到自动；地址没删，只是不用。'
+                't 清掉 ENVPROXY_TERM 就都撤回；公司地址会被盖掉——那是对的（回到自动，地址还在）'
             )
         },
         @{
@@ -362,9 +366,9 @@ function Get-HelpTopics {
                 't 它们只在启动那一刻读一次「该走哪个代理」，之后怎么变都不理。',
                 't 而它们多半是从桌面或任务栏点的，那一层拿不到这个工具设的值。',
                 'h 解决办法：给它建一个能翻墙的图标',
-                't 菜单选 5 进高级功能，再选 1。挑程序（或输入路径），选放哪，确认。',
-                # @explain 「走代理」是图标名的后缀，帮助必须与桌面上的名字对上
-                't 它会生成一个新图标，名字后面带「走代理」。以后点那个就能翻墙。',
+                ('t 菜单选 5 进高级功能，再' + (Get-AdvancedRef 'NewProxyIcon') + '。挑程序（或输入路径），选放哪，确认。'),
+                # @explain 图标名后缀由模式表派生，帮助必须与桌面上的名字逐字对上
+                ('t 它会生成一个新图标，名字后面带「' + (Get-ShortcutMode 'proxy').Label + '」。以后点那个就能翻墙。'),
                 'b ',
                 'h 注意三件事',
                 't 程序已经开着的，点了不会换代理，必须先关掉再点。',
@@ -383,10 +387,10 @@ function Get-HelpTopics {
                 't 固定入口在本机开一个永不变的地址，程序只认这个，背后自动跟着翻墙软件走。',
                 't 建图标时自动就用它，不用你做什么；它跟着监控一起跑，也没有开关要拨。',
                 't 它没在工作也不要紧：图标会退回去读当前地址，照样能用。',
-                't 想看它现在的状态：菜单选 5 再选 3，那一屏只看不改。',
+                ('t 想看它现在的状态：菜单选 5 再' + (Get-AdvancedRef 'ViewRelay') + '，那一屏只看不改。'),
                 'b ',
                 'h 不想要了',
-                't 菜单选 5 再选 3，能看状态、逐个删。'
+                ('t 菜单选 5 再' + (Get-AdvancedRef 'ManageIcons') + '，能看状态、逐个删。')
             )
         },
         @{

@@ -571,7 +571,29 @@ function Restore-PrevEnv {
             # 代理值也一起存了），还原它等于把我们的东西当成他的配置装回去：
             # 卸载报"已恢复原状"，而 ALL_PROXY / NODE_USE_ENV_PROXY 一直留着。
             # 这条判断在还原侧做，所以**已经存在的坏快照也会被自愈**，不用等用户重装。
-            if ($null -ne $bak -and (Test-IsOurOwnedValue $n ([string]$bak))) { continue }
+            # NO_PROXY 要单独判：它的归属判据是"子集"（当前值每一项都在记录里），
+            # 而合并规则是"保留使用者顺序 + 补默认项"，于是**使用者原有的项自然
+            # 全在记录里**，子集判据恒为真——还原被整段跳过，顺序还留在合并后的样子。
+            # 后果：只要使用者本来设过 NO_PROXY，卸载就报"代理变量仍在"并 exit 1，
+            # 而屏幕上让他"再试一次"，试一百次也一样。
+            # 还原语境只问一件事：这份快照是不是我们自己写下的。判据是**逐字相等**，
+            # 不是子集——只有完全一致才说明它不是使用者的原值。
+            $isOurSnapshot = $false
+            if ($null -ne $bak) {
+                $bakStr = [string]$bak
+                if ($n -eq 'NO_PROXY') {
+                    try {
+                        $ok = Get-Item -LiteralPath (Get-OwnedRegKeyPath) -ErrorAction SilentlyContinue
+                        if ($ok) {
+                            $recNp = $ok.GetValue($n, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                            $isOurSnapshot = ($null -ne $recNp -and [string]$recNp -eq $bakStr)
+                        }
+                    } catch { $isOurSnapshot = $false }
+                } else {
+                    $isOurSnapshot = [bool](Test-IsOurOwnedValue $n $bakStr)
+                }
+            }
+            if ($isOurSnapshot) { continue }
             if ($null -ne $bak) {
                 $kindName = Get-PrevEnvRaw ("{0}__Kind" -f $n)
                 if ($kindName -eq "ExpandString") {

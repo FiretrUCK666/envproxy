@@ -135,12 +135,32 @@ function Install-EnvProxy {
     if ($polWarn) { Write-Styled 'warn' ("      " + $polWarn) }
     Start-Sleep -Seconds 1
     Write-Host ""
-    # 安装走到了收尾这一步，说明覆盖早就成功、文件全是新的——那条
-    # 「上次更新没有完成」的警报到此已经不成立，必须撤掉。
-    # 不撤的后果是死循环：状态页说「选 1 重做一次即可」，用户照做、覆盖也真的成功了，
-    # 可标记还在，屏幕上是同一句警告——一条自己都说错了怎么修的指引，比不提示更糟。
-    # 与 mac 侧 ops.sh 在同一位置做同一件事（那边是 show_status 之前 rm -f）。
-    try { if (Test-Item $UpdateInProgressFile) { Remove-ItemSafe $UpdateInProgressFile } } catch {}
+    # 「上次更新没完成」这条警报什么时候才算不成立？
+    #
+    # 原来的判据是"安装走到收尾这一步"，理由写的是"说明覆盖早就成功、文件全是新的"。
+    # 那个前提是错的：覆盖中途被强杀时，安装区可能只剩一小部分文件（实测 2000 个里
+    # 只写了 139 个），而安装照样能走到收尾。于是标记被撤掉，再查状态页变成"一切正常"——
+    # **告警消失，安装区仍然是坏的**，比不提示更糟。
+    #
+    # 现在的判据是"库文件齐不齐"：入口声明的库清单里每一个都在、都能被解析。
+    # 这才是"覆盖成功"的真正证据，而且它自己就能验，不依赖任何外部条件。
+    # 不齐就**保留标记**，让状态页继续说真话。
+    $libsOk = $true
+    try {
+        foreach ($libName in @($CoreLibs)) {
+            $libPath = Join-Path $ScriptDir ("lib\{0}.ps1" -f $libName)
+            if (-not (Test-Path -LiteralPath $libPath)) { $libsOk = $false; break }
+            $parseErr = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($libPath, [ref]$null, [ref]$parseErr)
+            if ($parseErr -and $parseErr.Count) { $libsOk = $false; break }
+        }
+    } catch { $libsOk = $false }
+    if ($libsOk) {
+        try { if (Test-Item $UpdateInProgressFile) { Remove-ItemSafe $UpdateInProgressFile } } catch {}
+    } else {
+        Write-Styled 'warn' '[注意] 程序文件不完整，没撤掉「上次更新没完成」这条记录。'
+        Write-Styled 'dim'  '       补回来的两条路：下载安装包解压覆盖，或在仓库里 git pull。'
+    }
     # 这里**不联网**：版本号取自监控写下的缓存（状态页只读、永不联网那条契约）。
     # 所以不能说"正在联网确认"——那是在描述一件不会发生的事，用户会以为
     # 网慢/被墙导致"检查失败"，而实际根本没发请求。

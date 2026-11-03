@@ -37,16 +37,16 @@ jobs:
             fi
           done
 
-          # Git Bash 的终端同步脚本以模板形式内嵌在 win/lib/runtime.ps1 里（见 Get-PromptSyncContent），
+          # Git Bash 的终端同步脚本以模板形式内嵌在 win/lib/shell.ps1 里（见 Get-PromptSyncContent），
           # 安装时生成到 ~/.envproxy/。它在字符串里，上面那轮 bash -n 看不见它——
           # 所以这里把它抽出来单独解析一遍。生成式代码必须有这道检查，否则改坏了没人知道。
           _pstpl=$(mktemp "${TMPDIR:-/tmp}/envproxy_pstpl.XXXXXX" 2>/dev/null) || { echo "临时文件建不出来"; fail=1; }
           if [ -n "${_pstpl:-}" ]; then
             # 标记注释夹住整段：去掉两行标记、再去掉 return @' 与 '@ 两行，剩下的就是脚本正文。
-            sed -n '/<<<PROMPT_SYNC_BEGIN>>>/,/<<<PROMPT_SYNC_END>>>/p' win/lib/runtime.ps1 \
+            sed -n '/<<<PROMPT_SYNC_BEGIN>>>/,/<<<PROMPT_SYNC_END>>>/p' win/lib/shell.ps1 \
               | sed '1d;$d' | sed '1d;$d' > "$_pstpl"
             if [ ! -s "$_pstpl" ]; then
-              echo "抽不出 Git Bash 同步脚本模板（win/lib/runtime.ps1 里的标记被改了？）"
+              echo "抽不出 Git Bash 同步脚本模板（win/lib/shell.ps1 里的标记被改了？）"
               fail=1
             elif ! err=$(bash -n "$_pstpl" 2>&1); then
               echo "内嵌的 Git Bash 同步脚本有语法错误：$err"
@@ -562,9 +562,13 @@ jobs:
           # 必须容忍**目录形式**（/.github/ 带尾斜杠）——.gitattributes 里顶层目录就是那样写的，
           # 只匹配 "/名字空格" 会把它们漏掉，于是预期集合里多出 .github 与 tests、门禁假红。
           $ignAll = @(Select-String -Path .gitattributes -Pattern '^/(\S+?)/?\s+export-ignore' | ForEach-Object { $_.Matches[0].Groups[1].Value })
-          $repoTop = @(Get-ChildItem -Force | Where-Object {
-              $_.Name -ne '.git' -and -not ($ignAll -contains $_.Name)
-            } | ForEach-Object { $_.Name } | Sort-Object -Unique)
+          # 顶层集合从 **git 跟踪的路径**派生，不扫文件系统：
+          # 工作区里可能有本地草稿（AI 走查目录、临时快照），它们既不入库也不进包，
+          # 扫文件系统会把它们算进"预期"，于是每次本地复跑这条门禁都假红——
+          # 而假红会让人去查一个不存在的问题，久了就没人信这条门禁。
+          $repoTop = @(git ls-tree --name-only HEAD | Where-Object {
+              $_ -and -not ($ignAll -contains $_)
+            }) | ForEach-Object { $_.TrimEnd('/') } | Sort-Object -Unique
           $diff = Compare-Object $repoTop $tops
           if ($diff) {
             Write-Host '安装包顶层内容与「仓库导出集」不一致（左侧=预期，右侧=实际）：'
@@ -2581,9 +2585,16 @@ jobs:
           # ---- G-B：Kind='read' 的处理器体内不许写东西、不许提问 ----
           # 判据是"处理器函数的正文"，从函数头到下一个顶层 } 或下一个函数头。
           # 只读的项一旦开始写文件/改变量/弹提问，用户就没有"我只是看看"的安全感了。
+          # 词表要盖住"看起来不像写、实际改了状态"的那些：
+          #   Start-Process  启动一个程序（用户以为只是看看，屏幕上跳出一个窗口）
+          #   Stop-Process / Kill  停掉正在跑的东西
+          #   Copy-Item / Move-Item / Rename-Item  动文件
+          #   New-Object ...Mutex / WaitOne  抢锁（会挡住别人的正经操作）
           $writeHints = @('Set-ItemProperty', 'New-Item', 'Remove-Item', 'Set-Content',
                           'Add-Content', 'Out-File', 'Read-Host', 'WriteAllText', 'WriteAllBytes',
-                          'SetEnvironmentVariable', 'Remove-ItemProperty')
+                          'SetEnvironmentVariable', 'Remove-ItemProperty',
+                          'Start-Process', 'Stop-Process', 'Copy-Item', 'Move-Item', 'Rename-Item',
+                          'MessageBox', 'ReadKey')
           foreach ($it in $winItems) {
             if ($it.Kind -ne 'read') { continue }
             $fn = [regex]::Match($ps, "(?s)function\s+" + [regex]::Escape($it.Handler) + "\b(.*?)\n\}")
@@ -2600,7 +2611,12 @@ jobs:
             $fn = [regex]::Match($sh, "(?s)(?:^|\n)" + [regex]::Escape($it.Handler) + "\(\)\s*\{(.*?)\n\}")
             if (-not $fn.Success) { continue }
             $body = $fn.Groups[1].Value
-            foreach ($h in @('mkdir', 'rm ', 'rmdir', 'touch ', 'tee ', '>', 'read -r')) {
+            # 同 Win 侧：把'看起来不像写、实际改了状态'的也盖住。
+            #   export/launchctl 改变量与环境（退出终端后仍然生效）
+            #   open/osascript 启动程序（屏幕上跳出一个窗口）
+            #   trap 抢信号、nohup/& 起后台进程
+            foreach ($h in @('mkdir', 'rm ', 'rmdir', 'touch ', 'tee ', '>', 'read -r',
+                              'export ', 'launchctl', 'open ', 'osascript', 'nohup', 'setsid')) {
               # '>' 单独查会撞上 2>/dev/null 这种合法重定向，只认无 fd 前缀的写文件
               if ($h -eq '>') { continue }
               if ($body -match [regex]::Escape($h)) {

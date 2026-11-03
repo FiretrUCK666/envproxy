@@ -35,6 +35,39 @@ _shortcut_apps_dir() {
 _shortcut_default_dest() {
     printf '%s\n' "$HOME/Desktop"
 }
+# 用户自选过的落点，存在 $ENVPROXY_HOME/shortcut-dirs.txt，一行一个。
+#
+# 为什么必须记：壳子建到别处之后，扫描那三个标准目录就看不见它，
+# 而"找不到对应壳子的启动记录"会被当成孤儿——用户在管理页删掉那条，
+# 桌面上的壳子就变成双击报错。一个合法选项变成无声陷阱。
+_shortcut_extra_dirs_file() {
+    printf '%s\n' "$ENVPROXY_HOME/shortcut-dirs.txt"
+}
+
+_shortcut_extra_dirs() {
+    _sed_f=$(_shortcut_extra_dirs_file)
+    [ -f "$_sed_f" ] || return 0
+    while IFS= read -r _sed_l || [ -n "$_sed_l" ]; do
+        # 目录暂时不在（外接硬盘拔了）就跳过，但不删记录：插回来壳子还在。
+        [ -n "$_sed_l" ] && [ -d "$_sed_l" ] && printf '%s\n' "$_sed_l"
+    done < "$_sed_f"
+}
+
+# 记一个落点。标准目录不记：它们本来就在扫描清单里。
+_shortcut_register_dir() {
+    _srd_dir="$1"
+    [ -n "$_srd_dir" ] || return 0
+    [ -d "$_srd_dir" ] || return 0
+    for _srd_std in "$(_shortcut_default_dest)" /Applications "$HOME/Applications"; do
+        [ "$_srd_dir" = "$_srd_std" ] && return 0
+    done
+    _srd_f=$(_shortcut_extra_dirs_file)
+    mkdir -p "$ENVPROXY_HOME" 2>/dev/null || true
+    if [ -f "$_srd_f" ] && grep -qxF "$_srd_dir" "$_srd_f" 2>/dev/null; then
+        return 0
+    fi
+    printf '%s\n' "$_srd_dir" >> "$_srd_f" 2>/dev/null || true
+}
 
 # 把一个值写进 shell 单引号串，内部的单引号也安全转义。
 #
@@ -202,14 +235,21 @@ _shortcut_build_app() {
 
     _sba_base=$(basename "$_sba_target")
     _sba_base=${_sba_base%.app}
-    _sba_app="$_sba_dest/${_sba_base}${_sba_suffix}.app"
+    # 壳子的身份 = 目标路径 + 模式。这个哈希必须进**最终产物名**，不只是内部暂存目录：
+    #   只算路径  —— 同一个程序的两种模式会共用同一个壳子，后建的覆盖先建的
+    #   只算模式  —— 两个不同目录下同名的程序会互相覆盖
+    # 之前它只用在 _sba_work 上，最终落到桌面的名字没有它，于是
+    # "apps1/MyApp" 与 "apps2/MyApp" 都落成 "MyApp（翻墙）.app"，后者静默覆盖前者——
+    # 而屏幕上是同名图标，看不出发生过覆盖。
+    if command -v shasum >/dev/null 2>&1; then
+        _sba_key=$(printf '%s\n%s' "$_sba_target" "$_sba_mode" | shasum -a 256 | cut -c1-8)
+    else
+        _sba_key=$(printf '%s\n%s' "$_sba_target" "$_sba_mode" | cksum | cut -d' ' -f1)
+    fi
+    _sba_app="$_sba_dest/${_sba_base}_${_sba_key}${_sba_suffix}.app"
 
     _sba_store=$(_shortcut_apps_dir)
     mkdir -p "$_sba_store" 2>/dev/null || return 1
-    # 壳子的身份 = 目标路径 + 模式。两者都必须进目录名：
-    #   只算路径  —— 同一个程序的两种模式会共用同一个壳子，后建的覆盖先建的
-    #   只算模式  —— 两个不同目录下同名的程序会互相覆盖
-    _sba_key=$(printf '%s\n%s' "$_sba_target" "$_sba_mode" | cksum | cut -d' ' -f1)
     _sba_work="$_sba_store/${_sba_base}_${_sba_key}.app"
 
     # 重造前先删旧的：壳子里可能残留上一次的启动脚本，
@@ -244,6 +284,9 @@ _shortcut_build_app() {
     fi
 
     printf '%s\n' "$_sba_app"
+    # 记下落点：建到自定义文件夹时，扫描必须还能找到它。
+    # 只在真建成功之后记——前面失败的路径都已经 return 了。
+    _shortcut_register_dir "$_sba_dest"
     return 0
 }
 
@@ -252,7 +295,17 @@ _shortcut_build_app() {
 # 只按名字判会误删使用者自己建的、名字恰好也带「（走代理）」的 app。
 _shortcut_records() {
     _sr_base=$(_shortcut_default_dest)
-    for _sr_dir in "$_sr_base" /Applications "$HOME/Applications"; do
+    # 扫描清单 = 三个标准目录 + 用户自选过的落点。少了后半截，
+    # 建到别处的壳子在管理页里看不见，还会被当成孤儿删掉。
+    _sr_all="$_sr_base
+/Applications
+$HOME/Applications"
+    _sr_extra=$(_shortcut_extra_dirs 2>/dev/null)
+    if [ -n "$_sr_extra" ]; then _sr_all="$_sr_all
+$_sr_extra"; fi
+    # 用 <<< 重定向而不是管道：管道会让 while 跑在子 shell 里，
+    # 里面 printf 的输出根本传不出来（records 会永远是空）。
+    while IFS= read -r _sr_dir; do
         [ -d "$_sr_dir" ] || continue
         for _sr_app in "$_sr_dir"/*.app; do
             [ -d "$_sr_app" ] || continue
@@ -291,7 +344,7 @@ _shortcut_records() {
             [ -e "$_sr_target" ] || _sr_state=broken-target
             printf '%s\t%s\t%s\t%s\t%s\n' "$_sr_app" "$_sr_name" "$_sr_mode" "$_sr_state" "$_sr_target"
         done
-    done
+    done <<< "$_sr_all"
     return 0
 }
 

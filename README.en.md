@@ -31,7 +31,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 - [9. What is in the folder](#9-what-is-in-the-folder)
 - [10. Copying and backing up the folder](#10-copying-and-backing-up-the-folder)
 - [11. Setting it up for a friend or a new machine](#11-setting-it-up-for-a-friend-or-a-new-machine)
-- [12. Technical limits (6)](#12-technical-limits-6)
+- [12. Technical limits (5)](#12-technical-limits-5)
 - [13. macOS version](#13-macos-version)
 - [14. License and feedback](#14-license-and-feedback)
 
@@ -169,7 +169,7 @@ Three things that trip people up:
 - **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
 - Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
 
-**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 12.1).
+**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 13.1).
 
 ### 3.1 A window you already have open needs one Enter press
 
@@ -354,7 +354,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 | Shown | Meaning | What to do |
 |---|---|---|
 | Active | Normal | Nothing |
-| Installed but cannot run | Execution policy blocks it | Follow that hint (section 4) |
+| Installed but cannot run | Execution policy blocks it | Follow that hint (section 5) |
 | Markers are unpaired | Something left half a marker | Delete that lone marker line, then pick 1 |
 | No sync block in the profile | Never installed, or cleaned away | Run **1 Install / repair** |
 | Cannot read the profile path | Rare; this run cannot tell | Look again shortly; if it stays, run 1 |
@@ -531,7 +531,7 @@ Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 If it still fails, the policy is being enforced by Group Policy (common on work or school machines); only an administrator can change that. The status page tells you which case you are in.
 
-> Do not confuse this with the note in section 2: "do not change your execution policy" refers to the downloaded package being blocked, which you fix by unblocking the file or running `Unblock-File`, not by touching the policy. This section is about the profile itself failing to run, which is a different thing.
+> Do not confuse this with the note in section 1: "do not change your execution policy" refers to the downloaded package being blocked, which you fix by unblocking the file or running `Unblock-File`, not by touching the policy. This section is about the profile itself failing to run, which is a different thing.
 
 > Most problems are solved by **picking 1** in the menu. It does not install a second copy, does not cut your network, and does not lose your own settings.
 
@@ -718,18 +718,17 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 > It holds the run records this machine generated for itself (log, process id, state snapshot),
 > including your timestamps and ports. Deleting it changes nothing: a new machine rebuilds it on first run.
 
-## 12. Technical limits (6)
+## 12. Technical limits (5)
 
-<img src="./assets/readme/limits.en.svg" width="100%" alt="Six technical limits">
+<img src="./assets/readme/limits.en.svg" width="100%" alt="Five technical limits">
 
 | Limit | Reason | Effect |
 |---|---|---|
 | **TUN vs. corporate VPN** | Both are virtual adapters | Most apps keep the port open; a few close it |
 | **Only the browser proxy repair edits it** | Editing it breaks browsers | Only a dead loopback port |
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
-| **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 5 |
+| **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 6 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
-| **One copy acts at a time** | Several would edit the same settings | Open as many as you like (below) |
 
 One thing worth stating plainly about TUN: **most apps keep their local proxy port open in TUN mode**, so this tool detects them and keeps working, and you do nothing. **A few apps close that port.** Then there is nothing to detect. That is not a defect: it is how those apps work, and in that mode the app itself already carries all traffic, so whether terminal tools need a proxy is up to that app.
 
@@ -823,8 +822,7 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `apps/` | app wrappers are built here, then copied to the Desktop (only exists once you use menu 5) |
 | | `locks/monitor.lock` | single-instance lock, so two copies never run at once |
 | | `locks/op.lock` | one install/uninstall/stop/update at a time |
-
-These locks live here rather than in the project folder because they must cover **every** copy: two windows on the same folder, or one copy on D: and another on E:, all queue on the same lock. Keep them in the project folder and each copy would take its own lock, which is no lock at all.
+| | `shortcut-dirs.txt` | folders you picked by typing a path, so those icons stay findable |
 | `~/Library/LaunchAgents/` | one `*.plist` | the start-at-login item that launches it when you log in |
 | `mac/monitor/` inside the project folder | `monitor.log` | the decisions it made (black box) |
 | | `monitor.pid` | the process id of the background program |
@@ -837,6 +835,7 @@ These locks live here rather than in the project folder because they must cover 
 | | `update.inprogress` | written while program files are being replaced |
 | | `notify.last` | the state last warned about; keeps the same change from being reported twice |
 
+These locks live here rather than in the project folder because they must cover **every** copy: two windows on the same folder, or one copy on D: and another on E:, all queue on the same lock. Keep them in the project folder and each copy would take its own lock, which is no lock at all.
 
 Your shell config files (`~/.zshrc`, `~/.bashrc` and the like) also gain one small block, marked `EnvProxy` at both ends; removing that block turns off auto-follow for that terminal.
 

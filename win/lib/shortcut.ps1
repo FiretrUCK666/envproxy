@@ -2,7 +2,7 @@
 #  shortcut.ps1 — 走代理的快捷方式：生成启动脚本、读写 .lnk、扫描记录、三屏界面
 #
 #  为什么单独成一个库：这一块与"安装/卸载/状态编排"完全是两件事。
-#  它自带 VBS 生成、.lnk 的 COM 读写、程序扫描和三屏交互，约 1000 行；
+#  它自带 VBS 生成、.lnk 的 COM 读写、程序扫描和三屏交互；
 #  留在 ops 里会让以后每一次动 ops 都得先绕过它，也让这一块的边界看不见。
 #
 #  依赖只有 base：常量、纯函数、配色输出（Write-Styled）、清屏（Clear-Screen）、
@@ -266,10 +266,16 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir, $Mode, 
         #       此刻它还不存在，拼出来是 ('--proxy-server=' + )，连语法都不完整；
         #   写 "('--proxy-server=' + `$p)"（反引号转义）—— 字面保留 $p，
         #       脚本运行时那一行才取值，那正是"点击那一刻才知道地址"要的效果。
+        # 用**数组**形式传参，不用单字符串：单字符串要靠 Start-Process 自己按空格重切，
+        # 边界是猜出来的；数组的每一项就是一个参数，边界写在代码里。
+        # 现在这些参数都不含空格，但将来有人加一个含空格的值就会静默裂开——
+        # 而裂开的症状是"程序起来了但参数没生效"，不报错。
         if ($ExtraArgs -eq '--proxy-server=__ENVPROXY_CURRENT__') {
-            $argPart = " -ArgumentList ('--proxy-server=' + `$p)"
+            $argPart = " -ArgumentList @(('--proxy-server=' + `$p))"
         } else {
-            $argPart = " -ArgumentList '" + $ExtraArgs.Replace("'", "''") + "'"
+            $argList = @($ExtraArgs -split ' ' | Where-Object { $_ })
+            $quoted = @($argList | ForEach-Object { "'" + $_.Replace("'", "''") + "'" })
+            $argPart = " -ArgumentList @(" + ($quoted -join ', ') + ")"
         }
     }
 
@@ -717,12 +723,17 @@ function Get-ProxyShortcutRecords {
                 # 仍然列出来（它有我们的启动脚本），但不给它编一个假模式。
                 $name = Get-ShortcutBaseName $f.BaseName
                 $nameMode = Get-ShortcutModeFromName $f.BaseName
-                # 文件名里的模式优先，其次读启动脚本里那行标记，最后才是"未知"。
-                # 为什么要读脚本：用户可能把图标改了名（后缀就没了），
-                # 而脚本里那行标记是从生成那一刻就定死的，改不了。
+                # 判定顺序：**先读脚本里那行标记，再用文件名兜底**，最后才是"未知"。
+                #
+                # 为什么脚本优先：那行标记是生成那一刻写死的，用户改不了；
+                # 而图标名用户随时能改。反过来会出一个很难发现的错：
+                # 把「微信（翻墙）」改名成「微信（直连）」，界面就显示"直连"，
+                # 而实际行为仍是翻墙——显示与行为相反，且屏幕上没有任何异常。
+                #
+                # 文件名只在脚本读不到模式时兜底（老版本建的脚本没有那行标记）。
                 $modeId = ''
-                if ($nameMode) { $modeId = $nameMode.Id }
-                elseif (Test-Path -LiteralPath $vbsPath) { $modeId = Get-ProxyLauncherMode $vbsPath }
+                if (Test-Path -LiteralPath $vbsPath) { $modeId = Get-ProxyLauncherMode $vbsPath }
+                if (-not $modeId -and $nameMode) { $modeId = $nameMode.Id }
                 # 三种状态，都要能判出来：
                 #   no-launcher   —— 启动脚本被删了，点了必定失败
                 #   broken-target —— 脚本在，但它要启动的程序被卸载/搬走了，点了也会失败
@@ -1064,6 +1075,25 @@ $AdvancedItems = @(
 # 按 Action 取项。分派与「按语义名找编号」都走它。
 # 取不到返回 $null，由调用方决定怎么报——静默回落会让「传错了名字」
 # 变成「静默按默认做」，那是最坏的一种误导。
+
+# 高级功能项的指路文案。与 base 层的 Get-MenuRef 同构：
+# 编号与名字都从表里派生，**不许在文案里手写编号**。
+#
+# 手写的后果已经发生过一次：帮助里写「菜单选 5 再选 3，那一屏只看不改」，
+# 而 3 号是「管理已建的」（会删东西），只看不改的是 4 号。
+# 同一句里两个数字，一个对（5）一个错（3），因为都靠手抄。
+# 用户按它去"看看状态"，却进了一个能删东西的页面。
+#
+# 取不到就返回空串：调用方据此把整句提示去掉，而不是印一个"再选 （）"。
+function Get-AdvancedRef([string]$Action) {
+    $ai = Get-AdvancedItem $Action
+    if (-not $ai) { return '' }
+    # 只带编号，不带名字：名字最长 18 个字，拼进去会把整句顶过 80 列，
+    # 而 80 列的窗口会折行、后半截顶到最左边（自检里有断言盯这条）。
+    # 编号才是他要敲的东西；名字在下一屏自己就看见了。
+    return ('选 ' + $ai.Key)
+}
+
 function Get-AdvancedItem([string]$Action) {
     if (-not $Action) { return $null }
     foreach ($ai in $AdvancedItems) {
@@ -1537,47 +1567,28 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     }
 
     # ---- 浏览器内核做的程序：只问一句，而且先替用户判断好 ----
+    # ---- 浏览器内核做的程序：自动判断，不额外问一屏 ----
     #
     # 这类程序（Chrome / Edge / VS Code / Electron 应用）只认系统代理，
     # 不看环境变量，所以要让它按这个规矩走，得给它带上 --proxy-server 启动参数。
     #
-    # 判断由 Test-ChromiumApp 做，判据是结构性的（见那个函数的注释），实测准确。
-    # 但**结果仍要用户点头**：判错了那个程序会打不开，而用户是唯一知道
-    # "我这个程序本来能不能用"的人。所以是"我先猜到，你确认一下"，
-    # 不是"你来告诉我它是什么内核"——那是把内部概念摊给用户看。
+    # 为什么不问用户：这不是他能回答的问题——"它是不是浏览器内核做的"
+    # 是内部概念，摊给用户看只会让他卡住。判断由 Test-ChromiumApp 做，
+    # 判据是结构性的（见那个函数），实测准确；结果写在确认页上，
+    # 他觉得不对可以按 0 退出重来。
     $isChromium = Test-ChromiumApp $chosen.TargetPath
     $extraArgs = ''
-    Clear-Screen
-    Write-Styled 'title' '======== 再确认一件事 ========'
-    Write-Host ''
-    Write-Styled 'text' ('  程序：' + $chosen.Name)
-    Write-Host ''
     if ($isChromium) {
-        # 猜是的：说清猜的依据（用的是用户看得见的事实，不是内核名字）
-        Write-Styled 'text' '  这个程序是浏览器内核做的（Chrome、Edge、VS Code 这类）。'
-        Write-Styled 'text' '  它不认这里的设置，得单独告诉它走哪儿。'
-        Write-Host ''
-        Write-Styled 'dim'  '  帮你打开这一项，图标才能生效。'
-    } else {
-        Write-Styled 'text' '  一般程序直接就能用，不需要额外设置。'
-        Write-Host ''
-        Write-Styled 'dim'  '  只有 Chrome、Edge、VS Code 这一类需要单独指定，'
-        Write-Styled 'dim'  '  它们长得像浏览器，自己不听这里的招呼。'
-    }
-    Write-Host ''
-    Write-Styled 'item' '    1  就这样（默认）'
-    Write-Styled 'item' '    2  反过来：它是 / 它不是（我改一下）'
-    Write-Host ''
-    Write-Styled 'dim' '  直接回车即可    N = 取消'
-    $useChromiumArgs = $isChromium
-    while ($true) {
-        $ca = ''
-        try { $ca = "$(Read-Host '选择')".Trim() } catch { return }
-        if (-not $ca -or $ca -eq '1') { break }
-        if ($ca -eq '2') { $useChromiumArgs = -not $isChromium; break }
-        if ($ca -match '^[Nn]$') { return }
-        Write-Styled 'warn' '  只有 1、2 两个键（N 取消）。'
-        Start-Sleep -Milliseconds 800
+        if ($isDirect) {
+            # 强制直连：direct:// 让它彻底不用代理，bypass-list=* 是双保险
+            # （有些版本在 direct:// 下仍会去读一遍绕过列表）。
+            $extraArgs = '--proxy-server=direct:// --proxy-bypass-list=*'
+        } else {
+            # 走代理这一支要写成占位符，由启动器在**点击那一刻**替换成当时的代理地址。
+            # 不在这里写死端口：翻墙软件换端口后写死的图标就废了，
+            # 而"每次点击重新决定"正是启动器这一层的价值。
+            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__'
+        }
     }
     if ($useChromiumArgs) {
         if ($isDirect) {
@@ -1608,6 +1619,13 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     Write-Host ''
     Write-Styled 'text' ('  图标名  ' + (Get-PathBaseName $chosen.TargetPath) + $mode.Suffix)
     Write-Styled 'text' ('  放在    ' + $dest)
+    # 浏览器内核的程序要额外带启动参数，这件事必须在确认页上说一句：
+    # 不说的话，用户不知道为什么这个图标和别的不一样，出问题时也无从对照。
+    # 措辞只讲"对他有什么影响"，不讲内核、参数这些他不需要知道的东西。
+    if ($isChromium) {
+        Write-Styled 'text' ('  适配    ' + '这个程序需要单独指定，已自动带上')
+    }
+
     Write-Host ''
     # 先探一次同名：把"会覆盖"直接写进这一屏，让用户一次 y 就完成。
     #

@@ -1913,21 +1913,43 @@ EOF
     #
     # 做法：先用一个小状态机把**所有单引号字符串**（可跨行）整体抹掉，再在剩下的
     # shell 代码里查。跨行是关键——逐行正则做不到，实测会漏。
+    # 注释行必须先整行丢掉：注释里出现单引号是正常写法（解释转义、举例命令），
+    # 而状态机不分注释与代码——遇到一个不成对的引号，配对就错位到下一个文件，
+    # 于是后面所有 awk 程序体都抹不掉，报出一堆假的"带空格赋值"。
+    # 这一步只去掉「行首可空白 + #」的行；引号里以 # 开头的内容不受影响，
+    # 因为它们在上一轮已经被抹成 QUOTED 了... 但顺序反了：先抹引号才能安全判注释。
+    # 故做法是：**先按行首判注释并丢弃整行**，再跑引号状态机。行首注释里不可能
+    # 有"上一行还开着引号"的情况——那本身就说明代码坏了，真坏了 bash -n 会先报。
+    # 扫描器用状态机，必须同时认三件事，缺一条就会误报：
+    #   1 注释：井号后面的单引号不是定界符（注释里常解释转义技巧、举例命令）
+    #   2 反斜杠转义：反斜杠加单引号是字面单引号，两个反斜杠是字面反斜杠
+    #   3 双引号：双引号里的单引号不是定界符
+    # 早先的版本三条都不认，于是真实库拼接后被报出 29 处「带空格赋值」，
+    # 而那 29 处全是写在单引号串里的 awk 赋值——错的是扫描器，不是代码。
+    # 门禁常年红着，release.yml 卡在它上面，而没人知道红的是门禁自己。
     _sp_stripped=$(all_lib_source | awk '
-        BEGIN { inq = 0 }
+        BEGIN { st = "NORMAL" }
         {
-            line = $0; out = ""; i = 1
-            while (i <= length(line)) {
+            line = $0; out = ""; i = 1; n = length(line)
+            while (i <= n) {
                 c = substr(line, i, 1)
-                if (inq == 0) {
-                    if (c == "\047") { inq = 1; out = out "QUOTED"; i++; continue }
-                    out = out c; i++
-                } else {
-                    if (c == "\047") { inq = 0 }
-                    i++
+                if (st == "COMMENT") { i = n + 1; continue }
+                if (st == "NORMAL") {
+                    if (c == "#") { st = "COMMENT"; i++; continue }
+                    if (c == "\\") { i += 2; out = out "X"; continue }
+                    if (c == "\047") { st = "SQUOTE"; out = out "Q"; i++; continue }
+                    if (c == "\"")   { st = "DQUOTE"; out = out "Q"; i++; continue }
+                    out = out c; i++; continue
+                }
+                if (st == "SQUOTE") { if (c == "\047") { st = "NORMAL" } i++; continue }
+                if (st == "DQUOTE") {
+                    if (c == "\\") { i += 2; continue }
+                    if (c == "\"") { st = "NORMAL" }
+                    i++; continue
                 }
             }
-            print out
+            if (st != "COMMENT") { print out }
+            st = (st == "COMMENT") ? "NORMAL" : st
         }')
     _sp_assign=$(printf '%s\n' "$_sp_stripped" | grep -cE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*[[:space:]]+=' 2>/dev/null)
     _selftest_assert_eq "接线：库里没有带空格的 shell 赋值语句（引号内的 awk 程序体除外）" "0" "$_sp_assign"
@@ -2241,6 +2263,74 @@ except Exception: pass
     _selftest_done=1
     # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面
     # 每一次 launchctl 调用都拿到假结果（details 见替身定义处的说明）。
+    # --------------------------------------------------------------------------
+    # shortcut.sh：按程序定规矩这一层
+    #
+    # 这一层最危险的失效是"屏幕上看不出来"：两个规矩算出同一个壳子名，
+    # 后建的覆盖先建的，两个图标行为相同而画面上一切正常。
+    # --------------------------------------------------------------------------
+    echo '[shortcut] mode table and wrapper identity'
+
+    # 模式表是措辞与行为的唯一权威处，四项派生都必须非空。
+    _st_modes=$(printf '%s\n' $PROXY_MODES)
+    _st_mode_count=$(printf '%s\n' "$_st_modes" | grep -c . )
+    _selftest_assert_eq '至少两种规矩' '1' "$([ "$_st_mode_count" -ge 2 ] && echo 1 || echo 0)"
+
+    _st_ok=1
+    for _st_m in $PROXY_MODES; do
+        [ -n "$(proxy_mode_suffix "$_st_m" 2>/dev/null)" ] || _st_ok=0
+        [ -n "$(proxy_mode_label "$_st_m" 2>/dev/null)" ] || _st_ok=0
+        [ -n "$(proxy_mode_action "$_st_m" 2>/dev/null)" ] || _st_ok=0
+    done
+    _selftest_assert_eq '每种规矩的四个派生都非空' '1' "$_st_ok"
+
+    # 两种规矩的 Action 必须不同：相同的话启动器永远只走一支，
+    # 两个壳子的实际行为会完全一样，而屏幕上是两个不同的名字。
+    _st_act_proxy=$(proxy_mode_action proxy 2>/dev/null)
+    _st_act_direct=$(proxy_mode_action direct 2>/dev/null)
+    _selftest_assert_eq '两种规矩的行为类别不同' '1' "$([ "$_st_act_proxy" != "$_st_act_direct" ] && echo 1 || echo 0)"
+
+    # 取不到的规矩必须返回空，不许静默回落到默认——
+    # 那会把"名字传错"变成"按默认做了"，而用户以为它生效了。
+    _selftest_assert_eq '未知规矩取不到' '' "$(proxy_mode_suffix 'no-such-mode' 2>/dev/null)"
+
+    # 身份 = 路径 + 规矩。少这一维就会互相覆盖。
+    _st_t1=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_st1.XXXXXX" 2>/dev/null)
+    if [ -n "$_st_t1" ]; then
+        printf '#!/bin/sh\nexit 0\n' > "$_st_t1/app.sh"
+        chmod 755 "$_st_t1/app.sh" 2>/dev/null || true
+        mkdir -p "$_st_t1/out" 2>/dev/null || true
+        _st_w1=$(_shortcut_new "$_st_t1/app.sh" proxy "$_st_t1/out" 2>/dev/null)
+        _st_w2=$(_shortcut_new "$_st_t1/app.sh" direct "$_st_t1/out" 2>/dev/null)
+        _st_p1=${_st_w1#ok|}; _st_p1=${_st_p1%%|*}
+        _st_p2=${_st_w2#ok|}; _st_p2=${_st_p2%%|*}
+        _selftest_assert_eq '同一程序两个规矩都能建' '1' \
+            "$([ -d "$_st_p1" ] && [ -d "$_st_p2" ] && echo 1 || echo 0)"
+        _selftest_assert_eq '两个规矩的壳子不是同一个（少一维就会互相覆盖）' '1' \
+            "$([ "$_st_p1" != "$_st_p2" ] && echo 1 || echo 0)"
+        # 壳子里必须有归属标记，否则删不掉（也认不出是不是我们造的）。
+        _st_l1="$_st_p1/Contents/MacOS/launcher"
+        _selftest_assert_eq '壳子里有归属标记' '1' \
+            "$(grep -q '这个文件由 EnvProxy 生成' "$_st_l1" 2>/dev/null && echo 1 || echo 0)"
+        # 生成的正文必须能执行：语法错的话双击才炸，而那时已经发出去了。
+        _selftest_assert_eq '壳子的启动脚本能通过语法检查' '0' \
+            "$(sh -n "$_st_l1" 2>/dev/null; echo $?)"
+        # 建过一次之后，扫描必须能看见它（看不见就会被当成孤儿删掉）。
+        # 判据用剥掉后缀后的程序名：_shortcut_records 输出的是"名字 + 规矩"的分离字段，
+        # 拿裸目录名去 grep 永远对不上——那是断言写法的问题，不是产品的问题。
+        # 落点被记下来：扫不到就等于"这个图标在管理页里不存在"，删除/查看都够不着它。
+        # 这里查的是**记录文件里有没有这个落点**，不是 _shortcut_records 的整份输出——
+        # 沙箱的 ENVPROXY_HOME 与真实家目录不同，直接比对整份记录会受环境影响。
+        _selftest_assert_eq '自定义落点被记下来' '1' \
+            "$(_shortcut_extra_dirs 2>/dev/null | grep -qxF "$_st_t1/out" && echo 1 || echo 0)"
+        # 记下来之后，扫描必须真的能看见它（看不见就会在管理页里被当成孤儿）。
+        _selftest_assert_eq '建完能扫到' '1' \
+            "$(_shortcut_records 2>/dev/null | grep -qF "$(basename "$_st_p1")" && echo 1 || echo 0)"
+        # 扫到的规矩必须与建的时候一致：判错会让管理页显示与行为相反。
+        _selftest_assert_eq '扫到的规矩是 proxy' '1' \
+            "$(_shortcut_records 2>/dev/null | grep -F "$(basename "$_st_p1")" | grep -q 'proxy' && echo 1 || echo 0)"
+        rm -rf "$_st_t1" 2>/dev/null || true
+    fi
     unset -f launchctl 2>/dev/null || true
     trap - EXIT
     if [ "$_selftest_fails" -eq 0 ]; then

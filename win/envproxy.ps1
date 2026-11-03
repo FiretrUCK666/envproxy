@@ -293,7 +293,12 @@ if ($Stop) {
     # 两个返回值都要接住再说结论：只接住变量那一个的话，监控没停下来时屏幕会说
     # "未能停止"，而退出码仍然是 0——脚本里的 `-Stop && 下一步` 照常往下走。
     # 与 mac 侧 stop 分支同一套判据（那边接 stop_monitor 与 remove_user_env_vars 两个码）。
-    $monOk = [bool](Stop-Monitor)
+    # Stop-Monitor 返回的是**退出码**（0 = 已停或本来没跑，1 = 没能停），
+    # 不是布尔值。`[bool]0` 是 False，会把"成功"读成"失败"、把"失败"读成"成功"——
+    # 方向整个反了，而且永不收敛：脚本里 `-Stop; if ($?) {...}` 永远走不到下一步。
+    # 所以取最后一个返回值按 0 判。
+    $monRc = [int]((@(Stop-Monitor))[-1])
+    $monOk = ($monRc -eq 0)
     # 走 Apply-State 而不是裸调删除：拿写变量锁，与监控自愈互斥，不留半套变量。
     # 返回值必须接住：它写不成时 proxy 变量还在，屏幕上说"已清除"就是假话。
     $varsOk = [bool](Apply-State "off")

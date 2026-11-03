@@ -788,7 +788,7 @@ function Show-StatusSnapshot($st) {
     if ($st.UpdateInProgress) {
         Write-StatusRow $StatusLabels.LastUpdate '没有完成（覆盖过程中断）' 'warn'
         Write-Styled 'dim' "  程序文件可能新旧混合，某些功能会静默失效。"
-        Write-Styled 'dim' "  打开菜单$(Get-MenuRef 'Install')重做一次即可。"
+        Write-Styled 'dim' "  补回来的两条路：下载安装包解压覆盖，或在仓库里 git pull。"
     }
     if ($st.SysProxy) {
         # 措辞与实时帧逐字相同（两版是同一屏的两种刷新方式），见 Format-StatusLines。

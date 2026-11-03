@@ -71,12 +71,35 @@ if (-not $target -or -not (Test-Path -LiteralPath $target) -or ((Split-Path -Lea
         # 活跃度排序：monitor\monitor.log 最近写入的优先（无日志的排最后），
         # 同活跃度再看脚本本身的修改时间。这样"真正在用的项目"永远胜出，
         # 用户复制的备份（日志陈旧或没有日志）不会被误选。
+        # 活跃度排序三级，从"最像正本"到"兜底"：
+        #   ① monitor.log 最近写入  —— 真正在跑的那份
+        #   ② 脚本本身修改时间      —— 刚更新过的那份
+        #   ③ 该目录的 monitor.pid 里那个进程还活着 —— 正在用的铁证
+        #
+        # 为什么必须有第三级：用户用 `cp -r` 或资源管理器复制备份时，mtime 会被保留，
+        # 于是正本与备份在 ①② 上完全并列。实测并列时稳定选中**备份**（不是随机）——
+        # 因为 Sort-Object 对相等键保持原顺序，而枚举顺序里备份可能在前。
+        # 选中备份的后果是登录自启指向一个不跑的目录，而使用者看到的是"最近没生效"。
         foreach ($c in $candidates) {
-            $logPath = Join-Path (Split-Path -Parent $c.FullName) "monitor\monitor.log"
+            $root = Split-Path -Parent $c.FullName
+            $logPath = Join-Path $root "monitor\monitor.log"
             $logTime = if (Test-Path -LiteralPath $logPath) { ([System.IO.FileInfo]$logPath).LastWriteTime } else { [datetime]::MinValue }
             $c | Add-Member -NotePropertyName EnvLogTime -NotePropertyValue $logTime -Force
+            # pid 活着 = 1，否则 0。读不出来（没文件、内容是空的）也算 0，不当成错误。
+            $alive = 0
+            try {
+                $pidPath = Join-Path $root "monitor\monitor.pid"
+                if (Test-Path -LiteralPath $pidPath) {
+                    $pidTxt = ([string](Get-Content -LiteralPath $pidPath -Raw -ErrorAction SilentlyContinue)).Trim()
+                    $pidNum = 0
+                    if ([int]::TryParse($pidTxt, [ref]$pidNum) -and $pidNum -gt 0) {
+                        if (Get-Process -Id $pidNum -ErrorAction SilentlyContinue) { $alive = 1 }
+                    }
+                }
+            } catch { $alive = 0 }
+            $c | Add-Member -NotePropertyName EnvPidAlive -NotePropertyValue $alive -Force
         }
-        $target = ($candidates | Sort-Object EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
+        $target = ($candidates | Sort-Object EnvPidAlive, EnvLogTime, LastWriteTime -Descending | Select-Object -First 1).FullName
     }
 }
 if (-not $target -or -not (Test-Path -LiteralPath $target)) {
