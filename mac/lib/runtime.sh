@@ -755,6 +755,9 @@ get_monitor_pid() {
 }
 
 start_monitor() {
+    # 同 stop_monitor：它会直接调用 stop_monitor，两者共用 _existing / _args。
+    # 不加 local 时内层赋值会污染外层，判断读到别人的值。
+    local _force _existing _args _same _other _oargs _opath
     _force="$1"
     _existing=$(get_monitor_pid || true)
     if [ -n "$_existing" ]; then
@@ -812,6 +815,11 @@ start_monitor() {
 }
 
 stop_monitor() {
+    # 这几个变量必须 local：stop_monitor 会被 start_monitor 直接调用（"先停掉旧的再起新的"），
+    # 而两者都用 _existing / _args。不加 local 时，内层赋值会改掉外层的同名变量——
+    # 外层随后拿它做判断，读到的是内层留下的值。症状是"明明停成功了却报失败"，
+    # 或反过来。这种错不报错、只在某些时序下出现，是最难查的一类。
+    local _existing _args _target_dir _from_args _i
     _existing=$(get_monitor_pid || true)
     if [ -z "$_existing" ]; then
         # 监控本来就没在跑，但使用者确实表达了"停"的意图——照样记下来。

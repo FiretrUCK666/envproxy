@@ -45,6 +45,7 @@ _shortcut_extra_dirs_file() {
 }
 
 _shortcut_extra_dirs() {
+    local _sed_f _sed_l
     _sed_f=$(_shortcut_extra_dirs_file)
     [ -f "$_sed_f" ] || return 0
     while IFS= read -r _sed_l || [ -n "$_sed_l" ]; do
@@ -55,6 +56,7 @@ _shortcut_extra_dirs() {
 
 # 记一个落点。标准目录不记：它们本来就在扫描清单里。
 _shortcut_register_dir() {
+    local _srd_dir _srd_std _srd_f
     _srd_dir="$1"
     [ -n "$_srd_dir" ] || return 0
     [ -d "$_srd_dir" ] || return 0
