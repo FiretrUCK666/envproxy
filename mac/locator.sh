@@ -43,6 +43,16 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
             _log="$_cdir/monitor/monitor.log"
             _lm=0
             _fm=0
+            # 第一排序键：监控进程是否活着。必须排在活跃度之前——
+            # cp -p 复制出来的备份会连 monitor.log 的 mtime 一起带过去，
+            # 只按 mtime 排，谁胜出取决于 find 的枚举顺序，可能拉起一份死副本。
+            # 与 Windows 侧 locator.ps1 同一判据（那边 EnvPidAlive 排第一）。
+            _alive=0
+            _pidf="$_cdir/monitor/monitor.pid"
+            if [ -f "$_pidf" ]; then
+                _pid=$(head -n 1 "$_pidf" 2>/dev/null | tr -cd '0-9')
+                if [ -n "$_pid" ] && kill -0 "$_pid" 2>/dev/null; then _alive=1; fi
+            fi
             if [ -f "$_log" ]; then
                 _lm=$(stat -f %m "$_log" 2>/dev/null || stat -c %Y "$_log" 2>/dev/null || echo 0)
                 _lm=$(printf '%s' "$_lm" | tr -cd '0-9')
@@ -51,7 +61,7 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
             _fm=$(stat -f %m "$_cand" 2>/dev/null || stat -c %Y "$_cand" 2>/dev/null || echo 0)
             _fm=$(printf '%s' "$_fm" | tr -cd '0-9')
             [ -n "$_fm" ] || _fm=0
-            printf '%s %s %s\n' "$_lm" "$_fm" "$_cand"
+            printf '%s %s %s %s\n' "$_alive" "$_lm" "$_fm" "$_cand"
         done
     }
     _all=""
@@ -83,9 +93,13 @@ $_out"
 $_out"
     done
     # 活跃度排序：monitor.log 最近写入优先（真正在用的胜出，备份永不误选）
-    _best_line=$(printf '%s' "$_all" | grep -E '^[0-9]+ [0-9]+ ' | sort -rn | head -n 1)
+    # 三键降序，与 Windows 侧 locator.ps1 的 EnvPidAlive, EnvLogTime, LastWriteTime 对应：
+    #   ① 监控活着的优先；② monitor.log 的 mtime；③ 入口脚本自身 mtime。
+    # 必须逐键 -k：BSD/macOS 的 sort -rn 只按行首数值排，第二个键退化成字典序
+    # （"9" > "10"），排序结果与预期不符。
+    _best_line=$(printf '%s' "$_all" | grep -E '^[0-9]+ [0-9]+ [0-9]+ ' | sort -k1,1nr -k2,2nr -k3,3nr | head -n 1)
     if [ -n "$_best_line" ]; then
-        _target=$(printf '%s' "$_best_line" | sed 's/^[0-9]* [0-9]* //')
+        _target=$(printf '%s' "$_best_line" | sed 's/^[0-9]* [0-9]* [0-9]* //')
     fi
 fi
 

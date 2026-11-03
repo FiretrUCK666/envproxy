@@ -559,10 +559,6 @@ style_color_of_role() {
 style_color() {
     style_code_of_name "$(style_color_of_role "$1")"
 }
-# 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
-# stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。
-style_out() {
-
 # 屏幕刷新：菜单与帮助都是"一屏一页"，切换时清屏。
 # 只在真有终端时清：没有终端时 clear 会往输出里塞控制字符，把日志刷脏。
 #
@@ -570,10 +566,18 @@ style_out() {
 # 留在 help 里会让 shortcut 反过来依赖 help（它要清屏），
 # 而 help 的表又指向 shortcut 的处理器——两个方向都有边，就是一个环。
 # 环的毛病不是跑不起来，是单独读任何一个文件都看不出它依赖什么。
+#
+# 必须是**顶层定义**，不许写在别的函数体里：写在里面的话，它只在那个函数
+# 第一次被调用之后才存在，而先调它的地方（帮助页、救援页、快捷方式三屏）
+# 全都比 style_out 更早执行——屏幕上直接报 command not found，帮助页打不开。
 clear_screen_safe() {
     [ -t 1 ] || return 0
     clear 2>/dev/null || true
 }
+
+# 按角色输出一行。所有给人看的文字都走这里，于是"换个颜色"只要改上面那张表。
+# stdout 不是终端时不上色：转义序列会原样写进日志（实测 ^[[36m），既弄脏日志也没法看。
+style_out() {
     _so_role="$1"; shift
     if [ ! -t 1 ]; then printf '%s\n' "$*"; return 0; fi
     _so_c=$(style_color "$_so_role")

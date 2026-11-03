@@ -235,20 +235,24 @@ _shortcut_build_app() {
     _sba_suffix=$(proxy_mode_suffix "$_sba_mode" 2>/dev/null) || return 1
     [ -n "$_sba_suffix" ] || return 1
 
-    _sba_base=$(basename "$_sba_target")
-    _sba_base=${_sba_base%.app}
-    # 壳子的身份 = 目标路径 + 模式。这个哈希必须进**最终产物名**，不只是内部暂存目录：
-    #   只算路径  —— 同一个程序的两种模式会共用同一个壳子，后建的覆盖先建的
-    #   只算模式  —— 两个不同目录下同名的程序会互相覆盖
-    # 之前它只用在 _sba_work 上，最终落到桌面的名字没有它，于是
-    # "apps1/MyApp" 与 "apps2/MyApp" 都落成 "MyApp（翻墙）.app"，后者静默覆盖前者——
-    # 而屏幕上是同名图标，看不出发生过覆盖。
+    # 身份哈希 = 目标路径 + 模式。它只用在**内部**暂存目录名上（_sba_work），
+    # 不进桌面那个给人看的名字。
+    #
+    # 为什么这样分：
+    #   内部目录要防撞——同一个程序的两种模式、或两个目录下的同名程序，
+    #     共用暂存目录会互相覆盖，而屏幕上看不出发生过覆盖；
+    #   桌面名字要能读——用户看到的就是这个名字，塞进 8 位哈希等于让他对着
+    #     MyApp_a1b2c3d4（翻墙）猜那串字符是什么。Windows 侧的 .lnk 名
+    #     也是「程序名 + 后缀」，两端必须一致，否则同一个程序在两台机器上叫两个名字。
+    #
+    # 桌面名撞了（另一个目录下的同名程序）才退让加哈希：那时名字里带点东西是
+    # 唯一能区分两者的办法，比静默覆盖好。
     if command -v shasum >/dev/null 2>&1; then
         _sba_key=$(printf '%s\n%s' "$_sba_target" "$_sba_mode" | shasum -a 256 | cut -c1-8)
     else
         _sba_key=$(printf '%s\n%s' "$_sba_target" "$_sba_mode" | cksum | cut -d' ' -f1)
     fi
-    _sba_app="$_sba_dest/${_sba_base}_${_sba_key}${_sba_suffix}.app"
+    _sba_app="$_sba_dest/${_sba_base}${_sba_suffix}.app"
 
     _sba_store=$(_shortcut_apps_dir)
     mkdir -p "$_sba_store" 2>/dev/null || return 1
@@ -270,13 +274,31 @@ _shortcut_build_app() {
     # rm -rf 会连名字恰好撞上的真 app 一起删掉，而这一步发生在「建一个图标」
     # 这种看起来无害的动作里，用户不会预料到自己的东西没了。
     # 判据与 _shortcut_remove 完全一致（同一个标记行），两处不许各写一套。
+    # 目标位置已经有东西时，判它是不是**同一个壳子**：
+    #   是同一个（目标 + 模式都相同）  -> 直接覆盖，这是"重做一次"的正常路径；
+    #   不是同一个（另一个目录的同名程序，或同名但不是我们造的）-> 退让到带哈希的名字。
+    #
+    # 这一步不能省。桌面名不带哈希之后，"apps1/MyApp" 与 "apps2/MyApp" 都想叫
+    # "MyApp（翻墙）.app"——不退让就会后者静默覆盖前者，而两个图标同名，
+    # 用户看不出发生过覆盖，只会发现"另一个程序不见了"。
     if [ -e "$_sba_app" ]; then
-        if [ -f "$_sba_app/Contents/MacOS/launcher" ] && grep -q '这个文件由 EnvProxy 生成' "$_sba_app/Contents/MacOS/launcher" 2>/dev/null; then
+        _sba_same=""
+        if [ -r "$_sba_app/Contents/Info.plist" ]; then
+            if command -v /usr/libexec/PlistBuddy >/dev/null 2>&1; then
+                _sba_same=$(/usr/libexec/PlistBuddy -c "Print :EnvProxyTarget" "$_sba_app/Contents/Info.plist" 2>/dev/null)
+            fi
+            if [ -z "$_sba_same" ]; then
+                _sba_same=$(sed -n 's|.*<key>EnvProxyTarget</key><string>\(.*\)</string>.*|\1|p' "$_sba_app/Contents/Info.plist" 2>/dev/null | head -1)
+            fi
+        fi
+        if [ "$_sba_same" = "$_sba_target" ] && grep -q '这个文件由 EnvProxy 生成' "$_sba_app/Contents/MacOS/launcher" 2>/dev/null; then
+            # 同一个程序同一个模式：这是"按 y 重做一遍"，覆盖是对的。
             rm -rf "$_sba_app" 2>/dev/null || true
         else
-            # 同名但不是我们造的：一个字节都不动，把这个情况交给调用方去说。
-            echo "同名的东西已经存在，而且不是本工具建的：$_sba_app" >&2
-            return 2
+            # 不是同一个：退让到带哈希的名字。带上哈希之后一定不撞——
+            # 哈希本身包含目标路径与模式，不同的东西不会算出同一个值。
+            _sba_app="$_sba_dest/${_sba_base}_${_sba_key}${_sba_suffix}.app"
+            rm -rf "$_sba_app" 2>/dev/null || true
         fi
     fi
     if command -v ditto >/dev/null 2>&1; then
@@ -295,6 +317,40 @@ _shortcut_build_app() {
 # 扫出本工具造的壳子。判据是**内容**而不是文件名：
 # Info.plist 里有我们的标记、且启动脚本里带着目标路径那一行。
 # 只按名字判会误删使用者自己建的、名字恰好也带「（走代理）」的 app。
+# 读一个壳子的**显示名**——用户在屏幕上该看到的名字（不含内部哈希）。
+#
+# 为什么不能从 .app 的文件名反推：产物名是 `${基名}_${8位哈希}${后缀}.app`，
+# 哈希是身份的一部分（区分"同一程序的两种模式"与"不同目录的同名程序"），
+# 但它不该出现在屏幕上。从文件名剥 `_[0-9a-f]{8}` 也不行——
+# 真实程序名完全可能以这种形状结尾（my_tool_deadbeef），剥了就把名字改错。
+#
+# 唯一可靠的来源是建壳子时写进 Info.plist 的 CFBundleDisplayName，它就是
+# "基名 + 后缀"，从来不含哈希。读不到才回落到剥文件名（老版本壳子可能没有该键）。
+_shortcut_display_name() {
+    _sdn_app=$1
+    _sdn_name=""
+    if [ -r "$_sdn_app/Contents/Info.plist" ]; then
+        if command -v /usr/libexec/PlistBuddy >/dev/null 2>&1; then
+            _sdn_name=$(/usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$_sdn_app/Contents/Info.plist" 2>/dev/null)
+        fi
+        if [ -z "$_sdn_name" ]; then
+            _sdn_name=$(sed -n 's|.*<key>CFBundleDisplayName</key><string>\(.*\)</string>.*|\1|p' "$_sdn_app/Contents/Info.plist" 2>/dev/null | head -1)
+            _sdn_name=$(printf '%s' "$_sdn_name" | sed -e 's/&amp;/\&/g' -e 's/&lt;/</g' -e 's/&gt;/>/g')
+        fi
+    fi
+    # 回落：先剥模式后缀，再剥掉末尾那 8 位十六进制哈希。
+    # 这一步只在没有 Info.plist 显示名的老壳子上走，所以宁可剥错也要剥：
+    # 屏幕上带着哈希比名字少两个字符更让人困惑。
+    if [ -z "$_sdn_name" ]; then
+        _sdn_name=$(basename "$_sdn_app" .app)
+        for _sdn_m in $PROXY_MODES; do
+            _sdn_sfx=$(proxy_mode_suffix "$_sdn_m" 2>/dev/null) || continue
+            case "$_sdn_name" in *"$_sdn_sfx") _sdn_name=${_sdn_name%"$_sdn_sfx"} ;; esac
+        done
+        _sdn_name=$(printf '%s' "$_sdn_name" | sed -E 's/_[0-9a-f]{8}$//')
+    fi
+    printf '%s\n' "$_sdn_name"
+}
 _shortcut_records() {
     _sr_base=$(_shortcut_default_dest)
     # 扫描清单 = 三个标准目录 + 用户自选过的落点。少了后半截，
@@ -334,12 +390,16 @@ $_sr_extra"; fi
             if [ -z "$_sr_target" ]; then
                 _sr_target=$(grep '^exec ' "$_sr_launcher" 2>/dev/null | head -1 | sed -e "s/^exec //" -e "s/ \"\$@\"$//" -e "s/^'//" -e "s/'$//")
             fi
-            _sr_name=$(basename "$_sr_app" .app)
+            # 显示名从 Info.plist 读，不从文件名剥：产物名里带着 8 位身份哈希，
+            # 而从文件名剥它要猜形状（真实程序名也可能以 _deadbeef 结尾），猜错就改了名字。
+            _sr_name=$(_shortcut_display_name "$_sr_app")
+            # 模式按产物文件名的后缀判：后缀来自模式表，是这一层的权威处。
             _sr_mode=""
+            _sr_bn=$(basename "$_sr_app" .app)
             for _sr_m in $PROXY_MODES; do
                 _sr_sfx=$(proxy_mode_suffix "$_sr_m" 2>/dev/null) || continue
-                case "$_sr_name" in
-                    *"$_sr_sfx") _sr_mode=$_sr_m; _sr_name=${_sr_name%"$_sr_sfx"} ;;
+                case "$_sr_bn" in
+                    *"$_sr_sfx") _sr_mode=$_sr_m ;;
                 esac
             done
             _sr_state=ok
@@ -608,6 +668,8 @@ _shortcut_confirm_and_build() {
         *)      style_out dim "          双击它启动的程序会翻墙，跟着翻墙软件走。" ;;
     esac
     echo ""
+    # 图标名就说屏幕上会看到的那个名字。桌面名通常不带哈希（只在撞名时才带），
+    # 所以这里说「基名 + 后缀」与实际产物一致。
     style_out text "  图标名  ${_scb_name}${_scb_suffix}"
     style_out text "  放在    $(_shortcut_default_dest)"
     echo ""

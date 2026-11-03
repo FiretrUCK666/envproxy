@@ -952,25 +952,25 @@ get_current_state() {
 # 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
 # 状态页用它判两件事：注入的代理变量指向的端口、系统代理指向的端口。
 # 与 Windows 侧 Test-TcpAlive 同一判据（那边按地址族建套接字，这边同样只连一次）。
+#
+# 用 bash 内建的 /dev/tcp，不用 nc 也不用 curl：
+#   - nc 的 -G 在部分 macOS 版本不存在（Homebrew 的 GNU netcat 就没有 -G），
+#     那时旧代码会退到 curl；而 curl 那条路是 `-p -x http://addr:port http://127.0.0.1:9/`，
+#     它**真的去建一条到 127.0.0.1:9 的代理隧道**——端口 9 没人听，连接被拒，
+#     curl 返回非零，于是活着的代理端口被判成死的。判活只该连端口，不该建隧道。
+#   - /dev/tcp 零依赖、零 fork、无输出，语义就是"连得上吗"。
+#   - 与 doctor 层 sysproxy_port_state 同一套实现：同一件事不许有两套判据。
+#
+# IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西（冒号当分隔符）。
 _port_alive() {
     _pa_addr="$1"; _pa_port="$2"
     [ -n "$_pa_addr" ] && [ -n "$_pa_port" ] || return 1
-    # 大括号加 2>/dev/null 包住：nc/curl 在端口没人听时会往 stderr 写一行，
-    # 那行不是错误、只是噪声，不该出现在状态页上。
-    if nc_supports_G; then
-        if printf '' | nc -z -G 1 -w 1 "$_pa_addr" "$_pa_port" 2>/dev/null; then return 0; fi
-        return 1
-    fi
-    # 降级：用 curl 探连通。
-    # 与 probe 层同一个坑：--noproxy '' 是绕过代理直连目标，'*' 语义正好相反；
-    # 不加 -p 时 curl 发的是普通 GET，任何回 200 的服务都会被当成代理。
-    #
-    # 注释必须写在命令**上方**：续行（行尾反斜杠）中间夹一行注释，bash 会把
-    # 整行注释丢弃、续行到此结束，后面的参数变成一条独立命令去执行——
-    # 实测 curl 只收到前四个参数、URL 全丢，报 "no URL specified"，
-    # 于是判断永远是"死了"，状态页每次都打印假警告。
-    if curl_direct --disable -s -o /dev/null --connect-timeout 1 --max-time 2 \
-        --noproxy '' -p -x "http://$_pa_addr:$_pa_port" "http://127.0.0.1:9/" 2>/dev/null; then
+    case "$_pa_addr" in
+        *:*) _pa_host="[$_pa_addr]" ;;
+        *)   _pa_host="$_pa_addr" ;;
+    esac
+    if (exec 3<>"/dev/tcp/${_pa_host}/${_pa_port}") 2>/dev/null; then
+        exec 3<&- 2>/dev/null || true
         return 0
     fi
     return 1

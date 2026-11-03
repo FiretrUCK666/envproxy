@@ -551,7 +551,7 @@ function New-ProxyShortcut {
     # 不合法的值（别的工具写坏的、手工填错的）照样会建成功——快捷方式本身没毛病，
     # 它只是读不到可用的代理而已；但要在结果里说一句，否则用户点了图标发现没走代理，
     # 只会以为这个功能坏了。判断规则只写在 ConvertTo-ProxyUrl 那一处。
-    try { $res.ProxyRaw = [string](Get-ItemProperty -LiteralPath (Get-UserEnvKeyPath) -Name 'HTTPS_PROXY' -ErrorAction SilentlyContinue).HTTPS_PROXY } catch {}
+    try { $res.ProxyRaw = [string](Get-EnvProxyValue $PrimaryProxyVarName) } catch {}
     $res.ProxyOk = [bool](ConvertTo-ProxyUrl $res.ProxyRaw)
     if (-not $WorkingDirectory) { $WorkingDirectory = Split-Path -Parent $TargetPath }
     if (-not (Test-Path -LiteralPath $WorkingDirectory)) { $WorkingDirectory = Split-Path -Parent $TargetPath }
@@ -1656,7 +1656,10 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         # 只在**走代理**的模式下提醒。直连模式本来就不读代理，
         # 对它说"开好代理软件再点一次"是把人往错的方向推——
         # 他会以为直连图标也需要代理，甚至真的去开代理重做一遍。
-        if (-not $r.ProxyOk -and $r.Mode.Action -eq 'proxy') {
+        # 比的是 $r.Mode 本身：New-ProxyShortcut 在结果里放的是模式 Id 字符串（"proxy"/"direct"）。
+        # 曾经这里写的是 $r.Mode.Action —— 字符串上取 .Action 恒为 $null，比较永远为假，
+        # 于是这段告警成了死代码：代理没开时建图标一声不响，用户点进去发现没走代理。
+        if (-not $r.ProxyOk -and $r.Mode -eq 'proxy') {
             Write-Host ''
             Write-Styled 'warn' '  注意：现在没有检测到有效的代理地址。'
             Write-Styled 'dim'  '  这个图标仍然能用，但启动时会直连。开好代理软件再点一次就正常了。'

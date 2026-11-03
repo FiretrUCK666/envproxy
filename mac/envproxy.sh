@@ -265,8 +265,10 @@ case "$_CMD_NORM" in
     # 入口同时持有所有层，是唯一适合把这条能力接起来的地方。
     update) UPDATE_INSTALL_FINISH="install_envproxy" update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
-    # 高级功能：与 Windows 侧同名同号的二级菜单。mac 这边只放「网络救援」
-    # （DIVERGE(Mac): 从 Dock 启动的程序本来就拿得到 launchctl 设的变量，不需要启动器）。
+    # 高级功能：与 Windows 侧同名同号的二级菜单。mac 这边 4 项（图标三屏 + 网络救援），
+    # Windows 侧 7 项——多的三项是 WSL / Docker 这类只讲怎么改的说明页。
+    # DIVERGE(Mac): 中继（固定入口）只有 Windows 有；图标层两端都有，但机制不同
+    # （Win 造 .lnk + .vbs，Mac 造 wrapper .app）。
     advanced) show_advanced_menu;;
     help) show_help;;
     # 退出码要如实反映结果：报告没写出来时说"成功"是谎报，

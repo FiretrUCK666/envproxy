@@ -935,8 +935,9 @@ proxy_notify_state_path() { printf '%s' "$MONITOR_DIR/notify.last"; }
 # 弹窗本身要等用户看到，不能卡住探测节奏。
 # 文案与 Windows 侧同一套说法（不写端口号：用户不认端口，也做不了什么）。
 # DIVERGE(Mac): 这里的文案比 Windows 侧少一句"用菜单建的图标不受影响"。
-# 原因：固定入口（中继）与走代理的快捷方式都是 Windows 独有（本目录没有 relay / shortcut），
-# macOS 上不存在"图标记着固定地址"这回事，说了反而是让人去找一个不存在的东西。
+# 原因：那句话说的是「固定入口（中继）」，而中继只有 Windows 有（本目录没有 relay）。
+# 图标层两端都有，但 mac 的壳子是启动那一刻直接取端口、不经过任何固定地址，
+# 所以"端口变了图标还能用"这件事在这里不成立，说了反而是让人去找一个不存在的东西。
 invoke_proxy_change_notice() {
     _ipn_new="$1"
     case "$_ipn_new" in
@@ -1170,7 +1171,17 @@ run_monitor_loop() {
                 _snap_hs_port="${_last#on:}"
                 case "$_snap_hs_port" in
                     ''|*[!0-9]*) : ;;
-                    *) _snap_hs=$(handshake_kind_at "127.0.0.1" "$_snap_hs_port" 2>/dev/null || echo "") ;;
+                    *)
+                        # 两个回环地址都试，与探测层同一份清单（LOOPBACK_PROBES）。
+                        # 只写 127.0.0.1 的话，只绑 ::1 的代理（mihomo / sing-box 配
+                        # bind-address: "::1"）在这里永远握手失败，快照记成 silent，
+                        # 状态页于是对它显示"连不出去"——而它其实好的。
+                        # 取第一个有结果的：没结果（空）继续试下一个。
+                        for _snap_hs_addr in $LOOPBACK_PROBES; do
+                            _snap_hs=$(handshake_kind_at "$_snap_hs_addr" "$_snap_hs_port" 2>/dev/null || echo "")
+                            [ -n "$_snap_hs" ] && break
+                        done
+                        ;;
                 esac
                 ;;
         esac

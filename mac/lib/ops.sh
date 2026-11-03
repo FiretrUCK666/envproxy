@@ -216,6 +216,51 @@ uninstall_envproxy() {
     # remove_shell_hooks 随后摘掉 rc 里那一行（标记块精确移除，用户其余内容不动）。
     rm -f "$LOCATOR_PATH" "$PATH_CONF" "$ENVPROXY_HOME/prompt-sync.sh" 2>/dev/null || true
     remove_shell_hooks
+    # 走代理的快捷方式：与 Windows 侧同一套口径——能问的时候先问，默认保留。
+    #
+    # 为什么必须在删 $ENVPROXY_HOME 之前做：壳子的中转目录在
+    # $ENVPROXY_HOME/apps 下，落点记录在 $ENVPROXY_HOME/shortcut-dirs.txt。
+    # 不处理它们的话，下面那句 rmdir 会因为"目录非空"**静默失败**——
+    # 而它没有报错分支，于是卸载提示"已恢复到安装前的状态"，家目录却还留着，
+    # 连 --purge 也清不掉。
+    _keep_shortcuts=1
+    _sc_names=$(_shortcut_records 2>/dev/null | cut -f2)
+    if [ -n "$_sc_names" ]; then
+        _sc_list=$(printf '%s\n' "$_sc_names" | grep . | paste -sd '、' -)
+        # @explain 「走代理的快捷方式」是产品里的图标名，用户会在桌面上看到它
+        style_out text "你为这些程序建了走代理的快捷方式：$_sc_list"
+        style_out dim "卸载后它们仍然能启动程序，但不再自动带代理。"
+        if [ "$_purge" = "1" ]; then
+            # --purge 的语义是"我知道我在干什么，全部清干净"，与 --yes 同一条思路。
+            _keep_shortcuts=0
+            style_out dim "已指定 --purge：这些快捷方式一并删除。"
+        elif [ -t 0 ]; then
+            printf '这些快捷方式是否保留？[Y] 保留（默认） / [N] 一起删掉: '
+            _sc_ans=""
+            read -r _sc_ans || _sc_ans=""
+            case "$_sc_ans" in [Nn]*) _keep_shortcuts=0;; esac
+        else
+            style_out dim "这里没法提问，默认保留（要一并删除请用 uninstall --purge）。"
+        fi
+        if [ "$_keep_shortcuts" = "0" ]; then
+            # 用 here-doc 而不是管道：管道会让 while 跑在子 shell 里，
+            # 里面的计数与错误传不出来（与上面删运行时文件、下面摘 hook 同一做法）。
+            _sc_n=0
+            while IFS= read -r _sc_app; do
+                [ -n "$_sc_app" ] || continue
+                _shortcut_remove "$_sc_app" >/dev/null 2>&1 && _sc_n=$((_sc_n + 1))
+            done <<EOF_SHORTCUTS
+$(_shortcut_records 2>/dev/null | cut -f1)
+EOF_SHORTCUTS
+            # @explain 「走代理的快捷方式」是产品里的图标名，用户会在桌面上看到它
+            style_out ok "走代理的快捷方式：已删除 $_sc_n 个。"
+        fi
+    fi
+    # 中转目录与落点记录：无论保留还是删除图标，这两样都不该活过卸载。
+    # 壳子本体（桌面等落点）按上面的选择处理；这里是内部产物，留着没有任何用处，
+    # 而 shortcut-dirs.txt 记的是"用户自选过的落点"，重装后读它会得到上一份安装的记忆。
+    rm -rf "$(_shortcut_apps_dir)" 2>/dev/null || true
+    rm -f "$(_shortcut_extra_dirs_file)" 2>/dev/null || true
     _remove_log=0
     if [ "$_purge" = "1" ]; then
         _remove_log=1
@@ -303,6 +348,11 @@ $(monitor_runtime_files)
 EOF_RUNTIME_FILES
     if [ -f "$OWNED_ENV" ]; then _dirty="$_dirty 归属记录仍在（$OWNED_ENV）；"; fi
     if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
+    # 快捷方式的两个内部产物也要查：删了不查等于没删（上面刚补上删除逻辑）。
+    # 保留图标是用户的合法选择，那时桌面上的壳子当然还在，**不算脏**；
+    # 脏的是内部产物——中转目录与落点记录，它们无论选保留还是删除都该消失。
+    if [ -d "$(_shortcut_apps_dir)" ]; then _dirty="$_dirty 壳子中转目录仍在（$(_shortcut_apps_dir)）；"; fi
+    if [ -f "$(_shortcut_extra_dirs_file)" ]; then _dirty="$_dirty 快捷方式落点记录仍在（$(_shortcut_extra_dirs_file)）；"; fi
     if [ -f "$ENVPROXY_HOME/monitor.stdout.log" ] || [ -f "$ENVPROXY_HOME/monitor.stderr.log" ]; then _dirty="$_dirty 自启动重定向残留；"; fi
     # hook 名单与 remove_shell_hooks 同一份（改一边必须改另一边）：残留整块即脏。
     # 按行读而不是 `for x in $(...)`：后者靠词拆分，路径含空格就会被拆坏。
