@@ -1676,27 +1676,16 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
             Write-Styled 'dim'  '  这个图标仍然能用，但启动时会直连。开好代理软件再点一次就正常了。'
         }
         Write-Host ''
-        # 直接在这里给覆盖选项。让用户"去管理页删掉再回来重建"要走十来步
-        # （返回、进管理、找编号、确认、退出、再选程序），中途按错就回起点；
-        # 而重新生成同一个快捷方式只需要把同样的内容再写一遍。
-        Write-Styled 'text' '  要用当前设置覆盖它吗？'
-        Write-Styled 'dim'  '  输 y 回车覆盖，直接回车 = 保留原来的'
-        $ov = ''
-        try { $ov = "$(Read-Host '覆盖')".Trim() } catch {}
-        if ($ov -match '^(y|yes|是)$') {
-            $r2 = New-ProxyShortcut -TargetPath $chosen.TargetPath -WorkingDirectory $chosen.WorkingDirectory `
-                                    -DestinationDir $dest -Name (Get-PathBaseName $chosen.TargetPath) -ModeId $mode.Id -ExtraArgs $extraArgs -Force
-            Write-Host ''
-            if ($r2.Ok) {
-                Write-Styled 'ok' '  [完成] 已覆盖：'
-                Write-Styled 'dim' ('    ' + $r2.Path)
-            } else {
-                Write-Styled 'warn' ('  [失败] 没能覆盖：' + $r2.Reason)
-            }
-        } else {
-            Write-Host ''
-            Write-Styled 'dim' '  保留原来的，什么都没改。'
-        }
+        # 这里**不追问"要不要覆盖"**。
+        #
+        # 曾经这里问过，用户的原话是：「我当时都没有新建任何东西，还叫我覆盖什么」。
+        # 他说的对：走到这一步，图标刚刚建好（上面那行 [完成] 已经打出来了），
+        # 而"覆盖"暗示有另一份东西会被替换掉——但他没有第二份，也看不见第二份。
+        # 一个无法回答的问题比不问更糟：他只能随便按一个，然后不知道自己选了什么。
+        #
+        # 真正需要"更新已有图标"的场景（同名的图标已经在那儿）由 New-ProxyShortcut
+        # 自己的 -Force 语义处理：它只写 <名字><后缀>.lnk 这一个文件，从不碰
+        # 用户原本的快捷方式。所以这里不需要再问一遍——上面已经建好了。
     } else {
         Write-Styled 'warn' '  [失败] 没能创建：'
         Write-Styled 'dim'  ('         ' + $r.Reason)

@@ -225,3 +225,82 @@ foreach ($ss in @('ok', 'blocked', 'unpaired', 'missing', 'stale', 'nohost')) {
     }
 }
 
+# ---------------------------------------------------------------------------
+# 用户级环境变量所在的注册表键可能整份不存在。
+#
+# 实测过一台机器 HKCU\Environment 被清理工具删掉了（用户级 PATH/TEMP 全没了）。
+# 那时 OpenSubKey 返回 $null，旧实现写了一句 `if ($null -eq $key) { return }`——
+# 静默返回"成功"。后果是连锁的：中继读不到上游（固定图标全返 503）、
+# 终端拿不到代理变量，而屏幕上一切正常、日志还说"已注入代理"。
+#
+# 判据：删掉键之后写入必须**成功且真的落下值**，而不是无声无息地什么都没做。
+if ($env:OS -eq 'Windows_NT') {
+    $script:envKeyPath = Get-UserEnvKeyPath
+    $script:hadKey = Test-Path -LiteralPath $script:envKeyPath
+    $script:saved = @{}
+    if ($script:hadKey) {
+        foreach ($n in @($ProxyVarNames)) {
+            $script:saved[$n] = (Get-ItemProperty -LiteralPath $script:envKeyPath -Name $n -ErrorAction SilentlyContinue).$n
+        }
+    }
+    try {
+        # 拆掉整个键，制造"完全不存在"的状态。
+        if ($script:hadKey) { Remove-Item -LiteralPath $script:envKeyPath -Recurse -Force -ErrorAction SilentlyContinue }
+        Assert-Eq '键已删掉（前置条件）' $false (Test-Path -LiteralPath $script:envKeyPath)
+
+        $script:healErr = ''
+        try {
+            Write-UserEnvValues -Values @{ 'HTTP_PROXY' = 'http://127.0.0.1:7078' }
+        } catch {
+            $script:healErr = $_.Exception.Message
+        }
+        Assert-Eq '键不存在时写入不抛异常' '' $script:healErr
+        Assert-Eq '键被自动重建' $true (Test-Path -LiteralPath $script:envKeyPath)
+        $script:afterVal = (Get-ItemProperty -LiteralPath $script:envKeyPath -Name 'HTTP_PROXY' -ErrorAction SilentlyContinue).HTTP_PROXY
+        Assert-Eq '值真的落下去了（不是静默什么都没做）' 'http://127.0.0.1:7078' $script:afterVal
+    } finally {
+        # 还原：删掉测试写的值，再把原来的键与值放回去。
+        if (Test-Path -LiteralPath $script:envKeyPath) {
+            try { Remove-ItemProperty -LiteralPath $script:envKeyPath -Name 'HTTP_PROXY' -Force -ErrorAction SilentlyContinue } catch {}
+        }
+        if ($script:hadKey) {
+            if (-not (Test-Path -LiteralPath $script:envKeyPath)) { New-Item -Path $script:envKeyPath -Force | Out-Null }
+            foreach ($n in $script:saved.Keys) {
+                if ($script:saved[$n]) {
+                    Set-ItemProperty -LiteralPath $script:envKeyPath -Name $n -Value ([string]$script:saved[$n]) -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# terminal.env 的值必须转义换行。
+#
+# 事故（实测）：Windows 环境变量的值允许带换行。NO_PROXY 一旦带换行，
+# 写进 terminal.env 会把一条记录劈成两行：
+#     owned_NO_PROXY=localhost,127.0.0.1,::1,corp.com
+#     evil.example
+# Git Bash 的钩子逐行解析，读到的 owned 值是前半截，与窗口里的真实值不相等
+# -> 判定「不是我们写的，不许删」-> 那个窗口永远清不掉旧代理，
+# 而 HTTP_PROXY 照常被清掉。使用者得到半套变量，git 静默连一个死端口。
+#
+# 判据：编码后的值必须不含任何换行；百分号自身也必须被转义（否则解码有歧义）。
+# ---------------------------------------------------------------------------
+$script:nlCases = @(
+    @{ In = "localhost`ncorp.com";   Why = '换行' },
+    @{ In = "a`r`nb";                Why = 'CRLF' },
+    @{ In = "has%percent";           Why = '百分号' },
+    @{ In = "50%off%0Ainjected";     Why = '百分号+伪转义序列' }
+)
+foreach ($c in $script:nlCases) {
+    $enc = ConvertTo-EnvFileValue $c.In
+    Assert-Eq ("编码后不含换行（" + $c.Why + "）") $false ($enc -match "[`r`n]")
+    Assert-Eq ("编码后不含裸百分号（" + $c.Why + "）") $false ($enc -match '%(?!25|0A)')
+}
+# 无特殊字符的值必须原样通过，不许被无谓地改写。
+Assert-Eq '普通值原样通过' 'localhost,127.0.0.1,::1' (ConvertTo-EnvFileValue 'localhost,127.0.0.1,::1')
+# 拼行：等号只出现在键与值之间，值里的内容不许再造出新的键值边界。
+$script:line = Format-EnvFileLine 'NO_PROXY' "a`nb"
+Assert-Eq '拼出来的行不含换行' $false ($script:line -match "[`r`n]")
+Assert-Eq '拼出来的行只有一个等号' 1 ([regex]::Matches($script:line, '=').Count)

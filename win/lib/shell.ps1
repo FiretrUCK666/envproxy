@@ -615,6 +615,21 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
             esac
             _epc_n="${_epc_k#owned_}"
             _epc_want="$_epc_v"
+            # 还原写入端做的百分号转义（见 env 层 ConvertTo-EnvFileValue）。
+            # 不还原的话，带换行的 NO_PROXY 在文件里是 %0A 字面量，与窗口里的真实值
+            # 永远不相等 -> 判成"不是我们写的" -> 那个窗口永远清不掉旧代理。
+            # 顺序与编码相反：先还原换行、再还原百分号（否则 %250A 会被当成换行）。
+            #
+            # 两个候选方案都被实测否掉过，记在这里免得重走：
+            #   1. 用 bash 的 ${x//模式/替换}：命令替换会把结果尾部的换行全部吃掉，
+            #      值变成 localhostcorp.com，比不还原更糟；
+            #   2. 用 sed 的多行 s 命令：续行之后的源码缩进会跟着进替换串。
+            # 最终用 awk，换行交给 sprintf("%c",10) 生成——源码里没有真换行，
+            # 也不依赖续行，缩进怎么排都不影响结果。
+            # 只在确实含 % 时才 fork：绝大多数窗口的值不含 %，热路径保持零进程。
+            if [ "${_epc_want#*%}" != "$_epc_want" ]; then
+                _epc_want=$(printf '%s' "$_epc_want" | awk '{gsub(/%0A/, sprintf("%c",10)); gsub(/%25/,"%"); printf "%s", $0}')
+            fi
             [ -n "$_epc_want" ] || continue
             eval "_epc_cur=\"\${$_epc_n-}\""
             # 两种拼写都要看：只看大写的话，"只有小写还在"的窗口永远清不干净。

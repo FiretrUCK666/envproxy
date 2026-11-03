@@ -112,8 +112,15 @@ function Set-UserEnvRaw([hashtable]$Values) {
     if (-not $Values -or $Values.Count -eq 0) { return }
     $key = $null
     try {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($UserEnvSubKey, $true)
-        if ($null -eq $key) { return }
+        # 用 CreateSubKey 而不是 OpenSubKey：**这个键可能整份不存在**。
+        # 实测过一台机器 HKCU\Environment 被清理工具删掉了（用户级环境变量全没了），
+        # 而 OpenSubKey 返回 $null、紧接着 `if ($null -eq $key) { return }` 直接
+        # 静默返回"成功"——调用方以为写进去了，照常记日志"已注入代理"，
+        # 实际一个字节都没写。后果是连锁的：中继读不到上游（固定图标全返 503）、
+        # 终端拿不到代理变量，而屏幕上一切正常。
+        # 缺失时自建是安全的：环境变量本就该住在这个键下，Windows 支持它为空。
+        $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($UserEnvSubKey)
+        if ($null -eq $key) { throw ("打不开也建不了注册表键：" + $UserEnvSubKey) }
         foreach ($n in $Values.Keys) {
             $v = $Values[$n]
             if ($null -eq $v) {
@@ -743,6 +750,39 @@ function Apply-State([string]$state) {
 # 格式是每行 KEY=VALUE：无前缀行是「当前该注入的值」，owned_ 前缀行是「归属记录」
 # （值仍等于它才允许清除，与注册表 Owned 键同一套判据）。
 # 一次性整份重写：读的一方只会看到写之前或写之后的完整内容，不会看到半份。
+# terminal.env 是「给另一个进程读的键值文件」，值里必须不可能出现换行。
+#
+# 为什么必须转义（实测事故）：Windows 环境变量允许值里带换行。一旦 NO_PROXY 带换行，
+# 写进 terminal.env 后它会把一条记录劈成两行：
+#     owned_NO_PROXY=localhost,127.0.0.1,::1,corp.com
+#     evil.example
+# 钩子逐行解析，读到的 owned 值是前半截 `localhost,127.0.0.1,::1,corp.com`，
+# 与窗口里的真实值不相等 -> 判定「不是我们写的，不许删」 -> 那个窗口永远清不掉旧代理，
+# 而 HTTP_PROXY 照常被清掉。用户得到的是**半套变量**，git 静默连一个死端口。
+# 这正是本项目最想消灭的症状，却由一条漏掉的转义引入。
+#
+# 编码方式与状态快照完全一致（百分号转义，%25 先行），理由见 ConvertTo-SnapshotValue：
+# 反斜杠方案在 Windows 路径上会把 C:\nodejs\npm 劈开，往返不闭环。
+# 这里不直接调 runtime 层的 ConvertTo-SnapshotValue：env 层在它之下，反向依赖会造环。
+# 同样两条规则（先 %25 再 %0A、控制字符去掉）在两个文件里各写一遍，是分层边界的代价；
+# 门禁 10 的 round-trip 用例同时覆盖两者，改一处漏一处会被它抓到。
+function ConvertTo-EnvFileValue([string]$Text) {
+    if ($null -eq $Text) { return '' }
+    $s = [string]$Text
+    $s = $s.Replace('%', '%25')
+    $s = $s -replace "`r`n", '%0A'
+    $s = $s -replace "`n", '%0A'
+    $s = $s -replace "`r", '%0A'
+    $s = $s -replace "[\x00-\x08\x0B\x0C\x0E-\x1F]", ''
+    return $s
+}
+
+# 拼一条 `名=值`。值的转义在这里统一做，调用处不许自己拼字符串——
+# 漏一处的后果见上面那段。
+function Format-EnvFileLine([string]$Name, [string]$Value) {
+    return ($Name + '=' + (ConvertTo-EnvFileValue $Value))
+}
+
 function Write-TerminalStateFile([string]$State) {
     # 这个文件的语义是「归属通道」，不是「当前状态快照」。
     # 两者的差别决定 off 态该写什么：当快照看就该清空；可清空之后钩子手上再没有任何依据
@@ -777,7 +817,7 @@ function Write-TerminalStateFile([string]$State) {
                 "NODE_USE_ENV_PROXY" { [string](Get-UserEnvRaw $n) }
                 default              { $url }
             }
-            if ($v) { $lines += ("$n=$v"); $own[$n] = $v }
+            if ($v) { $lines += ((Format-EnvFileLine $n $v)); $own[$n] = $v }
         }
     } else {
         try {

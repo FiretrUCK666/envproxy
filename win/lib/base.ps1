@@ -243,10 +243,14 @@ function Remove-ItemSafe([string]$Path) {
 #
 # 路径用函数现算、不用变量缓存：变量是库加载时求值一次的普通赋值，
 # 自检在加载之后才改道，变量不会跟着变（mac 侧自检注释里点名过这个地雷）。
-$UserEnvSubKey       = 'Environment'
-$OwnedRegSubKey      = 'Software\EnvProxy\Owned'
-$PrevEnvSubKey       = 'Software\EnvProxy\Backup'
-$ScriptPathRegSubKey = 'Software\EnvProxy'
+# 只在**未设置**时给默认值：自检在加载本库之前就把它们指向临时键，
+# 无条件赋值会把那个改道覆盖掉——自检于是"以为在沙箱里跑"，实际改的是真实注册表。
+# 实测后果：跑一次自检就把使用者的代理变量清空了，而屏幕上写着 ALL PASS。
+# 用 if (-not $x) 而不是 param 默认值：这些是库级变量，调用方在 . 之前就已声明。
+if (-not $UserEnvSubKey)       { $UserEnvSubKey       = 'Environment' }
+if (-not $OwnedRegSubKey)      { $OwnedRegSubKey      = 'Software\EnvProxy\Owned' }
+if (-not $PrevEnvSubKey)       { $PrevEnvSubKey       = 'Software\EnvProxy\Backup' }
+if (-not $ScriptPathRegSubKey) { $ScriptPathRegSubKey = 'Software\EnvProxy' }
 
 function Get-RegPath([string]$SubKey) { return ('HKCU:\' + $SubKey) }
 
