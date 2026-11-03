@@ -358,6 +358,7 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 | Markers are unpaired | Something left half a marker | Delete that lone marker line, then pick 1 |
 | No sync block in the profile | Never installed, or cleaned away | Run **1 Install / repair** |
 | Cannot read the profile path | Rare; this run cannot tell | Look again shortly; if it stays, run 1 |
+| Sync block is outdated | That block is old code | Nothing; picking 1 refreshes it |
 
 ### 3.6 Use it without the menu (scripts, remote sessions)
 
@@ -435,10 +436,10 @@ This tool opens a **fixed entry** on your machine (an address that never changes
 
 **Four things worth knowing:**
 
-- **It runs alongside the background program.** No switch to turn on or off. Menu `5` then `4` shows how it is doing (that screen only reports; it changes nothing).
+- **It runs alongside the background program.** No switch to turn on or off. On Windows, menu `5` then `4` (view relay) shows how it is doing; that screen only reports and changes nothing. macOS needs no such layer and has no "view relay" item under `5`.
 - **It not working is not a problem.** A proxy icon falls back to reading the current address and still works. You only lose the "address never changes" part.
 - **Icons you already made need no rebuild** — every launch reads the current state again.
-- **Chromium-based programs need one extra tick.** Chrome, Edge, VS Code and Discord ignore environment variables and only honour a launch flag, so the flow asks whether to add that flag. Answer "no" when unsure — the wrong answer can stop a program from opening.
+- **Chromium-based programs are adapted automatically (Windows only).** Chrome, Edge, VS Code and Discord ignore environment variables and only honour a launch flag. You answer no questions: the tool recognises them itself and adds one line to the confirmation screen saying the program needs the flag and it has been added. The macOS build does no such adaptation; use the system proxy for those programs.
 
 Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
@@ -646,7 +647,7 @@ The two sides line up one to one. Only two files are Mac-only: `prompt-sync.sh` 
 Three areas with different rules:
 
 - **Program files**: `win\`, `mac\`, `release-notes\`, `assets\`. Updates overwrite these — **do not put your own files there**.
-- **Repo only, not in the package**: `docs\`, `tests\`, `.github\`. Read `docs\` for design notes.
+- **Repo only, not in the package**: `tests\`, `.github\`, `.gitattributes`.
 - **Runtime folder**: `monitor\`. Logs and run markers, **never overwritten, never deleted**.
 - **Top level**: only files of the same name are overwritten, **your own things are never deleted**.
 
@@ -769,9 +770,14 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
-**`5 Advanced` has one fewer item on Mac.** "Give one program a rule" exists on both (the mechanics differ,
-see module one in section 4), and so does "browser proxy repair". What Mac does not have is the third one —
-"places this tool cannot reach" (WSL and Docker setup) is Windows-only: WSL is a Windows thing and does not exist on a Mac.
+**`5 Advanced` has 4 items on Mac and 7 on Windows.** The first 3 share the same name on both (make a proxied
+icon, make a direct icon, manage what you made). **From item 4 onward the meanings diverge** — Windows item 4 is
+"view relay" (read only, changes nothing) while Mac item 4 is "browser proxy repair" (it changes system settings).
+So do not match items across platforms by number; match by name.
+
+Mac lacks these 3: **view relay** (Windows uses a fixed entry to survive a changing proxy port; Mac solves that
+differently, see section 4), **WSL behind a proxy**, and **Docker behind a proxy** (the last two are about Windows
+things that do not exist on a Mac).
 
 ### 13.4 What is in the `mac` folder
 

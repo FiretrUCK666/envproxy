@@ -1566,7 +1566,6 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
         return
     }
 
-    # ---- 浏览器内核做的程序：只问一句，而且先替用户判断好 ----
     # ---- 浏览器内核做的程序：自动判断，不额外问一屏 ----
     #
     # 这类程序（Chrome / Edge / VS Code / Electron 应用）只认系统代理，
@@ -1579,18 +1578,6 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     $isChromium = Test-ChromiumApp $chosen.TargetPath
     $extraArgs = ''
     if ($isChromium) {
-        if ($isDirect) {
-            # 强制直连：direct:// 让它彻底不用代理，bypass-list=* 是双保险
-            # （有些版本在 direct:// 下仍会去读一遍绕过列表）。
-            $extraArgs = '--proxy-server=direct:// --proxy-bypass-list=*'
-        } else {
-            # 走代理这一支要写成占位符，由启动器在**点击那一刻**替换成当时的代理地址。
-            # 不在这里写死端口：翻墙软件换端口后写死的图标就废了，
-            # 而"每次点击重新决定"正是启动器这一层的价值。
-            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__ --proxy-bypass-list=localhost,127.0.0.1,[::1]'
-        }
-    }
-    if ($useChromiumArgs) {
         if ($isDirect) {
             # 强制直连：direct:// 让它彻底不用代理，bypass-list=* 是双保险
             # （有些版本在 direct:// 下仍会去读一遍绕过列表）。

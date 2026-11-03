@@ -877,7 +877,7 @@ jobs:
               }
             }
           }
-          # d) 安装包里的每个顶层条目都要写进两语 README 第 8 节的文件夹清单代码块里
+          # d) 安装包里的每个顶层条目都要写进两语 README 第 9 节的文件夹清单代码块里
           $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [System.IO.Path]::GetTempPath() }
           $tar = Join-Path $tmp 'envproxy-docset.tar'
           Remove-Item $tar -Force -ErrorAction SilentlyContinue
@@ -896,7 +896,7 @@ jobs:
               # 写死 8 会在动过目录结构之后指到一个不相干的章节上（曾指向「性能与流量」）。
               if ($lines[$k] -match '^##\s*\d+\.\s*(文件夹里都有什么|What is in the folder)') { $start = $k; break }
             }
-            if ($start -lt 0) { Write-Host ("{0}：找不到第 8 节（文件夹清单所在节）" -f $f); $fail = 1; continue }
+            if ($start -lt 0) { Write-Host ("{0}：找不到第 9 节（文件夹清单所在节）" -f $f); $fail = 1; continue }
             $inFence = $false
             $block = @()
             for ($k = $start; $k -lt $lines.Count; $k++) {
@@ -905,7 +905,7 @@ jobs:
               }
               if ($inFence) { $block += $lines[$k] }
             }
-            if ($block.Count -eq 0) { Write-Host ("{0}：第 8 节里找不到文件夹清单代码块" -f $f); $fail = 1; continue }
+            if ($block.Count -eq 0) { Write-Host ("{0}：第 9 节里找不到文件夹清单代码块" -f $f); $fail = 1; continue }
             $blob = $block -join "`n"
             foreach ($t in $tops) {
               # 必须**行首锚定**：子串匹配会假绿——实测把清单里 `mac\` 那一行删掉，
@@ -942,7 +942,7 @@ jobs:
               # 同一缩进行里可以并排两项（"README.md  README.en.md"），
               # 所以先挑出所有"缩进 2 空格"的行，再在那些行里找这个条目名。
               $topLines = ($blob -split "`n" | Where-Object { $_ -cmatch '^  [^ ]' }) -join "`n"
-              if ($topLines -cnotmatch ('(?m)(^|\s)' + [regex]::Escape($t) + '(?:\s|\\|$)')) { Write-Host ("{0}：第 8 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
+              if ($topLines -cnotmatch ('(?m)(^|\s)' + [regex]::Escape($t) + '(?:\s|\\|$)')) { Write-Host ("{0}：第 9 节清单里没有安装包条目 {1}" -f $f, $t); $fail = 1 }
             }
           }
           # e) 发版说明随版：VERSION 抬了，发版说明必须同交（否则推标签时才报错，而标签不许重打）
@@ -976,7 +976,7 @@ jobs:
               if (($sz[$i] -join ',') -ne ($se[$i] -join ',')) { Write-Host ("第 {0} 个二级节块结构不一致：中文 [{1}] / 英文 [{2}]" -f ($i + 1), ($sz[$i] -join ','), ($se[$i] -join ',')); $fail = 1 }
             }
           }
-          # g) 第 8 节散文必须点名四个程序目录（只靠代码块里的清单不够：散文不写，进包范围改了用户也不知道）
+          # g) 第 9 节散文必须点名四个程序目录（只靠代码块里的清单不够：散文不写，进包范围改了用户也不知道）
           # 同上：按标题内容定位。中文与英文的标题文案不同，各给一条。
           foreach ($pair in @(
               @('README.md','^##\s*\d+\.\s*文件夹里都有什么'),
@@ -997,7 +997,7 @@ jobs:
               foreach ($w in @('win','mac','release-notes','assets')) {
               # 同上：散文里点名这四个目录，要求是独立词（前后不接字母数字）。
               # 裸子串会把 "macOS" 这种也算成点名了 mac。
-              if ($blob -notmatch ('(?<![A-Za-z0-9_-])' + [regex]::Escape($w) + '(?![A-Za-z0-9_-])')) { Write-Host ("{0} 第 8 节散文里没点名 {1}" -f $pair[0], $w); $fail = 1 }
+              if ($blob -notmatch ('(?<![A-Za-z0-9_-])' + [regex]::Escape($w) + '(?![A-Za-z0-9_-])')) { Write-Host ("{0} 第 9 节散文里没点名 {1}" -f $pair[0], $w); $fail = 1 }
               }
             }
           }
@@ -1969,10 +1969,10 @@ jobs:
           $enMacSec = Get-DocSection $enDoc 'What the installer adds'
           $secOk = $true
           foreach ($pair in @(
-              @{ n='README.md 第 8 节 Windows 运行时表';    v=$zhWinSec },
-              @{ n='README.md 12.6 节 Mac 运行时表';        v=$zhMacSec },
-              @{ n='README.en.md 第 8 节 Windows 运行时表'; v=$enWinSec },
-              @{ n='README.en.md 12.6 节 Mac 运行时表';     v=$enMacSec })) {
+              @{ n='README.md 第 9 节 Windows 运行时表';    v=$zhWinSec },
+              @{ n='README.md 13.6 节 Mac 运行时表';        v=$zhMacSec },
+              @{ n='README.en.md 第 9 节 Windows 运行时表'; v=$enWinSec },
+              @{ n='README.en.md 13.6 节 Mac 运行时表';     v=$enMacSec })) {
             if (-not $pair.v) {
               Write-Host ('切不出「' + $pair.n + '」——标题改过？这条门禁要跟着改，否则它静默失效')
               $secOk = $false
