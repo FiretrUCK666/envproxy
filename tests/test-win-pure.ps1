@@ -53,10 +53,16 @@ if ($env:OS -eq 'Windows_NT') {
         ScriptPathReg = $ScriptPathRegSubKey
     }
     $env:OS | Out-Null
-    $UserEnvSubKey       = 'Software\EnvProxy\__t_env'
-    $OwnedRegSubKey      = 'Software\EnvProxy\__t_owned'
-    $PrevEnvSubKey       = 'Software\EnvProxy\__t_prev'
-    $ScriptPathRegSubKey = 'Software\EnvProxy\__t_scriptpath'
+    # 键名带**进程级唯一后缀**：固定名会让两个并发的自检进程改同一批键、各写一半。
+    # 实测：串行跑 8 次全绿，并发跑两份两份都红（NO_PROXY 归属、快照写没写成、
+    # 节点标记条数……症状随机）。而并发是真实场景：CI 并行、本地开两个终端、
+    # 别的 agent 在同一台机器上跑门禁。
+    # 安装目录那边早就用 GUID 隔离了，注册表这边漏了——同一件事，两种做法。
+    $script:RegSandboxSuffix = "__t_" + [guid]::NewGuid().ToString('N').Substring(0, 8)
+    $UserEnvSubKey       = "Software\EnvProxy\$($script:RegSandboxSuffix)_env"
+    $OwnedRegSubKey      = "Software\EnvProxy\$($script:RegSandboxSuffix)_owned"
+    $PrevEnvSubKey       = "Software\EnvProxy\$($script:RegSandboxSuffix)_prev"
+    $ScriptPathRegSubKey = "Software\EnvProxy\$($script:RegSandboxSuffix)_scriptpath"
     if (-not (Test-RegKey 'HKCU:\Software\EnvProxy')) {
         New-Item -Path 'HKCU:\Software\EnvProxy' -Force -ErrorAction SilentlyContinue | Out-Null
     }
@@ -257,6 +263,28 @@ foreach ($caseName in @('env', 'probe', 'package', 'menu', 'update', 'ports', 't
         continue
     }
     . $casePath
+}
+
+# ------------------------------------------------------------------------------
+# 收尾：把自己的沙箱键和临时目录删干净。
+#
+# 这两件事各自都是为了不留垃圾，但更实际的理由是**下次跑不受影响**：
+# 残留的注册表键会让「装过/没装过」的判断读错，残留的临时安装目录会被定位器
+# 当成一个候选。键名带唯一后缀之后，不清也就只脏自己这一次——但清干净是更简单的心智模型。
+if ($env:OS -eq 'Windows_NT') {
+    foreach ($k in @($UserEnvSubKey, $OwnedRegSubKey, $PrevEnvSubKey, $ScriptPathRegSubKey)) {
+        try { Remove-Item -LiteralPath (Get-RegPath $k) -Recurse -Force -ErrorAction SilentlyContinue } catch {}
+    }
+    if (Test-RegKey 'HKCU:\Software\EnvProxy') {
+        # 父键只在空了才删：别的进程（或使用者自己）可能有别的内容在下面。
+        try {
+            $left = @(Get-ChildItem -LiteralPath 'HKCU:\Software\EnvProxy' -ErrorAction SilentlyContinue)
+            if ($left.Count -eq 0) { Remove-Item -LiteralPath 'HKCU:\Software\EnvProxy' -Force -ErrorAction SilentlyContinue }
+        } catch {}
+    }
+}
+if ($script:TestInstallDir -and (Test-Path -LiteralPath $script:TestInstallDir)) {
+    Remove-Item -LiteralPath $script:TestInstallDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 if ($script:fails -eq 0) { Write-Host 'ALL PASS'; exit 0 }
