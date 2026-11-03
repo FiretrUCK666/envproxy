@@ -25,6 +25,49 @@
 # 两边会不会分叉？会，所以这个函数的输出必须由 Show-StatusSnapshot 的同源数据算出：
 #   - 结论行、问题清单、参考项：同一份 $st
 #   - 判断逻辑：调同一个 Get-StatusProblems（下面抽出来的）
+# 状态页所有横线的宽度统一由这里算，不许各处手敲等号。
+#
+# 为什么：这一屏同时存在三根横线——顶部标题、「最近日志」段标题、底部收尾。
+# 原来它们分别是 29 / 38 / 34 个字符，全是手敲的，于是三根线互不相干，
+# 看起来像三个不同层级的组件拼在一起。
+#
+# 规则只有一条：**本屏所有横线同一个宽度**，取「标题自然宽度」与下限 40 的较大者。
+# 下限的存在是因为标题常常很短（"EnvProxy 状态"只有 29 列），
+# 而 29 列的日志区显得局促；40 列是一个能容纳常见状态短句、又不会在窄窗口折行的长度。
+$script:StatusRuleMinWidth = 40
+
+# 造一根等号线：文字居中，两侧补等号，总宽恰好 $Width。
+# 造一根等号线：文字居中，两侧补等号，**显示宽度**恰好 $MinWidth。
+#
+# 必须按显示宽度算，不能按字符数：中文一个字占两格。
+# 按字符数算出来的三条线字符数相同（都是 40），但显示宽度是 42 / 44 / 40——
+# 在终端里看就是没对齐。这个坑实测踩过一次。
+function Format-StatusTitleRule([string]$Text) {
+    $textW = Get-DisplayWidth $Text
+    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
+    $need = $w - $textW - 2
+    $left = [Math]::Floor($need / 2)
+    $right = $need - $left
+    return (('=' * $left) + ' ' + $Text + ' ' + ('=' * $right))
+}
+
+# 造一根横杠线：文字居中，两侧补横杠，显示宽度与等号线相同。
+function Format-StatusSectionRule([string]$Text) {
+    $textW = Get-DisplayWidth $Text
+    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
+    $need = $w - $textW - 2
+    $left = [Math]::Floor($need / 2)
+    $right = $need - $left
+    return (('-' * $left) + ' ' + $Text + ' ' + ('-' * $right))
+}
+
+# 纯等号收尾线，显示宽度与标题线一致。
+function Format-StatusBottomRule([string]$TitleText) {
+    $textW = Get-DisplayWidth $TitleText
+    $w = [Math]::Max($textW + 2, $script:StatusRuleMinWidth)
+    return ('=' * $w)
+}
+
 # 内容一旦不一致，自检里有断言逐步比对两版。
 function Format-StatusLines($st, [switch]$NoLog) {
     # $NoLog：省略「最近日志」区。实时刷新在窗口放不下整帧时用它——
@@ -44,7 +87,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     }
 
     $problems = @(Get-StatusProblems $st)
-    & $line '======== EnvProxy 状态 ========' 'title'
+    & $line (Format-StatusTitleRule 'EnvProxy 状态') 'title'
     # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
     # 与帮助页同一套规矩（标题上下各空一行），两版状态页也一样。
     & $line '' 'text'
@@ -220,7 +263,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     # 日志只用于排查，状态结论才是这一屏的主角，取舍时保结论。
     if (-not $NoLog) {
     & $line '' 'text'
-    & $line '---------------- 最近日志 ----------------' 'title'
+    & $line (Format-StatusSectionRule '最近日志') 'title'
     $tail = ''
     if ($st.Snapshot -and $st.Snapshot.Status -eq 'ok') { $tail = [string]$st.Snapshot.LogTail }
     if (-not $tail) { try { $tail = [string](Get-LogTailText 3) } catch { $tail = '' } }
@@ -248,7 +291,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     }
     }
 
-    & $line '==================================' 'title'
+    & $line (Format-StatusBottomRule 'EnvProxy 状态') 'title'
     # 底部提示与结束框之间空一行：紧贴着会被读成框里的内容，
     # 而它是这一屏的操作说明——"按 0 返回"要让人一眼看到，不能被边框糊进去。
     & $line '' 'text'
@@ -726,7 +769,7 @@ function Show-StatusSnapshot($st) {
     # ---- 先把结论算出来（判断在 Get-StatusProblems 里，与实时刷新那版共用）----
     $problems = @(Get-StatusProblems $st)
 
-    Write-Styled 'title' "======== EnvProxy 状态 ========"
+    Write-Styled 'title' (Format-StatusTitleRule 'EnvProxy 状态')
     # 标题下空一行，与实时刷新那版、帮助页同一套规矩。
     Write-Host ''
     if ($problems.Count -eq 0) {
@@ -769,9 +812,19 @@ function Show-StatusSnapshot($st) {
     }
     # 结论与说明都从 Get-ProxyVarsText 取：与实时帧同一张表。
     # 这一段原来是一条独立的长 if 链，与实时帧各写一套，于是同一份状态给出相反结论。
+    # 只有确实有问题时才在「要注意」区打这一行。
+    #
+    # 为什么：这一段排在「监控进程」之前，而正常状态下它的结论是绿色的「已注入」，
+    # 于是屏幕顺序变成「代理变量 → 监控进程 → 开机自启 → 翻墙代理」，
+    # 与实时帧的「监控 → 自启 → 翻墙 → 变量」不一致——同一份状态两种读法。
+    # 判据用 Role：Get-ProxyVarsText 只在真有问题时返回 warn。
     $pv = Get-ProxyVarsText $st
-    Write-StatusRow $StatusLabels.Vars $pv.Text $pv.Role
-    foreach ($h in @($pv.Hints)) { Write-Styled $h.Role ('  ' + $h.Text) }
+    $varsRowShown = $false
+    if ($pv.Role -ne 'ok') {
+        Write-StatusRow $StatusLabels.Vars $pv.Text $pv.Role
+        $varsRowShown = $true
+        foreach ($h in @($pv.Hints)) { Write-Styled $h.Role ('  ' + $h.Text) }
+    }
 
     if ($st.TermSync) {
         # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。
@@ -822,18 +875,22 @@ function Show-StatusSnapshot($st) {
     } else {
         Write-StatusRow $StatusLabels.Proxy '未检测到（当前无翻墙代理在运行）' 'dim'
     }
-    # 代理变量只有"已注入且活着"这一种情况才进参考区；
-    # 指向死端口、没人维护、翻墙在跑但工具停用这三种都已在上面说过，
+    # 「代理变量」只在"已注入且活着"或"确实没在跑代理"这两种情况下进参考区。
+    # 指向死端口、没人维护、翻墙在跑但工具停用这三种已在上面说过；
     # 这里再打一遍就是同一件事说两次，读者会以为有两处不同的问题。
-    if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
-        Write-StatusRow $StatusLabels.Vars ("已注入 ({0})" -f $st.ProxyValue) 'ok'
-    } elseif (-not $st.ProxyValue -and -not $st.Port) {
-        # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
-        # 少了 -not $st.Port 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
-        # 同时命中：同一屏里"代理变量"出现两次，一次说"已停用"、一次说"直连"，
-        # 用户会以为有两处不同的设置要处理（实测复现过）。
-        # 判据必须是**完整**的：有代理在跑就不该说"直连"，那是两件事。
-        Write-StatusRow $StatusLabels.Vars '无（直连状态）' 'dim'
+    #
+    # $varsRowShown 由「要注意」段置位：那一行在有问题时已经打过了，
+    # 这里不能重复——两版状态页都必须让每个标签只出现一次。
+    if (-not $varsRowShown) {
+        if ($st.ProxyValue -and $st.ProxyAlive -and $m) {
+            Write-StatusRow $StatusLabels.Vars ("已注入 ({0})" -f $st.ProxyValue) 'ok'
+        } elseif (-not $st.ProxyValue -and -not $st.Port) {
+            # 只有"确实没有翻墙软件在跑"时才说"直连状态"。
+            # 少了 -not $st.Port 这一半，就会与上面那条"翻墙软件在跑但本工具已停用"
+            # 同时命中：同一屏里"代理变量"出现两次，一次说"已停用"、一次说"直连"，
+            # 用户会以为有两处不同的设置要处理（实测复现过）。
+            Write-StatusRow $StatusLabels.Vars '无（直连状态）' 'dim'
+        }
     }
     if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
         Write-Host ''
@@ -913,7 +970,11 @@ function Get-VersionText($st) {
     } else {
         $state = "已是最新"; $role = 'dim'
     }
-    return @{ Text = ("{0}（{1}）{2}" -f $localText, $state, $ageText); Role = $role }
+    # 用破折号而不是括号包 $state：$state 自己常带括号（"开发副本（更新走 git pull…）"），
+    # 再套一层就成"（开发副本（更新走…））"——中文全角括号套全角括号，读者要数哪个括号对应哪个。
+    # 破折号没有配对问题，也不会与内容里的括号混在一起。
+    # $ageText 本身以括号开头，接在后面读作"…—（3 天前的记录）"，语义清楚。
+    return @{ Text = ("{0} — {1}{2}" -f $localText, $state, $ageText); Role = $role }
 }
 
 # 把一段文本裁到指定**显示宽度**，超出时末尾补省略号。
@@ -941,10 +1002,9 @@ function Show-RecentLog {
     # 日志块与上面的状态分组之间空一行：这是两块不同性质的东西（当前状态 vs 历史记录），
     # 紧贴着会让"最近日志"看起来像状态的一部分。
     Write-Host ''
-    Write-Styled 'title' "---------------- 最近日志 ----------------"
+    Write-Styled 'title' (Format-StatusSectionRule '最近日志')
     if (-not (Test-Item $LogFile)) {
         Write-Styled 'dim' "  （暂无日志）"
-        Write-Styled 'title' "=================================="
         return
     }
     # 日志行按控制台宽度裁：一行日志本来就是给文件看的（不折行、好搜），
@@ -968,5 +1028,5 @@ function Show-RecentLog {
         $shown = Limit-DisplayText $shown $logW
         Write-Styled 'dim' "  $shown"
     }
-    Write-Styled 'title' "=================================="
+    Write-Styled 'title' (Format-StatusBottomRule 'EnvProxy 状态')
 }
