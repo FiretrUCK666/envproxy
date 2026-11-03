@@ -270,8 +270,8 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir, $Mode, 
         # 边界是猜出来的；数组的每一项就是一个参数，边界写在代码里。
         # 现在这些参数都不含空格，但将来有人加一个含空格的值就会静默裂开——
         # 而裂开的症状是"程序起来了但参数没生效"，不报错。
-        if ($ExtraArgs -eq '--proxy-server=__ENVPROXY_CURRENT__') {
-            $argPart = " -ArgumentList @(('--proxy-server=' + `$p))"
+        if ($ExtraArgs -like '*__ENVPROXY_CURRENT__*') {
+            $argPart = " -ArgumentList @(('--proxy-server=' + `$p), '--proxy-bypass-list=localhost,127.0.0.1,[::1]')"
         } else {
             $argList = @($ExtraArgs -split ' ' | Where-Object { $_ })
             $quoted = @($argList | ForEach-Object { "'" + $_.Replace("'", "''") + "'" })
@@ -1587,7 +1587,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
             # 走代理这一支要写成占位符，由启动器在**点击那一刻**替换成当时的代理地址。
             # 不在这里写死端口：翻墙软件换端口后写死的图标就废了，
             # 而"每次点击重新决定"正是启动器这一层的价值。
-            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__'
+            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__ --proxy-bypass-list=localhost,127.0.0.1,[::1]'
         }
     }
     if ($useChromiumArgs) {
@@ -1599,7 +1599,7 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
             # 走代理这一支要写成占位符，由启动器在**点击那一刻**替换成当时的代理地址。
             # 不在这里写死端口：翻墙软件换端口后写死的图标就废了，
             # 而"每次点击重新决定"正是启动器这一层的价值。
-            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__'
+            $extraArgs = '--proxy-server=__ENVPROXY_CURRENT__ --proxy-bypass-list=localhost,127.0.0.1,[::1]'
         }
     }
 
