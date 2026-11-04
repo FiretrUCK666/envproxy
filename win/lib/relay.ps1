@@ -156,7 +156,14 @@ public class EnvProxyRelay {
     private const int ThreadStackBytes = 256 * 1024;
     private const int MaxHeadBytes = 65536;
     private const int ConnectTimeoutMs = 4000;
-    private const int FirstPacketTimeoutMs = 2000;
+    // 读首包与读剩余报头的等待上限。**一个具名常量**：原来两处各写 15000，
+    // 改一处漏一处会让"首包等 15 秒、报头又等 15 秒"，用户感觉是卡了 30 秒。
+    private const int FirstPacketTimeoutMs = 15000;
+    // 隧道建立后**两个方向都没有数据**的上限。零 = 永不超时，
+    // 而一条卡死的隧道只能等对端 FIN 才释放；200 个槽位占满后新连接一律 503，
+    // 用户看到的是"代理突然不能用了"，重启代理软件才好。
+    // 取 10 分钟：正常浏览一定会有数据往来，静默十分钟的隧道等于死了。
+    private const int IdleTimeoutMs = 600000;
 
     private static string _lastError = "";
     public static string LastError { get { return _lastError; } }
@@ -262,7 +269,16 @@ public class EnvProxyRelay {
         byte[] buf = new byte[16384];
         try {
             while (true) {
-                int n = from.Receive(buf);
+                int n;
+                try { n = from.Receive(buf); }
+                catch {
+                    // 空闲超时：**两个方向都关掉**，让另一个泵也退出。
+                    // 只关自己这一侧的话，另一侧的 Receive 会永远等下去，
+                    // 那条隧道就一直占着槽位（200 个占满后新连接全 503）。
+                    try { from.Close(); } catch {}
+                    try { to.Close(); } catch {}
+                    return;
+                }
                 if (n <= 0) {
                     // 半关闭：不这么做大响应体会被截断（"下载到一半失败"）。
                     try { to.Shutdown(SocketShutdown.Send); } catch {}
@@ -399,7 +415,7 @@ public class EnvProxyRelay {
             // 先只读一包，用它认出协议。**这是 SOCKS 能被接住的前提**：
             // 整段「读到空行为止」的读法对 SOCKS 会一直等到超时——
             // 那种协议的第一包没有 CRLF 空行，客户端随后也不发第二包（它在等我们回话）。
-            byte[] first = ReadFirstPacket(client, 15000);
+            byte[] first = ReadFirstPacket(client, FirstPacketTimeoutMs);
             if (first == null) { return; }
             bool isSocks = (first.Length > 0 && (first[0] == 0x05 || first[0] == 0x04));
 
@@ -441,7 +457,7 @@ public class EnvProxyRelay {
             }
 
             // 确认是 HTTP：把刚才那一包交回去，继续读到空行为止。
-            byte[] head = ReadHeadAfter(client, first, 15000);
+            byte[] head = ReadHeadAfter(client, first, FirstPacketTimeoutMs);
             if (head == null) { return; }
             string requestHead = Encoding.ASCII.GetString(head);
 
@@ -496,11 +512,12 @@ public class EnvProxyRelay {
                 client.Send(upHead);
             }
 
-            // 进泵之前必须把读超时清零。Socket.ReceiveTimeout 管的是整条连接的生命周期，
-            // 而隧道里十几秒没有字节是完全正常的（keep-alive、SSE、看文章时页面静止）。
-            // 留着超时的表现是"停十几秒不动就断了"，而且完全不报错。
-            client.ReceiveTimeout = 0;
-            upstream.ReceiveTimeout = 0;
+            // 进泵之前把读超时设成**空闲上限**，不是清零。清零的代价：一条卡死的隧道
+            // 只能等对端 FIN 才释放，200 个槽位占满后新连接一律 503——用户看到的是
+            // "代理突然不能用了"。而设得太短也不行：隧道里十几秒没字节完全正常
+            // （keep-alive、SSE、看文章时页面静止），停了就断且不报错。10 分钟是折中。
+            client.ReceiveTimeout = IdleTimeoutMs;
+            upstream.ReceiveTimeout = IdleTimeoutMs;
             Socket upRef = upstream;
             Socket clRef = client;
             Thread t = new Thread(delegate() { Pump(upRef, clRef); }, ThreadStackBytes);
@@ -523,8 +540,8 @@ public class EnvProxyRelay {
     //   · 不判响应、不等首包。二进制协议没有「响应头」这个概念，
     //     等首包会把单向先发数据的协议卡死（SOCKS5 的方法协商就是客户端先说）。
     private static void RelayBinary(Socket client, Socket upstream) {
-        client.ReceiveTimeout = 0;
-        upstream.ReceiveTimeout = 0;
+        client.ReceiveTimeout = IdleTimeoutMs;
+        upstream.ReceiveTimeout = IdleTimeoutMs;
         Socket upRef = upstream;
         Socket clRef = client;
         Thread t = new Thread(delegate() { Pump(upRef, clRef); }, ThreadStackBytes);

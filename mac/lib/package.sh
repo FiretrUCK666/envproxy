@@ -319,9 +319,19 @@ install_package() {
                 # 回滚没做成时，备份是唯一的回退抓手，而它正躺在 $_pstage/backup 里，
                 # 调用方（update.sh 的 finally）接下来会把整个 $_pstage 删掉。
                 # 所以搬到安装根旁的具名目录，并把路径交出去（调用方据此提示用户去哪找）。
-                _pkeep="$(dirname "$_pdest")/envproxy-backup-partial"
+                # 目录名带版本后缀，与 Windows 侧同一口径（那边是 -partial-<版本>）。
+                # **不许用固定名 + rm -rf**：连续两次更新失败时，第一份才是真正的
+                # "更新前状态"，被第二次静默删掉等于把唯一的还原抓手弄丢了。
+                # 版本号取**安装根里的 VERSION**（覆盖前那份，也就是"更新前"的版本）。
+                # 取包内那份也行，但这里的语义是"哪一次更新之前的状态"，旧版本号更贴切。
+                _pver=$(tr -d ' \t\r\n' < "$_pdest/VERSION" 2>/dev/null || true)
+                [ -n "$_pver" ] || _pver="unknown"
+                _pkeep="$(dirname "$_pdest")/envproxy-backup-partial-${_pver}"
+                # 再撞名（同一版本失败两次）就加时间戳，两份都留着。
+                if [ -d "$_pkeep" ]; then
+                    _pkeep="$_pkeep.$(date +%Y%m%d-%H%M%S)"
+                fi
                 if [ -d "$_pstage/backup" ]; then
-                    rm -rf "$_pkeep" 2>/dev/null || true
                     if cp -R "$_pstage/backup" "$_pkeep" 2>/dev/null; then
                         INSTALL_PARTIAL_BACKUP="$_pkeep"
                         echo "覆盖前的文件已保留到：$_pkeep"
