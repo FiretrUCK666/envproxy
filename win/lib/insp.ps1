@@ -900,7 +900,7 @@ function Show-RescuePage {
     # 现在没有可修项了，用户想把设置改回原样——若在这里按「可修项为零」提前返回，
     # 他只会看到「按回车返回」，r 根本敲不到；而帮助页白纸黑字承诺了那条路。
     Write-Host ''
-    Write-Styled 'dim' ('  ' + ('-' * 62))
+    Write-Styled 'dim' ('  ' + (Format-PlainRule '网络与代理修复'))
     Write-Host ''
     $hasBackup = $false
     try { $hasBackup = Test-DoctorJournalHasRestore } catch { $hasBackup = $false }

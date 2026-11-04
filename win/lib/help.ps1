@@ -366,7 +366,7 @@ function Get-HelpTopics {
                 't 它们只在启动那一刻读一次「该走哪个代理」，之后怎么变都不理。',
                 't 而它们多半是从桌面或任务栏点的，那一层拿不到这个工具设的值。',
                 'h 解决办法：给它建一个能翻墙的图标',
-                ('t 菜单选 5 进高级功能，再' + (Get-AdvancedRef 'NewProxyIcon') + '。挑程序（或输入路径），选放哪，确认。'),
+                ('t 菜单' + (Get-MenuRef 'Advanced') + '，进高级功能，再' + (Get-AdvancedRef 'NewProxyIcon') + '。挑程序（或输入路径），选放哪，确认。'),
                 # @explain 图标名后缀由模式表派生，帮助必须与桌面上的名字逐字对上
                 ('t 它会生成一个新图标，名字后面带「' + (Get-ShortcutMode 'proxy').Label + '」。以后点那个就能翻墙。'),
                 'b ',
@@ -387,10 +387,10 @@ function Get-HelpTopics {
                 't 固定入口在本机开一个永不变的地址，程序只认这个，背后自动跟着翻墙软件走。',
                 't 建图标时自动就用它，不用你做什么；它跟着监控一起跑，也没有开关要拨。',
                 't 它没在工作也不要紧：图标会退回去读当前地址，照样能用。',
-                ('t 想看它现在的状态：菜单选 5 再' + (Get-AdvancedRef 'ViewRelay') + '，那一屏只看不改。'),
+                ('t 想看它现在的状态：菜单' + (Get-MenuRef 'Advanced') + ' 再' + (Get-AdvancedRef 'ViewRelay') + '，那一屏只看不改。'),
                 'b ',
                 'h 不想要了',
-                ('t 菜单选 5 再' + (Get-AdvancedRef 'ManageIcons') + '，能看状态、逐个删。')
+                ('t 菜单' + (Get-MenuRef 'Advanced') + ' 再' + (Get-AdvancedRef 'ManageIcons') + '，能看状态、逐个删。')
             )
         },
         @{
