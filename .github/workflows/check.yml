@@ -2214,6 +2214,37 @@ jobs:
             Write-Host ("还原点保留条数太少（{0}）：只留一段就退回到单槽位语义" -f $keepWin); $fail = 1
           }
 
+          # ---- 跨平台临时目录：不许直接读 $env:TEMP ----
+          # $env:TEMP 只在 Windows 上有。在 Linux（CI 跑在 ubuntu）上它是 null，
+          # 而 Join-Path 收到 null 会抛 "Cannot bind argument to parameter Path"，
+          # 不是返回空、是让整个脚本当场崩掉。
+          #
+          # 这条不是假设：它实际让本项目的 CI 红过两次——一次在门禁自己的 bash 查找里，
+          # 一次在自检的临时目录里。两次都只在 CI 上红、本地全绿，排查成本很高。
+          # 正确的写法只有一个：[System.IO.Path]::GetTempPath()。
+          #
+          # 判据扫工作区的全部 ps1（含 tests），剥掉整行注释再找。
+          # **不能用 git ls-files 取清单**：那读的是已提交内容，工作区里的改动它看不见，
+          # 于是"刚写进去的违规"照样绿——门禁必须在提交前就能拦住它。
+          $psFiles = @(Get-ChildItem -Path 'win','tests' -Recurse -Filter *.ps1 -File | ForEach-Object { $_.FullName })
+          $tempHits = @()
+          foreach ($tf in $psFiles) {
+            $n = 0
+            foreach ($line in (Get-Content -LiteralPath $tf -Encoding UTF8)) {
+              $n++
+              if ($line.TrimStart().StartsWith('#')) { continue }
+              if ($line -match '\$env:TEMP') { $tempHits += ("{0}:{1}" -f (Split-Path $tf -Leaf), $n) }
+            }
+          }
+          if ($tempHits.Count -gt 0) {
+            Write-Host '临时目录不许读 $env:TEMP（Linux 上没有这个变量，Join-Path 会当场抛异常）：'
+            foreach ($h in $tempHits) { Write-Host ("  " + $h) }
+            Write-Host '  改用 [System.IO.Path]::GetTempPath()'
+            $fail = 1
+          } else {
+            Write-Host ("临时目录一律走 GetTempPath：{0} 个 ps1 文件里没有直接读环境变量的" -f $psFiles.Count)
+          }
+          # 这一段单独判一次：它跑在上一个 exit 之后。
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
 

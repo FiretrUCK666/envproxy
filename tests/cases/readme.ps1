@@ -37,7 +37,7 @@ $cmdExe = $null
 if ($env:SystemRoot) { $cmdExe = Join-Path $env:SystemRoot 'System32\cmd.exe' }
 if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
     $script = (@('@echo off', 'set HTTPS_PROXY=http://b', 'set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=', 'if defined HTTPS_PROXY (echo LEFT) else (echo CLEARED)') -join "`r`n")
-    $tmpCmd = Join-Path $env:TEMP ('ep_cmd_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
+    $tmpCmd = Join-Path ([System.IO.Path]::GetTempPath()) ('ep_cmd_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
     [System.IO.File]::WriteAllText($tmpCmd, $script, (New-Object System.Text.ASCIIEncoding))
     $out = (& $cmdExe /c $tmpCmd) -join ' '
     Remove-Item -LiteralPath $tmpCmd -Force -ErrorAction SilentlyContinue
@@ -46,7 +46,7 @@ if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
 
 # cmd 的坑：& 两边留空格会得到一个只含空格的值。文档专门警告过，这里钉住这个事实。
 if ($cmdExe -and (Test-Path -LiteralPath $cmdExe)) {
-    $tmpCmd2 = Join-Path $env:TEMP ('ep_cmd2_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
+    $tmpCmd2 = Join-Path ([System.IO.Path]::GetTempPath()) ('ep_cmd2_' + [guid]::NewGuid().ToString('N').Substring(0,6) + '.cmd')
     $script2 = (@('@echo off', 'set SPACETEST=hello', 'set SPACETEST= & set OTHER=1', 'if "[%SPACETEST%]"=="[ ]" (echo HASTHE-SPACE) else (echo NO-SPACE)') -join "`r`n")
     [System.IO.File]::WriteAllText($tmpCmd2, $script2, (New-Object System.Text.ASCIIEncoding))
     $out2 = (& $cmdExe /c $tmpCmd2) -join ' '

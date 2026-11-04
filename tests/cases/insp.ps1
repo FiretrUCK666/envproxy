@@ -81,7 +81,8 @@ $rescueSrc2 = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\insp.ps1'
 # 「再按一次往上撤一条」必须是真的：撤成功要从日志里消费掉那一段。
 # 只还原不消费的话，再按 r 取到的还是同一段——反复还原同一次，
 # 而界面上那句「撤销上一次修复」听起来像是在逐条回退。
-$journalUndoDir = Join-Path $env:TEMP ("undo_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+# 临时目录用 .NET 的 GetTempPath：Linux 上没有 $env:TEMP，Join-Path 收到 null 会崩。
+$journalUndoDir = Join-Path ([System.IO.Path]::GetTempPath()) ("undo_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $journalUndoDir -Force | Out-Null
 $savedMonitor = $MonitorDir
 $MonitorDir = $journalUndoDir

@@ -212,9 +212,12 @@ function New-ProblemReport {
         Write-Text -Path $target -Text $text -WithBom $false
         $saved = $target
     } catch {
-        # monitor\ 写不进去（只读分区、权限），退到临时目录
+        # monitor\ 写不进去（只读分区、权限），退到系统临时目录。
+        # **用 .NET 的 GetTempPath，不读 $env:TEMP**：后者只在 Windows 上有，
+        # 空值会让 Join-Path 抛异常，而这正好发生在"第一处已失败、只剩这条路"的时候——
+        # 于是报告一个字都留不下，用户还以为生成了。
         try {
-            $target = Join-Path $env:TEMP $fileName
+            $target = Join-Path ([System.IO.Path]::GetTempPath()) $fileName
             Write-Text -Path $target -Text $text -WithBom $false
             $saved = $target
         } catch { $saved = '' }
