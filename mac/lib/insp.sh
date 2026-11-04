@@ -493,7 +493,7 @@ get_cli_proxy_findings() {
                     fi ;;
             esac
             finding_new "cli-proxy.$_gcp_id" "$_gcp_kind" "$_gcp_name" "$_gcp_path" \
-                "$_gcp_val" "$_gcp_reason" "$_gcp_advice" 'cli-proxy'
+                "$_gcp_val" "$_gcp_reason" "$_gcp_advice" ''
         done <<EOF
 $_gcp_rows
 EOF

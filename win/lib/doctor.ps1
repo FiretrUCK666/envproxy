@@ -70,7 +70,6 @@ function New-Finding {
         [string]$Reason = '',
         [string]$Advice = '',
         [string]$Evidence = '',
-        [string]$Fix = '',
         $Data = $null
     )
     return @{
@@ -82,10 +81,11 @@ function New-Finding {
         Reason   = $Reason
         Advice   = $Advice
         Evidence = $Evidence
-        Fix      = $Fix
-        # 这里**不判**「能不能修」。同一个问题在两处判，迟早分叉，
-        # 而分叉的后果是屏幕说"可以修"、按下去却不动（DNS 那条就是这么来的）。
-        # 权威判据在 insp 层：Test-FindingRepairable（Kind + 该层有没有 Fix）。
+        # **Finding 上没有 Fix 字段，故意的。**
+        # 可修性由「这条记录的 Id → 检查器表 → 该层有没有 Fix」推出来；
+        # 存在这里就成了第二个真相。两边一分叉，代码不会报错，
+        # 而读代码的人无从判断哪份算数。权威判据只有一个：
+        # insp 层的 Test-FindingRepairable（Kind + 该层有没有 Fix）。
         Data     = $Data
     }
 }

@@ -157,7 +157,6 @@ function Get-SysProxyFindings {
             -Reason ([string]$L.Detail) `
             -Advice ([string]$L.Advice) `
             -Evidence ([string]$L.Evidence) `
-            -Fix 'sysproxy' `
             -Data @{ Layer = [string]$L.Layer; Port = [int]$L.Port; Handshake = [string]$L.Handshake }))
     }
     return $out
@@ -396,7 +395,6 @@ function Get-CliProxyFindings {
                 -Value ([string]$e.Value) `
                 -Reason (Get-CliProxyReason -Kind $kind -Value $e.Value -Alive $alive -HasInclude $read.HasInclude -Path $path) `
                 -Advice $(if (Test-FindingFixable $kind) { '可以让本工具删掉那一行（会先备份，能还原）。' } else { '保持原样即可。' }) `
-                -Fix 'cli-proxy' `
                 -Data @{ TargetId = [string]$target.Id; LineNumber = [int]$e.LineNumber; Key = [string]$e.Key; Raw = [string]$e.Raw }))
         }
     }

@@ -63,7 +63,11 @@ finding_fixable() {
 # 字段里不许出现 TAB（值都是地址、路径、短句；万一有，写入前由 finding_new 替换成空格）。
 finding_new() {
     _fn_id="${1:-}"; _fn_kind="${2:-}"; _fn_subject="${3:-}"; _fn_where="${4:-}"
-    _fn_value="${5:-}"; _fn_reason="${6:-}"; _fn_advice="${7:-}"; _fn_fix="${8:-}"
+    _fn_value="${5:-}"; _fn_reason="${6:-}"; _fn_advice="${7:-}"
+    # 第 8 列曾放"这一层由谁修"，**已废弃、恒为空串**，但列保留：
+    # 界面按 TAB 切字段，少一列会让所有读取点错位（而错位不报错，只是读到别人的值）。
+    # 可修性由「Id 前缀 → 检查器表 → 该层有没有 Fix」推出来，存一份在这里就是第二个真相。
+    _fn_fix="${8:-}"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(printf '%s' "$_fn_id" | tr '\t' ' ')" \
         "$_fn_kind" \
