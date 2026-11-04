@@ -45,6 +45,13 @@ Assert-Eq 'repairable: cli-proxy is repairable' 'True' `
     ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.git' -Kind 'residue-blocking')))
 Assert-Eq 'repairable: a clean layer is not repairable' 'False' `
     ([string](Test-FindingRepairable (New-Finding -Id 'sysproxy.layer' -Kind 'clean')))
+# 参数可以是检查器 Id（sysproxy），也可以是完整 Finding Id（sysproxy.direct）。
+# 调用点分散在界面各处，有的手里只有 Finding Id；只认一种的后果是
+# 另一侧的项全部被判成不可修，屏幕上那一区直接空了而没有任何报错。
+Assert-Eq 'repairable: accepts the bare inspector id' 'True' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'sysproxy' -Kind 'residue-blocking')))
+Assert-Eq 'repairable: accepts a dotted finding id' 'True' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.git' -Kind 'residue-blocking')))
 Assert-Eq 'repairable: an unknown layer is not repairable' 'False' `
     ([string](Test-FindingRepairable (New-Finding -Id 'nope.thing' -Kind 'residue-blocking')))
 # 判据只有一处实现：不许再出现第二个名字指向同一件事。

@@ -449,8 +449,15 @@ _shortcut_remove() {
         *) return 1 ;;
     esac
     [ -d "$_srm_app" ] || return 1
-    # 只删我们造的：判据与扫描一致，防止误删使用者自己的 app。
-    grep -q '这个文件由 EnvProxy 生成' "$_srm_app/Contents/MacOS/launcher" 2>/dev/null || return 1
+    # 只删我们造的，防止误删使用者自己的 app。
+    # 判据与扫描**完全一致**：启动脚本在就看那句注释，启动脚本没了就看
+    # Info.plist 的 EnvProxyTarget——否则 launcher 被删的壳子会出现在列表里
+    # 却删不掉，屏幕上成了"有一个，但删不了"。
+    if [ -f "$_srm_app/Contents/MacOS/launcher" ]; then
+        grep -q '这个文件由 EnvProxy 生成' "$_srm_app/Contents/MacOS/launcher" 2>/dev/null || return 1
+    else
+        grep -q '<key>EnvProxyTarget</key>' "$_srm_app/Contents/Info.plist" 2>/dev/null || return 1
+    fi
     rm -rf "$_srm_app" 2>/dev/null || return 1
     return 0
 }

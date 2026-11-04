@@ -134,7 +134,13 @@ assert_doctor_inspectors() {
 finding_repairable() {
     _fr_kind="${1:-}"; _fr_id="${2:-}"
     finding_fixable "$_fr_kind" || return 1
-    _fr_fix=$(insp_field_of_id "$_fr_id" 5 2>/dev/null || true)
+    # 参数可以是检查器 Id（sysproxy），也可以是完整 Finding Id（sysproxy.direct）。
+    # **必须两种都认**：调用点分散在界面各处，有的手里只有 Finding Id。
+    # 只认一种的后果是另一侧的可修项全部被判成不可修——
+    # 屏幕上那一区直接空了，而没有任何报错（实测踩过：传 sysproxy.direct 得"不可修"）。
+    # 截法与 Windows 侧 Test-FindingRepairable 一致：取第一个点号之前的那一段。
+    _fr_insp=${_fr_id%%.*}
+    _fr_fix=$(insp_field_of_id "$_fr_insp" 5 2>/dev/null || true)
     [ -n "$_fr_fix" ] || return 1
     return 0
 }

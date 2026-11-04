@@ -2061,6 +2061,20 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     done
     # 判据只有一处实现：不许再出现第二个名字指向同一件事。
     _selftest_assert_eq "fixable 判据只有 finding_fixable 一个名字" "" "$(command -v sysproxy_fixable 2>/dev/null || true)"
+    # repairable 必须两种 Id 都认：调用点有的手里只有完整 Finding Id。
+    # 只认一种的后果是那一侧的可修项全被判成不可修，屏幕上那一区直接空了。
+    finding_repairable "$FINDING_KIND_BLOCKING" 'sysproxy' \
+        && _selftest_assert_eq "repairable: bare inspector id" "yes" "yes" \
+        || _selftest_assert_eq "repairable: bare inspector id" "yes" "no"
+    finding_repairable "$FINDING_KIND_BLOCKING" 'sysproxy.direct' \
+        && _selftest_assert_eq "repairable: dotted finding id" "yes" "yes" \
+        || _selftest_assert_eq "repairable: dotted finding id" "yes" "no"
+    finding_repairable "$FINDING_KIND_BLOCKING" 'cli-proxy.git' \
+        && _selftest_assert_eq "repairable: dotted cli id" "yes" "yes" \
+        || _selftest_assert_eq "repairable: dotted cli id" "yes" "no"
+    finding_repairable "$FINDING_KIND_BLOCKING" 'dns.loopback' \
+        && _selftest_assert_eq "repairable: dns stays unrepairable" "no" "yes" \
+        || _selftest_assert_eq "repairable: dns stays unrepairable" "no" "no"
 
     echo "[13b] 判活只连端口，不建隧道（与 Windows 侧同判据）"
     # 这条防的是「把用户正在用的代理关掉」：代理端口活着、但翻墙节点挂了/目标被墙时，
