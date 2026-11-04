@@ -356,6 +356,41 @@ _dw_walk() {
                 continue
             fi
         fi
+        # ---- 零宽字符：组合附加符 / 零宽控制 / 变体选择符 ----
+        # 这些叠在前一个字符上，终端不为它们留宽度。**与 Windows 侧 Get-CodePointWidth 同判据**：
+        # 判得不一样时，两端对同一段文案算出不同宽度，菜单两列、帮助两列、
+        # 日志裁剪就会各歪各的，而用户报"某一屏表格歪了"根本无从复现。
+        # 覆盖范围：U+0300-036F、U+200B-200F、U+FE00-FE0F、U+FEFF。
+        # U+200B..U+200F（零宽空格/连接符等）的 UTF-8 是 E2 80 8B..8F：
+        # 首字节 0xE2 = 226，第二字节固定 0x80，第三字节 0x8B..0x8F = 139..143。
+        if [ "$_dw_b" -eq 226 ] && [ $((_dw_i + 4)) -le "$_dw_n" ]; then
+            _dw_b2=$((16#${_dw_hex:$((_dw_i + 2)):2}))
+            _dw_b3=$((16#${_dw_hex:$((_dw_i + 4)):2}))
+            if [ "$_dw_b2" -eq 128 ] && [ "$_dw_b3" -ge 139 ] && [ "$_dw_b3" -le 143 ]; then
+                _dw_w=0; _dw_i=$((_dw_i + 6)); DW_BYTES=$((_dw_i / 2)); continue
+            fi
+        fi
+        # U+0300..U+036F（组合附加符）的 UTF-8 跨两个首字节：
+        #   U+0300..U+033F -> CC 80..CC BF（首字节 0xCC = 204）
+        #   U+0340..U+036F -> CD 80..CD AF（首字节 0xCD = 205）
+        # 只认 0xCD 会漏掉前半段——而最常见的 U+0301（锐音符）正是 0xCC，
+        # 漏掉它就会出现「e + 锐音符」在 mac 上算 2 格、Windows 算 1 格。
+        if { [ "$_dw_b" -eq 204 ] || [ "$_dw_b" -eq 205 ]; } && [ $((_dw_i + 4)) -le "$_dw_n" ]; then
+            _dw_lo=$((16#${_dw_hex:$((_dw_i + 2)):2}))
+            if [ "$_dw_lo" -ge 128 ] && [ "$_dw_lo" -le 191 ]; then
+                if [ "$_dw_b" -eq 204 ] || { [ "$_dw_b" -eq 205 ] && [ "$_dw_lo" -le 175 ]; }; then
+                    _dw_w=0; _dw_i=$((_dw_i + 6)); DW_BYTES=$((_dw_i / 2)); continue
+                fi
+            fi
+        fi
+        if [ "$_dw_b" -eq 239 ] && [ $((_dw_i + 4)) -le "$_dw_n" ]; then
+            # EF BB BF -> U+FEFF；EF B8 80..8F -> U+FE00..FE0F（变体选择符）
+            _dw_b2=$((16#${_dw_hex:$((_dw_i + 2)):2}))
+            _dw_b3=$((16#${_dw_hex:$((_dw_i + 4)):2}))
+            if { [ "$_dw_b2" -eq 187 ] && [ "$_dw_b3" -eq 191 ]; } || { [ "$_dw_b2" -eq 184 ] && [ "$_dw_b3" -ge 128 ] && [ "$_dw_b3" -le 143 ]; }; then
+                _dw_w=0; _dw_i=$((_dw_i + 6)); DW_BYTES=$((_dw_i / 2)); continue
+            fi
+        fi
         if [ "$_dw_b" -lt 128 ]; then
             _dw_w=1; _dw_i=$((_dw_i + 2))
         elif [ "$_dw_b" -lt 224 ]; then

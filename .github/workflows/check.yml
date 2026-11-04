@@ -1750,7 +1750,13 @@ jobs:
           # 两处代码注释都写着"门禁核对两端对同一批字符的结论相同"，而这条门禁原来
           # 并不存在（两端测试里也都 0 处断言）。假承诺比没有承诺更糟：
           # 下一个人会相信已经有人看着了。这里把它变成真的。
-          $widthProbe = @('A', ' ', 'a', '~', '0', '©', '°', 'é', 'α', '·', '…', '→', '—', '中', '文', '測', 'あ', '한', 'Ａ', '　')
+          # 探针集必须覆盖**两端可能分歧的区域**，不只是"普通 BMP 字符"。
+          # 原来那批全是常见字，一个零宽字符都没有，于是两端对 U+0301 / U+200D /
+          # U+FE0F 算出不同宽度也照样绿——门禁比对的那批字符恰好绕开了差异区。
+          # 现在把三类零宽都放进去：组合附加符、零宽连接符、变体选择符。
+          $widthProbe = @('A', ' ', 'a', '~', '0', '©', '°', 'é', 'α', '·', '…', '→', '—', '中', '文', '測', 'あ', '한', 'Ａ', '　',
+                          ('e' + [char]0x0301), [string][char]0x200B, [string][char]0x200D, [string][char]0xFE0F,
+                          ([char]0x2764 + [char]0xFE0F), [char]::ConvertFromUtf32(0x1F600))
           # **必须从实现里读出阈值，不能在这里手抄一份。**
           # 原来这里写死 `-gt 0x2E80`，注释还说"与实现同一规则"——
           # 而那是门禁在跟自己比：把 base.ps1 的阈值改成 0xFFFF（所有中文变 1 格、
@@ -1783,42 +1789,69 @@ jobs:
             $rawB = $wWinBound.Groups[1].Value
             $winThreshold = if ($rawB -match '^0[xX]') { [Convert]::ToInt32($rawB.Substring(2), 16) } else { [int]$rawB }
           }
-          $wWin = @{}
+          # **真跑两端的实现来比，不在这里重写一遍算法。**
+          # 原来这段用的是门禁自己写的等价逻辑：拿阈值和字节规则各算一遍。
+          # 那是同义反复——真的实现改坏了，门禁算的还是老算法，照样绿；
+          # 而且它只处理单 [char]，遇到零宽字符直接抛异常。
+          # 现在：Windows 侧调真实的 Get-DisplayWidth，Mac 侧调真实的 _display_width。
+          . (Join-Path (Get-Location) 'win/lib/base.ps1')
+          $winW = @{}
           foreach ($ch in $widthProbe) {
-            $wWin[$ch] = $(if ([int][char]$ch -gt $winThreshold) { 2 } else { 1 })
+            $winW[$ch] = $(try { Get-DisplayWidth $ch } catch { -1 })
           }
-          # 只看首字节是不够的：U+2E80（分界线）与 U+2026（…）/U+2192（→）/U+2014（—）
-          # 的 UTF-8 首字节都是 E2，必须再看第二字节才分得开。
-          $wMac = @{}
-          foreach ($ch in $widthProbe) {
-            $bytes = [System.Text.Encoding]::UTF8.GetBytes($ch)
-            if ($bytes.Length -lt 3) { $wMac[$ch] = 1 }
-            elseif ($bytes[0] -gt 0xE2) { $wMac[$ch] = 2 }
-            elseif ($bytes[0] -eq 0xE2 -and $bytes[1] -ge 0xBA) { $wMac[$ch] = 2 }
-            else { $wMac[$ch] = 1 }
+          # Mac 用 bash 真跑一遍（CI 里这一步是 pwsh，所以要显式起 bash）。
+          #
+          # **先排除 WSL 那个假 bash。** Get-Command bash 在这类机器上解析到
+          # C:\WINDOWS\system32\bash.exe —— 那是 WSL 入口，跑 execvpe(/bin/bash) 会失败。
+          # 失败被 2>$null 吞掉后每个探针都读成缺失值，屏幕上看起来像"两端不一致"。
+          # 判据是"能不能真跑一句 shell"，不是"命令在不在"。
+          $bashPath = $null
+          foreach ($cand in @('C:\Program Files\Git\bin\bash.exe', (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe'))) {
+            if (-not $cand -or -not (Test-Path -LiteralPath $cand)) { continue }
+            $probeB = & $cand -c 'echo ok' 2>$null
+            if ("$probeB" -eq 'ok') { $bashPath = $cand; break }
           }
-          # 这三句必须真的按"码位 > 0x2E80"算，而不是按字节数：
-          # 早期 mac 用"3 字节就算两格"，把 …/→/— 判成 2 格，两端结论就此分叉。
-          $macSrc = Get-Content 'mac/lib/base.sh' -Raw -Encoding UTF8
-          # 这一条查的是"判据里有没有第二字节的分界"，不是某个十进制字面量：
-          # 0xBA 可以写成 186、\272（八进制）、$'\\272'、[$'\272'-$'\277'] 等等，
-          # 绑死一种写法会让重构（把比较换成 case 字节区间）被误判成"判据丢了"。
-          # 真实发生过：判据换成 case 区间后，这条门禁报红，而代码是对的。
-          $macHasSecondByte = ($macSrc -match '186') -or
-                              ($macSrc -match '\\272') -or
-                              ($macSrc -match '0xBA') -or
-                              ($macSrc -match 'BA 80')
-          if (-not $macHasSecondByte) {
-            Write-Host 'mac 侧宽度判据里找不到第二字节的分界（0xBA / 186 / \272 都算）——判据可能又退回只看首字节了'
-            $fail = 1
+          if (-not $bashPath) {
+            $g = Get-Command bash -ErrorAction SilentlyContinue
+            if ($g) { $probeB = & $g.Source -c 'echo ok' 2>$null; if ("$probeB" -eq 'ok') { $bashPath = $g.Source } }
           }
-          foreach ($ch in $widthProbe) {
-            if ($wWin[$ch] -ne $wMac[$ch]) {
-              Write-Host ("两端对同一个字符的宽度不一致：字符 [{0}] Win {1} / Mac {2}" -f $ch, $wWin[$ch], $wMac[$ch])
-              $fail = 1
+          if (-not $bashPath) { Write-Host '找不到可用的 bash，无法核对两端宽度'; $fail = 1 }
+          else {
+            # **用十六进制传参，不用 base64、也不直接传字符串。**
+            # 直接传会被命令行编码动过：实测 e + U+0301 这种"组合形式"在某些
+            # 环境里到达 bash 时已经被合成成单个字符，两端比的根本不是同一串。
+            # 十六进制是纯 ASCII，怎么传都不会变形。
+            $probeHex = $widthProbe | ForEach-Object {
+              ([System.Text.Encoding]::UTF8.GetBytes([string]$_)) | ForEach-Object { $_.ToString('x2') } | Join-String
+            }
+            $sb = @()
+            $sb += 'set -u'
+            $sb += 'cd "$ENVPROXY_REPO"'
+            $sb += '. ./mac/lib/base.sh 2>/dev/null'
+            $sb += 'for b in "$@"; do'
+            $sb += '  s=$(printf %s "$b" | xxd -r -p)'
+            $sb += "printf '%s\n' ""`$(_display_width ""`$s"")"""
+            $sb += 'done'
+            $sbText = $sb -join "`n"
+            $wTmp = Join-Path ([System.IO.Path]::GetTempPath()) ('wp_' + [guid]::NewGuid().ToString('N').Substring(0,8))
+            New-Item -ItemType Directory -Path $wTmp -Force | Out-Null
+            $sbFile = Join-Path $wTmp 'width_probe.sh'
+            [System.IO.File]::WriteAllText($sbFile, $sbText + "`n", (New-Object System.Text.UTF8Encoding($false)))
+            $env:ENVPROXY_REPO = (Get-Location).Path
+            $macOut = & $bashPath $sbFile @probeHex 2>$null
+            $macLines = @($macOut | Where-Object { "$_" -match '^\d+$' })
+            $macW = @{}
+            for ($i = 0; $i -lt $widthProbe.Count; $i++) {
+              $v = if ($i -lt $macLines.Count) { [int]$macLines[$i] } else { -1 }
+              $macW[$widthProbe[$i]] = $v
+            }
+            foreach ($ch in $widthProbe) {
+              if ($winW[$ch] -ne $macW[$ch]) {
+                Write-Host ("两端对同一段文字的宽度不一致：[" + $ch + "] Win " + $winW[$ch] + " / Mac " + $macW[$ch])
+                $fail = 1
+              }
             }
           }
-
           # e1) 状态页绝不联网。
           #
           # 状态页原来自己查最新版本号：真实网络请求，先 API 后 Web，各 8 秒超时，
