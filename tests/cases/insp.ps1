@@ -27,14 +27,26 @@ Assert-Eq 'inspector: -Quick runs only the quick ones' 0 `
         -not ($d -and $d.Quick)
     }).Count)
 
-# Finding 的唯一构造入口：Kind 与 Fixable 必须由它算，调用方不许自己比。
-$fb = New-Finding -Id 't.blocking' -Kind 'residue-blocking'
-Assert-Eq 'finding: blocking is fixable' 'True' $fb.Fixable
-foreach ($k in @('clean', 'alive', 'foreign', 'managed', 'unreadable', 'residue-slowing')) {
-    $x = New-Finding -Id 't.x' -Kind $k
-    $want = if ($k -eq 'residue-slowing') { 'True' } else { 'False' }
-    Assert-Eq ('finding: ' + $k + ' fixable=' + $want) $want $x.Fixable
+# 「这一档能不能修」只有一处判据：Kind 决定档位。
+foreach ($k in @('residue-blocking', 'residue-slowing')) {
+    Assert-Eq ('kind-level: ' + $k + ' is fixable') 'True' ([string](Test-FindingFixable $k))
 }
+foreach ($k in @('clean', 'alive', 'foreign', 'managed', 'unreadable')) {
+    Assert-Eq ('kind-level: ' + $k + ' is not fixable') 'False' ([string](Test-FindingFixable $k))
+}
+# 「这一条记录该不该出现在『要修的』里」是另一件事：Kind + 该层有没有 Fix。
+# 两件事分开测，是因为它们曾经被搅在一起——DNS 判成 Blocking 却没有 Fix，
+# 屏幕于是给了个按下去什么都不做的按钮。
+Assert-Eq 'repairable: dns has no fix, so it is not repairable' 'False' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'dns.loopback' -Kind 'residue-blocking')))
+Assert-Eq 'repairable: sysproxy is repairable' 'True' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'sysproxy.layer' -Kind 'residue-blocking')))
+Assert-Eq 'repairable: cli-proxy is repairable' 'True' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.git' -Kind 'residue-blocking')))
+Assert-Eq 'repairable: a clean layer is not repairable' 'False' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'sysproxy.layer' -Kind 'clean')))
+Assert-Eq 'repairable: an unknown layer is not repairable' 'False' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'nope.thing' -Kind 'residue-blocking')))
 # 判据只有一处实现：不许再出现第二个名字指向同一件事。
 if (Get-Command Test-SysProxyFixable -ErrorAction SilentlyContinue) {
     Assert-Eq 'fixable 判据只有 Test-FindingFixable 一个名字' 'absent' 'present'

@@ -134,7 +134,10 @@ new_problem_report() {
         # 网络体检：与 Windows 侧同一节、同一措辞。
         # 帮助里写着「报告里已经有网络体检的结论，不用你另外描述」——
         # 那一句是承诺，这一节是兑现它的地方；缺了它用户会翻遍报告找不到。
-        echo "---------------- 网络体检（浏览器那一侧） ----------------"
+        echo "---------------- 网络体检 ----------------"
+        # 三处都报，与救援页、与帮助里的承诺一致。
+        # 只报浏览器那一层的话，用户报告"只有 git 连不上"时发来的报告里没有那一层。
+        _npr_all=$(invoke_doctor_check full 2>/dev/null)
         _npr_layers=$(sysproxy_layers quick 2>/dev/null)
         _npr_fix=0
         if [ -z "$_npr_layers" ]; then
@@ -153,6 +156,17 @@ new_problem_report() {
             _npr_fix=$(printf "%s\n" "$_npr_layers" | awk -F"\t" 'NF>=3 {print $3}' | while read -r _k; do finding_fixable "$_k" && echo x; done | wc -l | tr -d " ")
         fi
         echo "  这一层有没有问题：$([ "${_npr_fix:-0}" -gt 0 ] && echo 有 || echo 没有)"
+        # 终端工具配置与网址解析：按检查器逐层报，界面不认具体是哪一层。
+        if [ -n "$_npr_all" ]; then
+            printf "%s\n" "$_npr_all" | while IFS="$(printf '\t')" read -r _na_id _na_kind _na_subj _na_where _na_val _na_reason _na_advice _na_fix; do
+                [ -n "$_na_id" ] || continue
+                case "$_na_id" in sysproxy.*) continue ;; esac
+                _na_flag=""
+                finding_repairable "$_na_kind" "$_na_id" && _na_flag="【可修】"
+                echo "  $_na_subj  ${_na_val:-（无）}  -> $_na_kind $_na_flag"
+                [ -n "$_na_reason" ] && echo "      $_na_reason"
+            done
+        fi
         echo ""
         # 后台程序快照：与 Windows 侧同一节、同一措辞。
         # 它回答"后台那一刻到底判成了什么"——状态页是实时的，出问题时那份已经过去了。

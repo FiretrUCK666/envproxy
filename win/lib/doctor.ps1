@@ -83,7 +83,9 @@ function New-Finding {
         Advice   = $Advice
         Evidence = $Evidence
         Fix      = $Fix
-        Fixable  = (Test-FindingFixable $Kind)
+        # 这里**不判**「能不能修」。同一个问题在两处判，迟早分叉，
+        # 而分叉的后果是屏幕说"可以修"、按下去却不动（DNS 那条就是这么来的）。
+        # 权威判据在 insp 层：Test-FindingRepairable（Kind + 该层有没有 Fix）。
         Data     = $Data
     }
 }
@@ -97,8 +99,8 @@ $ProxyTypeAutoDetect   = 0x08
 # 界面要判断「这项能不能修」时调这个，不许自己写 -eq 比较——
 # 那样加一类结论就会漏掉界面那一处。
 # 名字从 SysProxy 改成 Finding：它判的是所有检查器共用的那套结论词，
-# 不再只属于系统代理那一层。旧名保留成别名，因为界面上多处调用点
-# 改起来只是噪音，而两套实现才是真风险——下面这一行就是唯一实现。
+# 不再只属于系统代理那一层。**只有这一处实现**，没有别名——
+# 同一个概念两个名字，迟早会一边改一边忘。
 function Test-FindingFixable([string]$Kind) {
     return ($Kind -eq $FindingKinds.Blocking -or $Kind -eq $FindingKinds.Slowing)
 }

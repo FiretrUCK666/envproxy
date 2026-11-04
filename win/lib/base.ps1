@@ -1084,7 +1084,7 @@ $MenuItems = @(
     @{ Key = "2"; Name = "查看状态";   Switch = "Status";    Group = "日常"; Hint = "现在什么情况，一眼看清" },
     @{ Key = "3"; Name = "检查更新";   Switch = "Update";    Group = "日常"; Hint = "有新版先告诉改了什么，同意才装" },
     @{ Key = "4"; Name = "帮助";       Switch = "Help";      Group = "日常"; Hint = "忘了怎么用就看它" },
-    @{ Key = "5"; Name = "高级功能";   Switch = "Advanced";  Group = "进阶"; Hint = "给某个软件建一个能翻墙的图标" },
+    @{ Key = "5"; Name = "高级功能";   Switch = "Advanced";  Group = "进阶"; Hint = "建图标 / 修好连不上 / 接 WSL" },
     @{ Key = "6"; Name = "停止监控";   Switch = "Stop";      Group = "维护"; Hint = "先停掉，下次开机自己回来" },
     @{ Key = "7"; Name = "一键恢复";   Switch = "Uninstall"; Group = "维护"; Hint = "彻底卸载，回到没装之前" },
     @{ Key = "8"; Name = "问题反馈";   Switch = "Report";    Group = "支持"; Hint = "出问题了，一键生成一份报告" },

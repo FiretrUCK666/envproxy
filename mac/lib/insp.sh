@@ -123,6 +123,21 @@ assert_doctor_inspectors() {
 # 某个检查器抛异常不许把整体带崩：它自己那一层变成一条 unreadable 记录，
 # 其余层照常出结论。理由是失效模式——「一个检查器崩了 → 整屏空白」会让用户
 # 以为网络没问题，而真相是「有一层没看见」。
+# 这条 Finding 我们被授权去修吗？
+#
+# **这是「可修」的唯一判据，界面只许查它，不许自己按 Kind 猜。**
+# 两件事缺一不可：Kind 说「这是什么性质的问题」，
+# Fix 列说「我们被授权动这一层吗」。
+# 只看 Kind 会让「DNS 指向本机死端口」（Blocking、但那一层 Fix 为空）进「要修的」，
+# 用户按 y 什么都不修，屏幕还说"它自己消失了"。
+# 参数：$1 = Kind，$2 = 检查器 Id
+finding_repairable() {
+    _fr_kind="${1:-}"; _fr_id="${2:-}"
+    finding_fixable "$_fr_kind" || return 1
+    _fr_fix=$(insp_field_of_id "$_fr_id" 5 2>/dev/null || true)
+    [ -n "$_fr_fix" ] || return 1
+    return 0
+}
 invoke_doctor_check() {
     _idc_quick="${1:-}"
     for _idc_row in ${DOCTOR_INSPECTORS[@]+"${DOCTOR_INSPECTORS[@]}"}; do
@@ -615,6 +630,34 @@ get_dns_findings() {
 # 但「撤销最近一次」只有一个入口。
 #
 # 输出：Result <TAB> Inspector，Result ∈ none / ok / failed / partial
+# 还原旧版单槽位备份（doctor.bak）。返回 ok / failed / canceled / none。
+#
+# 旧文件是制表符分隔的五列：服务、类型、启用、地址、端口——
+# 与 sysproxy_repair 现在写进日志的 services 表**逐列同形**，所以
+# 拼一行 legacy=1 + 一张表，直接复用 restore_sysproxy_snapshot 那条唯一实现：
+# 撤销只该有一处代码，两处各写一套迟早分叉（旧版这里就写过一个
+# 独立的 sysproxy_restore，autoproxy 多传一个 on 的坑两边都踩过）。
+restore_legacy_sysproxy_snapshot() {
+    _rlss_path=$(sysproxy_backup_path)
+    [ -f "$_rlss_path" ] || { printf 'none'; return 0; }
+    _rlss_rows=$(cat "$_rlss_path" 2>/dev/null)
+    [ -n "$_rlss_rows" ] || { printf 'none'; return 0; }
+    # 先按日志条目的格式追加一段，再走唯一那条还原实现，最后把这段撤掉
+    # （它是临时载体，不该占用保留条数、也不该在日志里留痕）。
+    _rlss_before=$(cat "$(doctor_journal_path)" 2>/dev/null || true)
+    add_doctor_journal_entry 'legacy-restore' \
+        "inspector=sysproxy" \
+        "legacy=1" \
+        "services=$(printf '%s' "$_rlss_rows" | _bak_enc)" || { printf 'failed'; return 0; }
+    _rlss_res=$(restore_sysproxy_snapshot)
+    # 把临时段从日志里拿掉：写回原内容（没有原内容就删文件）。
+    if [ -n "$_rlss_before" ]; then
+        printf '%s\n' "$_rlss_before" > "$(doctor_journal_path)" 2>/dev/null || true
+    else
+        rm -f "$(doctor_journal_path)" 2>/dev/null || true
+    fi
+    printf '%s' "$_rlss_res"
+}
 restore_doctor_journal() {
     if ! doctor_journal_has_restore; then
         printf 'none\t'
@@ -623,10 +666,14 @@ restore_doctor_journal() {
     _rdj_count=$(doctor_journal_count)
     if [ "$_rdj_count" -eq 0 ]; then
         # 只有旧单槽位备份：它是 sysproxy 的，字段是 flags/server/bypass/pac。
-        # 这条路径要兼容升级上来的机器——那是他们唯一的还原机会。
+        # 这条路径要兼容升级上来的机器——那是他们唯一的还原机会，
+        # 所以必须**真的还原**，不能只回一句"没有可还原的记录"：
+        # 界面刚刚还印着「输 r 回车」，按下去却什么也没发生，比不给这个选项更糟。
         if [ -f "$(sysproxy_backup_path)" ]; then
-            # 旧文件的字段与 sysproxy_restore 的输入格式不同，见下方说明。
-            printf 'none\tlegacy'
+            _rdj_lg=$(restore_legacy_sysproxy_snapshot)
+            printf '%s\tlegacy' "$_rdj_lg"
+            # 撤成功了才删：留着会让 has_restore 一直为真，再按 r 又还原同一份旧快照。
+            [ "$_rdj_lg" = 'ok' ] && rm -f "$(sysproxy_backup_path)" 2>/dev/null
             return 0
         fi
         printf 'none\t'
@@ -673,6 +720,12 @@ show_rescue_page() {
     fi
 
     _rs_all=$(invoke_doctor_check full)
+    # 本轮实际查了几层：按表里声明算，不写死数字。
+    # 写死「三处」的话，某侧少一层（mac 没有 DNS 检查）时那句话就是假的。
+    _rs_checked=0
+    for _rs_row in ${DOCTOR_INSPECTORS[@]+"${DOCTOR_INSPECTORS[@]}"}; do
+        _insp_field "$_rs_row" 4 >/dev/null 2>&1 && [ -n "$_insp_out" ] && _rs_checked=$((_rs_checked + 1))
+    done
     _rs_fixable=0
     _rs_blocking=0
     _rs_slowing=0
@@ -708,7 +761,7 @@ show_rescue_page() {
                     esac ;;
                 "$FINDING_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
             esac
-            finding_fixable "$_rs_kind" && _rs_fixable=$((_rs_fixable + 1))
+            finding_repairable "$_rs_kind" "$_rs_id" && _rs_fixable=$((_rs_fixable + 1))
         done <<EOF
 $_rs_all
 EOF
@@ -727,7 +780,7 @@ EOF
         style_out dim "          这多半是节点的问题。关掉重开代理软件，或者换一个节点。"
         _rs_outofscope=1
     else
-        style_out ok "  查完了：这几处设置都没发现问题。"
+        style_out ok "  查完了：这几处设置都没发现问题（共查了 ${_rs_checked} 处）。"
         _rs_outofscope=1
     fi
 
@@ -737,9 +790,11 @@ EOF
         style_out warn "  要修的是："
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
-            finding_fixable "$_rs_kind" || continue
+            finding_repairable "$_rs_kind" "$_rs_id" || continue
             style_out text "    [$_rs_subj]  ${_rs_val:-（读不出地址）}"
             [ -n "$_rs_reason" ] && style_out dim "      $_rs_reason"
+            # Advice 是「使用者能做什么」。写了就得显示。
+            [ -n "$_rs_advice" ] && style_out dim "      $_rs_advice"
         done <<EOF
 $_rs_all
 EOF
@@ -751,10 +806,20 @@ EOF
         style_out dim "  发现的网络状况（只是提醒，本工具不改）："
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
-            [ "$_rs_kind" = "$FINDING_KIND_FOREIGN" ] || continue
-            case "$_rs_reason" in
-                *'不会生效'*) style_out text "    [$_rs_subj]  $_rs_reason" ;;
-            esac
+            _rs_show=0
+            if [ "$_rs_kind" = "$FINDING_KIND_FOREIGN" ]; then
+                case "$_rs_reason" in
+                    *'不会生效'*) _rs_show=1 ;;
+                esac
+            fi
+            # 问题真实存在、但这一层没有 Fix 的（DNS 指向本机死端口就是）。
+            # 它既不该进「要修的」，也不该进「不归我碰的」——漏了就会从三区里全部消失。
+            if finding_fixable "$_rs_kind" && ! finding_repairable "$_rs_kind" "$_rs_id"; then
+                _rs_show=1
+            fi
+            [ "$_rs_show" -eq 1 ] || continue
+            style_out text "    [$_rs_subj]  $_rs_reason"
+            [ -n "$_rs_advice" ] && style_out dim "      $_rs_advice"
         done <<EOF
 $_rs_all
 EOF

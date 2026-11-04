@@ -84,6 +84,27 @@ function Assert-DoctorInspectors {
 # 其余层照常出结论。理由是失效模式——「一个检查器崩了 → 整屏空白」会让用户
 # 以为网络没问题，而真相是「有一层没看见」。这与三态哲学同源：
 # 「读不出来」必须与「没问题」分开。
+# 这条 Finding 我们被授权去修吗？
+#
+# **这是「可修」的唯一判据，界面只许查它，不许自己按 Kind 猜。**
+# 为什么必须两件事一起看：Kind 说的是「这条记录是什么性质的问题」，
+# 而「我们有没有被授权动这一层」由检查器表的 Fix 列回答——两者缺一不可。
+# 只看 Kind 会让「DNS 指向本机死端口」这种 Blocking 记录进「要修的是」，
+# 而那一层根本没有 Fix：用户按 y，屏幕什么都不修，还说"它自己消失了"。
+# 同理只看 Fix 会让 Clean 那类记录冒出「可以修」。
+function Test-FindingRepairable($Finding) {
+    if ($null -eq $Finding) { return $false }
+    if (-not (Test-FindingFixable ([string]$Finding.Kind))) { return $false }
+    # 检查器 Id 就是 Finding Id 里第一个点号之前的那一段（dns.loopback -> dns）。
+    # 别拿 Get-DoctorInspectorKey 来取：那是 CLI 目标表（git/npm/curl）的查找函数，
+    # 两件事同名不同物，用错时它返回空、于是「可修」被静默判成假。
+    $inspId = ([string]$Finding.Id) -replace '\..*$', ''
+    $insp = Get-DoctorInspector $inspId
+    if ($null -eq $insp) { return $false }
+    $fn = [string]$insp.Fix
+    if (-not $fn) { return $false }
+    return [bool](Test-Path -LiteralPath ('function:' + $fn))
+}
 function Invoke-DoctorCheck {
     param([switch]$Quick)
     $findings = New-Object System.Collections.ArrayList
@@ -710,6 +731,12 @@ function Restore-DoctorJournal {
         'failed' { [void]$res.Left.Add($res.Inspector) }
         default  { }   # skip：记录读不懂，什么都没做
     }
+    # 撤的是旧版单槽位备份（doctor.bak）时，成功后就把它删掉。
+    # 不删的后果有两个：README 承诺的"撤销一次后消失"变成假话；
+    # 更实际的是 has_restore 会一直为真，用户再按 r 又还原同一份旧快照。
+    if ($res.Result -ne 'failed' -and [string]$last.OpId -eq 'legacy-bak') {
+        try { if (Test-Item (Get-SysProxyBackupPath)) { Remove-Item -LiteralPath (Get-SysProxyBackupPath) -Force } } catch { }
+    }
     if ($res.Left.Count -eq 0 -and $res.Undone.Count -gt 0) {
         $res.Result = 'ok'
     } elseif ($res.Undone.Count -eq 0 -and $res.Left.Count -eq 0) {
@@ -755,9 +782,11 @@ function Show-RescuePage {
     $findings = @(Invoke-DoctorCheck)
     # 按 Kind 分三组。**这就是「界面不认检查器」的全部实现**：
     # 它只回答「哪一档该放哪个区」，与是哪一层毫无关系。
-    $fixable = @($findings | Where-Object { Test-FindingFixable $_.Kind })
-    $blocking = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Blocking })
-    $slowing  = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Slowing })
+    $fixable = @($findings | Where-Object { Test-FindingRepairable $_ })
+    # 「挡住网络」这句话承诺的是"下面这些按 y 能修好"，所以只数真能修的那些。
+    # 把不可修的也算进来，用户会看到"发现 1 处挡住了网络"、按 y 却什么都不发生。
+    $blocking = @($fixable | Where-Object { $_.Kind -eq $FindingKinds.Blocking })
+    $slowing  = @($fixable | Where-Object { $_.Kind -eq $FindingKinds.Slowing })
     $foreign  = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Foreign })
     $managed  = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Managed })
     # 读不出来的一层不能静默消失，也不能混进「你没动」那一组（那组的语义是
@@ -768,9 +797,16 @@ function Show-RescuePage {
     $aliveBroken = @($findings | Where-Object {
         $_.Kind -eq $FindingKinds.Alive -and [string]$_.Data.Handshake -eq 'upstream-fail'
     })
-    # 不归我们碰的里面，凡是有地址冲突/建议性质的（Reason 非空且不是「不是本机」那句），
-    # 单独作为「只是提醒」列出来——那些是用户该知道但不用做什么的事。
+    # 「只是提醒」这一组混了两个来源，语义都是「用户该知道，但本工具不动手」：
+    #   ① 不归我们碰、但有话要说的（地址冲突那种）；
+    #   ② **问题确实存在、但这一层根本没有 Fix 的**（DNS 指向本机死端口就是）。
+    # ② 必须单独立一项：它既不该进「要修的」（按 y 什么都不会发生），
+    #   也不能进「不归我碰的」（那是别人的设置，而这是我们看得见、只是没授权动）。
+    # 漏了它这条记录就会从三个区里全部消失——比误报更难发现。
     $hints = @($foreign | Where-Object { [string]$_.Reason -match '不会生效' })
+    $hints += @($findings | Where-Object {
+        (Test-FindingFixable $_.Kind) -and -not (Test-FindingRepairable $_)
+    })
 
     # ---- 结论 ----
     Write-Host ''
@@ -785,7 +821,10 @@ function Show-RescuePage {
         Write-Styled 'dim'  '          这多半是节点的问题。关掉重开代理软件，或者换一个节点。'
         $outOfScope = $true
     } else {
-        Write-Styled 'ok' '  查完了：这三处设置都没发现问题。'
+        # 「几处」按本轮实际查过的层数说，不写死数字：写死的话，
+        # 某侧少查一层（mac 没有 DNS 检查）时这句话就是假的。
+        $checkedCount = @($DoctorInspectors | Where-Object { Test-Path -LiteralPath ('function:' + [string]$_.Detect) }).Count
+        Write-Styled 'ok' ('  查完了：这几处设置都没发现问题（共查了 {0} 处）。' -f $checkedCount)
         $outOfScope = $true
     }
 
@@ -805,6 +844,10 @@ function Show-RescuePage {
             $val = if ($f.Value) { [string]$f.Value } else { '（读不出地址）' }
             Write-Styled 'text' ('    [' + [string]$f.Subject + ']' + $pad + '  ' + $val)
             if ($f.Reason) { Write-Styled 'dim' ('      ' + [string]$f.Reason) }
+            # Advice 是「使用者能做什么」。写了就得显示——不显示的话，
+            # 最需要它的那一类（"这一项本工具不自动改，你自己去系统设置里改"）
+            # 就永远只在代码里存在，用户看不到。
+            if ($f.Advice) { Write-Styled 'dim' ('      ' + [string]$f.Advice) }
         }
     }
 
@@ -814,6 +857,7 @@ function Show-RescuePage {
         Write-Styled 'dim' '  发现的网络状况（只是提醒，本工具不改）：'
         foreach ($f in $hints) {
             Write-Styled 'text' ('    [' + [string]$f.Subject + ']  ' + [string]$f.Reason)
+            if ($f.Advice) { Write-Styled 'dim' ('      ' + [string]$f.Advice) }
         }
     }
 

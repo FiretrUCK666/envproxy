@@ -2297,22 +2297,26 @@ jobs:
           }
 
           # 菜单：两侧共享同一套编号（Mac 可以缺项，但同名项的编号必须一致）
+          $winHint = @{}
           $winMenu = @{}
-          foreach ($m in [regex]::Matches($psMenu, 'Key = "(\d)"; Name = "([^"]*)"')) {
+          foreach ($m in [regex]::Matches($psMenu, 'Key = "(\d)"; Name = "([^"]*)";\s*Switch = "[^"]*";\s*Group = "[^"]*";\s*Hint = "([^"]*)"')) {
             $winMenu[$m.Groups[2].Value] = $m.Groups[1].Value
+            $winHint[$m.Groups[2].Value] = $m.Groups[3].Value
           }
           # Mac 的菜单表格式是 '编号|名字|说明|分组|子命令'。
           # **必须限定在菜单表块内**：原来在整份 ops 库上跑，
           # 把帮助主题表（同样是 '数字|名字|…' 形状）也当菜单抓了进来，
           # 解析出 14 项、其中 6 项是帮助主题，靠编号恰好不冲突才没误报。
           $macMenu = @{}
+          $macHint = @{}
           $macBaseSrc = [System.IO.File]::ReadAllText('mac/lib/base.sh', [System.Text.Encoding]::UTF8)
           $macMenuBlock = [regex]::Match($macBaseSrc, '(?s)MENU_ITEMS=\((.*?)\n\)')
           if (-not $macMenuBlock.Success) {
             Write-Host 'Mac 侧找不到 MENU_ITEMS 菜单表，菜单核对无法进行'
             $fail = 1
           } else {
-            foreach ($m in [regex]::Matches($macMenuBlock.Groups[1].Value, "(?m)^\s*'(\d)\|([^|]+)\|")) {
+            foreach ($m in [regex]::Matches($macMenuBlock.Groups[1].Value, "(?m)^\s*'(\d)\|([^|]+)\|([^|]*)\|")) {
+              $macHint[$m.Groups[2].Value] = $m.Groups[3].Value
               $macMenu[$m.Groups[2].Value] = $m.Groups[1].Value
             }
           }
@@ -2346,6 +2350,17 @@ jobs:
                 Write-Host ("菜单项「{0}」只在 Win 侧存在（编号 {1}）——改名了？还是漏了同步？" -f $name, $winMenu[$name])
                 $fail = 1
               }
+            }
+          }
+          # 菜单提示（Hint）也必须逐字相同：它是用户挑菜单时读的那句话。
+          # 只比 Key/Name 时，两侧提示各说一半也照样绿——实测出现过
+          # 「给某个软件建一个能翻墙的图标」与「上不了网的时候用这个」并存，
+          # 而高级功能里其实有三块。
+          foreach ($name in $winHint.Keys) {
+            if (-not $macHint.ContainsKey($name)) { continue }
+            if ([string]$winHint[$name] -ne [string]$macHint[$name]) {
+              Write-Host ("菜单项「{0}」的提示不同：Win 「{1}」/ Mac 「{2}」" -f $name, $winHint[$name], $macHint[$name])
+              $fail = 1
             }
           }
           if ($winMenu['退出'] -ne '0') { Write-Host 'Win 侧退出项编号必须为 0'; $fail = 1 }
