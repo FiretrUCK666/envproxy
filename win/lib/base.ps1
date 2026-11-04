@@ -929,12 +929,6 @@ function Get-CodePointWidth([int]$Code) {
     return 1
 }
 
-# 兼容旧调用点：单字符（BMP 内）的宽度。
-# 只给那些确实一次一个 [char] 的地方用；算整行一律走 Get-DisplayWidth。
-function Get-CharWidth([char]$Ch) {
-    return (Get-CodePointWidth ([int]$Ch))
-}
-
 # 计算一段文字在终端里占几格：按码位遍历，代理对算一个字符。
 # 所有需要对齐的地方都走这一处。
 function Get-DisplayWidth([string]$Text) {

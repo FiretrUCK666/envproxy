@@ -1761,19 +1761,12 @@ jobs:
           # 原来这里写死 `-gt 0x2E80`，注释还说"与实现同一规则"——
           # 而那是门禁在跟自己比：把 base.ps1 的阈值改成 0xFFFF（所有中文变 1 格、
           # 整屏表格歪掉），门禁照样算出"中"=2、照样绿。
-          # 现在从 Get-CharWidth 的真实实现里抽那个边界值；抽不到就判失败
-          # （抽不到说明实现换了形状，这条门禁得跟着改，不能假装通过）。
-          # **必须从实现里读出阈值，不能在这里手抄一份。**
-          # 原来这里写死 `-gt 0x2E80`，注释还说"与实现同一规则"——
-          # 而那是门禁在跟自己比：把 base.ps1 的阈值改成 0xFFFF（所有中文变 1 格、
-          # 整屏表格歪掉），门禁照样算出"中"=2、照样绿。
-          # 做法：先切出 Get-CharWidth 的函数体，再在那一小段里取边界值。
+          # 做法：切出判据函数的函数体，在那一小段里取边界值。
           # 切不出来就判失败——那是实现换了形状，门禁得跟着改，不能假装通过。
           $wWinSrc = Get-Content 'win/lib/base.ps1' -Raw -Encoding UTF8
-          # 判据住在 Get-CodePointWidth（按码位判）；Get-CharWidth 现在只是它的转调。
-          # 先从真正的判据处取，取不到再退回旧名字——只认一个名字会让'改个名'变成'门禁红'。
+          # 判据住在 Get-CodePointWidth（按码位判）。**只认这一个名字**：
+          # 留一个旧名字的回退，等于给"改回旧实现也能绿"开了后门。
           $fStart = $wWinSrc.IndexOf('function Get-CodePointWidth')
-          if ($fStart -lt 0) { $fStart = $wWinSrc.IndexOf('function Get-CharWidth') }
           $wWinBound = $null
           if ($fStart -ge 0) {
             $fEnd = $wWinSrc.IndexOf('function ', $fStart + 5)
@@ -1781,7 +1774,6 @@ jobs:
             $wWinBound = [regex]::Match($wWinSrc.Substring($fStart, $fEnd - $fStart), '-gt\s+(0x[0-9A-Fa-f]+|\d+)')
           }
           if (-not $wWinBound -or -not $wWinBound.Success) {
-            Write-Host 'win 侧读不到宽度判据的边界值（Get-CharWidth 形状变了？）——这条门禁需要跟着改'
             Write-Host 'win 侧读不到宽度判据的边界值（Get-CodePointWidth 形状变了？）——这条门禁需要跟着改'
           }
           $winThreshold = 0
