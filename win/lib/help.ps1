@@ -366,7 +366,9 @@ function Get-HelpTopics {
                 't 它们只在启动那一刻读一次「该走哪个代理」，之后怎么变都不理。',
                 't 而它们多半是从桌面或任务栏点的，那一层拿不到这个工具设的值。',
                 'h 解决办法：给它建一个能翻墙的图标',
-                ('t 菜单' + (Get-MenuRef 'Advanced') + '，进高级功能，再' + (Get-AdvancedRef 'NewProxyIcon') + '。挑程序（或输入路径），选放哪，确认。'),
+                # 不带上名字：加上「给程序建固定走代理的快捷方式」会顶到 104 列，
+                # 而后面那半句「挑程序…选放哪，确认」已经把这一项讲清楚了。
+                ('t 打开菜单，' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'NewProxyIcon' 20) + '。挑程序（或输入路径），选放哪，确认。'),
                 # @explain 图标名后缀由模式表派生，帮助必须与桌面上的名字逐字对上
                 ('t 它会生成一个新图标，名字后面带「' + (Get-ShortcutMode 'proxy').Label + '」。以后点那个就能翻墙。'),
                 'b ',
@@ -387,10 +389,10 @@ function Get-HelpTopics {
                 't 固定入口在本机开一个永不变的地址，程序只认这个，背后自动跟着翻墙软件走。',
                 't 建图标时自动就用它，不用你做什么；它跟着监控一起跑，也没有开关要拨。',
                 't 它没在工作也不要紧：图标会退回去读当前地址，照样能用。',
-                ('t 想看它现在的状态：菜单' + (Get-MenuRef 'Advanced') + ' 再' + (Get-AdvancedRef 'ViewRelay') + '，那一屏只看不改。'),
+                ('t 想看它现在的状态：菜单' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'ViewRelay' 20) + '，那一屏只看不改。'),
                 'b ',
                 'h 不想要了',
-                ('t 菜单' + (Get-MenuRef 'Advanced') + ' 再' + (Get-AdvancedRef 'ManageIcons') + '，能看状态、逐个删。')
+                ('t 菜单' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'ManageIcons' 20) + '，能看状态、逐个删。')
             )
         },
         @{
@@ -459,7 +461,7 @@ function Get-HelpTopics {
                 't 于是国内网站也打不开——这不是网断了，是路指错了。',
                 'b ',
                 'h 怎么自己修',
-                "i 1. 菜单$(Get-MenuRef 'Advanced')，里面选网络与代理修复",
+                ('i 1. 打开菜单，' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'Rescue' 40) + '。'),
                 't2 它一次看三个地方：系统的代理、工具自己的配置、网址解析。',
                 't2 能修的问你一句才动手，改之前先留还原点。',
                 'i 2. 按 y 回车',

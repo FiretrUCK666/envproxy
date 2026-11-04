@@ -1083,14 +1083,24 @@ $AdvancedItems = @(
 # 同一句里两个数字，一个对（5）一个错（3），因为都靠手抄。
 # 用户按它去"看看状态"，却进了一个能删东西的页面。
 #
-# 取不到就返回空串：调用方据此把整句提示去掉，而不是印一个"再选 （）"。
-function Get-AdvancedRef([string]$Action) {
+# 取不到就返回空串：调用方据此把整句提示去掉，而不是印一个「再选 （）」。
+#
+# 默认不带名字：名字最长 28 格，拼进去会把整句顶过 80 列，而 80 列的窗口会折行、
+# 后半截顶到最左边（自检里有断言盯这条）。
+#
+# 但**只留一个编号也不行**：读者到那一屏还得自己找哪个是 N，
+# 屏幕上出现过「再选 1」这种让人回翻的话。所以由调用方按剩余宽度决定：
+# 宽裕就带名字，紧就只留编号——判断的是**预算**，不是在一处写死。
+#
+function Get-AdvancedRef([string]$Action, [int]$Budget = 0) {
     $ai = Get-AdvancedItem $Action
     if (-not $ai) { return '' }
-    # 只带编号，不带名字：名字最长 18 个字，拼进去会把整句顶过 80 列，
-    # 而 80 列的窗口会折行、后半截顶到最左边（自检里有断言盯这条）。
-    # 编号才是他要敲的东西；名字在下一屏自己就看见了。
-    return ('选 ' + $ai.Key)
+    $bare = '选 ' + $ai.Key
+    # $Budget 是这句话允许占的显示宽；0 = 不给名字（调用方没预算）。
+    if ($Budget -le 0) { return $bare }
+    $full = $bare + '（' + $ai.Name + '）'
+    if ((Get-DisplayWidth $full) -le $Budget) { return $full }
+    return $bare
 }
 
 function Get-AdvancedItem([string]$Action) {
