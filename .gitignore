@@ -41,3 +41,5 @@ _*
 /*.ps1
 /*.cmd
 /*.command
+# 测试沙箱（自检里 mktemp 失败时的兜底落点，不许入库）
+sandbox_*/

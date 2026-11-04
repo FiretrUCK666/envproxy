@@ -1,6 +1,0 @@
---- op 2026-11-04T14:49:28Z cli-proxy applied
-inspector=cli-proxy
-target=git
-path=/c/Users/FiretrUCK/.gitconfig
-content=[http]%0A	proxy %3D http://127.0.0.1:7890
---- end
