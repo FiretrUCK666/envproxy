@@ -654,7 +654,7 @@ restore_legacy_sysproxy_snapshot() {
     add_doctor_journal_entry 'legacy-restore' \
         "inspector=sysproxy" \
         "legacy=1" \
-        "services=$(printf '%s' "$_rlss_rows" | _bak_enc)" || { printf 'failed'; return 0; }
+        "services=$(_bak_enc "$_rlss_rows")" || { printf 'failed'; return 0; }
     _rlss_res=$(restore_sysproxy_snapshot)
     # 把临时段从日志里拿掉：写回原内容（没有原内容就删文件）。
     if [ -n "$_rlss_before" ]; then

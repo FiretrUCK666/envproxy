@@ -2076,6 +2076,18 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
         && _selftest_assert_eq "repairable: dns stays unrepairable" "no" "yes" \
         || _selftest_assert_eq "repairable: dns stays unrepairable" "no" "no"
 
+    # 旧版单槽位备份的还原路径（升级者的唯一退路）。
+    # 这里钉住最脏的一环：五列制表符内容编码成一行再解回来必须逐字节相等。
+    # 踩过的坑：_bak_enc 收的是**参数**不是标准输入，写成管道会静默得到空串，
+    # 于是"有备份、能还原"在屏幕上表现为"什么都没做"。
+    _lg_rows=$(printf 'Wi-Fi\tweb\tYes\t127.0.0.1\t7078\nWi-Fi\tsecureweb\tYes\t127.0.0.1\t7078')
+    _lg_enc=$(_bak_enc "$_lg_rows")
+    [ -n "$_lg_enc" ] && _selftest_assert_eq "legacy bak: encoding is not empty" "yes" "yes" \
+        || _selftest_assert_eq "legacy bak: encoding is not empty" "yes" "no"
+    _lg_dec=$(_bak_dec "$_lg_enc")
+    [ "$_lg_dec" = "$_lg_rows" ] && _selftest_assert_eq "legacy bak: encode/decode round-trips" "yes" "yes" \
+        || _selftest_assert_eq "legacy bak: encode/decode round-trips" "yes" "no"
+
     echo "[13b] 判活只连端口，不建隧道（与 Windows 侧同判据）"
     # 这条防的是「把用户正在用的代理关掉」：代理端口活着、但翻墙节点挂了/目标被墙时，
     # 如果用"能不能访问目标"来判活，就会判成 dead → residue-blocking → 救援误删。
