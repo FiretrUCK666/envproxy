@@ -543,7 +543,7 @@ EOF
     if ! add_doctor_journal_entry 'sysproxy' \
             "inspector=sysproxy" \
             "legacy=" \
-            "services=$(printf '%s' "$_spr_snap" | _bak_enc)"; then
+            "services=$(_bak_enc "$_spr_snap")"; then
         printf 'nobackup'; return 0
     fi
 

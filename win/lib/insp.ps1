@@ -731,12 +731,6 @@ function Restore-DoctorJournal {
         'failed' { [void]$res.Left.Add($res.Inspector) }
         default  { }   # skip：记录读不懂，什么都没做
     }
-    # 撤的是旧版单槽位备份（doctor.bak）时，成功后就把它删掉。
-    # 不删的后果有两个：README 承诺的"撤销一次后消失"变成假话；
-    # 更实际的是 has_restore 会一直为真，用户再按 r 又还原同一份旧快照。
-    if ($res.Result -ne 'failed' -and [string]$last.OpId -eq 'legacy-bak') {
-        try { if (Test-Item (Get-SysProxyBackupPath)) { Remove-Item -LiteralPath (Get-SysProxyBackupPath) -Force } } catch { }
-    }
     if ($res.Left.Count -eq 0 -and $res.Undone.Count -gt 0) {
         $res.Result = 'ok'
     } elseif ($res.Undone.Count -eq 0 -and $res.Left.Count -eq 0) {
@@ -745,6 +739,13 @@ function Restore-DoctorJournal {
         $res.Result = 'failed'
     } else {
         $res.Result = 'partial'
+    }
+    # 撤的是旧版单槽位备份（doctor.bak）时，**只在真的撤销成功之后**才删它。
+    # 判定必须在 $res.Result 结算之后：原来这段写在结算之前，那时 Result 还是初值
+    # "none"，"none -ne failed" 恒为真——撤失败也删，用户唯一一次回退机会就没了。
+    # mac 侧写的是"只有 ok 才删"，两侧必须同形。
+    if ($res.Result -eq 'ok' -and [string]$last.OpId -eq 'legacy-bak') {
+        try { if (Test-Item (Get-SysProxyBackupPath)) { Remove-Item -LiteralPath (Get-SysProxyBackupPath) -Force } } catch { }
     }
     return $res
 }

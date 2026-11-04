@@ -2085,6 +2085,18 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     [ -n "$_lg_enc" ] && _selftest_assert_eq "legacy bak: encoding is not empty" "yes" "yes" \
         || _selftest_assert_eq "legacy bak: encoding is not empty" "yes" "no"
     _lg_dec=$(_bak_dec "$_lg_enc")
+    # **贴着调用点测，不只测编码器。**
+    # 踩过的坑：编码器本身完全正确，但真实调用点用的是管道（`... | _bak_enc`），
+    # 而这个函数收的是参数，于是写出来的 services 永远是空串——
+    # 编码器的回归全绿，撤销功能整体不存在。测编码器证明不了调用点。
+    # 这里直接走真实写入路径：造一条 sysproxy 还原点，再读回来必须非空。
+    _lg_snap=$(printf 'Wi-Fi\tweb\tYes\t127.0.0.1\t7078')
+    add_doctor_journal_entry 'sysproxy-repair' "inspector=sysproxy" "legacy=" "services=$(_bak_enc "$_lg_snap")" >/dev/null 2>&1
+    _lg_back=$(doctor_journal_last_field services)
+    [ -n "$_lg_back" ] && _selftest_assert_eq "journal: the repair path writes a non-empty snapshot" "yes" "yes" \
+        || _selftest_assert_eq "journal: the repair path writes a non-empty snapshot" "yes" "no"
+    [ "$_lg_back" = "$_lg_snap" ] && _selftest_assert_eq "journal: the snapshot reads back byte-identical" "yes" "yes" \
+        || _selftest_assert_eq "journal: the snapshot reads back byte-identical" "yes" "no"
     [ "$_lg_dec" = "$_lg_rows" ] && _selftest_assert_eq "legacy bak: encode/decode round-trips" "yes" "yes" \
         || _selftest_assert_eq "legacy bak: encode/decode round-trips" "yes" "no"
 
