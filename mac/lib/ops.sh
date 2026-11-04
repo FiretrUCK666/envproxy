@@ -278,7 +278,8 @@ EOF_SHORTCUTS
         # 卸载 = 恢复成没装过：所有运行时状态都不该活过它，唯一保留的是黑匣子日志。
         # 漏掉任何一个的后果都很具体：version.cache 会让重装后的状态页显示上一次的版本号；
         # update.inprogress 会被读成"上次更新没完成"（那是上一次安装的经历）；
-        # 强杀留下的 .lock 空目录会让新监控的 mkdir 失败、多绕一圈接管分支。
+        # 监控锁住在 $LOCK_DIR（跟用户走，不跟文件夹走），卸载时由下面的锁清理处理，
+        # 不在这里删——这里删的是 $MONITOR_DIR 里的东西，那个目录里早就没有锁了。
         # 状态快照不删的后果与 version.cache 一字不差：重装后状态页会读到上一份
         # 安装留下的结论，而那是已经不存在的状态。
         # notify.last 也必须删：它记的是"上次提示过代理变了"。
@@ -296,7 +297,9 @@ EOF_SHORTCUTS
         monitor_runtime_files 2>/dev/null | while IFS= read -r _urf; do
             [ -n "$_urf" ] && rm -f "$_urf" 2>/dev/null
         done || true
-        rmdir "$MONITOR_DIR/.lock" 2>/dev/null || true
+        # 监控锁不在 $MONITOR_DIR 里（它住在 $LOCK_DIR，跟用户走不跟文件夹走），
+        # 这里没有要清的锁。早先这里 rmdir 一个 $MONITOR_DIR/.lock——那是个不存在的路径，
+        # 留着只会让读代码的人以为锁在安装目录里。
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
             rmdir "$MONITOR_DIR" 2>/dev/null || true
         fi

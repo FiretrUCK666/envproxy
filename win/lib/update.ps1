@@ -1033,14 +1033,23 @@ function Update-EnvProxy([bool]$AutoYes = $false, [scriptblock]$StopMonitor = $n
                     Write-Styled 'warn' "  备份也没能保留下来，请到 Releases 页面重新下载安装包覆盖一次。"
                 }
             }
+            # **半新半旧时不许再跑一遍安装**：那一步走的是本进程里的旧代码，
+            # 按旧的文件布局去动一个已经混了新旧的目录，可能把「半新半旧」变成更乱的半新半旧。
+            # 本文件后面那句「跑旧代码是自找麻烦」说的就是这件事，这里同样适用。
+            # 只报事实：备份在哪、要人工做什么。不动手，就不会再错一次。
+            if ($rollback -ne 'untouched' -and $rollback -ne 'complete') {
+                Write-Styled 'dim' '  按上面那条走：把备份里的文件拷回安装目录，再打开菜单选一次「安装 / 修复」。'
+                $script:UpdateExitCode = 1
+                return
+            }
             # 重装由**调用方注入**，本层不认识 ops：否则 update 调 ops 的 Install-EnvProxy，
-        # ops 又调 runtime 的 Stop-Monitor，runtime 又调 update 的 Get-RemoteVersion——
-        # 三个库首尾相接成一个环（任意长度都要当环看，不是只有 A<->B 才算）。
-        # 注入方是入口：它本来就同时持有所有层。
-        try {
-            if ($InstallFinish) { & $InstallFinish | Out-Null }
-            else { Write-Styled 'warn' '内部提示：更新未收到「重装」能力，请手动打开菜单选一次安装 / 修复。' }
-        } catch {
+            # ops 又调 runtime 的 Stop-Monitor，runtime 又调 update 的 Get-RemoteVersion——
+            # 三个库首尾相接成一个环（任意长度都要当环看，不是只有 A<->B 才算）。
+            # 注入方是入口：它本来就同时持有所有层。
+            try {
+                if ($InstallFinish) { & $InstallFinish | Out-Null }
+                else { Write-Styled 'warn' '内部提示：更新未收到「重装」能力，请手动打开菜单选一次安装 / 修复。' }
+            } catch {
                 # 重启安装失败要留痕：原来这里 catch {} 吞掉，"已恢复原状"后面跟着的
                 # "正在重启监控"可能根本没发生，用户却以为监控已经回来了。
                 try { Write-MonitorLog ("更新失败后重新安装也失败了：" + $_.Exception.Message) } catch {}

@@ -25,7 +25,6 @@ if [ -z "$_target" ] || [ ! -f "$_target" ]; then
         _old_dir=$(dirname "$_target" 2>/dev/null)
         if [ -n "$_old_dir" ]; then
             rm -f "$_old_dir/monitor/monitor.pid" "$_old_dir/monitor/stop.flag" 2>/dev/null
-    rm -rf "$_old_dir/monitor/.lock" 2>/dev/null
             if [ -d "$_old_dir" ] && [ -z "$(ls -A "$_old_dir" 2>/dev/null)" ]; then
                 rmdir "$_old_dir" 2>/dev/null
             fi
@@ -107,7 +106,25 @@ fi
     # 兜底：安装根找不到了，没有活着的组件会再纠正变量——把我们写的东西清掉，
     # 新终端不再读到过期代理。只删本机地址（归属判定），用户自己的配置不动。
     # 保持静默（登录路径不打扰用户），无日志可写：monitor 目录可能已不存在。
-    rm -f "$HOME/.envproxy/proxy.env" 2>/dev/null
+    # **写 off 哨兵，不删文件。**
+    # 删掉会让已开着的 shell 失去归属记录：终端钩子的契约是「没有归属记录时一个都不动」，
+    # 于是它继续把死代理 export 一遍——而 launchctl 那一路清掉了，
+    # 新窗口直连、旧窗口还挂着死端口，症状自相矛盾。
+    # 这里不加载 env 库（定位器是独立模板，跑起来时安装根可能已经不在了），
+    # 所以只写最小等价形态：首行标 off，每行 unset 一个地址变量。
+    if [ -d "$HOME/.envproxy" ]; then
+        {
+            echo '# envproxy-state: off'
+            echo '# 由登录定位器写下：安装根找不到了，这里只负责让新终端不再读过期代理。'
+            for _sv in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
+                echo "unset $_sv"
+            done
+            echo 'unset NODE_USE_ENV_PROXY'
+            echo 'true'
+        } > "$HOME/.envproxy/proxy.env.tmp.$$" 2>/dev/null && \
+            mv -f "$HOME/.envproxy/proxy.env.tmp.$$" "$HOME/.envproxy/proxy.env" 2>/dev/null || \
+            rm -f "$HOME/.envproxy/proxy.env.tmp.$$" 2>/dev/null
+    fi
     for _v in HTTP_PROXY http_proxy HTTPS_PROXY https_proxy ALL_PROXY all_proxy; do
         _cur=$(launchctl getenv "$_v" 2>/dev/null || echo "")
         # **两种回环写法都要认**：注入端按实际能连上的地址拼 URL，只绑 ::1 的代理
