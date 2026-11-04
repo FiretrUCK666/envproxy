@@ -159,7 +159,16 @@ invoke_doctor_check() {
             continue
         fi
         # 收集输出到变量再统一打印：直接调用会把它的 stderr 混进结果行。
-        _idc_out=$("$_idc_fn" 2>/dev/null) || _idc_out=''
+        #
+        # **读失败必须变成一条 unreadable，不许静默清空。**
+        # 原来写的是 `|| _idc_out=''`：函数崩了就什么都不产，
+        # 屏幕上看这一层"没问题"——而"读不出来"与"没问题"是两件事，
+        # 这正是本项目反复强调的那条契约的反面。Windows 侧一直是这样处理的。
+        if ! _idc_out=$("$_idc_fn" 2>/dev/null); then
+            finding_new "$_idc_id.error" "$FINDING_KIND_UNREADABLE" "$_idc_title" "$_idc_id" \
+                '' "这一项没能检查：读取过程出错了" '这一项没读出来，不代表没问题。可以到「问题反馈」生成一份报告。' ''
+            continue
+        fi
         if [ -n "$_idc_out" ]; then
             printf '%s\n' "$_idc_out"
         fi
@@ -636,32 +645,22 @@ get_dns_findings() {
 # 但「撤销最近一次」只有一个入口。
 #
 # 输出：Result <TAB> Inspector，Result ∈ none / ok / failed / partial
-# 还原旧版单槽位备份（doctor.bak）。返回 ok / failed / canceled / none。
+# 还原旧版单槽位备份（doctor.bak）。返回 ok / failed / canceled / skip。
 #
 # 旧文件是制表符分隔的五列：服务、类型、启用、地址、端口——
 # 与 sysproxy_repair 现在写进日志的 services 表**逐列同形**，所以
-# 拼一行 legacy=1 + 一张表，直接复用 restore_sysproxy_snapshot 那条唯一实现：
-# 撤销只该有一处代码，两处各写一套迟早分叉（旧版这里就写过一个
-# 独立的 sysproxy_restore，autoproxy 多传一个 on 的坑两边都踩过）。
+# 直接把内容交给 restore_sysproxy_snapshot，复用的是同一条唯一实现：
+# 撤销只该有一处代码，两处各写一套迟早分叉。
+#
+# **不借道日志**：早先的做法是先往日志追加一段临时记录再调那函数。
+# 那样会占用保留条数、把使用者另一条真实还原点挤掉（挤掉的回不来），
+# 写回日志还要求原子、中途失败会留下半截日志让所有还原点报废。
 restore_legacy_sysproxy_snapshot() {
     _rlss_path=$(sysproxy_backup_path)
     [ -f "$_rlss_path" ] || { printf 'none'; return 0; }
     _rlss_rows=$(cat "$_rlss_path" 2>/dev/null)
     [ -n "$_rlss_rows" ] || { printf 'none'; return 0; }
-    # 先按日志条目的格式追加一段，再走唯一那条还原实现，最后把这段撤掉
-    # （它是临时载体，不该占用保留条数、也不该在日志里留痕）。
-    _rlss_before=$(cat "$(doctor_journal_path)" 2>/dev/null || true)
-    add_doctor_journal_entry 'legacy-restore' \
-        "inspector=sysproxy" \
-        "legacy=1" \
-        "services=$(_bak_enc "$_rlss_rows")" || { printf 'failed'; return 0; }
-    _rlss_res=$(restore_sysproxy_snapshot)
-    # 把临时段从日志里拿掉：写回原内容（没有原内容就删文件）。
-    if [ -n "$_rlss_before" ]; then
-        printf '%s\n' "$_rlss_before" > "$(doctor_journal_path)" 2>/dev/null || true
-    else
-        rm -f "$(doctor_journal_path)" 2>/dev/null || true
-    fi
+    _rlss_res=$(restore_sysproxy_snapshot "$_rlss_rows")
     printf '%s' "$_rlss_res"
 }
 restore_doctor_journal() {

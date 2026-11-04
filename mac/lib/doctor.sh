@@ -606,8 +606,20 @@ EOF
 #   · 旧的（doctor.bak 转来的 legacy=1）：那是一张「服务|勾选框|启用|地址|端口」的表
 # 语义都是「推进去的命令返回 0 且回读确认没了」，不许只看了 osascript 的退出码就报成功。
 restore_sysproxy_snapshot() {
-    _rss_legacy=$(doctor_journal_last_field 'legacy')
-    _rss_services=$(doctor_journal_last_field 'services')
+    # $1 可选：直接给一张 services 表就从它还原，不给才去读日志最后一段。
+    #
+    # 为什么要有这个入参：旧版单槽位备份（doctor.bak）不在日志里，
+    # 若为了还原它先往日志追加一段临时记录，那一段会占用保留条数、
+    # 把用户**另一条真实还原点挤掉**（日志只留最近 5 段，挤掉的回不来）。
+    # 借道日志还要求写回是原子的，中途失败会留下半截日志、所有还原点报废。
+    # 直接传内容就绕开这两件事。
+    if [ $# -ge 1 ] && [ -n "${1:-}" ]; then
+        _rss_legacy=1
+        _rss_services=$1
+    else
+        _rss_legacy=$(doctor_journal_last_field 'legacy')
+        _rss_services=$(doctor_journal_last_field 'services')
+    fi
     [ -n "$_rss_services" ] || { printf 'skip'; return 0; }
 
     _rss_cmds=""
