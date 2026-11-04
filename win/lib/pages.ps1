@@ -405,18 +405,18 @@ function Get-TermSyncText([string]$State, $Sync) {
             $line = 0
             try { $line = [int]$Sync.Line } catch { $line = 0 }
             $hint = if ($line -gt 0) {
-                ('删掉配置文件里孤立的那行标记（第 {0} 行）再选 1。' -f $line)
+                (('删掉配置文件里孤立的那行标记（第 {0} 行）再' + (Get-MenuRef 'Install') + '。') -f $line)
             } else {
-                '在配置文件里找到孤立的 EnvProxy 标记行删掉，再选 1。'
+                ('在配置文件里找到孤立的 EnvProxy 标记行删掉，再' + (Get-MenuRef 'Install') + '。')
             }
             return @{ Text = '配置文件里的标记不成对，未改动它'; Hint = $hint; Bad = $true }
         }
         'stale'    {
             # 内容过期不是用户的问题，也不用手工改：安装会按当前版本重写。
-            return @{ Text = '同步块是旧版本的'; Hint = '这不影响用，只是那段代码旧了；打开菜单选 1 会更新它。'; Bad = $true }
+            return @{ Text = '同步块是旧版本的'; Hint = ('这不影响用，只是那段代码旧了；打开菜单' + (Get-MenuRef 'Install') + '会更新它。'); Bad = $true }
         }
-        'missing'  { return @{ Text = '配置文件里没有同步块'; Hint = '打开菜单选 1 可以写入。'; Bad = $true } }
-        'nohost'   { return @{ Text = '这一轮读不到配置文件路径，无法判断'; Hint = '过几秒再看一次；一直在就选 1。'; Bad = $true } }
+        'missing'  { return @{ Text = '配置文件里没有同步块'; Hint = ('打开菜单' + (Get-MenuRef 'Install') + '可以写入。'); Bad = $true } }
+        'nohost'   { return @{ Text = '这一轮读不到配置文件路径，无法判断'; Hint = ('过几秒再看一次；一直在就' + (Get-MenuRef 'Install') + '。'); Bad = $true } }
         default    {
             # 走到这里说明 Get-TerminalSyncState 又加了新状态而这张表没跟上。
             # 必须打印出来：问题清单会说"终端同步没生效"，而整屏找不到那四个字，

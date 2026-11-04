@@ -497,7 +497,8 @@ _shortcut_manage_page() {
         echo ""
         _sm_recs=$(_shortcut_records)
         if [ -z "$_sm_recs" ]; then
-            style_out dim "  还没有建过。先回上一页选 1 或 2 建一个。"
+            # 编号从表里取，不写死：高级功能重排后写死的数字会指向别的项。
+    style_out dim "  还没有建过。先回上一页改 $(advanced_ref NewProxyIcon) 或 $(advanced_ref NewDirectIcon) 建一个。"
             echo ""
             style_out dim "  按回车返回"
             _sm_x=""

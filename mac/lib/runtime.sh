@@ -456,7 +456,7 @@ EOF
         echo "没有需要修的：所有配置文件里的标记都是成对的。"
         return 0
     fi
-    [ "$_rhm_fixed" -gt 0 ] && echo "现在打开菜单选 1（安装 / 修复），把它重新写好。"
+    [ "$_rhm_fixed" -gt 0 ] && echo "现在打开菜单$(menu_ref install)，把它重新写好。"
     [ "$_rhm_failed" -gt 0 ] && return 1
     return 0
 }

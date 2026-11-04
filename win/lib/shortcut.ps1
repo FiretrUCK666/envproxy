@@ -359,7 +359,7 @@ function New-ProxyLauncherBody([string]$TargetPath, [string]$WorkingDir, $Mode, 
           "`$env:NO_PROXY=`$n;" + 'NODE_USE_ENV_PROXY_PLACEHOLDER' + "}" +
           "else{try{Add-Type -AssemblyName PresentationFramework;" +
           "[Windows.MessageBox]::Show('没找到可用的代理，《" + $appLabel + "》已经按直连打开了。`n`n" +
-          "翻墙软件开着的话：打开菜单选 1（安装 / 修复），再点这个图标。`n" +
+          ("翻墙软件开着的话：打开菜单" + (Get-MenuRef 'Install') + "，再点这个图标。`n") +
           "翻墙软件没开的话：先开它，再点这个图标。','EnvProxy')|Out-Null}catch{}};" +
           "Start-Process -FilePath '$t'" + $argPart + " -WorkingDirectory '$w'"
     # ---------------------------------------------------------------------------
@@ -1699,7 +1699,7 @@ function Invoke-ManageProxyShortcuts {
         Write-Styled 'title' (Format-TitleRule '管理已建的')
         Write-Host ''
         if ($recs.Count -eq 0 -and $orphans.Count -eq 0) {
-            Write-Styled 'dim' '  还没有建过。先回上一页选 1 或 2 建一个。'
+            Write-Styled 'dim' ('  还没有建过。先回上一页' + (Get-AdvancedRef 'NewProxyIcon') + '或' + (Get-AdvancedRef 'NewDirectIcon') + '建一个。')
             Write-Host ''
             try { $null = Read-Host (Format-PromptHint '回车返回') } catch {}
             return
@@ -2051,7 +2051,7 @@ function Show-DockerGuidePage {
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  改 Docker Desktop 自己的设置：' }
         @{ Role='cmd';  Text='    Settings → Resources → Proxies' }
-        @{ Role='text'; Text='  地址填 http://127.0.0.1:端口号。端口号看菜单选 2（查看状态）。' }
+        @{ Role='text'; Text=('  地址填 http://127.0.0.1:端口号。端口号看菜单' + (Get-MenuRef 'Status') + '。') }
         @{ Role='blank'; Text='' }
         @{ Role='dim'; Text='  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。' }
         @{ Role='blank'; Text='' }

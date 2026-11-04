@@ -106,7 +106,7 @@ function Install-EnvProxy {
     # 不说的话，用户卸载后发现自己原来的公司代理没了，而安装时屏幕上一切正常。
     if (-not $snapshotOk) {
         Write-Styled 'warn' "      没能记下你原来的代理设置（写入被拦住），卸载时可能还原不回来。"
-        Write-Styled 'warn' "      如果原本自己设过代理，请先抄一份；再点一次菜单选 1 重试。"
+        Write-Styled 'warn' ("      如果原本自己设过代理，请先抄一份；再点一次菜单" + (Get-MenuRef 'Install') + "重试。")
     }
     # 终端同步：写 $PROFILE 里的钩子块，让已经开着的窗口也能跟上。
     # 失败不阻断安装（其余三件事已经做成），但必须如实说清原因，不许报成功。

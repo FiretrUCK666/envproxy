@@ -179,7 +179,7 @@ function New-ProblemReport {
             $livePid = 0
             try { $livePid = [int](Get-MonitorProcessFast).ProcessId } catch { $livePid = 0 }
             if ($livePid -gt 0 -and $livePid -ne $sn.Pid) {
-                & $add ('  注意：快照是旧进程 ' + $sn.Pid + ' 写的，现在跑的是 ' + $livePid + '。选 1 可重启后台程序。')
+                & $add ('  注意：快照是旧进程 ' + $sn.Pid + ' 写的，现在跑的是 ' + $livePid + '。' + (Get-MenuRef 'Install') + '可重启后台程序。')
             }
         }
     } elseif ($sn) {
