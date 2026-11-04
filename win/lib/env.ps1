@@ -831,8 +831,15 @@ function Write-TerminalStateFile([string]$State) {
             }
         } catch {}
     }
+    # owned_ 行**必须走同一个转义函数**，不许手拼。
+    # 手拼的后果：NO_PROXY 的值里若含换行（用户自己的例外清单可能跨行），
+    # 写出来就被劈成两行——`owned_NO_PROXY=前半截` 加一行孤儿文本。
+    # 钩子逐行解析后读到的归属值与窗口里的真实值永远不等，于是判定
+    # 「这个值不是我们写的」→ 那个已经开着的窗口永远清不掉旧代理，
+    # 而 HTTP_PROXY 照常被清 → 用户拿到半套变量，git 静默连死端口。
+    # 上面注入行走的 Format-EnvFileLine 已经做了转义，这里不能例外。
     foreach ($n in $names) {
-        if ($own.ContainsKey($n)) { $lines += ("owned_" + $n + "=" + $own[$n]) }
+        if ($own.ContainsKey($n)) { $lines += (Format-EnvFileLine ('owned_' + $n) $own[$n]) }
     }
     # 落盘。用 base 层的 Write-Text（同目录临时文件 + 整体替换），不在这里再写一遍
     # 那套原子逻辑：本项目已经因为 File.Replace 的第三参数踩过一次坑，而这个模式

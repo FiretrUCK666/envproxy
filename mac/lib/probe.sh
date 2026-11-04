@@ -905,8 +905,14 @@ get_current_state() {
     #    "集合变化 = 强信号"会被自己的节流反复触发。故只有全扫轮更新签名。
     if [ "$_full" = "0" ] && [ -z "$_cands" ] && [ -n "$LAST_SEEN_SET" ]; then
         # 上一轮全扫记得有端口，而这一轮快扫什么都没看见：不下结论，并安排全扫。
+        #
+        # **必须 return 1（未判定），不能 return 0。** return 0 的语义是"判出来了"，
+        # 调用方于是拿 CURRENT_STATE 里上一轮留下的值当本轮结论：
+        # 去抖会把它算作一条支持证据、快照会写成"端口扫描 ok"，
+        # 而 CURRENT_STATE 若恰好停在 off，两轮之后就会删掉使用者的代理变量。
+        # Windows 侧这一分支返回 "unknown"（probe.ps1 同一位置），两侧必须同形。
         NEED_DEEP_SCAN=1
-        return 0
+        return 1
     fi
     _sig_changed=0
     if [ "$_full" = "1" ]; then

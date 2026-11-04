@@ -1995,7 +1995,9 @@ function Invoke-DirectShortcutFlow {
 # 通用的一屏讲解渲染。$Blocks 是若干 { Role; Text } 行的数组。
 function Show-GuidePage([string]$Title, [object[]]$Blocks, [string]$Footer) {
     Clear-Screen
-    Write-Styled 'title' ('======== ' + $Title + ' ========')
+    # 标题线由标题算，不许手敲：手敲的话这一屏和别的屏宽度对不上，
+    # 用户从高级功能页（40 格）点进来会看到线突然变窄，像换了个程序。
+    Write-Styled 'title' (Format-TitleRule $Title)
     Write-Host ''
     foreach ($b in $Blocks) {
         Write-Styled $b.Role ($b.Text)
@@ -2003,6 +2005,10 @@ function Show-GuidePage([string]$Title, [object[]]$Blocks, [string]$Footer) {
     # 结尾这两行不能和正文挤在一起，也不能太暗：
     # "我没改你的东西"是这一页的结论，"按回车返回"是唯一的出路，
     # 两者都写成 dim 时会混进上面的讲解里，用户读完不知道这一步算完了没有。
+    Write-Host ''
+    # 一根横线把「讲解」和「结论 + 出路」分开，与救援页同一形态。
+    # 没有它的时候，最后那两句会读成正文的最后两行，用户不知道讲完了没有。
+    Write-Styled 'dim' ('  ' + (Format-PlainRule $Title))
     Write-Host ''
     Write-Styled 'text' ('  ' + $Footer)
     Write-Host ''

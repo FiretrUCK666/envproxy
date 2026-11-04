@@ -603,7 +603,29 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
     # 清掉"仍等于我们写下的那个"的变量。没有状态文件时一个都不动。
     # 写入侧只有小写，但清除侧仍要认两套拼写：曾经写过大写的老版本窗口里
     # 可能还留着大写那一份，不认它就会永远清不掉。
-    _envproxy_gb_clear() {
+    # 还原写入端做的百分号转义（见 env 层 ConvertTo-EnvFileValue）。
+#
+# **两条路径共用这一个函数**：清除路径要拿它比对"值还是不是我们写的"，
+# 应用路径要拿它把值真正注入回环境。早先只有清除路径还原了，
+# 应用路径直接把 %0A / %25 当字面量注入——含 % 的企业例外清单失效，
+# 含换行的值多出一个假域名，而屏幕上完全看不出来。
+#
+# 顺序与编码相反：先还原换行、再还原百分号（否则 %250A 会被当成换行）。
+# 两个候选方案都被实测否掉过，记在这里免得重走：
+#   1. 用 bash 的 ${x//模式/替换}：命令替换会把结果尾部的换行全部吃掉；
+#   2. 用 sed 的多行 s 命令：续行之后的源码缩进会跟着进替换串。
+# 最终用 awk，换行交给 sprintf("%c",10) 生成——源码里没有真换行。
+# 只在确实含 % 时才 fork：绝大多数窗口的值不含 %，热路径保持零进程。
+_envproxy_gb_unescape() {
+    _egu_in="$1"
+    case "$_egu_in" in
+        *%*)
+            printf '%s' "$_egu_in" | awk '{gsub(/%0A/, sprintf("%c",10)); gsub(/%25/,"%"); printf "%s", $0}' ;;
+        *)
+            printf '%s' "$_egu_in" ;;
+    esac
+}
+_envproxy_gb_clear() {
         [ -n "$_ENVPROXY_GB_STATE" ] || return 0
         [ -r "$_ENVPROXY_GB_STATE" ] || return 0
         _epc_n=""
@@ -627,9 +649,7 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
             # 最终用 awk，换行交给 sprintf("%c",10) 生成——源码里没有真换行，
             # 也不依赖续行，缩进怎么排都不影响结果。
             # 只在确实含 % 时才 fork：绝大多数窗口的值不含 %，热路径保持零进程。
-            if [ "${_epc_want#*%}" != "$_epc_want" ]; then
-                _epc_want=$(printf '%s' "$_epc_want" | awk '{gsub(/%0A/, sprintf("%c",10)); gsub(/%25/,"%"); printf "%s", $0}')
-            fi
+            _epc_want=$(_envproxy_gb_unescape "$_epc_want")
             [ -n "$_epc_want" ] || continue
             eval "_epc_cur=\"\${$_epc_n-}\""
             # 两种拼写都要看：只看大写的话，"只有小写还在"的窗口永远清不干净。
@@ -672,9 +692,11 @@ if [ -z "${_ENVPROXY_GB_READY-}" ]; then
         _epa_node=""
         while IFS='=' read -r _epa_k _epa_v; do
             case "$_epa_k" in
-                HTTP_PROXY)          _epa_http="$_epa_v" ;;
-                NO_PROXY)            _epa_np="$_epa_v" ;;
-                NODE_USE_ENV_PROXY)  _epa_node="$_epa_v" ;;
+                HTTP_PROXY)          _epa_http=$(_envproxy_gb_unescape "$_epa_v") ;;
+                # **值要还原转义**：文件里存的是 %0A / %25 形态，
+                # 直接注入会让用户拿到字面量 %0A 与 %25。与清除路径共用同一个函数。
+                NO_PROXY)            _epa_np=$(_envproxy_gb_unescape "$_epa_v") ;;
+                NODE_USE_ENV_PROXY)  _epa_node=$(_envproxy_gb_unescape "$_epa_v") ;;
             esac
         done < "$_ENVPROXY_GB_STATE"
 

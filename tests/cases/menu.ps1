@@ -198,6 +198,23 @@ foreach ($t in $helpTopics) {
     }
     Assert-Eq 'advanced page has no line wider than 80 columns' '' $advWide
 
+# 讲解页（WSL / Docker）结尾必须有分隔线，与救援页同一形态。
+# 没有它的时候，「这一页只讲解」和「看完按回车」会读成正文的最后两行，
+# 用户不知道讲完了没有。这条判断放在源码层：渲染函数是两页共用的一个。
+$guideSrc = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\shortcut.ps1'), [System.Text.Encoding]::UTF8)
+$guideFn = [regex]::Match($guideSrc, '(?s)function Show-GuidePage.*?\n\}')
+Assert-Eq 'guide page: the shared renderer was found' 'True' ([string]$guideFn.Success)
+if ($guideFn.Success) {
+    $g = $guideFn.Value
+    Assert-Eq 'guide page: it draws a divider before the footer' 'True' `
+        ([bool]([regex]::IsMatch($g, 'Format-PlainRule')))
+    Assert-Eq 'guide page: the divider comes before the footer text' 'True' `
+        ([bool]([regex]::IsMatch($g, '(?s)Format-PlainRule.*?Footer')))
+    # 标题线也不许手敲：手敲的话这一屏和别的屏宽度对不上。
+    Assert-Eq 'guide page: the title rule is computed, not typed' 'False' `
+        ([bool]([regex]::IsMatch($g, '''=+ '' \+')))
+}
+
 # 显示宽度必须按码位算，不能按 UTF-16 码元算。
 # emoji 是代理对：逐个 [char] 判会各算两格（实测 '😀' 得 4，而终端只占 2），
 # 两端对同一字符算出不同宽度，菜单列就永远对不齐。
