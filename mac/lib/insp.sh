@@ -693,7 +693,12 @@ restore_doctor_journal() {
     fi
     _rdj_out=$("$_rdj_restore" 2>/dev/null) || _rdj_out='failed'
     case "$_rdj_out" in
-        ok)     printf 'ok\t%s' "$_rdj_insp" ;;
+        ok)
+            # 撤成功就消费掉那一段，让「再按一次往上撤一条」真的成立。
+            # 不消费的话再按 r 取到的还是同一段，反复还原同一次——
+            # 而界面上写的是「撤销上一次修复」，听起来像在逐条回退。与 Windows 侧同形。
+            drop_last_doctor_journal_entry >/dev/null 2>&1 || true
+            printf 'ok\t%s' "$_rdj_insp" ;;
         skip)   printf 'none\t%s' "$_rdj_insp" ;;
         *)      printf 'failed\t%s' "$_rdj_insp" ;;
     esac

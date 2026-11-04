@@ -852,6 +852,29 @@ function Read-DoctorJournal {
     return $ops
 }
 
+# 覆盖写入整份日志（用于撤销后消费掉那一段）。
+#
+# 与 Add-DoctorJournalEntry 分开：那个是"追加并裁到保留条数"，
+# 这个是"按给定的段重写"。删除只能靠重写——按字节截会把段截成半截，
+# 下次读出来是一条无效记录。
+function Write-DoctorJournalOps($Ops) {
+    try {
+        $null = Ensure-MonitorPaths
+        if (-not $MonitorDir) { return $false }
+        $path = Get-DoctorJournalPath
+        $list = @($Ops | Where-Object { $null -ne $_ })
+        if ($list.Count -eq 0) {
+            if (Test-Item $path) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
+            return $true
+        }
+        $text = ''
+        foreach ($op in $list) { $text += (Format-DoctorJournalEntry $op.OpId $op.Result $op.Fields) }
+        Write-Text -Path $path -Text $text -WithBom $false
+        return (Test-Item $path)
+    } catch {
+        return $false
+    }
+}
 # 追加一个还原点。返回 $true = 确实落盘了。
 #
 # **写不下来就返回假，调用方据此不动手**：没有退路的修改不该发生。

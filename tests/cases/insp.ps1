@@ -62,6 +62,32 @@ Assert-Eq 'dns: but the layer has no fix, so we may not touch it' 'False' ([stri
 # 这条判据要能在救援页源码里找到对应的「先于没发现问题」分支，
 # 否则 DNS 一有问题屏幕第一句就是「没发现问题」——误报平安。
 $rescueSrc2 = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\insp.ps1'), [System.Text.Encoding]::UTF8)
+# 「再按一次往上撤一条」必须是真的：撤成功要从日志里消费掉那一段。
+# 只还原不消费的话，再按 r 取到的还是同一段——反复还原同一次，
+# 而界面上那句「撤销上一次修复」听起来像是在逐条回退。
+$journalUndoDir = Join-Path $env:TEMP ("undo_" + [guid]::NewGuid().ToString('N').Substring(0, 8))
+New-Item -ItemType Directory -Path $journalUndoDir -Force | Out-Null
+$savedMonitor = $MonitorDir
+$MonitorDir = $journalUndoDir
+try {
+    $ua = Join-Path $journalUndoDir 'a.txt'; $ub = Join-Path $journalUndoDir 'b.txt'
+    Set-Content -LiteralPath $ua -Value 'AAA'; Set-Content -LiteralPath $ub -Value 'BBB'
+    [void](Add-DoctorJournalEntry 'cli-proxy.git' ([ordered]@{ inspector = 'cli-proxy'; path = $ua; content = 'AAA' }))
+    [void](Add-DoctorJournalEntry 'cli-proxy.npm' ([ordered]@{ inspector = 'cli-proxy'; path = $ub; content = 'BBB' }))
+    Set-Content -LiteralPath $ua -Value 'CHANGED1'; Set-Content -LiteralPath $ub -Value 'CHANGED2'
+    $u1 = Restore-DoctorJournal
+    Assert-Eq 'undo: the first press restores the most recent layer' 'ok' ([string]$u1.Result)
+    Assert-Eq 'undo: the most recent press leaves one fewer entry' 1 (@(Read-DoctorJournal).Count)
+    Assert-Eq 'undo: the second newest file is back to its old content' 'BBB' ((Get-Content -LiteralPath $ub -Raw).Trim())
+    $u2 = Restore-DoctorJournal
+    Assert-Eq 'undo: the second press goes one step further back' 'ok' ([string]$u2.Result)
+    Assert-Eq 'undo: the older file is back to its old content' 'AAA' ((Get-Content -LiteralPath $ua -Raw).Trim())
+    $u3 = Restore-DoctorJournal
+    Assert-Eq 'undo: with nothing left it says so instead of repeating' 'none' ([string]$u3.Result)
+} finally {
+    $MonitorDir = $savedMonitor
+    Remove-Item -LiteralPath $journalUndoDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 Assert-Eq 'rescue: an unfixable problem is reported before the all-clear' 'True' `
     ([bool]([regex]::IsMatch($rescueSrc2, '(?s)realButUnfixable.{0,400}没发现问题')))
 Assert-Eq 'repairable: an unknown layer is not repairable' 'False' `
@@ -228,9 +254,10 @@ try {
     Assert-Eq 'restore: reports ok' 'ok' ([string]$rr.Result)
     Assert-Eq 'restore: the file is byte-identical to before' $true `
         ([System.IO.File]::ReadAllText($npmFile) -ceq $npmOrig)
-    # 撤销完之后那条记录还在（日志是追加式的），再按一次会撤到更早那条——
-    # 内容是同一份，所以仍然 ok。这里只断言「不会报成没记录」。
-    Assert-Eq 'restore: the journal still has an entry' 'True' (Test-DoctorJournalHasRestore)
+    # 撤销成功要**消费掉**那一段：日志里只剩这一段，撤完就没有了。
+    # 旧行为是"追加式、撤完还在"，导致再按 r 反复还原同一次——
+    # 而界面上写的是「撤销上一次修复」，听起来像在逐条回退。
+    Assert-Eq 'restore: the entry is consumed by a successful undo' 'False' (Test-DoctorJournalHasRestore)
 } finally {
     $script:MonitorDir = $__savedMonitor3
     Remove-Item -LiteralPath $jDir3 -Recurse -Force -ErrorAction SilentlyContinue

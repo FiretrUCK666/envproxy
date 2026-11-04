@@ -747,6 +747,15 @@ function Restore-DoctorJournal {
     if ($res.Result -eq 'ok' -and [string]$last.OpId -eq 'legacy-bak') {
         try { if (Test-Item (Get-SysProxyBackupPath)) { Remove-Item -LiteralPath (Get-SysProxyBackupPath) -Force } } catch { }
     }
+    # 撤成功就从日志里消费掉那一段，让「再按一次往上撤一条」真的成立。
+    # 不消费的话，再按 r 取到的还是同一段，等于反复还原同一次——
+    # 而函数头那句注释早就这么承诺了（说了没做，比不说更糟）。
+    # 撤失败或跳过时**不动日志**：那一段还有用，用户可能想再试一次。
+    # 旧版单槽位备份（legacy-bak）不走这里：它根本没有对应的日志段。
+    if ($res.Result -eq 'ok' -and [string]$last.OpId -ne 'legacy-bak') {
+        $rest = @($ops | Select-Object -First ($ops.Count - 1))
+        [void](Write-DoctorJournalOps $rest)
+    }
     return $res
 }
 

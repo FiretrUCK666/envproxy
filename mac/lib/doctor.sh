@@ -375,6 +375,33 @@ _finding_entry_body() {
 
 # 追加一个还原点。$1 = op-id，$2.. = "key=value"（值由调用方先编码）。
 # 返回 0 = 确实落盘了。**写不下来就返回非零，调用方据此不动手**。
+# 丢掉最近一段（撤销成功后调用）。
+#
+# 与 add_doctor_journal_entry 分开：那个是"追加并裁到保留条数"，
+# 这个是"少一段"。删除只能靠整份重写——按字节截会把段截成半截，
+# 下次读出来是一条无效记录。
+drop_last_doctor_journal_entry() {
+    _ddje_path=$(doctor_journal_path)
+    [ -f "$_ddje_path" ] || return 0
+    # 用 awk 找到最后一个 "--- op" 的行号，只保留它之前的内容。
+    _ddje_keep=$(_ddje_path="$_ddje_path" awk '
+        /^--- op / { last = NR }
+        { lines[NR] = $0 }
+        END {
+            for (i = 1; i <= NR; i++) {
+                if (i < last) print lines[i]
+            }
+        }' "$_ddje_path" 2>/dev/null)
+    if [ -z "$_ddje_keep" ]; then
+        rm -f "$_ddje_path" 2>/dev/null || true
+    else
+        # 原子写回：同目录临时文件 + mv，中途失败时旧文件还在。
+        _ddje_tmp="$_ddje_path.tmp.$$"
+        printf '%s\n' "$_ddje_keep" > "$_ddje_tmp" 2>/dev/null || { rm -f "$_ddje_tmp" 2>/dev/null; return 1; }
+        mv -f "$_ddje_tmp" "$_ddje_path" 2>/dev/null || { rm -f "$_ddje_tmp" 2>/dev/null; return 1; }
+    fi
+    return 0
+}
 add_doctor_journal_entry() {
     _aje_op="$1"; shift
     ensure_monitor_paths || return 1
