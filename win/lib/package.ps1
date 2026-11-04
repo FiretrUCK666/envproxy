@@ -297,11 +297,16 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             Copy-FileAtomic (Join-Path $SrcRoot 'VERSION') (Join-Path $ProjectRoot 'VERSION')
         }
         # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
-        # 两种命名都扫：Copy-FileAtomic 产生 *.envproxy-new*，Write-Text 产生 *.tmp<数字>。
-        Get-ChildItem -LiteralPath $ProjectRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -like '*.tmp[0-9]*' } |
+        # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
+        #
+        # **只在本次覆盖写过的位置扫**：原来是整个 $ProjectRoot 递归扫 *.tmp[0-9]*，
+        # 而用户在安装根里放一个叫 notes.tmp1.txt 的文件会被静默删掉——
+        # 那与「安装根只覆盖同名文件、绝不删东西」这条边界直接冲突。
+        # 两个命名分别来自 Copy-FileAtomic（*.envproxy-new*）与 Write-Text（*.tmp<数字>），
+        # 它们只会出现在 $effShip 里。
+        Get-ChildItem -LiteralPath $effShip -Recurse -File -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -match '\.tmp\d+$' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }
-        if ($removed -gt 0) { Write-Styled 'dim' ("  共移除 {0} 个旧版本残留文件。" -f $removed) }
         # 覆盖全部成功：撤掉"更新进行中"标记。
         # 留着它会让状态页一直报"上次更新没完成，程序文件可能新旧混合"——那是假警报。
         try { if (Test-Item $marker) { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue } } catch {}

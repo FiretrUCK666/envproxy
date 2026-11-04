@@ -24,5 +24,10 @@ exit /b 1
 
 :run
 powershell -NoProfile -ExecutionPolicy Bypass -File "envproxy.ps1" -Menu
+rem Pass the exit code through: a script or scheduled task that calls the menu
+rem through this shell would otherwise always read zero, turning a failure into
+rem a success. The shell has no logic of its own, but it must not swallow it.
+set ENVPROXY_MENU_RC=%ERRORLEVEL%
 echo.
 pause
+exit /b %ENVPROXY_MENU_RC%
