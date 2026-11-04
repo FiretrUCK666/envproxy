@@ -293,10 +293,11 @@ nc_supports_G() {
     # 于是落进下面的通路当成"认 -G"，后续每次判活都 rc=127 → 活端口全被判死。
     # 这个判错方向很要命：'没装工具' 与 '工具不认这个开关' 必须分开处理。
     if ! command -v nc >/dev/null 2>&1; then
-        [ "$NC_HAS_G" = "1" ]
+        # 没有 nc 就是"不支持 -G"（上面已置 0）——这一支不必再比较一次。
+        # 原来写的是 [ "$NC_HAS_G" = "1" ]，恒假，看着像"想改回 1"的半截开关。
         return 1
     fi
-    # 拿一个必然连不上的端口探语法：认 -G 的 nc 会安静失败（退出码非 0 但没有 usage 报错），
+    # 拿一个必然连不上的端口探语法：认 -G 的 nc 会安静失败（非 0 但没有 usage 报错），
     # 不认的会打印 "invalid option" 之类。判据是"错误输出里有没有提到 invalid/usage"。
     _ncg_err=$(printf '' | nc -G 1 -w 1 127.0.0.1 1 2>&1 >/dev/null)
     case "$_ncg_err" in
@@ -383,7 +384,7 @@ handshake_kind_at() {
     handshake_kind_text "$_hkres"
 }
 # 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
-# 命中的地址放进 $LOOPBACK_HIT（注入端要用它拼 URL）。
+# 不发 $PROXY_URL_HIT：这条只回答"是不是代理"，命中地址由 proxy_url_for_port 现场取。
 test_http_proxy() {
     for _tp_addr in $LOOPBACK_PROBES; do
         if _handshake_at "$_tp_addr" "$1"; then
@@ -742,8 +743,10 @@ test_real_connectivity() {
 test_node_alive() {
     local _idle _now _port
     _port="$1"; _force="${2:-0}"
-    # 每轮开头刷新一次单调读数（一次 fork），本轮其余判定点复用。
-    mono_tick            # 本轮刷新一次（不包 $( )，否则全局缓存出不来）
+    # **时钟由主循环刷新（runtime.sh 每轮开头 mono_tick 一次），这里只读。**
+    # 原来这里也调一次：candidate 有 N 个端口时一轮就起 N+1 次 perl（每次约 15ms）。
+    # 注释当时写的"每轮至多一次 fork"因此从没成立过——而这正是它想省的。
+    # monotonic_now 在缓存缺失时会自己补一次，所以单测这条路径也安全。
     monotonic_now
     _now=$MONO_NOW
     if [ "$_force" != "1" ] && [ "$_port" = "$NODE_CACHE_PORT" ]; then

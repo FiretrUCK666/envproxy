@@ -495,7 +495,7 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
     # 阶段 1：并发连接，统一截止 800ms（逐个 IsCompleted 轮询，无 64 句柄上限问题）
     # 截止用**单调钟**，不用 [DateTime]::UtcNow：墙上时钟被 NTP 校正、夏令时或
     # 休眠唤醒向后拨一下，截止时刻就成了过去，这一轮立刻提前结束——活着的端口被漏掉，
-    # 上层读到"这些端口上没有代理"。同文件 902 行那条"时刻一律用单调秒数"说的就是这件事。
+# 上层读到"这些端口上没有代理"。文件末尾 `node_verdict` 之前那段"时刻一律用单调秒数"说的就是这件事。
     $deadline = (Get-MonotonicSeconds) + 0.8
     do {
         $allDone = $true
