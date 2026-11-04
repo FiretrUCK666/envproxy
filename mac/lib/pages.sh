@@ -557,7 +557,7 @@ show_status() {
             _sp_text="指向本机一个已经关掉的程序（浏览器会打不开网页）"
         fi
         _status_row "$STATUS_LABEL_SYSPROXY" "${_sp_text}。不是本工具写的。" warn
-        style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选浏览器代理修复。"
+        style_out dim "  这一项可以自己修：菜单$(menu_ref advanced)，再选网络与代理修复。"
     fi
     [ "$_pn" != "0" ] && echo ""
 
@@ -853,7 +853,7 @@ EOF
 
     # 系统代理：浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
     # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它
-    # （动它是「浏览器代理修复」的活）。
+    # （动它是「网络与代理修复」的活）。
     #
     # 判据**只有一处实现**：doctor 层的 sysproxy_layers + sysproxy_verdict。
     # 这里原来是第三套实现（scutil --proxy 读全局，只认 127.0.0.1），

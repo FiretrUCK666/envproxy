@@ -409,7 +409,7 @@ Menu `5` is where these live. It holds three unrelated things, each solving one 
 | Module | When you need it | What it does |
 |---|---|---|
 | **One program, one rule** | One program should use the proxy, or not | Builds an icon that sets up the env |
-| **Browser proxy repair** | The browser cannot open pages | Clears a proxy to a closed program |
+| **Network and proxy repair** | Pages or terminals fail | Clears a leftover to a closed program |
 | **Places this tool cannot reach** | You want WSL or Docker to use it too | Explains only, changes nothing |
 
 Each one below.
@@ -787,7 +787,7 @@ The behaviour and what each item affects are the same as Windows, and so are the
 
 **`5 Advanced` has 4 items on Mac and 7 on Windows.** The first 3 share the same name on both (make a proxied
 icon, make a direct icon, manage what you made). **From item 4 onward the meanings diverge** — Windows item 4 is
-"view relay" (read only, changes nothing) while Mac item 4 is "browser proxy repair" (it changes system settings).
+"view relay" (read only, changes nothing) while Mac item 4 is "network and proxy repair" (it changes system settings).
 So do not match items across platforms by number; match by name.
 
 Mac lacks these 3: **view relay** (Windows uses a fixed entry to survive a changing proxy port; Mac solves that

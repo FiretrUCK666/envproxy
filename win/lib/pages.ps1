@@ -168,7 +168,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
             '指向本机一个已经关掉的程序（浏览器会打不开网页）'
         }
         & $row $StatusLabels.SysProxy ($spText + '。不是本工具写的。') 'warn'
-        & $line ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选浏览器代理修复。') 'dim'
+        & $line ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络与代理修复。') 'dim'
     }
     # ---- 第四组：终端同步 ----
     # 话术从 Get-TermSyncText 取，与静态页同源
@@ -632,7 +632,7 @@ function Get-StatusSnapshot {
         # 处理方式不同——前者等监控自愈，后者要人看一眼变量被谁改坏了。
     }
     # 系统代理是浏览器的世界，不是我们写的，但用户常把它的毛病算到我们头上。
-    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它（动它是「浏览器代理修复」的活）。
+    # 若它指向本机死端口，浏览器全挂而终端正常——提醒一句，绝不动它（动它是「网络与代理修复」的活）。
     #
     # 判据**只有一处实现**：doctor 层的 Get-SystemProxyLayers + Get-SystemProxyVerdict。
     # 这里原来内联了一小段（只认 ProxyEnable + 127.0.0.1 + 端口死活），
@@ -645,7 +645,7 @@ function Get-StatusSnapshot {
         $spBad = @($spLayers | Where-Object { Test-FindingFixable $_.Kind })
         if ($spBad.Count -gt 0) {
             # 只报第一个：状态页那一行是一句话，列一长串会读不下去。
-            # 详细的几项留给「浏览器代理修复」那一屏。
+            # 详细的几项留给「网络与代理修复」那一屏。
             $st.SysProxy = @{ Server = $spBad[0].Url; Port = $spBad[0].Port; Kind = $spBad[0].Kind; Count = $spBad.Count }
         }
     } catch {}
@@ -811,7 +811,7 @@ function Show-StatusSnapshot($st) {
         Write-StatusRow $StatusLabels.SysProxy ($spText2 + '。不是本工具写的。') 'warn'
         # 这一行是"怎么处理"的说明，与它上面那条结论不该同级；
         # 都是 warn 会让整段看起来像两个错误，实际是"一个问题 + 一条办法"。mac 侧本来就是 dim。
-        Write-Styled 'dim' ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选浏览器代理修复。')
+        Write-Styled 'dim' ('  这一项可以自己修：菜单选 ' + (Get-MenuKey 'Advanced') + '（' + (Get-MenuName 'Advanced') + '），再选网络与代理修复。')
     }
     # ---- 参考信息：正常项各占一行，用 ok 色方便一眼确认核心链路是通的 ----
     #

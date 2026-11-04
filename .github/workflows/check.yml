@@ -2835,10 +2835,10 @@ jobs:
           # 但本地跑门禁正是最需要拦住的时候。用 git hash-object -w 先把工作区这一份
           # 写成 blob 再量，既能拿到"提交后会是多大"，也不受检出时 LF/CRLF 影响——
           # 与原来量 blob 的口径完全一致，只是换成了正确的对象。
-          $limit = 64 * 1024
+          $limit = 58 * 1024
           $blob = (git hash-object -w -- AGENTS.md).Trim()
           $size = [int](git cat-file -s $blob)
-          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（64 KB）" -f $size, $limit)
+          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（58 KB）" -f $size, $limit)
           if ($size -gt $limit) {
             Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
             exit 1
