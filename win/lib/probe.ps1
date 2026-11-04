@@ -400,10 +400,11 @@ function Test-HttpProxy([int]$Port) {
 #   而它恰恰是使用者**正在跑**的代理，只是上游节点不通。
 # 502 的正确含义是"我是代理，但我连不上你让我连的地方"，它与"这不是 HTTP"必须分开。
 #
-# 五类：
+# 七类：
 #   proxy-ok        回 HTTP/1.x 200  → 真是代理且链路可用
 #   proxy-auth      回 407            → 真是代理，要认证（也是活的代理）
-#   upstream-fail   回 5xx / 4xx      → 真是代理，但上游有问题（节点挂了、被墙）
+#   upstream-fail   回 5xx            → 真是代理，但上游有问题（节点挂了、被墙）
+#   refused         回 3xx / 其余 4xx → 它说 HTTP，但这次拒绝建隧道
 #   not-http        回了东西但不是 HTTP 应答 → 不是代理（普通程序占了端口）
 #   silent          连上了但一言不发 → 不是代理（或是不认 CONNECT 的纯 SOCKS 口）
 #   closed          连都连不上 → 端口没人听
@@ -411,6 +412,7 @@ $ConnectHandshakeKinds = @{
     Ok           = 'proxy-ok'
     Auth         = 'proxy-auth'
     UpstreamFail = 'upstream-fail'
+    Refused      = 'refused'
     NotHttp      = 'not-http'
     Silent       = 'silent'
     Closed       = 'closed'
@@ -424,13 +426,16 @@ function Get-HandshakeKind([string]$Response) {
     if ($Response -match "^\s*HTTP/1\.[01]\s+407(?:\s|$)") { return $ConnectHandshakeKinds.Auth }
     # 4xx/5xx：它**是**一个会说 HTTP 的东西，只是这次拒绝或失败。
     # 不能归进"不是代理"——那会把节点不通误判成端口残留。
-    if ($Response -match "^\s*HTTP/1\.[01]\s+[45]\d\d(?:\s|$)") { return $ConnectHandshakeKinds.UpstreamFail }
-    # 有字节但不成 HTTP 应答：普通服务（数据库、开发服务器、MUD 之类）。
-    if ($Response -match '^\s*HTTP/1\.[01]\s+\d{3}') { return $ConnectHandshakeKinds.UpstreamFail }
+    if ($Response -match "^\s*HTTP/1\.[01]\s+5\d\d(?:\s|$)") { return $ConnectHandshakeKinds.UpstreamFail }
+    # 3xx 与其余 4xx：它确实说 HTTP，但这次没答应建隧道——归"拒绝"，不归"上游坏了"。
+    if ($Response -match '^\s*HTTP/1\.[01]\s+[34]\d\d') { return $ConnectHandshakeKinds.Refused }
+    # 别的状态码（1xx/2xx 里非 200）：同样是"说了 HTTP 但这次不成"。
+    # **必须恰好三位且后面是空格或行尾**：\d{3} 会放过 "2000"，那不是状态码，要落到 not-http。
+    if ($Response -match '^\s*HTTP/1\.[01]\s+\d{3}(?:\s|$)') { return $ConnectHandshakeKinds.Refused }
     return $ConnectHandshakeKinds.NotHttp
 }
 
-# 对一个端口做握手，返回五分类之一。与 Test-HttpProxy 走同一条连接逻辑，只是结论更细。
+# 对一个端口做握手，返回七分类之一。与 Test-HttpProxy 走同一条连接逻辑，只是结论更细。
 function Get-ConnectHandshakeKind([int]$Port, [int]$TimeoutMs = 600) {
     if ($Port -le 0) { return $ConnectHandshakeKinds.Closed }
     $client = $null

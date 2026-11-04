@@ -638,6 +638,7 @@ function Get-SysProxyEvidenceText([string]$Handshake, [string]$OwnerName, [bool]
         'proxy-ok'        { $parts += '它应答了代理握手，确实在工作' }
         'proxy-auth'      { $parts += '它要求密码，是个正经代理' }
         'upstream-fail'   { $parts += '它是代理，但连不上你要访问的地方（多半是节点问题）' }
+        'refused'         { $parts += '它说 HTTP，但这次不答应建隧道（不是代理，或者它只服务特定地址）' }
         'not-http'        { $parts += '它不像代理，更像别的程序占着这个端口' }
         'silent'          { $parts += '它连上了但不应答代理握手' }
     }

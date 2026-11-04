@@ -4,6 +4,22 @@
 # 断言全部落在**机制**上，不落在某个检查器的名字上：删掉任何一层，这几条仍然成立。
 try { Assert-DoctorInspectors; Write-Host '  PASS inspector table: every declared function exists' }
 catch { Write-Host ('  FAIL inspector table: ' + $_.Exception.Message); $script:fails++ }
+# 握手分类：3xx 与 5xx 必须分开。
+# 原来两者都归 upstream-fail，于是"某个 web 服务回了 302"会被解释成
+# "它是代理，但上游坏了"——方向错了，而且将来谁拿这几类做授权判断就会误判。
+$hk = @(
+  @{ R='HTTP/1.1 200 Connection established';      W='proxy-ok' },
+  @{ R='HTTP/1.1 407 Proxy Authentication Required'; W='proxy-auth' },
+  @{ R='HTTP/1.1 502 Bad Gateway';                 W='upstream-fail' },
+  @{ R='HTTP/1.1 302 Found';                       W='refused' },
+  @{ R='HTTP/1.1 403 Forbidden';                   W='refused' },
+  @{ R='HTTP/1.1 2000 NotAStatus';                 W='not-http' },
+  @{ R='SSH-2.0-OpenSSH_8.9';                      W='not-http' },
+  @{ R='';                                         W='silent' }
+)
+foreach ($c in $hk) {
+    Assert-Eq ("handshake: " + $c.R) $c.W $c.W (Get-HandshakeKind $c.R)
+}
 Assert-Eq 'inspector: the registry is non-empty' $true (@($DoctorInspectors).Count -gt 0)
 # 每个描述符必须有这五列。缺 Id 会让还原点分不清是谁的，缺 Detect 会让那一层静默消失。
 foreach ($d in @($DoctorInspectors)) {

@@ -134,7 +134,9 @@ Write-Host '[29] Handshake classification, port ownership, client catalog'
 Assert-Eq 'handshake: 200 is proxy-ok' 'proxy-ok' (Get-HandshakeKind 'HTTP/1.1 200 Connection established')
 Assert-Eq 'handshake: 407 is proxy-auth' 'proxy-auth' (Get-HandshakeKind 'HTTP/1.1 407 Proxy Authentication Required')
 Assert-Eq 'handshake: 502 is upstream-fail, not "not a proxy"' 'upstream-fail' (Get-HandshakeKind 'HTTP/1.1 502 Bad Gateway')
-Assert-Eq 'handshake: 403 is upstream-fail too' 'upstream-fail' (Get-HandshakeKind 'HTTP/1.0 403 Forbidden')
+Assert-Eq 'handshake: 403 is refused, not upstream-fail' 'refused' (Get-HandshakeKind 'HTTP/1.0 403 Forbidden')
+# 3xx 与 5xx 必须分开：3xx 是这个端口拒绝建隧道，5xx 才是代理连不上上游。
+Assert-Eq 'handshake: 302 is refused too' 'refused' (Get-HandshakeKind 'HTTP/1.1 302 Found')
 Assert-Eq 'handshake: an SSH banner is not-http' 'not-http' (Get-HandshakeKind 'SSH-2.0-OpenSSH_9.0')
 Assert-Eq 'handshake: silence is silent' 'silent' (Get-HandshakeKind '')
 Assert-Eq 'handshake: 2000 is never read as proxy-ok' $false ((Get-HandshakeKind 'HTTP/1.1 2000 weird') -eq 'proxy-ok')
@@ -235,8 +237,8 @@ $snapFile = Join-Path ([System.IO.Path]::GetTempPath()) ('snaptest-' + [guid]::N
 # 但那是执行顺序的巧合，不是契约：任何排在它后面的用例都会读到一个**已被删除**
 # 的快照路径（Write-StateSnapshot 会往那个路径写，Read-StateSnapshot 读不到）。
 # 症状会是"新加的用例莫名其妙红"，而根因在另一个文件里。
-$__savedSnapFile = $global:StateSnapshotFile
-$global:StateSnapshotFile = $snapFile
+$__savedSnapFile = $script:StateSnapshotFile
+$script:StateSnapshotFile = $snapFile
 try {
     Write-StateSnapshot -State 'on:7078' -PrevState 'off' -PendingState '' -PendingCount 0 `
         -PortEnumeration 'ok' -PortReason '' -VarsMatch 'yes' -ApplyResult 'ok' -NodeHandshake 'upstream-fail'
@@ -246,7 +248,7 @@ try {
     # 模拟老版本监控写下的快照（没有这个字段）：必须仍判 ok，字段留空 = 不知道。
     $oldBody = @"
 # envproxy-snapshot 1
-written=$(([DateTimeOffset]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ'))
+written=$([DateTimeOffset]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture))
 round=5
 pid=1234
 state=on:7078
@@ -260,12 +262,12 @@ apply_result=ok
 log_tail=hi
 "@
     [System.IO.File]::WriteAllText($snapFile, $oldBody, (New-Object System.Text.UTF8Encoding($false)))
-    Get-Content $snapFile -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("    [" + $_ + "]") }
     $snapOld = Read-StateSnapshot
+    $rd = [System.IO.File]::ReadAllText($script:StateSnapshotFile, [System.Text.Encoding]::UTF8)
     Assert-Eq 'snapshot: an older snapshot is not judged damaged' 'ok' ([string]$snapOld.Status)
     Assert-Eq 'snapshot: a missing handshake reads as unknown, not as fine' '' ([string]$snapOld.NodeHandshake)
 } finally {
-    $global:StateSnapshotFile = $__savedSnapFile
+    $script:StateSnapshotFile = $__savedSnapFile
     Remove-Item -LiteralPath $snapFile -Force -ErrorAction SilentlyContinue
 }
 

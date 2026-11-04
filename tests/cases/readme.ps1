@@ -362,9 +362,12 @@ Write-Host '--- 状态快照 ---'
 
 $snapDir = New-TempDir 'ep-snap-'
 $snapFile = Join-Path $snapDir 'state.snapshot'
-    $realSnapFile = $global:StateSnapshotFile
 try {
-    $global:StateSnapshotFile = $snapFile
+    # **必须用 $script: 前缀**：这个变量由 shell.ps1 在脚本作用域里定义，
+    # 写 $global: 读到的是空——保存下来是空、finally 里再赋回去就把全局设成空，
+    # 后果：排在这一组之后的用例（doctor）读到一个空路径，快照一律判 damaged。
+    $script:__realSnapFile = $script:StateSnapshotFile
+    $script:StateSnapshotFile = $snapFile
 
     # 没有文件 = none（不是 damaged，也不是「空快照」）
     Assert-Eq '快照：没有文件判 none' 'none' (Read-StateSnapshot).Status
@@ -435,7 +438,8 @@ try {
     Assert-Eq '报告脱敏：只动 userinfo，不动主机端口' $true ((Hide-ProxyCredential '代理变量 : 已注入 (http://u:p@h:1)') -eq '代理变量 : 已注入 (http://***@h:1)')
     Assert-Eq '快照：最旧阈值等于心跳上限' $HeartbeatMaxSec $SnapshotStaleSec
 } finally {
-    $global:StateSnapshotFile = $realSnapFile
+    $script:StateSnapshotFile = $script:__realSnapFile
+    Remove-Variable -Name __realSnapFile -Scope Script -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $snapDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 

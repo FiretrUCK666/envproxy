@@ -312,7 +312,11 @@ function Read-StateSnapshot {
         $r.Reason = $_.Exception.Message
         return $r
     }
-    $lines = @($text -split "`n")
+    # **行尾的 CR 必须去掉**：Windows 上写出来的文件是 CRLF，
+    # 按 \n 切完每行末尾还留着一个 \r。它会让 `written` 这种精确匹配的值永远对不上
+    # （ParseExact 当场失败 → 整份快照被判 damaged），也让所有字符串字段带着不可见字符。
+    # 原来只有 ParseExact 那一处会因此失败，其余字段悄悄带着 \r 参与比较。
+    $lines = @(($text -split "`n") | ForEach-Object { $_.TrimEnd([char]13) })
     if ($lines.Count -lt 2 -or $lines[0].Trim() -ne '# envproxy-snapshot 1') {
         $r.Status = 'damaged'; $r.Reason = '首行格式标记不对'; return $r
     }

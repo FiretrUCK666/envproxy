@@ -341,7 +341,7 @@ _handshake_at() {
     printf '%s' "$_ha_resp" | grep -qE '^HTTP/1\.[01] +200( |$)'
 }
 
-# CONNECT 握手结果的**五分类**（给救援层判"这个端口到底是什么"用）。
+# CONNECT 握手结果的**七分类**（给救援层判"这个端口到底是什么"用）。
 #
 # 为什么不能沿用 _handshake_at 的布尔：它只回答"能不能拿去注入"，
 # 而救援要回答"这个端口是不是真代理、它现在为什么不能用"。两者不是同一个问题。
@@ -350,7 +350,7 @@ _handshake_at() {
 #   而它恰恰是使用者**正在跑**的代理，只是上游节点不通。
 #   "我是代理但连不上" 与 "我根本不是 HTTP" 必须分开。
 #
-# 输出：proxy-ok / proxy-auth / upstream-fail / not-http / silent / closed
+# 输出：proxy-ok / proxy-auth / upstream-fail / refused / not-http / silent / closed
 # 与 Windows 侧同一套词，门禁 6 核对。
 handshake_kind_text() {
     # $1 = 一行应答原文
@@ -360,14 +360,16 @@ handshake_kind_text() {
     # 状态码整段比对：写成以 200 结尾会让 "2000" 也匹配上。
     if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +200( |$)'; then printf 'proxy-ok'; return 0; fi
     if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +407( |$)'; then printf 'proxy-auth'; return 0; fi
-    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[45][0-9][0-9]( |$)'; then printf 'upstream-fail'; return 0; fi
-    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[0-9]{3}'; then printf 'upstream-fail'; return 0; fi
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +5[0-9][0-9]( |$)'; then printf 'upstream-fail'; return 0; fi
+    # 3xx 与其余 4xx：它确实说 HTTP，但这次没答应建隧道——归「拒绝」，不归「上游坏了」。
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[34][0-9][0-9]'; then printf 'refused'; return 0; fi
+    # 别的状态码（1xx/2xx 里非 200），**恰好三位**：\d{3} 会放过 "2000"，那不是状态码。
+    if printf '%s' "$1" | grep -qE '^HTTP/1\.[01] +[0-9]{3}( |$)'; then printf 'refused'; return 0; fi
     printf 'not-http'
 }
 
-# 对一个端口做握手，输出五分类之一。与 _handshake_at 走同一条连接路径。
+# 对一个端口做握手，输出七分类之一。与 _handshake_at 走同一条连接路径。
 handshake_kind_at() {
-    # 端口 0 或空：没有可以连的东西
     case "${2:-}" in ''|0) printf 'closed'; return 0 ;; esac
     _hkres=""
     if nc_supports_G; then

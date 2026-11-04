@@ -2324,10 +2324,11 @@ EOF
     _selftest_assert_eq "握手：200 是 proxy-ok" "proxy-ok" "$(handshake_kind_text 'HTTP/1.1 200 Connection established')"
     _selftest_assert_eq "握手：407 是 proxy-auth" "proxy-auth" "$(handshake_kind_text 'HTTP/1.1 407 Proxy Authentication Required')"
     _selftest_assert_eq "握手：502 是 upstream-fail（不能当成「不是代理」）" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 502 Bad Gateway')"
-    _selftest_assert_eq "握手：403 也是 upstream-fail" "upstream-fail" "$(handshake_kind_text 'HTTP/1.0 403 Forbidden')"
+    _selftest_assert_eq "握手：403 是 refused（不是上游坏了）" "refused" "$(handshake_kind_text 'HTTP/1.0 403 Forbidden')"
+    _selftest_assert_eq "握手：302 也是 refused" "refused" "$(handshake_kind_text 'HTTP/1.1 302 Found')"
     _selftest_assert_eq "握手：SSH 横幅是 not-http" "not-http" "$(handshake_kind_text 'SSH-2.0-OpenSSH_9.0')"
     _selftest_assert_eq "握手：没回话是 silent" "silent" "$(handshake_kind_text '')"
-    _selftest_assert_eq "握手：2000 绝不能被读成 200" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 2000 weird')"
+    _selftest_assert_eq "握手：2000 绝不能被读成 200" "not-http" "$(handshake_kind_text 'HTTP/1.1 2000 weird')"
 
     # 救援页那一档必须同时要求「活着」+「握手说上游失败」。
     #

@@ -231,6 +231,8 @@ get_sysproxy_findings() {
                 _gsf_reason="$_gsf_reason　它连不上外面（节点可能挂了）。" ;;
             proxy-auth)
                 _gsf_reason="$_gsf_reason　它要求密码，是个正经代理。" ;;
+            refused)
+                _gsf_reason="$_gsf_reason　它说 HTTP，但这次不答应建隧道（不是代理，或者它只服务特定地址）。" ;;
             not-http)
                 _gsf_reason="$_gsf_reason　它不像代理，更像别的程序占着这个端口。" ;;
             silent)
