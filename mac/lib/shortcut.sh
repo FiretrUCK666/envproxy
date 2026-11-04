@@ -497,10 +497,12 @@ _shortcut_manage_page() {
         echo ""
         _sm_recs=$(_shortcut_records)
         if [ -z "$_sm_recs" ]; then
-            # 编号从表里取，不写死：高级功能重排后写死的数字会指向别的项。
-    style_out dim "  还没有建过。先回上一页改 $(advanced_ref NewProxyIcon) 或 $(advanced_ref NewDirectIcon) 建一个。"
+            # 这里说「上面前两项」而不是取编号：本层不持有高级功能表，
+            # 调 help.sh 的 advanced_ref 会形成 help->shortcut->help 环
+            # （门禁 1 的依赖检查会当场拦住）。上一页只有这两项是建，
+            # 措辞上按位置说，重排也不影响读者找到它们。
+            style_out dim "  还没有建过。先回上一页，选带「翻墙」或「直连」的那两项之一建一个。"
             echo ""
-            style_out dim "  按回车返回"
             _sm_x=""
             read -r _sm_x 2>/dev/null || return 0
             return 0

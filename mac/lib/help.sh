@@ -932,20 +932,6 @@ _adv_field() {
 #
 # 同时带回这一项的 Kind（第 5 列，do / read）：调用方据此决定要不要拿操作锁。
 # 从表里取而不是在分派处写死编号——以后加新项只要标了 do 就自动受保护。
-# 按 Action 取「选 N（名字）」这句话，与 Windows 侧 Get-AdvancedRef 同义。
-# 写死的数字在表一重排就指向别的项，而屏幕上看起来完全正常。
-advanced_ref() {
-    for _ar_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
-        _adv_field "$_ar_i" 2 || continue
-        [ "$_adv_out" = "$1" ] || continue
-        _adv_field "$_ar_i" 1 || return 1
-        _ar_k=$_adv_out
-        _adv_field "$_ar_i" 6 || return 1
-        printf '选 %s（%s）' "$_ar_k" "$_adv_out"
-        return 0
-    done
-    return 1
-}
 _advanced_handler_for() {
     _ahf_kind=""
     for _ahf_i in ${ADVANCED_ITEMS[@]+"${ADVANCED_ITEMS[@]}"}; do
