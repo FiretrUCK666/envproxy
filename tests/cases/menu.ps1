@@ -182,6 +182,21 @@ foreach ($t in $helpTopics) {
         $tooWide = $ln; break
     }
     Assert-Eq ('topic ' + $t.Key + ' has no line wider than 80 columns') '' $tooWide
+    # 高级功能那一屏同样是用户逐行读的，同样会折行——上面这轮只查帮助主题，
+    # 管不到它。实测「5 网络与代理修复」那行曾到 82 列：名字和说明分家，
+    # 后半截顶到最左边，整屏结构就散了。
+    $advWide = ''
+    foreach ($al in (Get-AdvancedPageLines)) {
+        $atext = ''
+        if ($al -is [string]) { $atext = $al }
+        elseif ($al -is [hashtable] -and $al.ContainsKey('Segments')) {
+            foreach ($s in $al.Segments) { $atext += [string]$s.Text }
+        }
+        if (-not $atext) { continue }
+        if ((Get-DisplayWidth $atext) -le 80) { continue }
+        $advWide = $atext; break
+    }
+    Assert-Eq 'advanced page has no line wider than 80 columns' '' $advWide
     # 4) 不许混进本机的绝对路径：那一屏是给别人看的，写死 C:\Users\某人 会让别人困惑，
     #    换台机器就失准。$PROFILE 这类环境自带变量才是正确写法。
     $absPath = ''

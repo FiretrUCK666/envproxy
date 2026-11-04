@@ -1057,7 +1057,7 @@ $AdvancedItems = @(
        Name='查看中继';                 Hint='图标用的那个固定地址，现在怎么样；只看不改'
        Handler='Show-RelayPage' }
     @{ Key='5'; Action='Rescue';        Module='rescue'; Kind='do'
-       Name='网络与代理修复';           Hint='网页、终端工具连不上网的时候，先来这里查一下'
+       Name='网络与代理修复';           Hint='网页或终端工具连不上网时，先来这里查'
        Handler='Show-RescuePage' }
     @{ Key='6'; Action='WslGuide';      Module='guide';  Kind='read'
        Name='WSL 里也想翻墙';           Hint='要改一个系统设置，这里只讲怎么改'

@@ -907,7 +907,7 @@ ADVANCED_ITEMS=(
     '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建固定走代理的快捷方式|挑一个已装的程序'
     '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
-    '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页、终端工具连不上网的时候，先来这里查一下'
+    '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页或终端工具连不上网时，先来这里查'
 )
 
 # 取一行里第 N 段，结果写进 _adv_out。段不存在时返回 1。
