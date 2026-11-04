@@ -598,6 +598,30 @@ jobs:
             Write-Host '若左侧（工作区）多了东西：那个顶层文件/目录还没提交，或该进包却没进。'
             exit 1
           }
+          # **上面那个 Compare-Object 是同义反复，拦不住漏标。**
+          # $repoTop 本身就由「git 顶层 − export-ignore」算出，而 git archive 用的是
+          # 同一份 .gitattributes，于是两边永远相等：新增一个没标 export-ignore 的
+          # NOTES.md，预期里有它、包里也有它，门禁照样绿（构造过这个反例）。
+          # 所以另立一条**不依赖 .gitattributes** 的判据，判据来自命名约定。
+          $ignSet = @($ignAll | ForEach-Object { $_.Trim('/') })
+          $mustShip = @('README.md', 'README.en.md', 'LICENSE', 'VERSION', 'release-notes', 'assets', 'win', 'mac')
+          $looksInternal = @()
+          foreach ($top in @(git ls-tree --name-only HEAD)) {
+            $top = $top.TrimEnd('/')
+            if (-not $top) { continue }
+            if ($mustShip -contains $top) { continue }
+            if ($ignSet -contains $top) { continue }
+            if ($top -match '^\.' -or $top -match '\.(md|txt)$' -or $top -match '^(tests?|docs?|scripts?|tools?)$') {
+              $looksInternal += $top
+            }
+          }
+          if ($looksInternal.Count -gt 0) {
+            Write-Host '这些顶层条目看着是仓库内部文件，却没有 export-ignore（会随包发给用户）：'
+            $looksInternal | ForEach-Object { Write-Host ("  " + $_) }
+            Write-Host '修法：在 .gitattributes 里补一行 /名字 export-ignore。'
+            exit 1
+          }
+
           $bad = @($entries | Where-Object { $_ -match '^(win|mac)/monitor/' })
           if ($bad) { Write-Host '运行时目录进了安装包：'; $bad | ForEach-Object { Write-Host "  $_" }; exit 1 }
           # 双向：包内文件集必须等于"仓库文件集 − export-ignore"（目录内部的新文件也不能静默进包）。
@@ -686,9 +710,9 @@ jobs:
             foreach ($line in (Get-Content -LiteralPath $f.FullName -Encoding UTF8)) {
               $ln++
               $trimmed = $line.Trim()
-              if ($trimmed -eq "'@" -or $trimmed -eq '"@') { $inHere = $false; continue }
+              if ($trimmed -match "^'@(\s|$)" -or $trimmed -match '^"@(\s|$)' ) { $inHere = $false; continue }
               if ($inHere) { continue }
-              if ($trimmed.EndsWith("@'") -or $trimmed.EndsWith('@"')) { $inHere = $true; continue }
+              if (($trimmed -match "(^|[\s=,\(])@'$") -or ($trimmed -match '(^|[\s=,\(])@"$')) { $inHere = $true; continue }
               # 再排除「字符串数组里的模板正文」：profile 块的内容是按行写成 '....', 的字符串数组，
               # 那些行同样不是本文件的代码（它们会被原样写进用户的配置文件），
               # 里面的引号形态由被生成的内容决定，不能拿本文件的规则去套。
@@ -2753,7 +2777,9 @@ jobs:
             Write-Host 'G-C：两侧没有任何同 Action 的项，说明表结构没对齐'; $fail = 1
           }
 
-          if ($fail) { exit 1 }
+          # **不许在这里 exit。** G-D 段在这之后，提前退出会让整段变成死代码。
+          # 那种"看起来有人守着、实际没人守"比不写更危险：检查器表指错函数时
+          # 那一层会在界面上静默消失，而门禁是绿的。判失败统一挪到整步末尾。
           Write-Host ("高级功能表与处理器一致（Win {0} 项 / Mac {1} 项 / 共有 {2} 项）" -f $winItems.Count, $macItems.Count, $sharedCount)
           # ---- G-D：检查器注册表自洽 ----
           # 检查器层（insp）是「加一层网络检查 = 表里加一行」这条承诺的载体。
@@ -2838,6 +2864,9 @@ jobs:
             Write-Host ("检查器表：两侧的检查器不一致：Win [{0}] / Mac [{1}]" -f $winIds, $macIds)
             $fail = 1
           } else { Write-Host ("检查器表两侧一致：{0} 项（{1}）" -f $winInsp.Count, $winIds) }
+
+          # 整步只在这里判一次失败：G-A/G-B/G-C 与 G-D 都跑完了。
+          if ($fail) { exit 1 }
 
       - name: 门禁 7：AGENTS.md 体量上限
         shell: pwsh
