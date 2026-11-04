@@ -566,7 +566,13 @@ function Get-MonitorProcessFast {
         # 心跳却早就停更了；这种状态下状态页会一直说"运行中"，而环境变量再也不更新。
         # $HeartbeatMaxSec 就是为这件事存在的，这里必须真的用它。
         try {
+            # 心跳用文件 mtime，只能用墙上时钟（没有别的可用）。
+            # **年龄为负说明系统时间被往后调过**：那不是"监控死了"，是时钟的事。
+            # 直接把它当成"过旧"会让状态页在每次 NTP 校正后短暂报"未运行"，
+            # 而用户点一次安装就起了第二份（被单实例锁挡掉，白折腾一轮）。
+            # 负数按"刚写过"处理——这是两个错误里代价小的那一个。
             $beatAge = ((Get-Date) - (Get-Item -LiteralPath $HeartbeatFile).LastWriteTime).TotalSeconds
+            if ($beatAge -lt 0) { $beatAge = 0 }
             if ($beatAge -gt $HeartbeatMaxSec) { return $null }
         } catch { return $null }
 

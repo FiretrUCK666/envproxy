@@ -165,7 +165,15 @@ mono_tick() {
         _mn=$(perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%d", clock_gettime(CLOCK_MONOTONIC)' 2>/dev/null)
     fi
     case "$_mn" in
-        ''|*[!0-9]*) _mn=$(date +%s 2>/dev/null || echo 0) ;;
+        ''|*[!0-9]*)
+            # 退回墙上时钟：**只在第一次记一条**。这不是灾难（没装 perl 的机器只能这样），
+            # 但它是判定时刻的正确性降级：NTP 校时/夏令时/休眠唤醒都会让"两时刻相减"出错。
+            # 不记的话，出问题时没人知道这台机器上用的根本不是单调钟。
+            _mn=$(date +%s 2>/dev/null || echo 0)
+            if [ "${_MONO_FALLBACK_LOGGED:-0}" != "1" ]; then
+                _MONO_FALLBACK_LOGGED=1
+                log_msg "单调时钟不可用（perl 缺失或调用失败）：已退回墙上时钟，判定时刻可能受系统校时影响。" 2>/dev/null || true
+            fi ;;
     esac
     _MONO_LAST="$_mn"
     _MONO_READY=1

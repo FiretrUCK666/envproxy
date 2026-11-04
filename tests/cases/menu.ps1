@@ -25,6 +25,21 @@ Assert-Eq 'probe 层把失败原因交出来' $true ($probeSrc -match 'PortEnume
 Assert-Eq 'Get-ActiveProxyPort 不再有 NoLog 参数' $false ((Get-Command Get-ActiveProxyPort).Parameters.ContainsKey('NoLog'))
 $opsSrc = Get-AllLibSource
 Assert-Eq '状态页调探测时不传任何开关' $false ($opsSrc -match 'Get-ActiveProxyPort[^\r\n]*-NoLog')
+# 状态页开头：结论与下面那张表之间必须有一个空行。
+# 不加的话「一切正常，不用做任何事。」会顶着「监控进程：…」读，
+# 看起来像一个标签的两个部分——截图里就是这么被误读的。
+# 判据读的是渲染函数源码：`& $line '' 'text'` 出现在结论之后、监控行之前。
+$pageSrc = Get-AllLibSource
+$pgFn = [regex]::Match($pageSrc, '(?s)function Format-StatusLines.*?\n\}')
+Assert-Eq 'status page: the renderer is found' 'True' ([string]$pgFn.Success)
+if ($pgFn.Success) {
+    $g = $pgFn.Value
+    $iConc = $g.IndexOf('一切正常')
+    $iBlank = $g.IndexOf("& `$line '' 'text'", $iConc)
+    $iMon = $g.IndexOf('# 监控', $iConc)
+    Assert-Eq 'status page: a blank line separates the verdict from the table' 'True' `
+        ([string](($iBlank -gt $iConc) -and ($iBlank -lt $iMon)))
+}
 
 # 卸载必须把运行时状态清干净：漏一个就"没恢复到装之前"，而屏幕照样报"已完成"。
 # 具体后果（都实际发生过或差点发生）：

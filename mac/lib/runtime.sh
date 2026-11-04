@@ -1184,12 +1184,17 @@ run_monitor_loop() {
                         # 只写 127.0.0.1 的话，只绑 ::1 的代理（mihomo / sing-box 配
                         # bind-address: "::1"）在这里永远握手失败，快照记成 silent，
                         # 状态页于是对它显示"连不出去"——而它其实好的。
-                        # 取第一个有结果的：没结果（空）继续试下一个。
+                        #
+                        # **不能只看"非空"。** handshake_kind_at 对"连不上"也返回 silent
+                        # （非空），于是只绑 ::1 的代理在第一个地址上就 break，从不去试
+                        # 第二个地址，快照永远记成 silent。
                         for _snap_hs_addr in $LOOPBACK_PROBES; do
                             _snap_hs=$(handshake_kind_at "$_snap_hs_addr" "$_snap_hs_port" 2>/dev/null || echo "")
-                            [ -n "$_snap_hs" ] && break
+                            case "$_snap_hs" in
+                                ""|silent) continue ;;
+                                *) break ;;
+                            esac
                         done
-                        ;;
                 esac
                 ;;
         esac
