@@ -238,7 +238,8 @@ function Write-StateSnapshot {
         [string]$PortReason,
         [string]$VarsMatch,
         [string]$ApplyResult,
-        [string]$NodeHandshake = ''
+        [string]$NodeHandshake = '',
+        [int]$Round = -1
     )
     $lines = @()
     $lines += '# envproxy-snapshot 1'
@@ -246,10 +247,16 @@ function Write-StateSnapshot {
     # 仍可能给出 Kind=Local，于是同一个时刻被当成本地时间、年龄差出整整一个时区。
     # DateTimeOffset 明确带 Offset，写读两侧不会有歧义。
     $lines += 'written=' + ([DateTimeOffset]::UtcNow).ToString('yyyy-MM-ddTHH:mm:ssZ', [System.Globalization.CultureInfo]::InvariantCulture)
-    $round = 0
-    try { if ($null -ne $script:Round) { $round = [int]$script:Round } } catch { $round = 0 }
+    # round = **主循环轮次**，由调用方传进来。
+    # 不在这里读 $script:Round：那是探测层的计数器，Get-InUseProxyPort 也会推它，
+    # 于是同一字段两端涨得不一样快，"这份数据有没有在推进"的判断灵敏度就分叉了。
+    # 传不进来时才回退（自检与问题报告会不带参数地调它）。
+    $round = $Round
+    if ($round -lt 0) {
+        $round = 0
+        try { if ($null -ne $script:Round) { $round = [int]$script:Round } } catch { $round = 0 }
+    }
     $lines += 'round=' + $round
-    # 用 24340（PowerShell 自动变量，当前进程）；本地同名变量会遮蔽它，所以显式取一次
     $myPid = 0; try { $myPid = [int]$PID } catch { $myPid = 0 }
     $lines += 'pid=' + $myPid
     # 握手结论：只在**已经锁定端口**时才有值（那时端口是活的，握手不会等超时）。
@@ -816,7 +823,14 @@ function Run-MonitorLoop {
         Write-MonitorLog "启动对齐异常: $($_.Exception.Message)"
     }
 
+    # 主循环自己的轮次计数。
+    # **快照里的 round 用这一个，不用 probe 层的 $script:Round。**
+    # 那个是探测层的计数器，Get-InUseProxyPort 也会推它，所以它涨得比主循环快，
+    # 两端同一字段的增长步长就此不同——同一段"这份数据有没有在推进"的判断，
+    # 在 Windows 上比 macOS 敏感。mac 那边一直是主循环轮次，这里对齐它。
+    $loopRound = 0
     while (-not (Test-Item $StopFlag)) {
+        $loopRound++
         # 运行时目录自愈。它只在启动时建过一次，被外部删掉（清理工具、误删、同步软件）之后
         # 日志与 pid 文件就再也写不出来了：进程还在正常干活，状态页却因为读不到 pid 而报
         # "未运行"——用户看到的是"明明在跑却说没跑"，于是又去点安装，起第二份被单实例锁挡掉，
@@ -949,7 +963,7 @@ function Run-MonitorLoop {
                 }
                 Write-StateSnapshot -State $snapState -PrevState $snapPrev -PendingState $snapPending `
                     -PendingCount $pendingCount -PortEnumeration $snapEnum -PortReason $snapReason `
-                    -VarsMatch $snapVars -ApplyResult $lastApplyResult -NodeHandshake $snapHs
+                    -VarsMatch $snapVars -ApplyResult $lastApplyResult -NodeHandshake $snapHs -Round $loopRound
             } catch {}
 
             # 固定入口跟着当前代理走：每轮把"我们注入的那个值指向哪个端口"告诉中继。
