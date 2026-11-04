@@ -69,11 +69,21 @@ Assert-Eq '卸载: 工具目录只在空时才删（不碰使用者的东西）'
 # 操作锁必须能降级：有些受限会话/安全策略不让建 Global\ 对象。
 # 不降级的后果是 install/uninstall/stop/update 四个动作全部永久失败，
 # 而提示写的是「另一个安装正在进行」——一句假话，用户怎么重试都不会好。
-Assert-Eq 'lock: Global naming carries the user sid' 'True' `
-    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp'), '^Global\\EnvProxyInstallOp-S-')))
+# **判据不能写死 SID 后缀**：这个自检也在 Linux CI 上跑，那里没有
+# WindowsIdentity，Get-MutexName 会回落到无后缀的名字。写死 -S- 会让
+# 这两条在 CI 上必红，而本地（Windows）永远绿——正是"只在一个平台验过"。
+# 这里只钉两件真正跨平台的事：命名空间前缀对、名字对。
+# SID 只在 Windows 上才有意义，所以单独用条件断言。
+Assert-Eq 'lock: the global name carries the base' 'True' `
+    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp'), '^Global\\EnvProxyInstallOp')))
 Assert-Eq 'lock: the local fallback drops the Global prefix' 'True' `
-    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp' -Local), '^Local\\EnvProxyInstallOp-S-')))
-# 建不出来与"被别人占着"必须能分开：两件事的提示完全不同。
+    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp' -Local), '^Local\\EnvProxyInstallOp')))
+Assert-Eq 'lock: the two namespaces never produce the same name' 'False' `
+    ([string]((Get-MutexName 'EnvProxyInstallOp') -eq (Get-MutexName 'EnvProxyInstallOp' -Local)))
+if ($env:OS -eq 'Windows_NT') {
+    Assert-Eq 'lock: on Windows the name is scoped to the user sid' 'True' `
+        ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp'), '^Global\\EnvProxyInstallOp-S-')))
+}
 $entrySrc = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'envproxy.ps1'), [System.Text.Encoding]::UTF8)
 Assert-Eq 'lock: it tries the global namespace first, then the local one' 'True' `
     ([bool]([regex]::IsMatch($entrySrc, '(?s)foreach \(\$local in @\(\$false, \$true\)\)')))
