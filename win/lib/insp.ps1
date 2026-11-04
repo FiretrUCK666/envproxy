@@ -96,8 +96,6 @@ function Test-FindingRepairable($Finding) {
     if ($null -eq $Finding) { return $false }
     if (-not (Test-FindingFixable ([string]$Finding.Kind))) { return $false }
     # 检查器 Id 就是 Finding Id 里第一个点号之前的那一段（dns.loopback -> dns）。
-    # 别拿 Get-DoctorInspectorKey 来取：那是 CLI 目标表（git/npm/curl）的查找函数，
-    # 两件事同名不同物，用错时它返回空、于是「可修」被静默判成假。
     $inspId = ([string]$Finding.Id) -replace '\..*$', ''
     $insp = Get-DoctorInspector $inspId
     if ($null -eq $insp) { return $false }
@@ -105,6 +103,7 @@ function Test-FindingRepairable($Finding) {
     if (-not $fn) { return $false }
     return [bool](Test-Path -LiteralPath ('function:' + $fn))
 }
+
 function Invoke-DoctorCheck {
     param([switch]$Quick)
     $findings = New-Object System.Collections.ArrayList
@@ -490,7 +489,7 @@ function Repair-CliProxyConfig {
         }
         # 回读确认：那几项真的没了才算修好。不确认就报成功，
         # 就是屏幕上说修好了、git 还是连不上。
-        $target = Get-DoctorInspectorKey $targetId
+        $target = Get-CliProxyTarget $targetId
         if (-not $target) { [void]$res.Failed.Add($path); continue }
         $after = Read-CliProxyFile $target
         $left = 0
@@ -508,7 +507,7 @@ function Repair-CliProxyConfig {
 }
 
 # 按 Id 取 CLI 目标描述符（Repair 里回读要用它）。取不到返回 $null。
-function Get-DoctorInspectorKey([string]$TargetId) {
+function Get-CliProxyTarget([string]$TargetId) {
     foreach ($t in $CliProxyTargets) { if ($t.Id -eq $TargetId) { return $t } }
     return $null
 }
@@ -587,7 +586,7 @@ function ConvertFrom-DnsList([string]$Raw) {
 
 # 读当前活跃网卡的 DNS 两层。返回 @{ Ok; Adapter; Servers; ProfileServer; Problem }
 #
-# **只读注册表，不起外部进程**：netsh 的输出是按系统语言本地化的
+# **不靠解析 netsh 的文本**：netsh 的输出是按系统语言本地化的
 # （「静态配置的 DNS 服务器」/「Statically Configured」/「直接アクセス」……），
 # 靠匹配自然语言在非中文非英文的系统上必然失明。注册表值名是 ASCII 常量，
 # 与系统语言无关。
@@ -800,7 +799,9 @@ function Show-RescuePage {
     $managed  = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Managed })
     # 读不出来的一层不能静默消失，也不能混进「你没动」那一组（那组的语义是
     # 「东西在那儿、只是不归我碰」，而读不出来连是什么都不知道）。
-    $unreadable = @($findings | Where-Object { $_.Kind -eq $FindingKinds.Unreadable })
+    # **故意不渲染**：它不参与任何判断，纯粹是探测本身失败。
+    # 印出来只会让使用者看到「系统给的格式认不出来」这种他无法行动、也无需知道的话。
+    # 诊断信息归问题报告，那里的读者是排查的人，不是正在看病的使用者。
     # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
     # 拿不到握手时**不算**，绝不凭猜给用户指方向。
     $aliveBroken = @($findings | Where-Object {
