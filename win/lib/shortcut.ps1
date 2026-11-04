@@ -837,18 +837,22 @@ function Remove-ProxyShortcuts {
 # 按**显示宽度**取前 N 格，用于把长路径手动断行。
 #
 # 与 pages 层的 Limit-DisplayText 不同：那个会补省略号（它是"只显示一行"的场合），
-# 这里要的是"分段显示完整内容"，所以只切、不加标记，切点在字符边界上。
-# 为什么不能用 .Substring($n)：中文一字两格，按字符数切会让中文行超宽。
+# 这里要的是"分段显示完整内容"，所以只切、不加标记，切点在码位边界上。
+#
+# **必须按码位走，不能按 [char] 走**：emoji 是代理对，按码位二元切会切出
+# 半个字符（实测宽度 6 时切出 "微信" + 半个 emoji），屏幕上就是乱码方块。
 function Limit-DisplayTextWithTail([string]$Text, [int]$Width) {
     if (-not $Text) { return '' }
     if ($Width -le 1) { return $Text.Substring(0, 1) }
     $accW = 0
     $i = 0
-    foreach ($ch in $Text.ToCharArray()) {
-        $cw = Get-CharWidth $ch
+    while ($i -lt $Text.Length) {
+        $cp = [char]::ConvertToUtf32($Text, $i)
+        $len = if ($cp -gt 0xFFFF) { 2 } else { 1 }
+        $cw = Get-CodePointWidth $cp
         if ($accW + $cw -gt $Width) { break }
         $accW += $cw
-        $i++
+        $i += $len
     }
     if ($i -le 0) { $i = 1 }
     return $Text.Substring(0, $i)

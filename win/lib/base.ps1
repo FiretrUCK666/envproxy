@@ -901,22 +901,47 @@ function Test-CanPrompt {
 # 这是**唯一**的判据处：Get-DisplayWidth 与日志裁剪都调它。写成两份就会有一天
 # 两份算出两个宽度，症状是同一屏里两列对不齐、日志截得长短不一。
 # 与 Mac 侧 _display_width 同一条判据（门禁核对两端对同一批字符的结论相同）。
-function Get-CharWidth([char]$Ch) {
-    if ([int]$Ch -gt 0x2E80) { return 2 }
+# 单个码位占几格。
+#
+# **必须按码位判，不能按 [char]（UTF-16 码元）判**：emoji 是代理对，一个字符
+# 在 .NET 里是两个 [char]，逐个判会各算两格——实测 Get-DisplayWidth '😀' 得 4，
+# 而终端里只占 2 格，mac 侧同一字符算 2。两端对同一个字符算出不同宽度，
+# 菜单列就永远对不齐，路径折行会切在代理对中间切出乱码方块。
+#
+# 组合附加符（U+0300–U+036F）、零宽控制（U+200B–U+200F）、变体选择符（U+FE00–U+FE0F）
+# 一律算 0 格：它们叠在前一个字符上，终端不为它们留宽度。
+function Get-CodePointWidth([int]$Code) {
+    # 零宽：组合附加符、零宽空格/连接符、变体选择符
+    if (($Code -ge 0x0300 -and $Code -le 0x036F) -or
+        ($Code -ge 0x200B -and $Code -le 0x200F) -or
+        ($Code -ge 0xFE00 -and $Code -le 0xFE0F) -or
+        $Code -eq 0xFEFF) { return 0 }
+    if ($Code -gt 0x2E80) { return 2 }
     return 1
 }
 
-# 计算一段文字在终端里占几格：中日韩字符占两格，其余一格。
+# 兼容旧调用点：单字符（BMP 内）的宽度。
+# 只给那些确实一次一个 [char] 的地方用；算整行一律走 Get-DisplayWidth。
+function Get-CharWidth([char]$Ch) {
+    return (Get-CodePointWidth ([int]$Ch))
+}
+
+# 计算一段文字在终端里占几格：按码位遍历，代理对算一个字符。
 # 所有需要对齐的地方都走这一处。
 function Get-DisplayWidth([string]$Text) {
     if (-not $Text) { return 0 }
     # ANSI 颜色序列不占格子——终端把它当控制指令执行，屏幕上不留宽度。
     # 不剥掉就会把 ESC[36m 这类序列也算进去：实测一行 34 格的标题被算成 51 格，
     # 于是 Measure-ScreenFrame 误判"这帧太宽、画不下"而白白降级，日志裁剪也会截短。
-    # 渲染层的着色与度量必须在这一点上对齐。
     $clean = [regex]::Replace($Text, [string][char]27 + '\[[0-9;]*[A-Za-z]', '')
     $w = 0
-    foreach ($ch in $clean.ToCharArray()) { $w += (Get-CharWidth $ch) }
+    $i = 0
+    while ($i -lt $clean.Length) {
+        $cp = [char]::ConvertToUtf32($clean, $i)
+        $w += (Get-CodePointWidth $cp)
+        # 代理对占两个 [char]，指针要走两格
+        $i += $(if ($cp -gt 0xFFFF) { 2 } else { 1 })
+    }
     return $w
 }
 

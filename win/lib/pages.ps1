@@ -939,6 +939,8 @@ function Get-VersionText($st) {
 #
 # 为什么不用 .Length：中文一字两格。按字符数裁 78 会让中文密集的行实际占 90+ 格，
 # 在 80 列窗口里折行——而状态页是按逻辑行做绝对定位的，折行会让后面每行都错位。
+#
+# 按码位遍历，不按 [char]：emoji 是代理对，切一半会在屏幕上变成乱码方块。
 # 这是唯一实现：静态页的最近日志与实时页的日志段都调它，不许各写一份。
 function Limit-DisplayText([string]$Text, [int]$Width) {
     if (-not $Text) { return '' }
@@ -946,11 +948,15 @@ function Limit-DisplayText([string]$Text, [int]$Width) {
     if ((Get-DisplayWidth $Text) -le $Width) { return $Text }
     $acc = ''
     $accW = 0
-    foreach ($ch in $Text.ToCharArray()) {
-        $cw = Get-CharWidth $ch
+    $i = 0
+    while ($i -lt $Text.Length) {
+        $cp = [char]::ConvertToUtf32($Text, $i)
+        $len = if ($cp -gt 0xFFFF) { 2 } else { 1 }
+        $cw = Get-CodePointWidth $cp
         if ($accW + $cw -gt ($Width - 1)) { break }
-        $acc += $ch
+        $acc += $Text.Substring($i, $len)
         $accW += $cw
+        $i += $len
     }
     return $acc + '…'
 }

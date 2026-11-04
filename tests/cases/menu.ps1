@@ -197,6 +197,26 @@ foreach ($t in $helpTopics) {
         $advWide = $atext; break
     }
     Assert-Eq 'advanced page has no line wider than 80 columns' '' $advWide
+
+# 显示宽度必须按码位算，不能按 UTF-16 码元算。
+# emoji 是代理对：逐个 [char] 判会各算两格（实测 '😀' 得 4，而终端只占 2），
+# 两端对同一字符算出不同宽度，菜单列就永远对不齐。
+Assert-Eq 'width: emoji occupies two cells' 2 (Get-DisplayWidth ([char]::ConvertFromUtf32(0x1F600)))
+Assert-Eq 'width: emoji after CJK still adds two' 6 (Get-DisplayWidth ('微信' + [char]::ConvertFromUtf32(0x1F600)))
+Assert-Eq 'width: a combining mark adds nothing' 1 (Get-DisplayWidth ('e' + [char]0x301))
+Assert-Eq 'width: plain ASCII counts one each' 5 (Get-DisplayWidth 'abcde')
+# 剪切不许切出半个代理对：那样屏幕上就是乱码方块。
+$wide = '微信' + [char]::ConvertFromUtf32(0x1F600) + '测试'
+$brokenAt = ''
+foreach ($w in @(2, 3, 4, 5, 6, 7, 8)) {
+    foreach ($cut in @((Limit-DisplayTextWithTail $wide $w), (Limit-DisplayText $wide $w))) {
+        for ($i = 0; $i -lt $cut.Length; $i++) {
+            if ([char]::IsHighSurrogate($cut[$i]) -and ($i + 1 -ge $cut.Length -or -not [char]::IsLowSurrogate($cut[$i + 1]))) { $brokenAt = "w=$w" }
+            if ([char]::IsLowSurrogate($cut[$i]) -and ($i -eq 0 -or -not [char]::IsHighSurrogate($cut[$i - 1]))) { $brokenAt = "w=$w" }
+        }
+    }
+}
+Assert-Eq 'truncation never splits a surrogate pair' '' $brokenAt
     # 4) 不许混进本机的绝对路径：那一屏是给别人看的，写死 C:\Users\某人 会让别人困惑，
     #    换台机器就失准。$PROFILE 这类环境自带变量才是正确写法。
     $absPath = ''
