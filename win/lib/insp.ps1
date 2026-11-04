@@ -657,7 +657,8 @@ function Get-DnsFindings {
                 -Subject '网址解析' -Where ($st.Adapter + ' 的 DNS 设置') `
                 -Value ($profileList -join '、') `
                 -Reason ('你给「所有网络」设了 ' + ($profileList -join '、') + '，所以单独给某几个 Wi-Fi 设的 ' + ($servers -join '、') + ' 不会生效。') `
-                -Advice '两处都留着一个设置，系统只用其中一处。想统一就去系统设置里把多余的删掉；本工具不改 DNS。'))
+                -Advice '两处都留着一个设置，系统只用其中一处。想统一就去系统设置里把多余的删掉；本工具不改 DNS。' `
+                -Data @{ Tag = 'dns-conflict' }))
         }
     }
 
@@ -811,7 +812,10 @@ function Show-RescuePage {
     # ② 必须单独立一项：它既不该进「要修的」（按 y 什么都不会发生），
     #   也不能进「不归我碰的」（那是别人的设置，而这是我们看得见、只是没授权动）。
     # 漏了它这条记录就会从三个区里全部消失——比误报更难发现。
-    $hints = @($foreign | Where-Object { [string]$_.Reason -match '不会生效' })
+    # 判**结构化标记**，不判中文文案。
+    # 原来这里是 `Reason -match '不会生效'`：改一次措辞（「不会生效」写成「不生效」），
+    # 这条就从「只是提醒」掉进「不归我碰的」——不报错、不失败，静默换区。
+    $hints = @($foreign | Where-Object { [string]$_.Data.Tag -eq 'dns-conflict' })
     $hints += @($findings | Where-Object {
         (Test-FindingFixable $_.Kind) -and -not (Test-FindingRepairable $_)
     })

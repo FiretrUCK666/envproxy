@@ -144,6 +144,25 @@ finding_repairable() {
     [ -n "$_fr_fix" ] || return 1
     return 0
 }
+# 这条 Finding 属于「只是提醒」那一类吗（用户该知道，但本工具不改）？
+#
+# **判 Id，不判 Reason 里的中文。** 文案会改，判据不该跟着改：
+# 改一次措辞就静默换区，不报错也不失败，是最难查的那种坏法。
+# 与 Windows 侧 Finding.Data.Tag 是同一件事（那边用结构化字段，这边用 Id 后缀）。
+# 这条 Finding 是「端口活着、但连不上外面」那一档吗？
+# 判 Id 后缀，不判 Reason 里的中文（理由同 finding_is_hint）。
+finding_is_upstream_fail() {
+    case "${1:-}" in
+        *.upstreamfail) return 0 ;;
+    esac
+    return 1
+}
+finding_is_hint() {
+    case "${1:-}" in
+        *.overlay) return 0 ;;
+    esac
+    return 1
+}
 invoke_doctor_check() {
     _idc_quick="${1:-}"
     for _idc_row in ${DOCTOR_INSPECTORS[@]+"${DOCTOR_INSPECTORS[@]}"}; do
@@ -217,9 +236,16 @@ get_sysproxy_findings() {
             silent)
                 _gsf_reason="$_gsf_reason　它连上了但不应答代理握手。" ;;
         esac
-        finding_new "sysproxy.$_gsf_l" "$_gsf_kind" '浏览器代理' "$_gsf_where" \
+        # Id 后缀带上握手结论：界面上要认「端口活着但连不上外面」那一档，
+        # 靠的就是它。**不能靠 Reason 里的中文反推**——文案一改，那一档就不报了，
+        # 不报错也不失败。后缀是稳定的语义标识，措辞随便改。
+        _gsf_id="sysproxy.$_gsf_l"
+        case "${_gsf_hs:-}" in
+            upstream-fail) _gsf_id="$_gsf_id.upstreamfail" ;;
+        esac
+        finding_new "$_gsf_id" "$_gsf_kind" '浏览器代理' "$_gsf_where" \
             "${_gsf_url:-}" "$_gsf_reason" \
-            "$(get_sysproxy_advice "$_gsf_kind")" 'sysproxy'
+            "$(get_sysproxy_advice "$_gsf_kind")" ''
     done <<EOF
 $_gsf_layers
 EOF
@@ -761,18 +787,21 @@ show_rescue_page() {
                     finding_repairable "$_rs_kind" "$_rs_id" && _rs_slowing=$((_rs_slowing + 1)) ;;
                 "$FINDING_KIND_ALIVE")
                     _rs_alive=$((_rs_alive + 1))
-                    # 握手分类在那条 Finding 的 Reason 里（sysproxy 层用 get_sysproxy_reason 生成）。
-                    # 只有明确说了「连不上外面」才认这一档。
-                    case "$_rs_reason" in
-                        *'连不上外面'*|*'没有回应'*) _rs_alivebroken=$((_rs_alivebroken + 1)) ;;
-                    esac ;;
+                    # 这一档的判据由 get_sysproxy_findings 在产 Finding 时定（看握手结果），
+                    # 这里不再从 Reason 里反推中文。用 Id 后缀认那一档：
+                    # 文案会改，判据不该跟着改——改一次措辞就静默少报一档，不报错也不失败。
+                    finding_is_upstream_fail "$_rs_id" && _rs_alivebroken=$((_rs_alivebroken + 1)) ;;
                 "$FINDING_KIND_FOREIGN")
-                    # 带「不会生效」这类措辞的是设置冲突，属于「只是提醒」；
-                    # 其余 foreign 是「别人的东西，我没动」。
-                    case "$_rs_reason" in
-                        *'不会生效'*) _rs_hint=$((_rs_hint + 1)) ;;
-                        *) _rs_foreign=$((_rs_foreign + 1)) ;;
-                    esac ;;
+                    # 判**Id**，不判中文文案。
+                    # 原来这里是 `case $_rs_reason in *'不会生效'*)`：改一次措辞
+                    # （「不会生效」写成「不生效」）这条就静默换区，不报错也不失败。
+                    # 而且 mac 的 get_dns_findings 是空实现，那个匹配从来没有命中过——
+                    # 一条永远不成立的条件比没有条件更坏：它让人以为这里处理过。
+                    if finding_is_hint "$_rs_id"; then
+                        _rs_hint=$((_rs_hint + 1))
+                    else
+                        _rs_foreign=$((_rs_foreign + 1))
+                    fi ;;
                 "$FINDING_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
             esac
             finding_repairable "$_rs_kind" "$_rs_id" && _rs_fixable=$((_rs_fixable + 1))
@@ -829,10 +858,8 @@ EOF
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
             _rs_show=0
-            if [ "$_rs_kind" = "$FINDING_KIND_FOREIGN" ]; then
-                case "$_rs_reason" in
-                    *'不会生效'*) _rs_show=1 ;;
-                esac
+            if [ "$_rs_kind" = "$FINDING_KIND_FOREIGN" ] && finding_is_hint "$_rs_id"; then
+                _rs_show=1
             fi
             # 问题真实存在、但这一层没有 Fix 的（DNS 指向本机死端口就是）。
             # 它既不该进「要修的」，也不该进「不归我碰的」——漏了就会从三区里全部消失。
@@ -857,10 +884,8 @@ EOF
                 "$FINDING_KIND_MANAGED")
                     style_out dim "    [$_rs_subj]  （这台电脑由管理员统一管着）" ;;
                 "$FINDING_KIND_FOREIGN")
-                    case "$_rs_reason" in
-                        *'不会生效'*) : ;;
-                        *) style_out dim "    [$_rs_subj]  ${_rs_val:-（地址没读到）}" ;;
-                    esac ;;
+                    # 「只是提醒」的那种上面已经单独印过，这里不再重复数。判 Id，不判文案。
+                    finding_is_hint "$_rs_id" || style_out dim "    [$_rs_subj]  ${_rs_val:-（地址没读到）}" ;;
             esac
         done <<EOF
 $_rs_all
