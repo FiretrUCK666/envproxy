@@ -1109,7 +1109,15 @@ run_monitor_loop() {
         # 按轮计数而不是按秒：轮询节奏本身就是可变配置，写死秒数会随节奏改动而失准。
         if [ $_repair -ge 30 ]; then
             _repair=0
-            repair_autorun || true
+            # 自愈写的是全局位置（LaunchAgents、~/.envproxy），必须与 install/uninstall 互斥。
+            # 不互斥的后果：卸载先杀监控再删这些文件，中间有窗口；自愈恰好落进去
+            # 就会把它们重建回来，用户看到「卸了又回来了」。
+            # 拿不到锁就**跳过这一轮**（下轮再试），不报错：自愈是后台动作，撞上人工操作该让路。
+            _ar_lock="$LOCK_DIR/op.lock"
+            if acquire_op_lock "$_ar_lock"; then
+                repair_autorun || true
+                rm -f "$_ar_lock" 2>/dev/null || true
+            fi
             # 探测层的中断残留（Ctrl-C / 被杀 / 断电时来不及删的临时目录）。
             # 挂在这个周期里而不是每轮：它只是清扫，与正确性无关，不该占热路径。
             probe_clean_stale_temp || true

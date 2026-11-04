@@ -372,12 +372,37 @@ function Get-LogTailText([int]$Count = 4) {
 
 
 function Repair-AutoRun {
+    # **自愈写的是全局位置，必须与 install/uninstall 互斥。**
+    # 不互斥的后果具体：卸载先杀监控、再删 launcher 与 Run 键，中间有最长几秒的窗口；
+    # 监控每约 60–90 秒跑一轮自愈，恰好落进那个窗口就会把两者重建回来——
+    # 用户看到「卸了又回来了」。多份拷贝时两个监控还会互相重建对方位置的自启动项。
+    #
+    # 拿不到锁就**跳过这一轮**（下轮再试），不报错也不轮询：
+    # 自愈是后台动作，撞上人工操作时让路才是对的。
+    $autoLock = $null
+    try {
+        $autoLock = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp" -Local:$false))
+        if (-not $autoLock.WaitOne(0)) {
+            try { $autoLock.Dispose() } catch {}
+            return
+        }
+    } catch {
+        # Global 建不出来就降级；两个都不行就放弃本轮，绝不硬写。
+        try {
+            if ($autoLock) { $autoLock.Dispose() }
+            $autoLock = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp" -Local:$true))
+            if (-not $autoLock.WaitOne(0)) { try { $autoLock.Dispose() } catch {}; return }
+        } catch { return }
+    }
     try {
         $expected = Get-LauncherCommand
         $actual = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
         if ((-not (Test-LauncherCurrent)) -or $actual -ne $expected) {
             New-Item -Path $LauncherDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
-            [System.IO.File]::WriteAllText($LauncherPath, (Get-LauncherContent), (New-Object System.Text.UTF8Encoding($true)))
+            # 走 Write-Text（同目录临时文件 + 整体替换），不直接 WriteAllText：
+            # 写到一半被杀会留下半截 launcher.ps1，下次登录定位器跑不起来，
+            # 那个登录就白费了。Write-Text 是项目里唯一的原子写法。
+            Write-Text -Path $LauncherPath -Text (Get-LauncherContent) -WithBom $true
             Set-ItemProperty -Path $RunKeyPath -Name $RunKeyName -Value $expected -ErrorAction Stop
             # 写完必须读回：修没修成由复读决定，不由"我调用了写入"决定。
             $check = (Get-ItemProperty $RunKeyPath -ErrorAction Stop).$RunKeyName
@@ -389,6 +414,8 @@ function Repair-AutoRun {
         }
     } catch {
         try { Write-MonitorLog ("开机自启动修复失败：" + $_.Exception.Message) } catch {}
+    } finally {
+        if ($autoLock) { try { $autoLock.ReleaseMutex() } catch {}; try { $autoLock.Dispose() } catch {} }
     }
 }
 
