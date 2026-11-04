@@ -822,11 +822,22 @@ function Show-RescuePage {
         Write-Styled 'dim'  '          这多半是节点的问题。关掉重开代理软件，或者换一个节点。'
         $outOfScope = $true
     } else {
-        # 「几处」按本轮实际查过的层数说，不写死数字：写死的话，
-        # 某侧少查一层（mac 没有 DNS 检查）时这句话就是假的。
-        $checkedCount = @($DoctorInspectors | Where-Object { Test-Path -LiteralPath ('function:' + [string]$_.Detect) }).Count
-        Write-Styled 'ok' ('  查完了：这几处设置都没发现问题（共查了 {0} 处）。' -f $checkedCount)
-        $outOfScope = $true
+        # 「本工具不自动改、但问题确实存在」的那些（DNS 指向死端口就是）。
+        # **必须先于「没发现问题」判**：那三个计数只统计可修项，
+        # 所以 DNS 那种「Blocking 但没有 Fix」不会进任何一个——
+        # 落进 else 就成了"屏幕第一句说你没问题"，紧接着的提醒区却在说网页会打不开。
+        # 这类误报平安比不说更坏：它会让人排除掉唯一真实的原因。
+        $realButUnfixable = @($hints | Where-Object { Test-FindingFixable $_.Kind })
+        if ($realButUnfixable.Count -gt 0) {
+            Write-Styled 'warn' ('  查完了：发现 {0} 处问题，但本工具不自动改（见下面的提醒）。' -f $realButUnfixable.Count)
+            $outOfScope = $true
+        } else {
+            # 「几处」按本轮实际查过的层数说，不写死数字：写死的话，
+            # 某侧少查一层（mac 没有 DNS 检查）时这句话就是假的。
+            $checkedCount = @($DoctorInspectors | Where-Object { Test-Path -LiteralPath ('function:' + [string]$_.Detect) }).Count
+            Write-Styled 'ok' ('  查完了：这几处设置都没发现问题（共查了 {0} 处）。' -f $checkedCount)
+            $outOfScope = $true
+        }
     }
 
     # ---- 要修的那些行 ----

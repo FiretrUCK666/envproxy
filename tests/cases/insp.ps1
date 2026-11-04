@@ -52,6 +52,18 @@ Assert-Eq 'repairable: accepts the bare inspector id' 'True' `
     ([string](Test-FindingRepairable (New-Finding -Id 'sysproxy' -Kind 'residue-blocking')))
 Assert-Eq 'repairable: accepts a dotted finding id' 'True' `
     ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.git' -Kind 'residue-blocking')))
+# 「本工具不改、但问题真实存在」的记录必须能与「没问题」分开。
+# DNS 指向死端口就是这一类：Kind 是可修档（它确实在挡网络），但那一层没有 Fix。
+# 判据若只看 Kind，它会被算进「挡住网络」却修不了；只看 Fix，它会从三个区全部消失。
+# 两个都不对的方式都会让屏幕说错话，所以这里把两个维度分别钉住。
+$dnsFinding = New-Finding -Id 'dns.loopback' -Kind 'residue-blocking' -Subject '网址解析'
+Assert-Eq 'dns: its kind is in the repairable tier' 'True' ([string](Test-FindingFixable 'residue-blocking'))
+Assert-Eq 'dns: but the layer has no fix, so we may not touch it' 'False' ([string](Test-FindingRepairable $dnsFinding))
+# 这条判据要能在救援页源码里找到对应的「先于没发现问题」分支，
+# 否则 DNS 一有问题屏幕第一句就是「没发现问题」——误报平安。
+$rescueSrc2 = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\insp.ps1'), [System.Text.Encoding]::UTF8)
+Assert-Eq 'rescue: an unfixable problem is reported before the all-clear' 'True' `
+    ([bool]([regex]::IsMatch($rescueSrc2, '(?s)realButUnfixable.{0,400}没发现问题')))
 Assert-Eq 'repairable: an unknown layer is not repairable' 'False' `
     ([string](Test-FindingRepairable (New-Finding -Id 'nope.thing' -Kind 'residue-blocking')))
 # 判据只有一处实现：不许再出现第二个名字指向同一件事。

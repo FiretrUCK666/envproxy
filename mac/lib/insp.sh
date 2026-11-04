@@ -749,8 +749,12 @@ show_rescue_page() {
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
             case "$_rs_kind" in
-                "$FINDING_KIND_BLOCKING") _rs_blocking=$((_rs_blocking + 1)) ;;
-                "$FINDING_KIND_SLOWING")  _rs_slowing=$((_rs_slowing + 1)) ;;
+                # 只在"真能修"时计数：下面那句「发现 N 处挡住了网络」承诺的是
+                # "按 y 能修好"，把不可修的算进来就会说了却做不到。与 Windows 侧同形。
+                "$FINDING_KIND_BLOCKING")
+                    finding_repairable "$_rs_kind" "$_rs_id" && _rs_blocking=$((_rs_blocking + 1)) ;;
+                "$FINDING_KIND_SLOWING")
+                    finding_repairable "$_rs_kind" "$_rs_id" && _rs_slowing=$((_rs_slowing + 1)) ;;
                 "$FINDING_KIND_ALIVE")
                     _rs_alive=$((_rs_alive + 1))
                     # 握手分类在那条 Finding 的 Reason 里（sysproxy 层用 get_sysproxy_reason 生成）。
@@ -786,7 +790,15 @@ EOF
         style_out dim "          这多半是节点的问题。关掉重开代理软件，或者换一个节点。"
         _rs_outofscope=1
     else
-        style_out ok "  查完了：这几处设置都没发现问题（共查了 ${_rs_checked} 处）。"
+        # 「本工具不自动改、但问题确实存在」的那些（DNS 指向死端口就是）。
+        # **必须先于「没发现问题」判**：上面三个计数只统计可修项，
+        # 这类记录不会进任何一个——落进 else 就成了"屏幕第一句说你没问题"，
+        # 紧接着的提醒区却在说网页会打不开。误报平安比不说更坏。
+        if [ "$_rs_hint" -gt 0 ]; then
+            style_out warn "  查完了：发现 $_rs_hint 处问题，但本工具不自动改（见下面的提醒）。"
+        else
+            style_out ok "  查完了：这几处设置都没发现问题（共查了 ${_rs_checked} 处）。"
+        fi
         _rs_outofscope=1
     fi
 
