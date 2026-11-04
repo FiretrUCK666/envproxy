@@ -1797,19 +1797,27 @@ jobs:
           # C:\WINDOWS\system32\bash.exe —— 那是 WSL 入口，跑 execvpe(/bin/bash) 会失败。
           # 失败被 2>$null 吞掉后每个探针都读成缺失值，屏幕上看起来像"两端不一致"。
           # 判据是"能不能真跑一句 shell"，不是"命令在不在"。
+          # 候选路径**由变量拼、拼不出来就跳过**：CI 跑在 Linux 上，
+          # ${env:ProgramFiles(x86)} 是 null，Join-Path 会直接抛异常
+          # （"Cannot bind argument to parameter Path because it is null"），
+          # 整道门禁挂在这里——而它明明是"在 Windows 上找 git bash"这件事的副作用。
           $bashPath = $null
-          foreach ($cand in @('C:\Program Files\Git\bin\bash.exe', (Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe'))) {
-            if (-not $cand -or -not (Test-Path -LiteralPath $cand)) { continue }
+          $cands = New-Object System.Collections.Generic.List[string]
+          foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if ($base) { $cands.Add((Join-Path $base 'Git\bin\bash.exe')) }
+          }
+          $cands.Add('C:\Program Files\Git\bin\bash.exe')
+          foreach ($cand in $cands) {
+            if (-not (Test-Path -LiteralPath $cand)) { continue }
             $probeB = & $cand -c 'echo ok' 2>$null
             if ("$probeB" -eq 'ok') { $bashPath = $cand; break }
           }
           if (-not $bashPath) {
+            # 退一步：PATH 上任何能跑通 echo ok 的 bash（CI 的 ubuntu 就是这种）。
             $g = Get-Command bash -ErrorAction SilentlyContinue
             if ($g) { $probeB = & $g.Source -c 'echo ok' 2>$null; if ("$probeB" -eq 'ok') { $bashPath = $g.Source } }
           }
-          if (-not $bashPath) { Write-Host '找不到可用的 bash，无法核对两端宽度'; $fail = 1 }
-          else {
-            # **用十六进制传参，不用 base64、也不直接传字符串。**
+          if (-not $bashPath) { Write-Host '找不到可用的 bash，无法核对两端宽度'; $fail = 1 } else {
             # 直接传会被命令行编码动过：实测 e + U+0301 这种"组合形式"在某些
             # 环境里到达 bash 时已经被合成成单个字符，两端比的根本不是同一串。
             # 十六进制是纯 ASCII，怎么传都不会变形。
