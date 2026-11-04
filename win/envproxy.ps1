@@ -59,7 +59,8 @@ param(
 #     lib\runtime.ps1  日志、监控进程、主循环、自启动定位器
 #     lib\package.ps1  覆盖安装区、备份与回滚
 #     lib\update.ps1   版本检查、下载校验、确认流程
-#     lib\doctor.ps1   系统代理各层判定与修复
+#     lib\doctor.ps1   系统代理各层判定与修复（叶子层：只依赖 base + probe）
+#     lib\insp.ps1     检查器层：注册表、编排、各检查器、救援页界面
 #     lib\ops.ps1      安装/停止/卸载/日常操作的编排
 #     lib\pages.ps1    状态页两版渲染、问题清单
 #     lib\report.ps1   问题报告（唯一会写文件、会提问的一层）
@@ -94,7 +95,8 @@ $LibDir = Join-Path $ScriptDir "lib"
 # relay 只依赖 base（它用的是固定安装目录，不是 monitor 目录），所以排在 runtime 之前
 # 也可以；排在 package 之前是因为建快捷方式那一段要用它算端口记录的位置。
 # doctor 排在 ops 之前：菜单与高级功能页要调它给结论，而它自己不调界面。
-$CoreLibs = @("base", "screen", "probe", "env", "shell", "runtime", "relay", "package", "update", "doctor", "ops", "pages", "report", "help", "shortcut")
+# insp 排在 doctor 之后：它是检查器层，汇总各层并渲染救援页，依赖 doctor 的判据。
+$CoreLibs = @("base", "screen", "probe", "env", "shell", "runtime", "relay", "package", "update", "doctor", "insp", "ops", "pages", "report", "help", "shortcut")
 # ------------------------------------------------------------------------------
 # 先看这台的 PowerShell 允不允许我们干活
 # ------------------------------------------------------------------------------

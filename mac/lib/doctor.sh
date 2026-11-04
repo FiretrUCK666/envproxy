@@ -21,29 +21,59 @@
 #    「端口死」= 「写它的程序不在了」。两条客观事实叠加，不是猜。
 # ==============================================================================
 
-# 判定结论词（与 Windows 侧 $SysProxyKinds 逐字同形，门禁 6 核对）
-SYSPROXY_KIND_CLEAN="clean"                  # 压根没设代理
-SYSPROXY_KIND_BLOCKING="residue-blocking"    # 手动代理指向死端口：真断网，最高优先级
-SYSPROXY_KIND_SLOWING="residue-slowing"      # 自动配置脚本指向死端口：能上网但会卡几秒
-SYSPROXY_KIND_ALIVE="alive"                  # 回环地址 + 端口活着：翻墙软件正在用，不动
-SYSPROXY_KIND_FOREIGN="foreign"              # 不是回环：公司/学校代理，工具不碰
-SYSPROXY_KIND_MANAGED="managed"              # 被描述文件/策略管着：改了也会被改回，不动
+# 判定结论词（与 Windows 侧 $FindingKinds 逐字同形，门禁 6 核对）
+#
+# **所有检查器共用**这套词，名字叫 FINDING 而不是 SYSPROXY：它描述的是
+# 「某一层网络设置出了什么事」，不再只服务于系统代理。多一层检查器不需要、
+# 也不许新增词——七个词表达的是「有没有东西 / 东西归谁 / 能不能修」，与层无关。
+FINDING_KIND_CLEAN="clean"                  # 压根没设
+FINDING_KIND_BLOCKING="residue-blocking"    # 手动代理指向死端口：真断网，最高优先级
+FINDING_KIND_SLOWING="residue-slowing"      # 自动配置脚本指向死端口：能上网但会卡几秒
+FINDING_KIND_ALIVE="alive"                  # 回环地址 + 端口活着：翻墙软件正在用，不动
+FINDING_KIND_FOREIGN="foreign"              # 不是回环：公司/学校代理，工具不碰
+FINDING_KIND_MANAGED="managed"              # 被描述文件/策略管着：改了也会被改回，不动
 # 读不出来：networksetup 被拦、权限不足、输出认不出来。
 # **必须与 foreign 分开**——foreign 断言「这是别人的代理」，而读不出来时
 # 我们连地址都没拿到，说成 foreign 就是编的。
 # 它不可修，也不进「不能动」那一组的计数（那组的意思是「东西在那儿，但不归我碰」）。
 # 少了这个词，读失败的那一层会在清单里**整层消失**：使用者报上不了网，
 # 工具却说「没发现问题」——最难被当成故障的一类失效。
-SYSPROXY_KIND_UNREADABLE="unreadable"
+FINDING_KIND_UNREADABLE="unreadable"
 
 # 「哪个结论允许被修」只有一处：**只有 residue 两类**。
 # 界面要判断「这项能不能修」时调这个，不许自己写字符串比较——
-# 那样加一类结论就会漏掉界面那一处。
-sysproxy_fixable() {
+# 那样加一类结论就会漏掉界面那一处。旧名保留成同一个实现，不许变成第二份判据。
+finding_fixable() {
     case "${1:-}" in
-        "$SYSPROXY_KIND_BLOCKING"|"$SYSPROXY_KIND_SLOWING") return 0 ;;
+        "$FINDING_KIND_BLOCKING"|"$FINDING_KIND_SLOWING") return 0 ;;
     esac
     return 1
+}
+
+# ------------------------------------------------------------------------------
+# 统一诊断记录（Finding）：所有检查器的输出只有这一种形状
+# ------------------------------------------------------------------------------
+# 为什么必须统一：界面的职责是「把可修的东西列出来、把不归我碰的东西列出来」，
+# 那与具体是哪一层毫无关系。只要每层的输出同构，界面就永远不用改——
+# 加一层检查器不需要碰界面一个字，这是「不堆补丁」在这里的具体含义。
+#
+# 输出是**一行一条、TAB 分列**（与 sysproxy_layers 的既有形状一致：Mac 侧
+# 一直靠管道 + read 传结构，引入数组会撞 bash 3.2 的坑）：
+#   Id <TAB> Kind <TAB> Subject <TAB> Where <TAB> Value <TAB> Reason <TAB> Advice <TAB> Fix
+# 字段里不许出现 TAB（值都是地址、路径、短句；万一有，写入前由 finding_new 替换成空格）。
+finding_new() {
+    _fn_id="${1:-}"; _fn_kind="${2:-}"; _fn_subject="${3:-}"; _fn_where="${4:-}"
+    _fn_value="${5:-}"; _fn_reason="${6:-}"; _fn_advice="${7:-}"; _fn_fix="${8:-}"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$(printf '%s' "$_fn_id" | tr '\t' ' ')" \
+        "$_fn_kind" \
+        "$(printf '%s' "$_fn_subject" | tr '\t' ' ')" \
+        "$(printf '%s' "$_fn_where" | tr '\t' ' ')" \
+        "$(printf '%s' "$_fn_value" | tr '\t' ' ')" \
+        "$(printf '%s' "$_fn_reason" | tr '\t' ' ')" \
+        "$(printf '%s' "$_fn_advice" | tr '\t' ' ')" \
+        "$_fn_fix"
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -58,16 +88,16 @@ sysproxy_fixable() {
 sysproxy_verdict() {
     _spv_url="${1:-}"; _spv_port="${2:-0}"; _spv_alive="${3:-unknown}"
     _spv_managed="${4:-0}"; _spv_layer="${5:-manual}"
-    [ "$_spv_managed" = "1" ] && { printf '%s' "$SYSPROXY_KIND_MANAGED"; return 0; }
-    [ -z "$_spv_url" ] && [ "$_spv_port" -le 0 ] 2>/dev/null && { printf '%s' "$SYSPROXY_KIND_CLEAN"; return 0; }
+    [ "$_spv_managed" = "1" ] && { printf '%s' "$FINDING_KIND_MANAGED"; return 0; }
+    [ -z "$_spv_url" ] && [ "$_spv_port" -le 0 ] 2>/dev/null && { printf '%s' "$FINDING_KIND_CLEAN"; return 0; }
     # 不是本机回环：公司/学校代理，工具不碰
-    is_loopback_url "$_spv_url" || { printf '%s' "$SYSPROXY_KIND_FOREIGN"; return 0; }
-    [ "$_spv_alive" = "unknown" ] && { printf '%s' "$SYSPROXY_KIND_FOREIGN"; return 0; }
-    [ "$_spv_alive" = "alive" ] && { printf '%s' "$SYSPROXY_KIND_ALIVE"; return 0; }
+    is_loopback_url "$_spv_url" || { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
+    [ "$_spv_alive" = "unknown" ] && { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
+    [ "$_spv_alive" = "alive" ] && { printf '%s' "$FINDING_KIND_ALIVE"; return 0; }
     if [ "$_spv_layer" = "pac" ]; then
-        printf '%s' "$SYSPROXY_KIND_SLOWING"
+        printf '%s' "$FINDING_KIND_SLOWING"
     else
-        printf '%s' "$SYSPROXY_KIND_BLOCKING"
+        printf '%s' "$FINDING_KIND_BLOCKING"
     fi
     return 0
 }
@@ -211,7 +241,7 @@ sysproxy_layers() {
             # 所以产出一条 unreadable 记录，字段填占位值，让界面能如实说一句。
             if ! _gspl_raw=$(_sysproxy_read_one "$_gspl_svc" "$_gspl_kind"); then
                 printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-                    "unknown" "$_gspl_svc" "$SYSPROXY_KIND_UNREADABLE" "" "" "$_gspl_kind"
+                    "unknown" "$_gspl_svc" "$FINDING_KIND_UNREADABLE" "" "" "$_gspl_kind"
                 continue
             fi
             _gspl_en=$(printf '%s\n' "$_gspl_raw" | sed -n '1p')
@@ -288,39 +318,153 @@ sysproxy_managed() {
 }
 
 # ------------------------------------------------------------------------------
-# 3. 备份：动手之前先把原样记下来，能还原
+# 3. 备份：事务日志（每次修复一个还原点，能撤销最近一次）
 # ------------------------------------------------------------------------------
 # 落在 monitor/ 下，与 state.snapshot 同一个运行时目录：卸载时会一起清掉。
-# 格式：每条一行，字段用 TAB；服务名里可能有空格，所以不用空格当分隔。
 #
-# 为什么必须能还原：修系统代理是整个工具里除了卸载之外唯一会动「别人写的设置」的地方。
+# **为什么从单槽位（doctor.bak）改成日志**：单槽位只有一个还原点，而且「只写一次」。
+# 一旦可修的层不止一处（系统代理 + 终端工具配置），这条规则立刻自相矛盾：
+# 修完 A 再修 B，槽位里存的仍是 A 之前的原样，用户按「还原」以为撤掉的是刚才那次，
+# 实际撤掉的是很久以前那次——而屏幕上只说「已经改回去了」。
+#
+# 格式与 Windows 侧逐字同形（门禁 6 核对）：三行一段，追加写。
+#   --- op <utc> <op-id> <result>
+#   <key>=<escaped value>
+#   --- end
+DOCTOR_JOURNAL_KEEP=5
+
+doctor_journal_path() {
+    printf '%s' "$MONITOR_DIR/doctor.journal"
+}
+# 旧版单槽位备份的位置。**仍然读、不再写**：升级前修过的人手里有它，
+# 直接丢掉等于把他们唯一的一次还原机会删了。
 sysproxy_backup_path() {
     printf '%s' "$MONITOR_DIR/doctor.bak"
 }
 
-# 写备份。**只写一次**：每次覆盖就失效（用户第一次修之前的原样才是要还原的那个）。
-sysproxy_backup() {
-    ensure_monitor_paths || return 1
-    _spb_path=$(sysproxy_backup_path)
-    [ -f "$_spb_path" ] && return 0
-    _spb_tmp="$_spb_path.tmp.$$"
-    : > "$_spb_tmp" 2>/dev/null || return 1
-    sysproxy_layers > /dev/null 2>&1
-    # 记的是「全部被启用的项」，不是只记可修的那几项：
-    # 还原要能复原现场，不是只复原我们动过的。
-    sysproxy_list_services | while IFS= read -r _spb_svc; do
-        [ -n "$_spb_svc" ] || continue
-        for _spb_kind in web secureweb socksfirewall autoproxy; do
-            _spb_raw=$(_sysproxy_read_one "$_spb_svc" "$_spb_kind") || continue
-            _spb_en=$(printf '%s\n' "$_spb_raw" | sed -n '1p')
-            _spb_host=$(printf '%s\n' "$_spb_raw" | sed -n '2p')
-            _spb_port=$(printf '%s\n' "$_spb_raw" | sed -n '3p')
-            printf '%s\t%s\t%s\t%s\t%s\n' \
-                "$_spb_svc" "$_spb_kind" "$_spb_en" "$_spb_host" "$_spb_port" >> "$_spb_tmp"
-        done
+# 值编码：与 Windows 侧 ConvertTo-DoctorBakValue 逐字同形。
+# 只需要挡住换行与 = 两个字符（换行会让一条记录裂成两行；= 会让键值解析错位）。
+# 转义用 % 领头（与 URL 编码同形），% 自己先转，避免二次解码。
+#
+# 换行单独处理：sed 是逐行工作的，它永远看不见换行符，所以「把换行变成 %0A」
+# 只能靠 awk 在**行与行之间**插。这里用 printf 拼字面量 %0A——
+# 写成 awk 的 printf 格式串（"%0A"）会被当成格式指令，实测报
+# "not enough arguments to satisfy format string" 并把整条值截断。
+_bak_enc() {
+    _be_s="${1:-}"
+    [ -n "$_be_s" ] || { printf ''; return 0; }
+    printf '%s' "$_be_s" | sed -e 's/%/%25/g' -e 's/\r/%0D/g' -e 's/=/%3D/g' \
+        | awk 'BEGIN{ORS=""} {if (NR>1) printf "%s", "%0A"; printf "%s", $0}'
+}
+_bak_dec() {
+    _bd_s="${1:-}"
+    [ -n "$_bd_s" ] || { printf ''; return 0; }
+    printf '%s' "$_bd_s" | sed -e 's/%3D/=/g' -e 's/%0A/\n/g' -e 's/%0D/\r/g' -e 's/%25/%/g'
+}
+
+# 造一个还原点的正文。$2 是「键=值」的行，按调用方给的顺序原样写。
+_finding_entry_body() {
+    _feb_op="$1"; shift
+    _feb_result="${1:-applied}"; shift
+    printf -- '--- op %s %s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$_feb_op" "$_feb_result"
+    for _feb_line in "$@"; do
+        printf '%s\n' "$_feb_line"
     done
-    mv -f "$_spb_tmp" "$_spb_path" 2>/dev/null || { rm -f "$_spb_tmp" 2>/dev/null; return 1; }
-    [ -s "$_spb_path" ]
+    printf -- '--- end\n'
+}
+
+# 追加一个还原点。$1 = op-id，$2.. = "key=value"（值由调用方先编码）。
+# 返回 0 = 确实落盘了。**写不下来就返回非零，调用方据此不动手**。
+add_doctor_journal_entry() {
+    _aje_op="$1"; shift
+    ensure_monitor_paths || return 1
+    _aje_path=$(doctor_journal_path)
+    _aje_new=$(_finding_entry_body "$_aje_op" applied "$@") || return 1
+    # 保留最近 N 段：超了就整份重写（而不是截断）。
+    # 按字节截会把最后一段截成半截，下次读出来是一条无效记录。
+    _aje_tmp="$_aje_path.tmp.$$"
+    {
+        _aje_count=$(doctor_journal_count)
+        _aje_keep=$((DOCTOR_JOURNAL_KEEP - 1))
+        if [ "$_aje_count" -gt "$_aje_keep" ]; then
+            # 只要最后 keep 段：用 awk 数「--- op」出现的位置，从第 (count-keep+1) 段起输出。
+            _aje_skip=$((_aje_count - _aje_keep))
+            awk -v skip="$_aje_skip" '
+                /^--- op / { n++ }
+                { if (n > skip) print }
+            ' "$_aje_path"
+        else
+            [ -f "$_aje_path" ] && cat "$_aje_path"
+        fi
+        printf '%s\n' "$_aje_new"
+    } > "$_aje_tmp" 2>/dev/null || { rm -f "$_aje_tmp" 2>/dev/null; return 1; }
+    mv -f "$_aje_tmp" "$_aje_path" 2>/dev/null || { rm -f "$_aje_tmp" 2>/dev/null; return 1; }
+    [ -s "$_aje_path" ]
+}
+
+# 日志里有几段 ation。没有文件时输出 0。
+doctor_journal_count() {
+    _djc_path=$(doctor_journal_path)
+    [ -f "$_djc_path" ] || { printf '0'; return 0; }
+    grep -c '^--- op ' "$_djc_path" 2>/dev/null || printf '0'
+}
+
+# 有没有能撤销的记录。界面据此决定要不要印「输 r 还原」那一行：
+# 备份在就允许还原，与「当下有没有可修项」是两件事。
+doctor_journal_has_restore() {
+    [ "$(doctor_journal_count)" -gt 0 ] && return 0
+    # 旧单槽位备份也算：升级前修过的人**第一天就能还原**，不需要先再修一次。
+    [ -f "$(sysproxy_backup_path)" ] && return 0
+    return 1
+}
+
+# 把日志拆成若干段，供还原时定位「最近一条」。
+# 输出：每段一行，字段 TAB 分：Stamp <TAB> OpId <TAB> Result <TAB> 字段行（用 0x01 连接）
+doctor_journal_ops() {
+    _djo_path=$(doctor_journal_path)
+    [ -f "$_djo_path" ] || return 0
+    awk '
+        /^--- op / {
+            if (cur != "") print cur
+            stamp=$3; opid=$4; res=$5
+            cur = stamp "\t" opid "\t" res "\t"
+            next
+        }
+        /^--- end/ {
+            if (cur != "") { print cur; cur="" }
+            next
+        }
+        {
+            if (cur != "") {
+                if (substr(cur, length(cur), 1) != "\t") cur = cur "\001"
+                cur = cur $0
+            }
+        }
+        END { if (cur != "") print cur }
+    ' "$_djo_path" 2>/dev/null
+}
+
+# 取最近一条还原点的某个字段。$1 = 字段名（inspector / path / content …）
+# 取不到时输出空。**只在有日志时才有效**。
+#
+# 注意读取循环用的是 `IFS= read -r x || [ -n "$x" ]`：字段串的最后一段没有换行，
+# 光靠 `while read` 会把最后一行丢掉——而「最后一个字段」恰好是最常被问的那个
+# （content 永远排在最后）。这个写法和 base 层的 Ensure-MonitorPaths 之外
+# 各处读文件的惯例一致。
+doctor_journal_last_field() {
+    _djf_want="$1"
+    _djf_last=$(doctor_journal_ops | tail -n 1)
+    [ -n "$_djf_last" ] || { printf ''; return 1; }
+    _djf_fields=$(printf '%s' "$_djf_last" | cut -f4-)
+    printf '%s' "$_djf_fields" | tr '\001' '\n' | while IFS= read -r _djf_line || [ -n "$_djf_line" ]; do
+        case "$_djf_line" in
+            "$_djf_want"=*)
+                _djf_val=${_djf_line#*=}
+                _bak_dec "$_djf_val"
+                return 0 ;;
+        esac
+    done
+    return 0
 }
 
 # ------------------------------------------------------------------------------
@@ -350,7 +494,7 @@ sysproxy_repair() {
     # 多出来的那一列（握手类）只用于解释，这里用 _spr_hs 接住、不使用。
     while IFS="$(printf '\t')" read -r _spr_layer _spr_svc _spr_kind _spr_url _spr_port _spr_box _spr_hs; do
         [ -n "$_spr_svc" ] || continue
-        sysproxy_fixable "$_spr_kind" || continue
+        finding_fixable "$_spr_kind" || continue
         _spr_count=$((_spr_count + 1))
         _spr_q=$(printf '%s' "$_spr_svc" | sed "s/'/'\\\\''/g")
         case "$_spr_layer" in
@@ -378,7 +522,30 @@ $_spr_layers
 EOF
     [ "$_spr_count" -gt 0 ] || { printf 'none'; return 0; }
 
-    sysproxy_backup || { printf 'nobackup'; return 0; }
+    # 还原点：记「这次动之前，每个服务的四个勾选框各是什么」。
+    # 记的是**全部被启用的项**，不是只记可修的那几项：还原要能复原现场，
+    # 而不是只复原我们动过的。
+    #
+    # 为什么写成一行一条、TAB 分列：一条还原点要同时装下多个服务的多项设置，
+    # 折叠成「键=值」会让服务名里的空格与 = 都被卷进来。
+    # 这里用「一行一个字段」的形式塞进 content 字段，由 _bak_enc 负责转义换行。
+    _spr_snap=""
+    _spr_scan=$(sysproxy_layers)
+    while IFS="$(printf '\t')" read -r _ss_l _ss_svc _ss_kind _ss_url _ss_port _ss_box _ss_hs; do
+        [ -n "$_ss_svc" ] || continue
+        _ss_en="No"
+        [ -n "$_ss_url" ] && _ss_en="Yes"
+        _spr_snap="$_spr_snap${_ss_svc}	${_ss_box}	${_ss_en}	${_ss_url}	${_ss_port}
+"
+    done <<EOF
+$_spr_scan
+EOF
+    if ! add_doctor_journal_entry 'sysproxy' \
+            "inspector=sysproxy" \
+            "legacy=" \
+            "services=$(printf '%s' "$_spr_snap" | _bak_enc)"; then
+        printf 'nobackup'; return 0
+    fi
 
     # 一次提权，执行整串命令。输出转成一句结果，不把 stderr 丢给用户看。
     _spr_script="set -e;$_spr_cmds"
@@ -397,7 +564,7 @@ EOF
     _spr_left=0
     while IFS="$(printf '\t')" read -r _spr_l2 _spr_s2 _spr_k2 _spr_u2 _spr_p2; do
         [ -n "$_spr_s2" ] || continue
-        sysproxy_fixable "$_spr_k2" && _spr_left=$((_spr_left + 1))
+        finding_fixable "$_spr_k2" && _spr_left=$((_spr_left + 1))
     done <<EOF
 $_spr_after
 EOF
@@ -405,37 +572,45 @@ EOF
     return 0
 }
 
-# 从备份还原：把「原本开着、现在被我们关了」的那些重新打开。
-# 返回 ok / none / canceled / failed。
-sysproxy_restore() {
-    _srr_path=$(sysproxy_backup_path)
-    [ -f "$_srr_path" ] || { printf 'none'; return 0; }
-    _srr_cmds=""
-    _srr_count=0
-    while IFS="$(printf '\t')" read -r _srr_svc _srr_kind _srr_en _srr_host _srr_port; do
-        [ -n "$_srr_svc" ] || continue
-        [ "$_srr_en" = "Yes" ] || continue
-        _srr_q=$(printf '%s' "$_srr_svc" | sed "s/'/'\\\\''/g")
-        # restore 用 -set*proxy <svc> <host> <port> on：
-        # 整串里的 on 会把状态一并打开（这正是还原想要的）。
+# 撤销一次系统代理修复。返回 ok / failed / skip。
+#
+# 两种还原点都要认：
+#   · 新的（content 里有 services）：按记录把每个服务的四个勾选框恢复到当时的样子
+#   · 旧的（doctor.bak 转来的 legacy=1）：那是一张「服务|勾选框|启用|地址|端口」的表
+# 语义都是「推进去的命令返回 0 且回读确认没了」，不许只看了 osascript 的退出码就报成功。
+restore_sysproxy_snapshot() {
+    _rss_legacy=$(doctor_journal_last_field 'legacy')
+    _rss_services=$(doctor_journal_last_field 'services')
+    [ -n "$_rss_services" ] || { printf 'skip'; return 0; }
+
+    _rss_cmds=""
+    _rss_count=0
+    while IFS="$(printf '\t')" read -r _rss_svc _rss_box _rss_en _rss_host _rss_port; do
+        [ -n "$_rss_svc" ] || continue
+        [ "$_rss_en" = "Yes" ] || continue
+        _rss_q=$(printf '%s' "$_rss_svc" | sed "s/'/'\\\\''/g")
+        # 还原用 -set*proxy <svc> <host> <port> on：整串里的 on 会把状态一并打开
+        # （这正是还原想要的）。
         # **但注意 `-setwebproxy` 有副作用：它会顺带打开状态。**
         # 所以"修"那边绝不能走"先清地址再关状态"——那会把代理重新打开、指向一个死端口。
         # 修复侧现在的做法（只 -set*proxystate off，不动地址）是对的，别改。
-        case "$_srr_kind" in
-            web)           _srr_cmds="$_srr_cmds networksetup -setwebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
-            secureweb)     _srr_cmds="$_srr_cmds networksetup -setsecurewebproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
-            socksfirewall) _srr_cmds="$_srr_cmds networksetup -setsocksfirewallproxy '$_srr_q' '$_srr_host' '$_srr_port' on;" ;;
+        case "$_rss_box" in
+            web)           _rss_cmds="$_rss_cmds networksetup -setwebproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
+            secureweb)     _rss_cmds="$_rss_cmds networksetup -setsecurewebproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
+            socksfirewall) _rss_cmds="$_rss_cmds networksetup -setsocksfirewallproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
             # -setautoproxyurl 只收 <服务名> <url> 两个参数；多给一个 on 会被判为无效，整串 set -e 就此中断。
-            autoproxy)     _srr_cmds="$_srr_cmds networksetup -setautoproxyurl '$_srr_q' '$_srr_host';" ;;
+            autoproxy)     _rss_cmds="$_rss_cmds networksetup -setautoproxyurl '$_rss_q' '$_rss_host';" ;;
         esac
-        _srr_count=$((_srr_count + 1))
-    done < "$_srr_path"
-    [ "$_srr_count" -gt 0 ] || { printf 'none'; return 0; }
-    _srr_script="set -e;$_srr_cmds"
-    _srr_msg=$(osascript -e "do shell script \"$(printf '%s' "$_srr_script" | sed 's/"/\\\\"/g')\" with prompt \"EnvProxy 要把浏览器代理设置改回原样，需要你的开机密码\" with administrator privileges" 2>&1)
+        _rss_count=$((_rss_count + 1))
+    done <<EOF
+$_rss_services
+EOF
+    [ "$_rss_count" -gt 0 ] || { printf 'skip'; return 0; }
+    _rss_script="set -e;$_rss_cmds"
+    _rss_msg=$(osascript -e "do shell script \"$(printf '%s' "$_rss_script" | sed 's/"/\\\\"/g')\" with prompt \"EnvProxy 要把浏览器代理设置改回原样，需要你的开机密码\" with administrator privileges" 2>&1)
     if [ $? -ne 0 ]; then
-        case "$_srr_msg" in
-            *'-128'*|*'User canceled'*|*'用户已取消'*) printf 'canceled'; return 0 ;;
+        case "$_rss_msg" in
+            *'-128'*|*'User canceled'*|*'用户已取消'*) printf 'skip'; return 0 ;;
         esac
         printf 'failed'
         return 0
@@ -443,15 +618,15 @@ sysproxy_restore() {
     # 回读确认：osascript 返回 0 只代表"那串命令都返回 0"，不代表设置真的生效——
     # 描述文件（MDM）会在下一瞬间把它覆盖回去。与 sysproxy_repair 同一条道理：
     # 不确认就报成功，就是屏幕上说改回去了、实际没改。
-    _srr_after=$(sysproxy_layers)
-    _srr_left=0
+    _rss_after=$(sysproxy_layers)
+    _rss_left=0
     # 同样要读全 7 列（理由见 sysproxy_repair 里那段注释）。
-    while IFS="$(printf '\t')" read -r _srr_l2 _srr_s2 _srr_k2 _srr_u2 _srr_p2 _srr_b2 _srr_h2; do
-        [ -n "$_srr_s2" ] || continue
-        sysproxy_fixable "$_srr_k2" && _srr_left=$((_srr_left + 1))
+    while IFS="$(printf '\t')" read -r _rss_l2 _rss_s2 _rss_k2 _rss_u2 _rss_p2 _rss_b2 _rss_h2; do
+        [ -n "$_rss_s2" ] || continue
+        finding_fixable "$_rss_k2" && _rss_left=$((_rss_left + 1))
     done <<EOF
-$_srr_after
+$_rss_after
 EOF
-    [ "$_srr_left" -eq 0 ] && printf 'ok' || printf 'failed'
+    [ "$_rss_left" -eq 0 ] && printf 'ok' || printf 'failed'
     return 0
 }

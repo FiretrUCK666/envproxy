@@ -443,35 +443,48 @@ This tool opens a **fixed entry** on your machine (an address that never changes
 
 Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
-### Module two: browser proxy repair
+### Module two: network and proxy repair
 
 **Where the problem comes from.** A proxy app removes its system proxy setting when it closes normally. But when it is **killed** — a hard shutdown, power loss, End Task, or a crash — it never gets the chance.
 
 The system still says "send browser traffic to `127.0.0.1:7078`", but nothing is listening there any more. Every time the browser goes online it knocks on a door that no longer exists, so **even domestic sites fail**.
 
-**The tell: the terminal is fine, only the browser is broken.** Terminal variables are managed by EnvProxy itself, which is a separate thing from the system proxy setting.
+**The same fault shows up in two more places**, and either one can keep you offline:
+
+- **Config files of terminal tools.** Plenty of people have run `git config --global http.proxy …` from an online tutorial, or written an address into `~/.npmrc`. Those settings **outrank environment variables** — this tool can manage the variables perfectly and still lose. The symptom: the browser is fine and only `git clone` or `npm install` keeps failing.
+- **Name resolution (DNS).** Some proxy apps change the system DNS addresses and never change them back on exit.
+
+This screen looks at all three and lists the conclusions in the order network, browser, terminal tools.
+
+**The tell: the environment variables this tool manages are fine.** So when it breaks you feel "the network obviously works, just not this one thing".
 
 **How it repairs.** It turns off only the switch that is wrong and leaves every other byte alone:
 
 | Situation | What it does |
 |---|---|
-| Loopback address, port already gone | Turns that entry off |
+| Loopback address, port already gone | Turns that setting off, or deletes the line |
 | Not a loopback address (company, school) | **Leaves it alone** |
 | Port still alive (you are using it) | **Leaves it alone** |
 | Managed by administrator policy | **Leaves it alone** |
 | Cannot tell | **Leaves it alone** |
+| Name resolution broken | **Warns only, changes nothing** (see below) |
 
-It saves the original first, so you can put it back (press `r` on that screen).
+It saves the original first, so you can put it back (press `r` on that screen; it undoes the **last** repair).
+
+**Why DNS is only reported, never changed.** Changing it back automatically would require knowing which DNS your router will hand out once you switch to automatic — and that answer does not exist before the change. Guessing wrong swaps a working address for a broken one, which is worse than the original fault. So this item explains what it found and leaves the one click in system settings to you.
+
+**It also points out one thing you would never find yourself.** If you set DNS for "all networks" and also for one particular Wi-Fi, the system only uses one of them and the other silently does nothing. Nothing on screen tells you that; this screen does.
 
 ### What it cannot reach
 
 This matters more than everything above, because it tells you where to look next.
 
-**The repair only looks at "the proxy setting the browser uses".** If it says nothing is wrong, that does not mean your network is fine — only that this one layer is clean.
+**It looks at three places only: the proxy setting the browser uses, terminal tool config files, and the name-resolution addresses.** If it says nothing is wrong, that does not mean your network is fine — only that these three are clean.
 
-If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, or firewall rules. It cannot see any of those.
+If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, firewall rules, or an adapter that never got an address. It cannot see any of those, and will not touch them.
 
-**Terminal variables are not its business either.** If `git`, `npm` or `curl` cannot connect, go to section 5 — that is a different path.
+**It looks at settings, not at whether the network works.** So an unplugged cable, an unjoined Wi-Fi or a dead router will also report "nothing wrong" — what it checks is whether something points the wrong way, not whether the road itself is open.
+
 
 
 ### Module three: places this tool cannot reach
@@ -518,6 +531,7 @@ it simply has no dedicated page there.
 | Variables come back after removal | Node is unstable | Expected. If it persists, switch nodes |
 | Variables linger after disconnect | "Disconnect" leaves the core running | Expected. Quit the app |
 | Sync "installed but cannot run" | Execution policy blocks the profile | See the section below |
+| Only `git` / `npm` fail | A proxy is hard-coded in their config | Menu 5 → network and proxy repair |
 | All of the above tried | — | Pick 2, screenshot, then pick 1 |
 
 **If "Terminal sync" says "installed but cannot run"**
@@ -674,7 +688,8 @@ All of it is **outside** this folder, so an update that overwrites the program f
 | | `monitor.beat` | heartbeat: process id plus start time |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | state snapshot written by the background program; the status page only reads it |
-| | `doctor.bak` | proxy setting as it was before the browser proxy repair changed it, so it can be restored |
+| | `doctor.journal` | settings from before each repair, so the last one can be undone. Keeps 5 |
+| | `doctor.bak` | older restore point, only on upgraded machines. Still read; gone after one undo |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |
 | | `update.inprogress` | written while program files are being replaced |
@@ -726,7 +741,7 @@ A copied backup **is never mistaken for the live one**, since log activity decid
 | Limit | Reason | Effect |
 |---|---|---|
 | **TUN vs. corporate VPN** | Both are virtual adapters | Most apps keep the port open; a few close it |
-| **Only the browser proxy repair edits it** | Editing it breaks browsers | Only a dead loopback port |
+| **Only that one repair screen edits them** | Editing elsewhere breaks browsers | Only a dead loopback port |
 | **Running programs are not changed** | Read once at startup | Open windows need one Enter |
 | **Tools with their own proxy config** | They do not read these | Maven, Gradle, Docker: section 6 |
 | **No interface** | Zero dependencies is the premise | Only a menu: no tray, no window |
@@ -834,7 +849,8 @@ Installing writes files to three places. **None of them is the folder you downlo
 | | `monitor.pid` | the process id of the background program |
 | | `version.cache` | cached version, written by the background program |
 | | `state.snapshot` | verdict the background program writes every round; the status page only reads it |
-| | `doctor.bak` | proxy setting as it was before the browser proxy repair changed it, so it can be restored |
+| | `doctor.journal` | settings from before each repair, so the last one can be undone. Keeps 5 |
+| | `doctor.bak` | older restore point, only on upgraded machines. Still read; gone after one undo |
 | | `report-*.txt` | reports built by "Problem report"; open one before sending it |
 | | `stopped.intent` | the record that you stopped it on purpose |
 | | `stop.flag` | temporary stop signal, deleted after use |

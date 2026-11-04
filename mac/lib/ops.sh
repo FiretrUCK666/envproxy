@@ -165,13 +165,15 @@ install_envproxy() {
 # 同一份清单只有一处，就不会再出现"删了忘了查"。
 # 与 Windows 侧 ops.ps1 卸载分支同一套文件（那边逐项 Remove-Item）。
 monitor_runtime_files() {
-    # doctor.bak 也在这里：它是浏览器代理修复动手前留下的原样，卸载之后没有任何组件会再用它。
-    # 漏掉的后果不是"多留一个文件"——它记着使用者当时的系统代理设置，留着就是留了份
+    # 修复动手前留下的还原点。卸载之后没有任何组件会再读它，
+    # 而它记着使用者当时的系统代理设置与配置文件原文——留着就是留了份
     # 没人管理、也没人知道该不该删的配置副本。
+    # 两份都要删：journal 是现行格式，bak 是旧版的单槽位备份
+    # （升级上来的机器上可能还留着，不删就成了永远没人清理的孤儿）。
     printf '%s\n' "$PID_FILE" "$STOP_FLAG" "$STOP_INTENT" \
         "$VERSION_CACHE" "$SNAPSHOT_FILE" \
         "$MONITOR_DIR/update.inprogress" "$MONITOR_DIR/notify.last" \
-        "$MONITOR_DIR/doctor.bak"
+        "$(doctor_journal_path)" "$(sysproxy_backup_path)"
 }
 
 uninstall_envproxy() {

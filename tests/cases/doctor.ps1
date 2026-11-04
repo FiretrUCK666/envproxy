@@ -11,12 +11,12 @@ Assert-Eq 'verdict: a company proxy is never ours' 'foreign' (Get-SystemProxyVer
 Assert-Eq 'verdict: a hostname proxy is never ours' 'foreign' (Get-SystemProxyVerdict -Url 'http://proxy.corp.com:3128' -Port 3128 -Alive $false)
 Assert-Eq 'verdict: policy-managed wins over everything' 'managed' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $false -Managed $true)
 Assert-Eq 'verdict: unknown liveness is never touched' 'foreign' (Get-SystemProxyVerdict -Url 'http://127.0.0.1:7078' -Port 7078 -Alive $null)
-Assert-Eq 'fixable: blocking yes' 'True' (Test-SysProxyFixable 'residue-blocking')
-Assert-Eq 'fixable: slowing yes' 'True' (Test-SysProxyFixable 'residue-slowing')
-Assert-Eq 'fixable: alive no' 'False' (Test-SysProxyFixable 'alive')
-Assert-Eq 'fixable: foreign no' 'False' (Test-SysProxyFixable 'foreign')
-Assert-Eq 'fixable: managed no' 'False' (Test-SysProxyFixable 'managed')
-Assert-Eq 'fixable: clean no' 'False' (Test-SysProxyFixable 'clean')
+Assert-Eq 'fixable: blocking yes' 'True' (Test-FindingFixable 'residue-blocking')
+Assert-Eq 'fixable: slowing yes' 'True' (Test-FindingFixable 'residue-slowing')
+Assert-Eq 'fixable: alive no' 'False' (Test-FindingFixable 'alive')
+Assert-Eq 'fixable: foreign no' 'False' (Test-FindingFixable 'foreign')
+Assert-Eq 'fixable: managed no' 'False' (Test-FindingFixable 'managed')
+Assert-Eq 'fixable: clean no' 'False' (Test-FindingFixable 'clean')
 
 Write-Host '[25] DefaultConnectionSettings parsing (doctor)'
 # 这一段防的是「假修好」：Windows 真正生效的是这段二进制，只读 ProxyEnable 看不出来
@@ -125,7 +125,7 @@ $rescueSrc = (Get-Command Show-RescuePage).Definition
 Assert-Eq 'rescue: restore is gated on the backup, not on fixable count' $true ($rescueSrc -match '\$hasBackup')
 Assert-Eq 'rescue: no early return just because nothing is fixable' $true ($rescueSrc -match '\$fixable\.Count -eq 0 -and -not \$hasBackup')
 # 失败的项必须在屏幕上说出来，不许只报"修好了"。
-Assert-Eq 'rescue: partial names what was left unfixed' $true ($rescueSrc -match '\$leftNames')
+Assert-Eq 'rescue: partial names the layer that was left unfixed' $true ($rescueSrc -match '\$x\.Title')
 Write-Host '[29] Handshake classification, port ownership, client catalog'
 # 这一节守三件事，都对应"会误删活代理"或"永远修不好"的真实缺陷。
 # ① 握手必须五分类：节点挂掉的代理回 502，不能被当成"这不是代理"；
@@ -186,9 +186,9 @@ Assert-Eq 'evidence: no handshake and no owner yields nothing' '' `
 
 # 救援页那一档只在「活着 + 握手说上游失败」时成立。
 # 拿不到握手时必须不成立——绝不凭猜给用户指方向。
-$rescueSrc = [System.IO.File]::ReadAllText((Join-Path $TestRoot 'win\lib\shortcut.ps1'))
+$rescueSrc = [System.IO.File]::ReadAllText((Join-Path $TestRoot 'win\lib\insp.ps1'))
 Assert-Eq 'rescue: the node-problem branch exists' $true ($rescueSrc -match 'aliveBroken')
-Assert-Eq 'rescue: it requires the alive kind' $true ($rescueSrc -match '\$_.Kind -eq \$SysProxyKinds\.Alive')
+Assert-Eq 'rescue: it requires the alive kind' $true ($rescueSrc -match '\$_.Kind -eq \$FindingKinds\.Alive')
 Assert-Eq 'rescue: it requires upstream-fail evidence' $true ($rescueSrc -match "Handshake -eq 'upstream-fail'")
 Assert-Eq 'rescue: the message points at the node' $true ($rescueSrc -match '多半是节点的问题')
 # 这一档的台词本身不许出现"删/清掉设置"之类的话——那正是错的指导。

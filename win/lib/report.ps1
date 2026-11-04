@@ -124,31 +124,36 @@ function New-ProblemReport {
     & $add ''
 
     # 网络体检：报告里最该有的一节。
-    # 用户报「上不了网」的时候，作者第一件事就是想确认「是不是浏览器被指到了死端口」——
-    # 没有这一节，得靠来回追问三四轮。判据本来就是现成的（doctor 层），
+    # 用户报「上不了网」的时候，作者第一件事就是想确认「是不是哪里被指到了死端口」——
+    # 没有这一节，得靠来回追问三四轮。判据本来就是现成的（检查器层），
     # 顺手写进来，提问的人不用另外描述。
-    & $rule '网络体检（浏览器那一侧）'
+    #
+    # **遍历全部检查器，不点名任何一层**：加一层检查，这一节自动多几行。
+    # 报告是给排查的人看的，标记可以直白写内部语义。
+    & $rule '网络体检（全部检查器）'
     try {
-        $docLayers = @(Get-SystemProxyLayers)
-        if ($docLayers.Count -eq 0) {
-            & $add '  没有设任何浏览器代理（干净直连）。'
+        $findings = @(Invoke-DoctorCheck)
+        if ($findings.Count -eq 0) {
+            & $add '  各项都没发现问题。'
         } else {
-            foreach ($dl in $docLayers) {
-                # 报告是给排查的人看的，标记可以直白写内部语义。
-                # 关键是 unreadable 单独一档：它没有地址、也不参与判断，
+            foreach ($fd in $findings) {
+                # unreadable 单独一档：它没有地址、也不参与判断，
                 # 落进「不是本机的，未动」会把「探测失败」说成「别人的设置」。
-                $flag = if (Test-SysProxyFixable $dl.Kind) { '【可修】' }
-                        elseif ($dl.Kind -eq $SysProxyKinds.Alive) { '（正在用）' }
-                        elseif ($dl.Kind -eq $SysProxyKinds.Managed) { '（被管理员锁定）' }
-                        elseif ($dl.Kind -eq $SysProxyKinds.Unreadable) { '（这一层没读到）' }
+                $flag = if (Test-FindingFixable $fd.Kind) { '【可修】' }
+                        elseif ($fd.Kind -eq $FindingKinds.Alive) { '（正在用）' }
+                        elseif ($fd.Kind -eq $FindingKinds.Managed) { '（被管理员锁定）' }
+                        elseif ($fd.Kind -eq $FindingKinds.Unreadable) { '（这一项没读到）' }
                         else { '（不是本机的，未动）' }
-                $addr = if ($dl.Url) { [string]$dl.Url } else { '（无地址）' }
-                $extra = if ($dl.Detail) { '  ' + [string]$dl.Detail } else { '' }
-                & $add ('  ' + $dl.Layer + '  ' + $addr + '  -> ' + $dl.Kind + ' ' + $flag + $extra)
+                $where = if ($fd.Where) { [string]$fd.Where } else { [string]$fd.Id }
+                $val = if ($fd.Value) { [string]$fd.Value } else { '（无地址）' }
+                $extra = if ($fd.Reason) { '  ' + [string]$fd.Reason } else { '' }
+                & $add ('  ' + $where + '  ' + $val + '  -> ' + $fd.Kind + ' ' + $flag + $extra)
+                # 证据只在**端口活着**或需要解释时才有内容，且它只进报告、不参与授权。
+                if ($fd.Evidence) { & $add ('      证据：' + [string]$fd.Evidence) }
             }
         }
-        $fixCount = @($docLayers | Where-Object { Test-SysProxyFixable $_.Kind }).Count
-        & $add ('  这一层有没有问题：' + $(if ($fixCount -gt 0) { '有' } else { '没有' }))
+        $fixCount = @($findings | Where-Object { Test-FindingFixable $_.Kind }).Count
+        & $add ('  有没有可以修的残留：' + $(if ($fixCount -gt 0) { '有（' + $fixCount + ' 项）' } else { '没有' }))
     } catch {
         & $add ('  （取网络体检结论时出错：' + $_.Exception.Message + '）')
     }

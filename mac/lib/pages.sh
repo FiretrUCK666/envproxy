@@ -142,7 +142,7 @@ new_problem_report() {
         else
             printf "%s\n" "$_npr_layers" | while IFS="$(printf '\t')" read -r _nl_l _nl_s _nl_k _nl_u _nl_p _nl_b _nl_h; do
                 [ -n "$_nl_s" ] || continue
-                if sysproxy_fixable "$_nl_k"; then _nl_flag="【可修】"; else _nl_flag=""; fi
+                if finding_fixable "$_nl_k"; then _nl_flag="【可修】"; else _nl_flag=""; fi
                 case "$_nl_k" in
                     alive)    _nl_flag="（正在用）" ;;
                     managed)  _nl_flag="（被管理员锁定）" ;;
@@ -150,7 +150,7 @@ new_problem_report() {
                 esac
                 echo "  $_nl_l  $_nl_u  -> $_nl_k $_nl_flag"
             done
-            _npr_fix=$(printf "%s\n" "$_npr_layers" | awk -F"\t" 'NF>=3 {print $3}' | while read -r _k; do sysproxy_fixable "$_k" && echo x; done | wc -l | tr -d " ")
+            _npr_fix=$(printf "%s\n" "$_npr_layers" | awk -F"\t" 'NF>=3 {print $3}' | while read -r _k; do finding_fixable "$_k" && echo x; done | wc -l | tr -d " ")
         fi
         echo "  这一层有没有问题：$([ "${_npr_fix:-0}" -gt 0 ] && echo 有 || echo 没有)"
         echo ""
@@ -551,7 +551,7 @@ show_status() {
         #   manual 手动代理指向死端口 —— 浏览器打不开任何网页（真断网）
         #   pac    设置脚本指向死端口 —— 能上网，但每次开网页先卡几秒
         # 措辞与 Windows 侧逐字相同（两平台同一件事必须同一句话）。
-        if [ "$_sp_first_kind" = "$SYSPROXY_KIND_SLOWING" ]; then
+        if [ "$_sp_first_kind" = "$FINDING_KIND_SLOWING" ]; then
             _sp_text="有个设置脚本指向已经关掉的程序（网页能开，但每次要等几秒）"
         else
             _sp_text="指向本机一个已经关掉的程序（浏览器会打不开网页）"
@@ -870,7 +870,7 @@ EOF
     # （_spr_box 变成 "web<TAB>proxy-ok"、case 匹配不上、可修项全变 none）。
     while IFS="$(printf '\t')" read -r _sp_layer _sp_svc _sp_kind _sp_url _sp_port _sp_box _sp_hs; do
         [ -n "$_sp_svc" ] || continue
-        if sysproxy_fixable "$_sp_kind"; then
+        if finding_fixable "$_sp_kind"; then
             _sp_count=$((_sp_count + 1))
             if [ -z "$_sp_first_kind" ]; then
                 _sp_first_url="$_sp_url"

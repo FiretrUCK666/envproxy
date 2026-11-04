@@ -25,9 +25,12 @@
 # ------------------------------------------------------------------------------
 # 判定结论词（两侧同形，门禁 6 核对；Mac 侧见 doctor.sh 同一组）
 # ------------------------------------------------------------------------------
-# 只在这里定义一次，界面与状态页都读它——写两处必然分叉。
-$SysProxyKinds = @{
-    Clean         = 'clean'            # 压根没设代理
+# 只在这里定义一次，**所有检查器共用**、界面与状态页都读它——写两处必然分叉。
+# 名字叫 Finding 而不是 SysProxy：这套词现在描述的是「某一层网络设置出了什么事」，
+# 不再只服务于系统代理。多一层检查器不需要、也不许新增词——七个词表达的是
+# 「有没有东西 / 东西归谁 / 能不能修」，与层无关。
+$FindingKinds = @{
+    Clean         = 'clean'            # 压根没设
     Blocking      = 'residue-blocking' # 手动代理指向死端口：真断网，最高优先级
     Slowing       = 'residue-slowing'  # 自动配置脚本指向死端口：能上网但会卡几秒
     Alive         = 'alive'            # 回环地址 + 端口活着：翻墙软件正在用，不动
@@ -39,6 +42,52 @@ $SysProxyKinds = @{
     Unreadable    = 'unreadable'
 }
 
+# ------------------------------------------------------------------------------
+# 统一诊断记录（Finding）：所有检查器的输出只有这一种形状
+# ------------------------------------------------------------------------------
+# 为什么必须统一：界面的职责是「把可修的东西列出来、把不归我碰的东西列出来」，
+# 那与具体是哪一层毫无关系。只要每层的输出同构，界面就永远不用改——
+# 加一层检查器不需要碰界面一个字，这是「不堆补丁」在这里的具体含义。
+#
+# 字段：
+#   Id       稳定标识，进日志与报告（如 sysproxy.manual / cli-proxy.git）
+#   Kind     七个结论词之一
+#   Subject  给人看的分组名（「浏览器代理」「Git 自己的代理」）
+#   Where    东西在哪（层名、网卡名、文件路径）
+#   Value    当前值（地址、DNS 列表）
+#   Reason   为什么这么判。**只许引用廉价信号**（地址形态、端口三态、是否被管）
+#   Advice   使用者能做什么
+#   Evidence 贵信号（握手、属主、客户端名）。**只进报告，绝不参与授权**
+#   Fix      修它要调用哪个函数；空串 = 只诊断不修
+#   Fixable  由 Kind 算出来，不许调用方自己写比较
+function New-Finding {
+    param(
+        [string]$Id,
+        [string]$Kind,
+        [string]$Subject = '',
+        [string]$Where = '',
+        [string]$Value = '',
+        [string]$Reason = '',
+        [string]$Advice = '',
+        [string]$Evidence = '',
+        [string]$Fix = '',
+        $Data = $null
+    )
+    return @{
+        Id       = $Id
+        Kind     = $Kind
+        Subject  = $Subject
+        Where    = $Where
+        Value    = $Value
+        Reason   = $Reason
+        Advice   = $Advice
+        Evidence = $Evidence
+        Fix      = $Fix
+        Fixable  = (Test-FindingFixable $Kind)
+        Data     = $Data
+    }
+}
+
 # WinINET 的连接标志位。值与 Windows SDK 一致，改动会导致写进去的开关错位。
 $ProxyTypeProxy        = 0x02
 $ProxyTypeAutoProxyUrl = 0x04
@@ -47,8 +96,11 @@ $ProxyTypeAutoDetect   = 0x08
 # 判据里「哪个结论允许被修」只有一处：**只有 residue 两类**。
 # 界面要判断「这项能不能修」时调这个，不许自己写 -eq 比较——
 # 那样加一类结论就会漏掉界面那一处。
-function Test-SysProxyFixable([string]$Kind) {
-    return ($Kind -eq $SysProxyKinds.Blocking -or $Kind -eq $SysProxyKinds.Slowing)
+# 名字从 SysProxy 改成 Finding：它判的是所有检查器共用的那套结论词，
+# 不再只属于系统代理那一层。旧名保留成别名，因为界面上多处调用点
+# 改起来只是噪音，而两套实现才是真风险——下面这一行就是唯一实现。
+function Test-FindingFixable([string]$Kind) {
+    return ($Kind -eq $FindingKinds.Blocking -or $Kind -eq $FindingKinds.Slowing)
 }
 
 # ------------------------------------------------------------------------------
@@ -72,14 +124,14 @@ function Get-SystemProxyVerdict {
         [bool]$Managed = $false,
         [string]$Kind = 'manual'
     )
-    if ($Managed) { return $SysProxyKinds.Managed }
-    if (-not $Url -and $Port -le 0) { return $SysProxyKinds.Clean }
+    if ($Managed) { return $FindingKinds.Managed }
+    if (-not $Url -and $Port -le 0) { return $FindingKinds.Clean }
     # 地址拆不出端口、也不是合法地址：无从判断死活，归「不是本机代理」那类——不动。
-    if (-not (Test-LoopbackUrl $Url)) { return $SysProxyKinds.Foreign }
-    if ($null -eq $Alive) { return $SysProxyKinds.Foreign }
-    if ($Alive) { return $SysProxyKinds.Alive }
-    if ($Kind -eq 'pac') { return $SysProxyKinds.Slowing }
-    return $SysProxyKinds.Blocking
+    if (-not (Test-LoopbackUrl $Url)) { return $FindingKinds.Foreign }
+    if ($null -eq $Alive) { return $FindingKinds.Foreign }
+    if ($Alive) { return $FindingKinds.Alive }
+    if ($Kind -eq 'pac') { return $FindingKinds.Slowing }
+    return $FindingKinds.Blocking
 }
 
 # ------------------------------------------------------------------------------
@@ -403,7 +455,7 @@ function Test-SystemProxyManaged {
 #   Layer  标签（manual / pac / winhttp / blob）
 #   Url    地址原文
 #   Port   端口
-#   Kind   结论词（见 $SysProxyKinds）
+#   Kind   结论词（见 $FindingKinds）
 #   Detail 给人看的补充（什么时候用得到由界面决定）
 #
 # -Quick 只查手动代理与自动配置两层，且超时短——供每 2–3 秒刷新的状态页用。
@@ -504,7 +556,7 @@ function Get-SystemProxyLayers {
         if ($wh -and $wh.State -eq 'unknown') {
             [void]$out.Add(@{
                 Layer = 'winhttp'; Url = ''; Port = 0
-                Kind = $SysProxyKinds.Unreadable
+                Kind = $FindingKinds.Unreadable
                 Detail = ('这一层没读到：' + $wh.Detail)
             })
         }
@@ -681,20 +733,41 @@ function Get-WinHttpProxy {
 }
 
 # ------------------------------------------------------------------------------
-# 6. 备份：动手之前先把原样记下来，能还原
+# 6. 备份：事务日志（每次修复一个还原点，能撤销最近一次）
 # ------------------------------------------------------------------------------
 # 落在 monitor\ 下，与 state.snapshot 同一个运行时目录：卸载时会一起清掉，
 # 不新增一个「卸载之后还留在盘上」的位置。
 #
 # 为什么必须能还原：修系统代理是整个工具里除了卸载之外唯一会动「别人写的设置」的地方。
 # 用户回头发现某个程序连不上了，唯一能接受的说法是「我把它改回去」。
+#
+# **为什么从单槽位（doctor.bak）改成日志**：
+# 单槽位只有一个还原点，而且「只写一次」。一旦可修的层不止一处（系统代理 + 终端工具配置），
+# 这条规则立刻自相矛盾：修完 A 再修 B，槽位里存的仍是 A 之前的原样，
+# 用户按「还原」以为撤掉的是刚才那次，实际撤掉的是很久以前那次——
+# 而屏幕上只说「已经改回去了」。日志让每一次修复各自留一个还原点，
+# 「还原」= 撤销最近一次，语义与用户的心智一致。
+#
+# 格式（三行一段，追加写）：
+#   --- op <utc> <op-id> <result>
+#   <key>=<escaped value>        字段由各层自己声明，编解码沿用下面两个函数
+#   --- end
+# *result* 由还原时决定不了，写入时先记 'applied'；还原成功后再追加一条 op 记 'restored'
+# 是不必要的复杂度——还原只读，不写。
+#
+# 保留最近 $DoctorJournalKeep 段：太多了没人看，也把用户的日志目录撑大。
+$DoctorJournalKeep = 5
+
+function Get-DoctorJournalPath { return (Join-Path $MonitorDir 'doctor.journal') }
+# 旧版单槽位备份的位置。**仍然读、不再写**：升级前修过的人手里有它，
+# 直接丢掉等于把他们唯一的一次还原机会删了。
 function Get-SysProxyBackupPath { return (Join-Path $MonitorDir 'doctor.bak') }
 
 # 备份文件的行编码。
 #
 # **不能借用 runtime 层的快照编解码**：doctor 只允许依赖 base + probe，
-# 引 rutime 会造出 doctor <-> runtime 的新环（门禁 1/2 会拦）。
-# 这里的值只有代理地址、例外列表、PAC 地址三种，都是单行 ASCII 或带 ; 的短串，
+# 引 runtime 会造出 doctor <-> runtime 的新环（门禁 1/2 会拦）。
+# 这里的值都是地址、路径、例外列表这类单行短串，
 # 只需要挡住换行与 = 两个字符：
 #   换行会让一条记录裂成两行；= 会让「第一个 = 之前是键」这条解析错位。
 # 转义用 % 领头（与 URL 编码同形，读起来不陌生），% 自己先转，避免二次解码。
@@ -707,59 +780,109 @@ function ConvertFrom-DoctorBakValue([string]$Text) {
     return ($Text -replace '%3D', '=' -replace '%0A', "`n" -replace '%0D', "`r" -replace '%25', '%')
 }
 
-# 写备份。**只写一次**：每次覆盖就失效（用户第一次修之前的原样才是要还原的那个）。
-# 已经有备份就不动它。
-function Backup-SystemProxy {
-    param($Conn)
-    if (-not $Conn) { return $false }
+# 造一个还原点的正文（不含首尾标记）。$Fields 是有序哈希表：键名只许 [a-z0-9_]，
+# 值一律经过转义。写成有序是因为一个还原点往往要按顺序读回来。
+function Format-DoctorJournalEntry([string]$OpId, [string]$Result, $Fields) {
+    $lines = New-Object System.Collections.ArrayList
+    [void]$lines.Add(('--- op {0} {1} {2}' -f ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')), $OpId, $Result))
+    foreach ($k in $Fields.Keys) {
+        if ($k -notmatch '^[a-z0-9_]+$') { continue }
+        [void]$lines.Add(('{0}={1}' -f $k, (ConvertTo-DoctorBakValue ([string]$Fields[$k]))))
+    }
+    [void]$lines.Add('--- end')
+    return ($lines -join "`n")
+}
+
+# 读全部还原点，返回数组（旧的在前，最近的在后）。
+#
+# **读不出来返回空数组，不是抛错**：调用方据此说「没有可还原的记录」。
+# 猜一个默认值去写，等于把用户的设置改成我们编的。
+#
+# 读的时候同时兼容旧的 doctor.bak：它没有首尾标记，整份就是一段字段。
+# 把它当成一条 op 接在最前面（它年代最久），于是升级前修过的人**第一天就能还原**，
+# 不需要先再修一次。
+function Read-DoctorJournal {
+    $ops = New-Object System.Collections.ArrayList
+    # 旧单槽位备份：字段是 flags/server/bypass/pac，与系统代理那一层的字段同名。
     try {
-        # MonitorDir 由 base 层按需算出来；没装过的机器上它可能还没初始化。
+        $oldPath = Get-SysProxyBackupPath
+        if (Test-Item $oldPath) {
+            $map = @{}
+            foreach ($line in [System.IO.File]::ReadAllLines($oldPath, [System.Text.Encoding]::UTF8)) {
+                $m = [regex]::Match($line, '^(flags|server|bypass|pac)=(.*)$')
+                if ($m.Success) { $map[$m.Groups[1].Value] = (ConvertFrom-DoctorBakValue $m.Groups[2].Value) }
+            }
+            $f = 0
+            if ($map.ContainsKey('flags') -and [int]::TryParse([string]$map['flags'], [ref]$f) -and $f -ge 0 -and $f -le 0x0F) {
+                $fields = [ordered]@{
+                    inspector = 'sysproxy'
+                    layer     = 'legacy'
+                    flags     = [string]$f
+                    server    = [string]$map['server']
+                    bypass    = [string]$map['bypass']
+                    pac       = [string]$map['pac']
+                }
+                [void]$ops.Add(@{ Stamp = ''; OpId = 'legacy-bak'; Result = 'applied'; Fields = $fields })
+            }
+        }
+    } catch { }
+    try {
+        $path = Get-DoctorJournalPath
+        if (-not (Test-Item $path)) { return $ops }
+        $cur = $null
+        foreach ($line in [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)) {
+            $t = ([string]$line).TrimEnd()
+            if ($t -match '^--- op (\S+) (\S+) (\S+)$') {
+                $cur = @{ Stamp = $Matches[1]; OpId = $Matches[2]; Result = $Matches[3]; Fields = [ordered]@{} }
+                continue
+            }
+            if ($t -eq '--- end') {
+                # 没有字段的 op 是写了一半的：丢掉，别让「还原」去动一个空记录。
+                if ($cur -and $cur.Fields.Count -gt 0) { [void]$ops.Add($cur) }
+                $cur = $null
+                continue
+            }
+            if ($null -eq $cur) { continue }
+            $m = [regex]::Match($t, '^([a-z0-9_]+)=(.*)$')
+            if ($m.Success) { $cur.Fields[$m.Groups[1].Value] = (ConvertFrom-DoctorBakValue $m.Groups[2].Value) }
+        }
+    } catch { }
+    return $ops
+}
+
+# 追加一个还原点。返回 $true = 确实落盘了。
+#
+# **写不下来就返回假，调用方据此不动手**：没有退路的修改不该发生。
+# 保留最近 $DoctorJournalKeep 段——超了就整份重写（而不是截断），
+# 因为要按「段」丢，按字节截会把最后一段截成半截，下次读出来是一条无效记录。
+function Add-DoctorJournalEntry([string]$OpId, $Fields, [string]$Result = 'applied') {
+    try {
         $null = Ensure-MonitorPaths
         if (-not $MonitorDir) { return $false }
         if (-not (Test-Item $MonitorDir)) { [void](New-Item -Path $MonitorDir -ItemType Directory -Force -ErrorAction SilentlyContinue) }
-        $path = Get-SysProxyBackupPath
-        if (Test-Item $path) { return $true }
-        $lines = @(
-            ('flags={0}' -f $Conn.Flags)
-            ('server={0}' -f (ConvertTo-DoctorBakValue $Conn.ProxyServer))
-            ('bypass={0}' -f (ConvertTo-DoctorBakValue $Conn.ProxyBypass))
-            ('pac={0}' -f (ConvertTo-DoctorBakValue $Conn.AutoConfigUrl))
-        )
-        Write-Text -Path $path -Text ($lines -join "`n")
-        return (Test-Item $path)
+        $entry = Format-DoctorJournalEntry $OpId $Result $Fields
+        $existing = @(Read-DoctorJournal | Where-Object { $_.OpId -ne 'legacy-bak' })
+        # 只留最后 N-1 段，再拼上新的这一段，总数不超过 N。
+        $keep = @()
+        $keepCount = [Math]::Max(0, $DoctorJournalKeep - 1)
+        if ($existing.Count -gt $keepCount) { $existing = @($existing | Select-Object -Last $keepCount) }
+        foreach ($op in $existing) {
+            $keep += (Format-DoctorJournalEntry $op.OpId $op.Result $op.Fields)
+        }
+        $keep += $entry
+        Write-Text -Path (Get-DoctorJournalPath) -Text (($keep -join "`n") + "`n") -WithBom $false
+        return (Test-Item (Get-DoctorJournalPath))
     } catch {
         return $false
     }
 }
 
-# 读回备份。文件不存在或读不懂都返回 $null——调用方据此说「没有可还原的记录」，
-# 不能猜一个默认值去写：猜错等于把用户的设置改成我们编的。
-function Read-SystemProxyBackup {
-    try {
-        $path = Get-SysProxyBackupPath
-        if (-not (Test-Item $path)) { return $null }
-        $map = @{}
-        foreach ($line in [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)) {
-            $m = [regex]::Match($line, '^(flags|server|bypass|pac)=(.*)$')
-            if ($m.Success) { $map[$m.Groups[1].Value] = (ConvertFrom-DoctorBakValue $m.Groups[2].Value) }
-        }
-        if (-not $map.ContainsKey('flags')) { return $null }
-        $f = 0
-        if (-not [int]::TryParse([string]$map['flags'], [ref]$f)) { return $null }
-        # 长度校验：真实的标志位只用到低 4 位。超出这个范围的数字说明文件被写坏了
-        # （测试里出现过 "garbage" 被读到、flags 变成 0 的情况），
-        # 按 0 用会把代理整个关掉，所以这里直接判成「读不出来」。
-        if ($f -lt 0 -or $f -gt 0x0F) { return $null }
-        return @{
-            Flags = $f
-            ProxyServer = [string]$map['server']
-            ProxyBypass = [string]$map['bypass']
-            AutoConfigUrl = [string]$map['pac']
-        }
-    } catch {
-        return $null
-    }
+# 有没有能撤销的记录。界面据此决定要不要印「输 r 还原」那一行：
+# 备份在就允许还原，与「当下有没有可修项」是两件事。
+function Test-DoctorJournalHasRestore {
+    try { return (@(Read-DoctorJournal).Count -gt 0) } catch { return $false }
 }
+
 
 # ------------------------------------------------------------------------------
 # 7. 修复：只修可修的那几项，且必须回读确认
@@ -791,11 +914,22 @@ function Repair-SystemProxy {
     if (-not $before) { $res.Result = 'failed'; $res.Detail = 'read'; return $res }
 
     $layers = @(Get-SystemProxyLayers)
-    $fixable = @($layers | Where-Object { (Test-SysProxyFixable $_.Kind) })
+    $fixable = @($layers | Where-Object { (Test-FindingFixable $_.Kind) })
     if ($fixable.Count -eq 0) { return $res }
 
     # 备份写不下来就不动手：没有退路的修改不该发生。
-    if (-not (Backup-SystemProxy $before)) { $res.Result = 'nobackup'; return $res }
+    #
+    # 一个还原点只记「这次动之前长什么样」。同一层里 manual 与 pac 可能同时可修，
+    # 但它们改的是同一份 WinINET 配置，所以合成**一个**还原点——分开记会造出
+    # 两条内容相同、还原时互相覆盖的记录。
+    $backupFields = [ordered]@{
+        inspector = 'sysproxy'
+        flags     = [string]$before.Flags
+        server    = [string]$before.ProxyServer
+        bypass    = [string]$before.ProxyBypass
+        pac       = [string]$before.AutoConfigUrl
+    }
+    if (-not (Add-DoctorJournalEntry 'sysproxy' $backupFields)) { $res.Result = 'nobackup'; return $res }
 
     # 目标标志位：把「可修的层」关掉，其余层原样保留。
     #
@@ -832,7 +966,7 @@ function Repair-SystemProxy {
                 if (-not $sp) { $kept += $s; continue }
                 $segAlive = Test-TcpAlive (ConvertTo-ProbeHost $sp.Host) ([int]$sp.Port) 800
                 $segVerdict = Get-SystemProxyVerdict -Url $one -Port ([int]$sp.Port) -Alive $segAlive
-                if (Test-SysProxyFixable $segVerdict) { continue }   # 这一段是死的，丢掉
+                if (Test-FindingFixable $segVerdict) { continue }   # 这一段是死的，丢掉
                 $kept += $s
             }
             if ($kept.Count -eq 0) {
@@ -869,7 +1003,7 @@ function Repair-SystemProxy {
 
     # WinHTTP 是独立一层，需要管理员。不是管理员时不代跑，由界面给出命令。
     if ($IncludeWinHttp) {
-        $whLayers = @($layers | Where-Object { $_.Layer -eq 'winhttp' -and (Test-SysProxyFixable $_.Kind) })
+        $whLayers = @($layers | Where-Object { $_.Layer -eq 'winhttp' -and (Test-FindingFixable $_.Kind) })
         if ($whLayers.Count -gt 0) {
             if (Test-IsElevated) {
                 # 必须看 netsh 自己的退出码。原来的判法是"回读还没读到就算修好"——
@@ -904,20 +1038,26 @@ function Repair-SystemProxy {
     return $res
 }
 
-# 从备份还原。返回 $true = 回过读、值对上了。
-#
-# **没有备份时什么都不做**。原来这里先 Set 再判断，读不出备份时
-# Flags 取到 $null → 转成 0 → 等于「直连」，于是把用户的代理整个关掉了。
-# 实测踩到：备份文件是被写坏的内容，还原一次代理就从「手动代理开着」变成「全关」。
-# 没有可还原的记录，唯一安全的动作是不动。
-function Restore-SystemProxyBackup {
-    $bak = Read-SystemProxyBackup
-    if (-not $bak) { return $false }
-    if ($null -eq $bak.Flags) { return $false }
-    $ok = Set-SystemProxyConnection -Flags $bak.Flags -ProxyServer $bak.ProxyServer `
-        -ProxyBypass $bak.ProxyBypass -AutoConfigUrl $bak.AutoConfigUrl
-    if (-not $ok) { return $false }
+# 撤销一次系统代理修复。返回 'ok' / 'failed' / 'skip'。
+function Restore-SysProxySnapshot($Op) {
+    if (-not $Op) { return 'skip' }
+    $fl = 0
+    if (-not [int]::TryParse([string]$Op.Fields['flags'], [ref]$fl)) { return 'skip' }
+    # 长度校验：真实的标志位只用到低 4 位。超出这个范围的数字说明记录被写坏了
+    # （测试里出现过 "garbage" 被读到、flags 变成 0 的情况），
+    # 按 0 用会把代理整个关掉，所以这里直接判成「读不出来」。
+    if ($fl -lt 0 -or $fl -gt 0x0F) { return 'skip' }
+    $server = [string]$Op.Fields['server']
+    $bypass = [string]$Op.Fields['bypass']
+    $pac    = [string]$Op.Fields['pac']
+    $ok = Set-SystemProxyConnection -Flags $fl -ProxyServer $server -ProxyBypass $bypass -AutoConfigUrl $pac
+    if (-not $ok) { return 'failed' }
     $after = Get-SystemProxyConnection
-    if (-not $after) { return $false }
-    return ([int]$after.Flags -eq [int]$bak.Flags)
+    if (-not $after) { return 'failed' }
+    # 三类值都要比：只比标志位的话，「标志位改回去了、地址还留着」会被判成功——
+    # 而那正是「屏幕上说改回去了、浏览器还是不对」的来源。
+    if ([int]$after.Flags -ne $fl) { return 'failed' }
+    if ([string]$after.ProxyServer -cne $server) { return 'failed' }
+    if ([string]$after.AutoConfigUrl -cne $pac) { return 'failed' }
+    return 'ok'
 }

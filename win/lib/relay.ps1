@@ -292,15 +292,53 @@ public class EnvProxyRelay {
         return -1;
     }
 
+    // 读**恰好一包**，不等空行。
+    //
+    // 为什么必须有它：Handle 要先看一眼首字节才知道对面说的是 HTTP 还是 SOCKS，
+    // 而 SOCKS 的第一包没有 CRLF 空行、客户端随后也不发第二包（它在等我们回话）。
+    // 拿「读到空行为止」的那个函数去读 SOCKS，就会白等满超时才拿到这三个字节——
+    // 客户端早就超时放弃了。实测症状：上游 15 秒后确实收到了握手，客户端却什么都没有。
+    //
+    // 返回 null 表示这一包都没读到（对端连上就断了，或超时）。
+    private static byte[] ReadFirstPacket(Socket s, int timeoutMs) {
+        s.ReceiveTimeout = timeoutMs;
+        byte[] buf = new byte[8192];
+        int n;
+        try { n = s.Receive(buf); }
+        catch { return null; }
+        if (n <= 0) { return null; }
+        byte[] outb = new byte[n];
+        Array.Copy(buf, outb, n);
+        return outb;
+    }
+
     // 读到头的结尾（空行）为止，**不能只读一次**。
     // 客户端的请求头经常分两次写出，也可能是很大的 Cookie（>16KB）。
     // 只读一次就把半截头当完整头转给上游，上游等不到空行不应答，
     // 客户端挂满超时后收到 504——每条这类请求都彻底失败。
     private static byte[] ReadHead(Socket s, int timeoutMs) {
+        return ReadHeadAfter(s, null, timeoutMs);
+    }
+
+    // 同上，但允许把「已经读到的第一包」交给它接着读。
+    //
+    // 这个参数是为了 SOCKS：那种协议没有 CRLF 空行，先整段读头会一直等到超时。
+    // 所以调用方先读一包、看一眼首字节，确认是 HTTP 之后才把这一包交回来接着读。
+    // 传 null 时行为与原来的 ReadHead 完全一样（HTTP 路径没变）。
+    private static byte[] ReadHeadAfter(Socket s, byte[] first, int timeoutMs) {
         s.ReceiveTimeout = timeoutMs;
         byte[] buf = new byte[8192];
         MemoryStream ms = new MemoryStream();
         int total = 0;
+        if (first != null && first.Length > 0) {
+            ms.Write(first, 0, first.Length);
+            total += first.Length;
+            if (first.Length < MaxHeadBytes && IndexOfCrLfCrLf(ms.GetBuffer(), total) >= 0) {
+                byte[] done = new byte[total];
+                Array.Copy(ms.GetBuffer(), done, total);
+                return done;
+            }
+        }
         while (total < MaxHeadBytes) {
             int n;
             try { n = s.Receive(buf); }
@@ -358,36 +396,60 @@ public class EnvProxyRelay {
         Socket upstream = null;
         try {
             client.NoDelay = true;
-            byte[] head = ReadHead(client, 15000);
-            if (head == null) { return; }
-            string requestHead = Encoding.ASCII.GetString(head);
-
-            if (IsStatusRequest(requestHead)) {
-                int cur;
-                lock (_upLock) { cur = _upstreamPort; }
-                string body = "{\"running\":true,\"upstream\":" + cur + "}";
-                byte[] payload = Encoding.UTF8.GetBytes(body);
-                StringBuilder sb = new StringBuilder();
-                sb.Append("HTTP/1.1 200 OK\r\n");
-                sb.Append("Content-Type: application/json\r\n");
-                sb.Append("Content-Length: ").Append(payload.Length).Append("\r\n");
-                sb.Append("Connection: close\r\n");
-                sb.Append("X-EnvProxy-Relay: status\r\n");
-                sb.Append("X-EnvProxy-Upstream: ").Append(cur).Append("\r\n\r\n");
-                client.Send(Encoding.ASCII.GetBytes(sb.ToString()));
-                client.Send(payload);
-                return;
-            }
+            // 先只读一包，用它认出协议。**这是 SOCKS 能被接住的前提**：
+            // 整段「读到空行为止」的读法对 SOCKS 会一直等到超时——
+            // 那种协议的第一包没有 CRLF 空行，客户端随后也不发第二包（它在等我们回话）。
+            byte[] first = ReadFirstPacket(client, 15000);
+            if (first == null) { return; }
+            bool isSocks = (first.Length > 0 && (first[0] == 0x05 || first[0] == 0x04));
 
             string upHost;
             int upPort;
             lock (_upLock) { upHost = _upstreamHost; upPort = _upstreamPort; }
             if (upPort <= 0) {
+                // 上游还没定：先看看这是不是状态查询，不是就直接报没上游。
+                if (!isSocks && IsStatusRequest(Encoding.ASCII.GetString(first))) {
+                    ReplyStatus(client);
+                    return;
+                }
                 Reply(client, "HTTP/1.1 503 Service Unavailable", "no upstream", 0);
                 return;
             }
 
             bool timedOut;
+
+            // **SOCKS5/SOCKS4 走原始字节流，不解析 HTTP。**
+            //
+            // 为什么需要：这个固定入口常被当「混合端口」填进各种工具
+            // （ALL_PROXY、Docker、Maven、IDE 的设置框）。其中一部分会按 SOCKS 发握手，
+            // 而原来的读法会一直等到 15 秒超时、然后把连接丢掉。
+            // 用户看到的是「填了地址，卡十几秒，然后失败」，同一个地址在浏览器里却完全正常。
+            //
+            // 做法：SOCKS 的两个版本首字节是 0x04 / 0x05，看到就把它当成不透明字节流——
+            // 连上游、把已读到的这一包原样转过去，然后双向泵。
+            // 上游（混合端口）本来就同时说两种协议，不需要我们理解内容。
+            // **这个判断只碰首字节**，不实现 SOCKS 协议的任何部分，也不校验版本号与长度。
+            if (isSocks) {
+                upstream = ConnectUpstream(upHost, upPort, out timedOut);
+                if (upstream == null) {
+                    // 二进制协议没有 HTTP 状态码可言，直接断开——客户端会自己报错。
+                    return;
+                }
+                upstream.Send(first, 0, first.Length, SocketFlags.None);
+                RelayBinary(client, upstream);
+                return;
+            }
+
+            // 确认是 HTTP：把刚才那一包交回去，继续读到空行为止。
+            byte[] head = ReadHeadAfter(client, first, 15000);
+            if (head == null) { return; }
+            string requestHead = Encoding.ASCII.GetString(head);
+
+            if (IsStatusRequest(requestHead)) {
+                ReplyStatus(client);
+                return;
+            }
+
             upstream = ConnectUpstream(upHost, upPort, out timedOut);
             if (upstream == null) {
                 // 拒绝与超时要分开：拒绝是"上游没开"（去开翻墙软件），
@@ -451,6 +513,40 @@ public class EnvProxyRelay {
             try { if (client != null) { client.Close(); } } catch {}
             try { if (upstream != null) { upstream.Close(); } } catch {}
         }
+    }
+
+    // 把一条连接变成透明的双向字节流。用于 SOCKS 这类我们不解析的协议。
+    //
+    // 与 HTTP 分支的两点区别，都不是随手写的：
+    //   · 读超时必须清零。隧道里十几秒没有字节是完全正常的，
+    //     留着 ReadHead 那次设的超时，表现是「停十几秒不动就断了」，而且完全不报错。
+    //   · 不判响应、不等首包。二进制协议没有「响应头」这个概念，
+    //     等首包会把单向先发数据的协议卡死（SOCKS5 的方法协商就是客户端先说）。
+    private static void RelayBinary(Socket client, Socket upstream) {
+        client.ReceiveTimeout = 0;
+        upstream.ReceiveTimeout = 0;
+        Socket upRef = upstream;
+        Socket clRef = client;
+        Thread t = new Thread(delegate() { Pump(upRef, clRef); }, ThreadStackBytes);
+        t.IsBackground = true;
+        t.Start();
+        Pump(client, upstream);
+    }
+
+    private static void ReplyStatus(Socket client) {
+        int cur;
+        lock (_upLock) { cur = _upstreamPort; }
+        string body = "{\"running\":true,\"upstream\":" + cur + "}";
+        byte[] payload = Encoding.UTF8.GetBytes(body);
+        StringBuilder sb = new StringBuilder();
+        sb.Append("HTTP/1.1 200 OK\r\n");
+        sb.Append("Content-Type: application/json\r\n");
+        sb.Append("Content-Length: ").Append(payload.Length).Append("\r\n");
+        sb.Append("Connection: close\r\n");
+        sb.Append("X-EnvProxy-Relay: status\r\n");
+        sb.Append("X-EnvProxy-Upstream: ").Append(cur).Append("\r\n\r\n");
+        client.Send(Encoding.ASCII.GetBytes(sb.ToString()));
+        client.Send(payload);
     }
 
     private static void Reply(Socket s, string status, string why, int upPort) {

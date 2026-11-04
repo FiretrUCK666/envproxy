@@ -642,7 +642,7 @@ function Get-StatusSnapshot {
     $st.SysProxy = $null
     try {
         $spLayers = @(Get-SystemProxyLayers -Quick)
-        $spBad = @($spLayers | Where-Object { Test-SysProxyFixable $_.Kind })
+        $spBad = @($spLayers | Where-Object { Test-FindingFixable $_.Kind })
         if ($spBad.Count -gt 0) {
             # 只报第一个：状态页那一行是一句话，列一长串会读不下去。
             # 详细的几项留给「浏览器代理修复」那一屏。

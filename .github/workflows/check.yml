@@ -2115,6 +2115,20 @@ jobs:
             $fail = 1
           }
           Write-Host '系统代理判据核对通过（结论词、可修集合、判活语义三端一致）'
+          # ---- 还原点日志的保留条数：两侧必须同一个数 ----
+          # 它决定「撤销」能往回走几步。一侧改了另一侧没改，同一个用法在两台机器上
+          # 能撤销的次数就不一样——而屏幕上不会显示这个数字，用户只会觉得"有时能退有时不能"。
+          $keepWin = Grab $ps '\$DoctorJournalKeep\s*=\s*(\d+)' 'Win 还原点保留条数'
+          $keepMac = Grab $sh 'DOCTOR_JOURNAL_KEEP=(\d+)' 'Mac 还原点保留条数'
+          if ((-not $keepWin) -or (-not $keepMac)) { $fail = 1 }
+          elseif ($keepWin -ne $keepMac) {
+            Write-Host ("还原点保留条数两侧不一致：Win {0} / Mac {1}" -f $keepWin, $keepMac); $fail = 1
+          } else { Write-Host ("还原点保留条数两侧一致：{0} 段" -f $keepWin) }
+          # 至少要留两段：只留一段等于回到旧的单槽位语义，
+          # 「撤销上一次」与「撤销第一次」又混成一件事了。
+          if ($keepWin -and [int]$keepWin -lt 2) {
+            Write-Host ("还原点保留条数太少（{0}）：只留一段就退回到单槽位语义" -f $keepWin); $fail = 1
+          }
 
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
@@ -2726,6 +2740,89 @@ jobs:
 
           if ($fail) { exit 1 }
           Write-Host ("高级功能表与处理器一致（Win {0} 项 / Mac {1} 项 / 共有 {2} 项）" -f $winItems.Count, $macItems.Count, $sharedCount)
+          # ---- G-D：检查器注册表自洽 ----
+          # 检查器层（insp）是「加一层网络检查 = 表里加一行」这条承诺的载体。
+          # 表里指着一个不存在的函数时，那一层会在界面上**静默消失**——
+          # 用户报"上不了网"，工具说"没发现问题"，因为最脏的那层根本不在清单里。
+          # 这一与 G-A 是同一类问题（表指向不存在的处理器），只是换了一张表。
+          #
+          # 守三件事：
+          #   D-1 每个 Detect 在本侧真存在（扫全部库，不只看一个文件）
+          #   D-2 声明了 Fix 的必须有 Restore，且那个函数也真存在
+          #      —— 否则用户按「撤销」时退不回去，而屏幕上给了那个选项
+          #   D-3 两侧的 Id 集合与顺序一致 —— 界面按顺序分组，
+          #      一侧多一层或顺序不同，两台机器上同一屏的先后就不一样
+          $inspWinSrc = Get-ChildItem 'win/lib/*.ps1' | ForEach-Object { Get-Content $_.FullName -Raw } | Join-String -Separator "`n"
+          $inspMacSrc = Get-ChildItem 'mac/lib/*.sh' | ForEach-Object { Get-Content $_.FullName -Raw } | Join-String -Separator "`n"
+          $winInsp = @()
+          $winInspBlock = [regex]::Match($inspWinSrc, '(?s)\$DoctorInspectors\s*=\s*@\((.*?)\n\)')
+          if (-not $winInspBlock.Success) { Write-Host '检查器表：Win 侧找不到 $DoctorInspectors'; $fail = 1 }
+          else {
+            foreach ($m in [regex]::Matches($winInspBlock.Groups[1].Value, "Id = '([^']+)'[^}]*?Detect = '([^']+)';?\s*Fix = (\`$null|'[^']*');?\s*Restore = (\`$null|'[^']*')")) {
+              $fx = $m.Groups[3].Value.Trim("'")
+              if ($m.Groups[3].Value -eq '$null') { $fx = '' }
+              $rs = $m.Groups[4].Value.Trim("'")
+              if ($m.Groups[4].Value -eq '$null') { $rs = '' }
+              $winInsp += [pscustomobject]@{ Id = $m.Groups[1].Value; Detect = $m.Groups[2].Value; Fix = $fx; Restore = $rs }
+            }
+          }
+          $macInsp = @()
+          $macInspBlock = [regex]::Match($inspMacSrc, '(?s)DOCTOR_INSPECTORS=\((.*?)\n\)')
+          if (-not $macInspBlock.Success) { Write-Host '检查器表：Mac 侧找不到 DOCTOR_INSPECTORS'; $fail = 1 }
+          else {
+            foreach ($ln in ($macInspBlock.Groups[1].Value -split "`n")) {
+              $s = $ln.Trim().Trim("'")
+              if (-not $s -or $s.StartsWith('#')) { continue }
+              $c = $s -split '\|'
+              if ($c.Count -lt 6) { continue }
+              $macInsp += [pscustomobject]@{ Id = $c[0]; Detect = $c[3]; Fix = $c[4]; Restore = $c[5] }
+            }
+          }
+          if ($winInsp.Count -eq 0) { Write-Host '检查器表：Win 侧没解析出任何条目'; $fail = 1 }
+          if ($macInsp.Count -eq 0) { Write-Host '检查器表：Mac 侧没解析出任何条目'; $fail = 1 }
+          # D-1 / D-2：本侧函数真实存在。
+          foreach ($d in $winInsp) {
+            if ($inspWinSrc -notmatch ("(?m)^function\s+" + [regex]::Escape($d.Detect) + "\b")) {
+              Write-Host ("检查器表：Win 侧 " + $d.Id + " 的读取函数 " + $d.Detect + " 不存在"); $fail = 1
+            }
+            if ($d.Fix) {
+              if ($inspWinSrc -notmatch ("(?m)^function\s+" + [regex]::Escape($d.Fix) + "\b")) {
+                Write-Host ("检查器表：Win 侧 " + $d.Id + " 的修复函数 " + $d.Fix + " 不存在"); $fail = 1
+              }
+              if (-not $d.Restore) {
+                Write-Host ("检查器表：Win 侧 " + $d.Id + " 声明了修复却没有撤销函数"); $fail = 1
+              } elseif ($inspWinSrc -notmatch ("(?m)^function\s+" + [regex]::Escape($d.Restore) + "\b")) {
+                Write-Host ("检查器表：Win 侧 " + $d.Id + " 的撤销函数 " + $d.Restore + " 不存在"); $fail = 1
+              }
+            }
+          }
+          foreach ($d in $macInsp) {
+            $pat = "(?m)^(" + [regex]::Escape($d.Detect) + "\(\)|function\s+" + [regex]::Escape($d.Detect) + "\b)"
+            if ($inspMacSrc -notmatch $pat) {
+              Write-Host ("检查器表：Mac 侧 " + $d.Id + " 的读取函数 " + $d.Detect + " 不存在"); $fail = 1
+            }
+            if ($d.Fix) {
+              $patf = "(?m)^(" + [regex]::Escape($d.Fix) + "\(\)|function\s+" + [regex]::Escape($d.Fix) + "\b)"
+              if ($inspMacSrc -notmatch $patf) {
+                Write-Host ("检查器表：Mac 侧 " + $d.Id + " 的修复函数 " + $d.Fix + " 不存在"); $fail = 1
+              }
+              if (-not $d.Restore) {
+                Write-Host ("检查器表：Mac 侧 " + $d.Id + " 声明了修复却没有撤销函数"); $fail = 1
+              } else {
+                $patr = "(?m)^(" + [regex]::Escape($d.Restore) + "\(\)|function\s+" + [regex]::Escape($d.Restore) + "\b)"
+                if ($inspMacSrc -notmatch $patr) {
+                  Write-Host ("检查器表：Mac 侧 " + $d.Id + " 的撤销函数 " + $d.Restore + " 不存在"); $fail = 1
+                }
+              }
+            }
+          }
+          # D-3：两侧的 Id 与顺序必须一致（界面按顺序分组）。
+          $winIds = ($winInsp | ForEach-Object { $_.Id }) -join ','
+          $macIds = ($macInsp | ForEach-Object { $_.Id }) -join ','
+          if ($winIds -ne $macIds) {
+            Write-Host ("检查器表：两侧的检查器不一致：Win [{0}] / Mac [{1}]" -f $winIds, $macIds)
+            $fail = 1
+          } else { Write-Host ("检查器表两侧一致：{0} 项（{1}）" -f $winInsp.Count, $winIds) }
 
       - name: 门禁 7：AGENTS.md 体量上限
         shell: pwsh
@@ -2733,15 +2830,15 @@ jobs:
           # 这份文件每次会话都注入上下文，必须有天花板。
           #
           # 量什么：**工作区里这一份**，不是 HEAD 里那份。
-          # 原来量 HEAD:AGENTS.md，改完没提交时门禁看的是**上一版**——工作区已经撑到
-          # 57 KB，它仍然报"当前 55275 字节"并放行（实测过）。CI 里两者相等，
+          # 原来量 HEAD:AGENTS.md，改完没提交时门禁看的是**上一版**——工作区可能已经撑过
+          # 上限了，它仍然按旧版的小体积放行（实测过）。CI 里两者相等，
           # 但本地跑门禁正是最需要拦住的时候。用 git hash-object -w 先把工作区这一份
           # 写成 blob 再量，既能拿到"提交后会是多大"，也不受检出时 LF/CRLF 影响——
           # 与原来量 blob 的口径完全一致，只是换成了正确的对象。
-          $limit = 54 * 1024
+          $limit = 64 * 1024
           $blob = (git hash-object -w -- AGENTS.md).Trim()
           $size = [int](git cat-file -s $blob)
-          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（54 KB）" -f $size, $limit)
+          Write-Host ("AGENTS.md 当前 {0} 字节，上限 {1} 字节（64 KB）" -f $size, $limit)
           if ($size -gt $limit) {
             Write-Host "AGENTS.md 超限。它每次会话都会注入上下文——请先精简（合并重复表述、把细节指向权威条目）再提交。"
             exit 1

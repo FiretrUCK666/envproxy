@@ -255,7 +255,7 @@ function Get-AllLibSource {
 # 顺序有依赖的地方保留原顺序：前面几组会建立沙箱与假服务器，后面几组用它们。
 # ------------------------------------------------------------------------------
 $caseDir = Join-Path $PSScriptRoot 'cases'
-foreach ($caseName in @('env', 'probe', 'package', 'menu', 'update', 'ports', 'term', 'readme', 'doctor')) {
+foreach ($caseName in @('env', 'probe', 'package', 'menu', 'update', 'ports', 'term', 'readme', 'doctor', 'insp')) {
     $casePath = Join-Path $caseDir ($caseName + '.ps1')
     if (-not (Test-Path -LiteralPath $casePath)) {
         Write-Host ("missing case file: {0}" -f $casePath)

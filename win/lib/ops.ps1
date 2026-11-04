@@ -436,9 +436,12 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         # 「上次提示过的代理状态」。不删的后果具体：重装后的监控会读到上一份安装留下的值，
         # 于是重装后第一次真实变化被当成「已经提示过了」而静默跳过——用户换了端口却什么提示都没有。
         Remove-ItemSafe (Get-ProxyNotifyStatePath)
-        # 浏览器代理修复动手前留下的原样。不删的后果与 state.snapshot 同类：
-        # 重装后没有任何组件会用它，但它是使用者当时的系统代理设置副本——
+        # 修复动手前留下的还原点。不删的后果与 state.snapshot 同类：
+        # 重装后没有任何组件会用它，但它存着使用者当时的系统代理设置与配置文件原文——
         # 一份没人管理、也没人知道该不该删的配置留在盘上，本身就不该发生。
+        # 两份都要删：journal 是现行格式，bak 是旧版的单槽位备份
+        # （升级上来的机器上可能还留着，不删就成了永远没人清理的孤儿）。
+        Remove-ItemSafe (Get-DoctorJournalPath)
         Remove-ItemSafe (Get-SysProxyBackupPath)
         # 若无日志可留（从未运行过），空目录一并移除，不留任何痕迹
         $hasContent = Get-ChildItem -LiteralPath $MonitorDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1

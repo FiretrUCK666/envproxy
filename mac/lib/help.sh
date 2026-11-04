@@ -906,7 +906,7 @@ ADVANCED_ITEMS=(
     '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建固定走代理的快捷方式|挑一个已装的程序'
     '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
-    '4|Rescue|show_rescue_page|rescue|do|浏览器代理修复|浏览器打不开网页的时候，先来这里查一下'
+    '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页、终端工具连不上网的时候，先来这里查一下'
 )
 
 # 取一行里第 N 段，结果写进 _adv_out。段不存在时返回 1。
@@ -966,7 +966,7 @@ _assert_advanced_table() {
 # 分两段：icon 是「给某个程序定规矩」，rescue 是「出问题了先来查」。
 ADVANCED_MODULES=(
     'icon|给某个程序定规矩'
-    'rescue|浏览器上不了网的时候'
+    'rescue|上不了网的时候'
 )
 
 # 某个模块的"为什么需要它"。与上面的表分开维护：
@@ -984,8 +984,8 @@ _advanced_module_why() {
             '没法让某一个程序单独走、或者单独不走。' \
             '这里的壳子会在启动前把环境准备好，再交给真正的程序。' ;;
         rescue) printf '%s\n' \
-            '翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统的那条设置' \
-            '可能没来得及撤掉。浏览器照旧把请求发给一个已经不存在的程序，' \
+            '翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统和自己配置里的设置' \
+            '可能没来得及撤掉。浏览器和终端照旧把请求发给一个已经不存在的程序，' \
             '于是连国内网站都打不开——线没断，是路指错了。' ;;
     esac
 }
@@ -1100,192 +1100,4 @@ show_advanced_menu() {
             style_out warn "  没有这个编号：$_adm_ans（可用的有$_adm_keys，0 = 返回）"
         fi
     done
-}
-
-# 浏览器代理修复页：查出问题 -> 说清 -> 问一句 -> 修 -> 回读 -> 报结果。
-#
-# 这一屏的读法是「先结论、后明细、最后动作」，与状态页同一套：
-# 用户打开它的时候心里只有一个问题「我这网到底怎么了」。
-show_rescue_page() {
-    clear_screen_safe
-    # 这一屏的读法：范围 -> 结论 -> 明细 -> 兜底 -> 动作。
-    #
-    # 排版只靠空行与缩进分层次，不画横线。原来每一块之间都画一根，
-    # 一屏四根横线把内容切成四张卡片，眼睛不知道该先看哪块。
-    # 与 Windows 侧同一套（那边是 Show-RescuePage）。
-    #
-    # 重心放在**结论**上：用户点进来时心里只有一个问题「我这网怎么了」。
-    # 明细缩进一层，表示它是结论的注脚，不是并列的第二件事。
-    style_out title "======== 浏览器代理修复 ========"
-    echo ""
-    # 第一句就说清它管到哪儿。名字里带「浏览器」，但用户到这里时心里想的是
-    # 「我整个网都不行」——不说清，他会以为这一屏能修所有上网问题。
-    # 与 Windows 侧逐字相同（那边是 Show-RescuePage 开头那两句）。
-    style_out dim "  只修浏览器走的那个代理设置（Safari、Chrome、Edge 都读它）。"
-    style_out dim "  终端里的 git、npm、curl 不归这里管。"
-
-    _rs_layers=$(sysproxy_layers full)
-    _rs_fixable=0
-    _rs_blocking=0
-    _rs_slowing=0
-    _rs_foreign=0
-    _rs_managed=0
-    _rs_alivebroken=0
-    while IFS="$(printf '\t')" read -r _rs_l _rs_svc _rs_kind _rs_url _rs_port _rs_box _rs_hs; do
-        [ -n "$_rs_svc" ] || continue
-        case "$_rs_kind" in
-            "$SYSPROXY_KIND_BLOCKING") _rs_blocking=$((_rs_blocking + 1)) ;;
-            "$SYSPROXY_KIND_SLOWING")  _rs_slowing=$((_rs_slowing + 1)) ;;
-            "$SYSPROXY_KIND_FOREIGN")  _rs_foreign=$((_rs_foreign + 1)) ;;
-            "$SYSPROXY_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
-        esac
-        # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
-        # 拿不到（quick 或权限不足）时**不算**，绝不凭猜给用户指方向。
-        if [ "$_rs_kind" = "$SYSPROXY_KIND_ALIVE" ] && [ "${_rs_hs:-}" = "upstream-fail" ]; then
-            _rs_alivebroken=$((_rs_alivebroken + 1))
-        fi
-        sysproxy_fixable "$_rs_kind" && _rs_fixable=$((_rs_fixable + 1))
-    done <<EOF
-$_rs_layers
-EOF
-
-    # ---- 结论 + 明细 ----
-    #
-    # 这一屏只回答三件事：有没有问题、问题出在哪一行、我该敲什么。
-    # 所以结构是「一句话结论 -> 要动的那些行 -> 一条分隔线 -> 动作」。
-    #
-    # 两条硬规矩（改之前先读）：
-    #   1) 不给使用者看内部名词。「系统下载（WinHTTP）」这种词他看不懂，也没法据此行动，
-    #      下面统一说成「浏览器代理 / 自动配置脚本」——那是他自己在系统设置里能看见的东西。
-    #   2) 结论用色块区分严重度：ok 绿（没事）、warn 黄（要修）、dim 灰（说明）。
-    # 与 Windows 侧同一套（那边是 Show-RescuePage）。
-    echo ""
-    _rs_outofscope=0
-    if [ "$_rs_blocking" -gt 0 ]; then
-        style_out warn "  查完了：浏览器被指到了一个已经关掉的程序上，所以网页打不开。"
-        style_out dim  "          线没断，是路指错了。"
-    elif [ "$_rs_slowing" -gt 0 ]; then
-        style_out warn "  查完了：有个自动配置脚本指向已经关掉的程序。"
-        style_out dim  "          网页能开，但每次都要先等它几秒。"
-    elif [ "$_rs_alivebroken" -gt 0 ]; then
-        # 代理程序还开着、端口也活着，但它连不上外面。这一档必须说清是节点的问题：
-        # 说"没发现问题"会让用户去动系统代理，而删掉设置并不恢复网络（程序还占着端口），
-        # 只会把他能用的那条路删掉。
-        style_out warn "  查完了：设置本身没坏，但代理连不上外面。"
-        style_out dim  "          这多半是节点的问题。关掉重开代理软件，或者换一个节点。"
-        _rs_outofscope=1
-    else
-        style_out ok "  查完了：没发现问题，浏览器能正常联网。"
-        _rs_outofscope=1
-    fi
-
-    # 要动的那些行：只列「地址」，不重复结论里已经说过的那句原因。
-    if [ "$_rs_fixable" -gt 0 ]; then
-        echo ""
-        style_out warn "  要修的是："
-        while IFS="$(printf '\t')" read -r _rs_l2 _rs_svc2 _rs_kind2 _rs_url2 _rs_port2; do
-            [ -n "$_rs_svc2" ] || continue
-            sysproxy_fixable "$_rs_kind2" || continue
-            style_out text "    $_rs_url2"
-        done <<EOF
-$_rs_layers
-EOF
-    fi
-    # 不归我们碰的那些：只报地址，不逐条解释——那是使用者的东西，说清「我没动」就够。
-    if [ "$_rs_foreign" -gt 0 ] || [ "$_rs_managed" -gt 0 ]; then
-        echo ""
-        style_out dim "  另外 $((_rs_foreign + _rs_managed)) 项是你自己设的，本工具不碰："
-        while IFS="$(printf '\t')" read -r _rs_l3 _rs_svc3 _rs_kind3 _rs_url3 _rs_port3; do
-            [ -n "$_rs_svc3" ] || continue
-            case "$_rs_kind3" in
-                "$SYSPROXY_KIND_FOREIGN")
-                    # 地址不会为空：doctor.sh 里空地址已经判成 clean，不会走到这一档。
-                    style_out dim "    $_rs_url3"
-                    ;;
-                "$SYSPROXY_KIND_MANAGED")
-                    style_out dim "    （这台电脑由管理员统一管着）"
-                    ;;
-            esac
-        done <<EOF
-$_rs_layers
-EOF
-    fi
-
-    # ---- 兜底说明：讲清这一屏查不到什么 ----
-    # Proxifier / Netch / SSTap / 各种加速器走的是驱动、TUN 网卡与路由表，
-    # 它们出问题时 Internet Settings 里一个字节都不会变——扫注册表永远扫不出来。
-    if [ "$_rs_outofscope" = "1" ]; then
-        echo ""
-        style_out dim "  如果浏览器还是打不开网页，那问题不在这里："
-        style_out dim "  可能是虚拟网卡（TUN）、路由表、或者防火墙规则。"
-    fi
-
-    # ---- 动作 ----
-    #
-    # 分隔线只在这里用一条：把「上面是情况」和「下面是你要敲什么」分开。
-    # 别处不画线——这一屏上一次画了四根，把内容切成四张卡片，眼睛不知道先看哪块。
-    #
-    # 「能不能还原」与「当下有没有可修项」是两件事，必须分开判断。
-    # 最常撞上的时序：昨天修过（备份已写），今天客户端换回原端口，现在没有可修项了，
-    # 用户想把代理改回原样——若按「可修项为零」提前返回，他只会看到「按回车返回」，
-    # r 根本敲不到，而帮助页承诺了那条路。备份在就允许还原，与 fixable 无关。
-    echo ""
-    _rs_rule="  $(printf '%*s' 62 '' | tr ' ' '-')"
-    style_out dim "$_rs_rule"
-    echo ""
-    _rs_hasbak=0
-    [ -f "$(sysproxy_backup_path)" ] && _rs_hasbak=1
-    if [ "$_rs_fixable" -eq 0 ] && [ "$_rs_hasbak" -eq 0 ]; then
-        style_out dim "  按回车返回"
-        read -r _rs_dummy || true
-        return 0
-    fi
-    [ "$_rs_fixable" -gt 0 ] && style_out text "  输 y 回车 = 修好上面那 $_rs_fixable 项（会先备份，能还原）"
-    [ "$_rs_hasbak" -eq 1 ] && style_out dim "  输 r 回车 = 还原成第一次修之前的样子"
-    style_out dim "  直接回车 = 什么都不做，返回"
-    _rs_ans=""
-    if ! read -r _rs_ans 2>/dev/null; then return 0; fi
-    case "$_rs_ans" in
-        y|Y|yes|YES|是) ;;
-        r|R)
-            [ "$_rs_hasbak" -eq 1 ] || return 0
-            _rs_rr=$(sysproxy_restore)
-            echo ""
-            case "$_rs_rr" in
-                ok)       style_out ok "  [完成] 已经改回第一次修之前的样子。" ;;
-                canceled) style_out warn "  你取消了密码，什么都没改。" ;;
-                *)        style_out warn "  [未完成] 没能改回去。可以再试一次。" ;;
-            esac
-            style_out dim "  按回车返回"
-            read -r _rs_dummy || true
-            return 0 ;;
-        *) return 0 ;;
-    esac
-
-    # 真动手。mac 上改系统代理要管理员，会弹一次系统密码框。
-    echo ""
-    style_out text "  接下来会弹一个要开机密码的窗口，那是系统的，不是要装别的东西。"
-    _rs_res=$(sysproxy_repair)
-    echo ""
-    case "$_rs_res" in
-        fixed)
-            style_out ok "  [完成] 修好了。"
-            style_out dim "  浏览器要是还打不开，把它关掉重开一次。" ;;
-        none)
-            style_out dim "  查的时候还在，动手的时候已经没了（可能是你自己关掉了）。" ;;
-        managed)
-            style_out warn "  这台电脑的设置由管理员统一管着，本工具改不动。"
-            style_out dim "  需要的话请找管理员。" ;;
-        nobackup)
-            style_out warn "  [未完成] 备份写不下来，为了安全没有动任何设置。"
-            style_out dim "  确认日志目录可写之后再来一次。" ;;
-        canceled)
-            style_out warn "  你取消了密码，什么都没改。" ;;
-        *)
-            style_out warn "  [未完成] 没能改完。"
-            style_out dim "  可以再试一次；还不行就用主菜单的「问题反馈」生成一份报告。" ;;
-    esac
-    style_out dim "  按回车返回"
-    read -r _rs_dummy || true
-    return 0
 }

@@ -2051,14 +2051,16 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     _selftest_assert_eq "判据：域名代理永远不碰" "foreign" "$(sysproxy_verdict 'http://proxy.corp.com:3128' 3128 dead 0 manual)"
     _selftest_assert_eq "判据：被策略管着优先于一切" "managed" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 dead 1 manual)"
     _selftest_assert_eq "判据：说不清就不动" "foreign" "$(sysproxy_verdict 'http://127.0.0.1:7078' 7078 unknown 0 manual)"
-    _k=0; sysproxy_fixable residue-blocking && _k=1
+    _k=0; finding_fixable residue-blocking && _k=1
     _selftest_assert_eq "可修：blocking" "1" "$_k"
-    _k=0; sysproxy_fixable residue-slowing && _k=1
+    _k=0; finding_fixable residue-slowing && _k=1
     _selftest_assert_eq "可修：slowing" "1" "$_k"
     for _nk in alive foreign managed clean; do
-        _k=0; sysproxy_fixable "$_nk" && _k=1
+        _k=0; finding_fixable "$_nk" && _k=1
         _selftest_assert_eq "不可修：$_nk" "0" "$_k"
     done
+    # 判据只有一处实现：不许再出现第二个名字指向同一件事。
+    _selftest_assert_eq "fixable 判据只有 finding_fixable 一个名字" "" "$(command -v sysproxy_fixable 2>/dev/null || true)"
 
     echo "[13b] 判活只连端口，不建隧道（与 Windows 侧同判据）"
     # 这条防的是「把用户正在用的代理关掉」：代理端口活着、但翻墙节点挂了/目标被墙时，
@@ -2103,31 +2105,139 @@ except Exception: pass
         fi
     fi
 
-    echo "[14] 网络救援的备份只写一次，且能读回"
-    # 「只写一次」是契约：每次覆盖就失效——用户第一次修之前的原样才是要还原的那个。
+    echo "[14] 网络救援的还原点：追加、只撤最近一次、旧格式仍能读"
+    # 从单槽位（doctor.bak）换成日志的理由：可修的层不止一处之后，
+    # 「只写一次」的槽位会让「还原」撤掉很久以前那次，而屏幕上说「已经改回去了」。
+    # 这一节把新语义钉死：追加、按 inspector 分发、旧格式仍能读、条数有上限。
     _bk_saved="$MONITOR_DIR"
+    _bk_saved_log="$LOG_FILE"
     MONITOR_DIR="$_sandbox/rescue_bak"
+    # LOG_FILE 也要一起指进沙箱：ensure_monitor_paths 只在**两个都空**时才推导，
+    # 只改 MONITOR_DIR 会让它以为还没初始化，于是把路径改回真实的 monitor 目录——
+    # 那样"自检"就写进了使用者的运行时目录，而屏幕上写着全绿。
+    LOG_FILE="$MONITOR_DIR/monitor.log"
     mkdir -p "$MONITOR_DIR" 2>/dev/null || true
-    # 用替身顶掉真实的 networksetup：自检不该读也不该改使用者的系统代理设置。
-    networksetup() {
-        case "$1" in
-            -listallnetworkservices) printf 'An asterisk (*) denotes that a network service is disabled.\nWi-Fi\n' ;;
-            -getwebproxy) printf 'Enabled: Yes\nServer: 127.0.0.1\nPort: 7078\nAuthenticated Proxy Enabled: 0\n' ;;
-            -getsecurewebproxy|-getsocksfirewallproxy) printf 'Enabled: No\nServer: \nPort: 0\n' ;;
-            -getautoproxyurl) printf 'URL: (null)\nEnabled: No\n' ;;
-            *) return 0 ;;
-        esac
-    }
-    _bk_1=0; sysproxy_backup >/dev/null 2>&1 && _bk_1=1
-    _selftest_assert_eq "备份能写出来" "1" "$_bk_1"
-    _selftest_assert_eq "备份文件在" "1" "$([ -f "$MONITOR_DIR/doctor.bak" ] && echo 1 || echo 0)"
-    _bk_first=$(cat "$MONITOR_DIR/doctor.bak" 2>/dev/null)
-    printf 'Wi-Fi\tweb\tNo\t9.9.9.9\t1\n' > "$MONITOR_DIR/doctor.bak"
-    sysproxy_backup >/dev/null 2>&1
-    _bk_second=$(cat "$MONITOR_DIR/doctor.bak" 2>/dev/null)
-    _selftest_assert_eq "已有备份不被覆盖（只写一次）" "Wi-Fi	web	No	9.9.9.9	1" "$_bk_second"
-    unset -f networksetup 2>/dev/null || true
+    _bk_0=0; doctor_journal_has_restore && _bk_0=1
+    _selftest_assert_eq "一开始没有可还原的记录" "0" "$_bk_0"
+    _bk_1=0
+    add_doctor_journal_entry 'sysproxy' "inspector=sysproxy" "flags=3" "server=127.0.0.1:7078" && _bk_1=1
+    _selftest_assert_eq "还原点能写出来" "1" "$_bk_1"
+    _selftest_assert_eq "日志文件在" "1" "$([ -f "$(doctor_journal_path)" ] && echo 1 || echo 0)"
+    _selftest_assert_eq "一段可读" "1" "$(doctor_journal_count)"
+    _selftest_assert_eq "inspector 字段能读回" "sysproxy" "$(doctor_journal_last_field inspector)"
+    _selftest_assert_eq "值里的冒号能读回" "127.0.0.1:7078" "$(doctor_journal_last_field server)"
+    # 第二段：追加而不是覆盖。
+    add_doctor_journal_entry 'cli-proxy' "inspector=cli-proxy" "target=npm" "path=/tmp/x" >/dev/null 2>&1
+    _selftest_assert_eq "追加之后两段" "2" "$(doctor_journal_count)"
+    _selftest_assert_eq "最后一段是新的那个" "cli-proxy" "$(doctor_journal_last_field inspector)"
+    _selftest_assert_eq "旧的那段还在（追加不是覆盖）" "1" "$(grep -c 'inspector=sysproxy' "$(doctor_journal_path)" 2>/dev/null || echo 0)"
+    # 转义：值里有 = 与换行必须原样读回，否则配置文件还原会损坏。
+    _bk_val="a=b
+c=d"
+    add_doctor_journal_entry 'cli-proxy' "inspector=cli-proxy" "content=$(_bak_enc "$_bk_val")" >/dev/null 2>&1
+    _selftest_assert_eq "值里的 = 与换行能原样读回" "$_bk_val" "$(doctor_journal_last_field content)"
+    # 上限：写多了只留最近 N 段。不设上限就是往用户的日志目录里无限追加。
+    _bk_i=0
+    while [ "$_bk_i" -lt 10 ]; do
+        add_doctor_journal_entry 'sysproxy' "inspector=sysproxy" "flags=1" >/dev/null 2>&1
+        _bk_i=$((_bk_i + 1))
+    done
+    _selftest_assert_eq "条数有上限（等于 DOCTOR_JOURNAL_KEEP）" "$DOCTOR_JOURNAL_KEEP" "$(doctor_journal_count)"
     MONITOR_DIR="$_bk_saved"
+    LOG_FILE="$_bk_saved_log"
+
+    echo "[14b] 旧的单槽位备份仍然能读（升级上来的人第一天就能还原）"
+    # 升级前修过的人手里只有 doctor.bak。直接丢掉等于把他们唯一的一次还原机会删了，
+    # 所以新代码必须**认**它——只读不写。
+    _bk_saved2="$MONITOR_DIR"
+    MONITOR_DIR="$_sandbox/rescue_legacy"
+    mkdir -p "$MONITOR_DIR" 2>/dev/null || true
+    printf 'Wi-Fi\tweb\tYes\t127.0.0.1\t7078\n' > "$MONITOR_DIR/doctor.bak"
+    _lg_0=0; doctor_journal_has_restore && _lg_0=1
+    _selftest_assert_eq "只有旧备份时也提供还原" "1" "$_lg_0"
+    MONITOR_DIR="$_bk_saved2"
+
+    echo "[14c] 检查器注册表：每个声明的函数都真存在"
+    # 这一节守的是「加一层网络检查 = 表里加一行」这条架构承诺。
+    # 它一旦破了，每加一层就要改界面、改报告、改备份——那正是要避免的屎山。
+    _ic_0=0; assert_doctor_inspectors >/dev/null 2>&1 && _ic_0=1
+    _selftest_assert_eq "检查器表自检通过" "1" "$_ic_0"
+    _ic_n=$(printf '%s\n' "${DOCTOR_INSPECTORS[@]}" | grep -c .)
+    _selftest_assert_eq "至少有检查器" "1" "$([ "$_ic_n" -ge 1 ] && echo 1 || echo 0)"
+    # 每一项都必须有 Id 与 Detect；声明了 Fix 的必须有 Restore。
+    _ic_bad=0
+    for _ic_row in ${DOCTOR_INSPECTORS[@]+"${DOCTOR_INSPECTORS[@]}"}; do
+        _insp_field "$_ic_row" 1; _ic_id=$_insp_out
+        _insp_field "$_ic_row" 4; _ic_detect=$_insp_out
+        _insp_field "$_ic_row" 5; _ic_fix=$_insp_out
+        _insp_field "$_ic_row" 6; _ic_restore=$_insp_out
+        [ -n "$_ic_id" ] || _ic_bad=$((_ic_bad + 1))
+        [ -n "$_ic_detect" ] || _ic_bad=$((_ic_bad + 1))
+        if [ -n "$_ic_fix" ] && [ -z "$_ic_restore" ]; then _ic_bad=$((_ic_bad + 1)); fi
+    done
+    _selftest_assert_eq "每一项都有 Id/Detect，可修的都有 Restore" "0" "$_ic_bad"
+    # quick 档只跑 Quick=1 的：状态页每 2–3 秒刷一次，跑贵的检查器会把刷新拖垮。
+    _ic_quick_bad=0
+    while IFS="$(printf '\t')" read -r _ic_qid _ic_qkind _ic_qsubj _ic_qwhere _ic_qval _ic_qr _ic_qa _ic_qfix; do
+        [ -n "$_ic_qid" ] || continue
+        _ic_pre=${_ic_qid%%.*}
+        _ic_isq=$(insp_field_of_id "$_ic_pre" 3)
+        [ "$_ic_isq" = "1" ] || _ic_quick_bad=$((_ic_quick_bad + 1))
+    done <<EOF
+$(invoke_doctor_check quick)
+EOF
+    _selftest_assert_eq "quick 档只跑标了 1 的检查器" "0" "$_ic_quick_bad"
+    # 全量档至少能跑（不崩、不产出 error 行）。
+    _ic_flag=0
+    invoke_doctor_check full | grep -q '^[^	]*\.error' && _ic_flag=1
+    _selftest_assert_eq "全量档没有检查器崩掉" "0" "$_ic_flag"
+
+    echo "[14d] 终端工具代理的判据（cli-proxy）"
+    # 与系统代理同构：本机回环 + 端口死 = 可修；其余一律不动。
+    # 每一条都对应一种「删掉用户唯一的上网路径」或「删了他公司代理」的真实后果。
+    _selftest_assert_eq "cli 判据：回环死端口可修" "$FINDING_KIND_BLOCKING" "$(cli_proxy_verdict 'http://127.0.0.1:7890' dead 0)"
+    _selftest_assert_eq "cli 判据：回环活端口不动" "$FINDING_KIND_ALIVE" "$(cli_proxy_verdict 'http://127.0.0.1:7890' alive 0)"
+    _selftest_assert_eq "cli 判据：说不清就不动" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'http://127.0.0.1:7890' unknown 0)"
+    _selftest_assert_eq "cli 判据：localhost 也算回环" "$FINDING_KIND_BLOCKING" "$(cli_proxy_verdict 'http://localhost:10809' dead 0)"
+    _selftest_assert_eq "cli 判据：方括号 IPv6 也算回环" "$FINDING_KIND_BLOCKING" "$(cli_proxy_verdict 'http://[::1]:10808' dead 0)"
+    _selftest_assert_eq "cli 判据：公司代理永远不碰" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'http://proxy.corp.com:3128' dead 0)"
+    _selftest_assert_eq "cli 判据：内网代理也不碰" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'http://10.0.0.8:8080' dead 0)"
+    _selftest_assert_eq "cli 判据：空值等于没设" "$FINDING_KIND_CLEAN" "$(cli_proxy_verdict '' dead 0)"
+    _selftest_assert_eq "cli 判据：有 include 就不动" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'http://127.0.0.1:7890' dead 1)"
+    _selftest_assert_eq "cli 判据：认不出的值不动" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'not-a-url' dead 0)"
+    # 行解析：三种写法都要认，注释必须不认。
+    _cli_config_line_parse 'proxy = http://127.0.0.1:7890'
+    _selftest_assert_eq "cli 行解析：键值" "proxy" "$_cfl_key"
+    _selftest_assert_eq "cli 行解析：值" "http://127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse 'proxy = "http://127.0.0.1:7890"'
+    _selftest_assert_eq "cli 行解析：双引号被剥掉" "http://127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse "proxy='http://127.0.0.1:7890'"
+    _selftest_assert_eq "cli 行解析：单引号被剥掉" "http://127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse 'proxy = http://127.0.0.1:7890   '
+    _selftest_assert_eq "cli 行解析：尾部空白被去掉" "http://127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse 'proxy=socks5://127.0.0.1:1080'
+    _selftest_assert_eq "cli 行解析：socks 写法保留" "socks5://127.0.0.1:1080" "$_cfl_val"
+    _cli_config_line_parse '# proxy=http://127.0.0.1:7890'
+    _selftest_assert_eq "cli 行解析：# 注释不是设置" "1" "$?"
+    _cli_config_line_parse '; proxy=http://127.0.0.1:7890'
+    _selftest_assert_eq "cli 行解析：; 注释不是设置" "1" "$?"
+    _cli_config_line_parse '[http]'
+    _selftest_assert_eq "cli 行解析：段头不是设置" "1" "$?"
+    # 读文件：段名要拼进键名，include 要能被认出来，注释行不许命中。
+    _cli_dir="$_sandbox/cli_proxy"
+    mkdir -p "$_cli_dir" 2>/dev/null || true
+    # 两个段各一条代理：只找到一条就说明"段名拼进键名"那条逻辑没生效。
+    printf '[user]\n    name = someone\n[http]\n    proxy = http://127.0.0.1:10809\n[https]\n    proxy = http://127.0.0.1:10809\n[include]\n    path = ../other\n' > "$_cli_dir/gitconfig"
+    _cli_rows=$(read_cli_proxy_file "$_cli_dir/gitconfig" 'http.proxy https.proxy')
+    _selftest_assert_eq "cli 读文件：找到两条代理项" "2" "$(printf '%s\n' "$_cli_rows" | grep -c .)"
+    _selftest_assert_eq "cli 读文件：键带段名" "http.proxy" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f2)"
+    _selftest_assert_eq "cli 读文件：认出了 include" "1" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f4)"
+    printf '# proxy=http://127.0.0.1:9999\nregistry=https://r/\nproxy=http://127.0.0.1:7890\n' > "$_cli_dir/.npmrc"
+    _cli_rows2=$(read_cli_proxy_file "$_cli_dir/.npmrc" 'proxy https-proxy')
+    _selftest_assert_eq "cli 读文件：注释掉的 proxy 不算" "1" "$(printf '%s\n' "$_cli_rows2" | grep -c .)"
+    _selftest_assert_eq "cli 读文件：活着的那条被读到" "http://127.0.0.1:7890" "$(printf '%s\n' "$_cli_rows2" | head -n 1 | cut -f3)"
+    # 文件不存在 = 读成功、零条目（「这一层不存在」不是「读不出来」）。
+    _selftest_assert_eq "cli 读文件：不存在的文件产出零行" "0" "$(read_cli_proxy_file "$_cli_dir/no-such" 'proxy' | grep -c .)"
 
     echo "[15] PAC 端口解析、裸 IPv6、地址形态"
     # 三条都对应"永远修不好"或"误判"的真实缺陷。
@@ -2182,18 +2292,23 @@ except Exception: pass
     _selftest_assert_eq "握手：2000 绝不能被读成 200" "upstream-fail" "$(handshake_kind_text 'HTTP/1.1 2000 weird')"
 
     # 救援页那一档必须同时要求「活着」+「握手说上游失败」。
+    #
+    # 判断成两类： 「有代理在跑但连不出去」与「设置指向死端口」是**两种病**，
+    # 前者不该建议用户去动系统代理（删了也不恢复网络，只会把他能用的路径删掉）。
+    # 所以这一屏必须有那么一档，且它的出现条件是那两个信号同时成立。
     _rp_src=$(all_lib_source)
     case "$_rp_src" in
-        *"_rs_alivebroken"*) _selftest_assert_eq "救援页：节点那一档存在" "1" "1" ;;
-        *) _selftest_assert_eq "救援页：节点那一档存在" "1" "0" ;;
-    esac
-    case "$_rp_src" in
-        *"upstream-fail"*) _selftest_assert_eq "救援页：它要握手证据" "1" "1" ;;
-        *) _selftest_assert_eq "救援页：它要握手证据" "1" "0" ;;
+        *"upstream-fail"*) _selftest_assert_eq "救援页：认得出「代理活着但连不出去」这一档" "1" "1" ;;
+        *) _selftest_assert_eq "救援页：认得出「代理活着但连不出去」这一档" "1" "0" ;;
     esac
     case "$_rp_src" in
         *"多半是节点的问题"*) _selftest_assert_eq "救援页：台词指向节点" "1" "1" ;;
         *) _selftest_assert_eq "救援页：台词指向节点" "1" "0" ;;
+    esac
+    # 这一档的台词本身不许出现"删/清掉设置"之类的话——那正是错的指导。
+    case "$_rp_src" in
+        *"删掉设置"*|*"清掉设置"*) _selftest_assert_eq "救援页：台词不叫人去删设置" "1" "0" ;;
+        *) _selftest_assert_eq "救援页：台词不叫人去删设置" "1" "1" ;;
     esac
 
     # quick 档不采集握手，所以状态页永远不会误报这一档。
