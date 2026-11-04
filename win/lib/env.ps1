@@ -349,15 +349,28 @@ function Test-SnapshotRecorded([string]$Name, [string]$Value) {
     try {
         if (-not (Test-RegKey (Get-PrevEnvRegKeyPath))) {
             # 快照键整个不存在——这里有两件**结果相反**的事，必须分开：
-            #   装过（机器上有安装记录）却没快照：只可能是"装前本机就没这个名字"，
-            #     所以现在这个本机值是我们写的 -> 返回 $false（我们写的）。
+            #   装过（机器上有安装记录）却没快照：快照写失败了（磁盘满、注册表被拦）。
+            #     **这时不能认领任何本机值**——不知道装前是什么，删掉就再也还原不回来。
             #   从没装过：这个本机代理是使用者自己挂的 mitmproxy/跳板，
-            #     没有任何证据指向我们 -> 返回 $null（不知道，一个都不动）。
-            # 折叠成 $false 的后果是：在一台从没装过的机器上点一次"停止"，
-            # 就把使用者自己设的本机代理删掉，而且没有快照可以还原。
-            # 判据用安装记录（ScriptPath），与安装侧判断"首次安装"用的是同一处事实。
-            if (-not (Test-HasInstallRecord)) { return $null }
-            return $false
+            #     同样没有任何证据指向我们 -> 返回 $null（不知道，一个都不动）。
+            # 两种都返回 $null。原来"装过"那支返回 $false（=我们写的），
+            # 于是装完快照失败的用户，第一次判 off 就丢掉自己设的本机代理。
+            return $null
+        }
+        # 键在、但缺"快照已完成"标记：早期版本装的，或写到一半失败。
+        # 保守处理：当成不知道。旧快照（本版本之前）没有这个标记，
+        # 但它们是真的写完的——用一个补充判据区分：键里有任何一项就算写成功过。
+        $marker = $null
+        try { $marker = (Get-ItemProperty -LiteralPath (Get-PrevEnvRegKeyPath) -Name 'SnapshotComplete' -ErrorAction SilentlyContinue).SnapshotComplete } catch {}
+        if ($null -eq $marker) {
+            # 没有标记：只有在键里确实存着东西时才能确认它写完过。
+            # 一条都没有 = 写失败留下的空键（或真的什么都没存），一律不知道。
+            $hasAny = $false
+            try {
+                $k = Get-Item -LiteralPath (Get-PrevEnvRegKeyPath) -ErrorAction Stop
+                if ($k.GetValueNames().Count -gt 0) { $hasAny = $true }
+            } catch {}
+            if (-not $hasAny -and (Test-HasInstallRecord)) { return $null }
         }
         $raw = Get-PrevEnvRaw $Name
         if ($null -eq $raw) {
@@ -554,6 +567,11 @@ function Snapshot-PrevEnv([bool]$FirstInstall = $false) {
             } catch { $failed = $true }
         }
         if ($failed) { return 1 }
+        # **写一个明确的"快照已完成"标记。** 只靠"键在不在"分不清两件事：
+        #   装前本机就没这些变量 -> 键是空的，但确实拍过快照（返回 0）；
+        #   快照写失败          -> 键可能没建起来，或建了但是空的。
+        # 两者对归属判断的含义完全相反，必须能分开。
+        try { Set-ItemProperty -Path (Get-PrevEnvRegKeyPath) -Name 'SnapshotComplete' -Value 1 -ErrorAction Stop } catch { return 1 }
         return 0
     } catch { return 1 }
 }

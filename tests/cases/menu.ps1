@@ -64,6 +64,27 @@ Assert-Eq 'lock: it tries the global namespace first, then the local one' 'True'
     ([bool]([regex]::IsMatch($entrySrc, '(?s)foreach \(\$local in @\(\$false, \$true\)\)')))
 Assert-Eq 'lock: a lock that cannot even be created is reported differently' 'True' `
     ([bool]([regex]::IsMatch($entrySrc, 'OpLockUnavailable')))
+# 快照写失败时不能认领用户自己的本机代理。
+# 装过却没快照，只可能是"装前本机就没这个名字"（安全）或"快照写失败了"（危险）——
+# 后者不知道装前是什么，认领就等于删掉一个还原不回来的值。
+$envSrc = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'lib\env.ps1'), [System.Text.Encoding]::UTF8)
+$snapFn = [regex]::Match($envSrc, '(?s)function Test-SnapshotRecorded.*?\n\}')
+Assert-Eq 'snapshot: the ownership check is found' 'True' ([string]$snapFn.Success)
+if ($snapFn.Success) {
+    $s = $snapFn.Value
+    # 键不存在的那支必须返回 $null（不知道），不许返回 $false（我们写的）。
+    Assert-Eq 'snapshot: a missing key never claims ownership' 'False' `
+        ([bool]([regex]::IsMatch($s, '(?s)PrevEnvRegKeyPath\)\)\s*\{\s*(?:#[^\n]*\n\s*)*return \$false')))
+    # 那支的结论必须是"不知道"。正文里 return $null 出现在注释之后，
+    # 所以按"这段里 return $null 在 return $false 之前"来判，不依赖注释格式。
+    $nullAt = $s.IndexOf('return $null')
+    $falseAt = $s.IndexOf('return $false')
+    Assert-Eq 'snapshot: a missing key yields unknown, not ownership' 'True' `
+        ([string](($nullAt -ge 0) -and ($falseAt -lt 0 -or $nullAt -lt $falseAt)))
+}
+# 写快照成功时要留下完成标记，否则"空快照"与"没写成功"分不开。
+$completeMark = $envSrc -match 'SnapshotComplete'
+Assert-Eq 'snapshot: completion is recorded explicitly' 'True' ([string]$completeMark)
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
 # switches, so every number must resolve and every switch must exist.
