@@ -511,16 +511,25 @@ function Test-IsElevated {
     } catch { return $false }
 }
 
-function Get-MutexName([string]$Base) {
+function Get-MutexName([string]$Base, [switch]$Local) {
     # 互斥体按用户隔离：机器级 Global\ 配当前用户 SID。
     # 同一台电脑多个账户各装一份时互不干扰；同一用户多次登录共用同一把锁，单监控语义不变。
     # 拿不到 SID 就回落到无后缀，绝不因此罢工。
     # 放在 base：入口的安装/更新锁与库里的写变量锁都用它，库不许回头依赖入口。
+    #
+    # -Local：降级到会话级的 Local\ 命名空间。
+    # **必须能降级**：有些受限会话、安全策略或沙箱不让建 Global\ 对象，
+    # 此时 New-Object Mutex 会抛异常。不降级的话 install/uninstall/stop/update
+    # 四个动作全部永久失败，而提示写的是「另一个安装正在进行」——
+    # 一句假话，用户重试到天荒地老也不会好。
+    # 代价只是跨会话不再互斥（同一用户在同一台机器的多个会话里各有一把锁），
+    # 比「完全不能用」好得多。
+    $ns = if ($Local) { 'Local' } else { 'Global' }
     try {
         $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        if ($sid) { return ("Global\{0}-{1}" -f $Base, $sid) }
+        if ($sid) { return ("{0}\{1}-{2}" -f $ns, $Base, $sid) }
     } catch {}
-    return ("Global\{0}" -f $Base)
+    return ("{0}\{1}" -f $ns, $Base)
 }
 
 # 小写化 + 去空白，用于合并去重（比较时大小写不敏感）

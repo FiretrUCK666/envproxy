@@ -163,16 +163,40 @@ foreach ($libName in $CoreLibs) { . (Join-Path $LibDir ("{0}.ps1" -f $libName)) 
 # 所以这里不需要 AbandonedMutexException 分支，保持 catch 全收。
 # 互斥体的名字由 base 层的 Get-MutexName 生成（库里的写变量锁也用它，所以它不在入口）。
 function Get-OpLock {
-    try {
-        $m = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp"))
-        if (-not $m.WaitOne(0)) { return $null }
-        return $m
-    } catch { return $null }
+    # 先试 Global\（跨会话互斥，理想情况）；建不出来就降级到 Local\。
+    #
+    # **必须区分"建不出锁"与"锁被别人拿着"**：原来这两件事都落到 `return $null`，
+    # 上层于是统一报「另一个安装正在进行」——而当 Global\ 不可用时，
+    # 根本没有另一个安装，那句话是假的，用户怎么重试都不会好。
+    # 现在：建不出来就降级，降级也不行才报"锁不可用"（另一种话术）。
+    foreach ($local in @($false, $true)) {
+        try {
+            $m = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp" -Local:$local))
+            if (-not $m.WaitOne(0)) {
+                # 锁建出来了但被占着：这才是真的"另一个安装正在进行"。
+                $script:OpLockBusy = $true
+                return $null
+            }
+            if ($local) { Write-MonitorLog "操作锁降级到 Local 命名空间（Global 不可用）。" }
+            return $m
+        } catch { continue }
+    }
+    # 两个命名空间都建不出来：这是环境问题，不是"有别人在用"。
+    $script:OpLockUnavailable = $true
+    return $null
 }
 function Exit-IfOpBusy {
+    $script:OpLockBusy = $false
+    $script:OpLockUnavailable = $false
     $m = Get-OpLock
     if (-not $m) {
-        Write-Styled 'warn' "另一个安装/更新正在进行，请等它结束再试（没有做任何改动）。"
+        # 两种原因说两种话：说错了用户会一直重试一个并不存在的「另一个安装」。
+        if ($script:OpLockUnavailable) {
+            Write-Styled 'warn' "这台电脑不让本工具加锁（可能是安全策略或受限会话），所以没法安全地改动。"
+            Write-Styled 'dim'  "  可以先关掉正在跑的监控窗口再试；还是不行的话，换个普通终端再试一次。"
+        } else {
+            Write-Styled 'warn' "另一个安装/更新正在进行，请等它结束再试（没有做任何改动）。"
+        }
         exit 1
     }
     return $m

@@ -51,6 +51,19 @@ Assert-Eq '卸载: 运行时状态逐项点到（不留过期答案）' '' ($unM
 # 目录只删空的：使用者在 %USERPROFILE%\.envproxy 里自己放的东西一个字节都不许动。
 Assert-Eq '卸载: 工具目录只在空时才删（不碰使用者的东西）' $true ($unBody -match 'Get-ChildItem -LiteralPath \$epHome')
 
+# 操作锁必须能降级：有些受限会话/安全策略不让建 Global\ 对象。
+# 不降级的后果是 install/uninstall/stop/update 四个动作全部永久失败，
+# 而提示写的是「另一个安装正在进行」——一句假话，用户怎么重试都不会好。
+Assert-Eq 'lock: Global naming carries the user sid' 'True' `
+    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp'), '^Global\\EnvProxyInstallOp-S-')))
+Assert-Eq 'lock: the local fallback drops the Global prefix' 'True' `
+    ([bool]([regex]::IsMatch((Get-MutexName 'EnvProxyInstallOp' -Local), '^Local\\EnvProxyInstallOp-S-')))
+# 建不出来与"被别人占着"必须能分开：两件事的提示完全不同。
+$entrySrc = [System.IO.File]::ReadAllText((Join-Path $ScriptDir 'envproxy.ps1'), [System.Text.Encoding]::UTF8)
+Assert-Eq 'lock: it tries the global namespace first, then the local one' 'True' `
+    ([bool]([regex]::IsMatch($entrySrc, '(?s)foreach \(\$local in @\(\$false, \$true\)\)')))
+Assert-Eq 'lock: a lock that cannot even be created is reported differently' 'True' `
+    ([bool]([regex]::IsMatch($entrySrc, 'OpLockUnavailable')))
 Write-Host '[11] the menu dispatch table'
 # The menu maps numbers to existing entry switches; the shells call back through these
 # switches, so every number must resolve and every switch must exist.
