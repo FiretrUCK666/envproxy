@@ -618,6 +618,38 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     if test_endpoint_status 404 3xx; then _ep_f=1; else _ep_f=0; fi
     _selftest_assert_eq "端点判据：3xx 类收到 404 不算通" "0" "$_ep_f"
 
+    # 端点合格证：一个端点的"通"只有在**直连它不通**时才证明得了代理能出去。
+    #
+    # 这一组挡的是一个真实发生过的误判（2026-11-06）：用户换节点后节点域名消失，
+    # 所有真被墙的站点一律回 502，而 www.gstatic.com 与 connectivitycheck.gstatic.com
+    # 在那个网络下直连就回 204（国内有落地）。旧代码只看"经代理拿到期望应答"，
+    # 于是从这两个端点收到 204、判成"翻墙中"，把一条死代理注入到每个终端里。
+    # 直连那一侧换掉取值函数，用例因此不依赖这台机器能不能翻墙。
+    _ep_saved_direct=$(declare -f test_endpoint_direct 2>/dev/null || true)
+    _ep_saved_checked="$ENDPOINT_PROOF_CHECKED"
+    _ep_saved_walled="$ENDPOINT_PROOF_WALLED"
+    # 造一个"直连也通"的答案：全部返回 0（= 直连就能通）
+    eval 'test_endpoint_direct() { return 0; }'
+    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
+    if endpoint_is_walled 0; then _ep_g=1; else _ep_g=0; fi
+    _selftest_assert_eq "合格证：直连就能通的端点不算证据" "0" "$_ep_g"
+    # 再造一个"直连不通"的答案
+    eval 'test_endpoint_direct() { return 1; }'
+    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
+    if endpoint_is_walled 0; then _ep_h=1; else _ep_h=0; fi
+    _selftest_assert_eq "合格证：直连不通的端点算证据" "1" "$_ep_h"
+    # 缓存必须真的生效：问过一次就不再问（否则每轮都白问六个直连）
+    _ep_calls=0
+    eval 'test_endpoint_direct() { _ep_calls=$((_ep_calls + 1)); return 1; }'
+    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
+    endpoint_is_walled 0 >/dev/null 2>&1 || true
+    endpoint_is_walled 0 >/dev/null 2>&1 || true
+    endpoint_is_walled 0 >/dev/null 2>&1 || true
+    _selftest_assert_eq "合格证：同一个端点只问一次直连" "1" "$_ep_calls"
+    if [ -n "$_ep_saved_direct" ]; then eval "$_ep_saved_direct"; else unset -f test_endpoint_direct 2>/dev/null || true; fi
+    ENDPOINT_PROOF_CHECKED="$_ep_saved_checked"
+    ENDPOINT_PROOF_WALLED="$_ep_saved_walled"
+
     echo "[3] 注入核对回收往返"
     set_user_env_vars "17890" || true
     if env_vars_in_sync "17890"; then _s1=1; else _s1=0; fi

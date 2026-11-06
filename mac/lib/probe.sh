@@ -129,6 +129,78 @@ check_endpoint_field() {
 # 端点个数（各处要遍历时用它，不写死数字）。
 check_endpoint_count() { printf '%s' "${#CHECK_ENDPOINTS[@]}"; }
 
+# 端点合格证：一个端点的"通"，只有在**本机直连它是不通的**时候才证明得了别的什么。
+#
+# 为什么必须现场验，而不是挑一批"确定被墙"的网址：一个端点通不通、被谁通，
+# 是「本机网络 × 代理客户端的分流规则」的性质，不是网址自身的性质。同一个网址
+# 在不同网络下答案可以相反。实测反例就是这么发生的：某网络下 www.gstatic.com 与
+# connectivitycheck.gstatic.com 直连就回 204（国内有落地），而用户的代理客户端
+# 恰好把这两个域名走了直连分流——于是节点早已死亡、所有真被墙的站点一律回 502，
+# 本工具仍从这两个端点收到 204，判成"翻墙中"，把一条死代理注入到每个人的终端里。
+# 屏幕上是绿的，终端里每条命令都失败——这正是本工具最不能犯的错。
+#
+# 所以判据从"端点通不通"收紧成"经代理通、**且**直连不通"，两个条件缺一不可。
+# 直连那一侧每个端点只问一次（网段与被墙状态不会每 15 秒变一次），结论进程内缓存。
+# 这样"哪个端点能用"就由现场事实决定，换网络、换客户端、换分流规则都不用改代码。
+#
+# 缓存用两个索引串（bash 3.2 无关数组可用，但这里要的只是"问过没有 / 是不是被墙"）：
+#   ENDPOINT_PROOF_CHECKED  已经问过直连的端点索引（0 起）
+#   ENDPOINT_PROOF_WALLED   其中"直连不通"的那几个
+ENDPOINT_PROOF_CHECKED=""
+ENDPOINT_PROOF_WALLED=""
+# 直连那一侧的单次上限（秒）。比经代理的 6 秒短：被墙的地址多半是"连上没人应"
+# 或直接被 RST，2 秒够用；这条路径只在首次遇到某个端点时走，不参与稳态探测。
+ENDPOINT_DIRECT_TIMEOUT=2
+
+# 直连（不经任何代理）问一次这个端点，返回 0 = 直连就能通（这个端点不能当证据）。
+# 判据与 test_single_endpoint 共用 test_endpoint_status，只是不经过代理端口。
+test_endpoint_direct() {
+    local _ed_code _ed_first _ed_out
+    # --noproxy '*' 让 curl 完全不看代理设置（含环境变量与系统代理）。
+    # 这一项是整条判据的根——漏了它，这里问到的就是"代理那一侧"，
+    # 与经代理的探测同源，两边永远一致，合格证会恒为"可以当证据"，等于没验。
+    _ed_out=$(curl_direct --disable -s -D - -o /dev/null --head \
+        --noproxy '*' --connect-timeout 2 --max-time "$ENDPOINT_DIRECT_TIMEOUT" \
+        "http://$1$2" 2>/dev/null)
+    [ -n "$_ed_out" ] || return 1
+    _ed_first=$(printf '%s' "$_ed_out" | head -n 1)
+    _ed_code=$(printf '%s' "$_ed_first" | sed -n 's/^HTTP\/[0-9.]*[[:space:]]\{1,\}\([0-9]\{3\}\).*/\1/p')
+    [ -n "$_ed_code" ] || return 1
+    test_endpoint_status "$_ed_code" "$3"
+}
+
+# 这个端点能不能当证据（进程内缓存，每个端点只问一次直连）。
+# 只由 test_real_connectivity 在"经代理已经拿到期望应答"之后调用。
+endpoint_is_walled() {
+    local _iw_i
+    _iw_i="$1"
+    if _in_list "$_iw_i" "$ENDPOINT_PROOF_CHECKED"; then
+        _in_list "$_iw_i" "$ENDPOINT_PROOF_WALLED" && return 0 || return 1
+    fi
+    ENDPOINT_PROOF_CHECKED="$ENDPOINT_PROOF_CHECKED $_iw_i"
+    if test_endpoint_direct "$(check_endpoint_field $((_iw_i + 1)) 1)" \
+                            "$(check_endpoint_field $((_iw_i + 1)) 2)" \
+                            "$(check_endpoint_field $((_iw_i + 1)) 3)"; then
+        return 1
+    fi
+    ENDPOINT_PROOF_WALLED="$ENDPOINT_PROOF_WALLED $_iw_i"
+    return 0
+}
+
+# 经代理问一个端点，再判它的应答能不能当证据。三处探测（快路、并行兜底、串行兜底）
+# 都只调用它，判据不会各写一套。
+# 直连合格证只在**端点真的应答了**之后才去问：没应答就无从谈起，白问一次是净损失。
+test_proxy_endpoint_evidence() {
+    local _pe_idx _pe_port
+    _pe_port="$1"; _pe_idx="$2"
+    test_single_endpoint "$_pe_port" \
+        "$(check_endpoint_field $((_pe_idx + 1)) 1)" \
+        "$(check_endpoint_field $((_pe_idx + 1)) 2)" \
+        "$(check_endpoint_field $((_pe_idx + 1)) 3)" || return 1
+    endpoint_is_walled "$_pe_idx"
+}
+
+
 # 监控状态（进程内变量，不落地）
 LAST_GOOD_ENDPOINT=0
 LAST_NODE_CHECK=0
@@ -685,12 +757,12 @@ _probe_endpoint_one() {
     local _port
     _port="$1"; _h="$2"; _pa="$3"; _idx="$4"; _dir="$5"; _exp="$6"
     if test_single_endpoint "$_port" "$_h" "$_pa" "$_exp"; then
-        printf '%s' "$_idx" > "$_dir/win" 2>/dev/null || true
+        printf '%s' "$_idx" > "$_dir/answered.$_idx" 2>/dev/null || true
     fi
 }
 
 test_real_connectivity() {
-    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited
+    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited _pick
     _port="$1"
     # 先定下这个端口该走哪个回环地址（只算一次，下面所有端点共用）。
     # 只绑 ::1 的代理在 IPv4 上主动拒绝——不在这里定，下面每个端点都会连错地址。
@@ -701,8 +773,11 @@ test_real_connectivity() {
     _fast_path=$(check_endpoint_field $((LAST_GOOD_ENDPOINT + 1)) 2)
     _fast_exp=$(check_endpoint_field $((LAST_GOOD_ENDPOINT + 1)) 3)
     # 期望值必须跟着端点走：不传就吃默认 204，wikipedia（期望 3xx）会永远判死。
+    # 快路也要过合格证：只加在兜底那边会让"上次命中的正是直连也通的端点"变成后门，
+    # 而它恰恰是最常走的路径。
     if [ -n "$_fast_host" ] && [ -n "$_fast_path" ] \
-        && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}"; then
+        && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}" \
+        && endpoint_is_walled "$LAST_GOOD_ENDPOINT"; then
         return 0
     fi
     _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}conn.XXXXXX" 2>/dev/null) || return 1
@@ -719,19 +794,44 @@ test_real_connectivity() {
         fi
         _idx=$((_idx + 1))
     done
+    # 收集阶段：并行探针只报"这个端点应答了"，合格证由父 shell 判。
+    #
+    # 为什么不在子进程里顺手判：合格证要写缓存（ENDPOINT_PROOF_CHECKED / _WALLED），
+    # 而 `&` 起的子 shell 里赋值出不来——每个端点会被反复重问一遍直连，
+    # 正是这条缓存要省掉的开销。判据本身也因此只有一处实现。
+    #
+    # 收集窗口不能是固定时长：早先只要有人应答就立刻收工，于是一个"应了声但
+    # 直连也能通"的端点会让判决空转。现在等到"有人应答 **且** 直连不通"为止；
+    # 一直等不到就把窗口耗满，然后再照着**已经拿到的应答**逐个补判一遍——
+    # 宁可多花几秒也要能下结论，不能因为错过截止时刻就说"不知道"。
     _waited=0
     while [ $_waited -lt 70 ]; do
-        if [ -f "$_tmpdir/win" ]; then
-            LAST_GOOD_ENDPOINT=$(cat "$_tmpdir/win" 2>/dev/null || echo "$LAST_GOOD_ENDPOINT")
-            rm -rf "$_tmpdir" 2>/dev/null || true
-            wait 2>/dev/null || true
-            return 0
-        fi
+        for _pick in "$_tmpdir"/answered.*; do
+            [ -f "$_pick" ] || continue
+            _idx=$(cat "$_pick" 2>/dev/null || echo "")
+            case "$_idx" in ''|*[!0-9]*) continue;; esac
+            if endpoint_is_walled "$_idx"; then
+                LAST_GOOD_ENDPOINT="$_idx"
+                rm -rf "$_tmpdir" 2>/dev/null || true
+                wait 2>/dev/null || true
+                return 0
+            fi
+        done
         sleep 0.1
         _waited=$((_waited + 1))
     done
-    rm -rf "$_tmpdir" 2>/dev/null || true
+    # 窗口耗尽：并行探针可能还没收齐，这里对每一个端点再串行确认一次（全部带合格证）。
     wait 2>/dev/null || true
+    _idx=0
+    while [ "$_idx" -lt "$(check_endpoint_count)" ]; do
+        if [ $_idx -ne $LAST_GOOD_ENDPOINT ] && test_proxy_endpoint_evidence "$_port" "$_idx"; then
+            LAST_GOOD_ENDPOINT="$_idx"
+            rm -rf "$_tmpdir" 2>/dev/null || true
+            return 0
+        fi
+        _idx=$((_idx + 1))
+    done
+    rm -rf "$_tmpdir" 2>/dev/null || true
     return 1
 }
 

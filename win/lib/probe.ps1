@@ -909,6 +909,94 @@ $CheckEndpoints = @(
     @{ Host = "www.wikipedia.org";              Path = "/";           Expect = "3xx" }
 )
 
+# 端点合格证：一个端点的"通"，只有在**本机直连它是不通的**时候才证明得了别的什么。
+#
+# 为什么必须现场验，而不是挑一批"确定被墙"的网址：一个端点通不通、被谁通，
+# 是「本机网络 × 代理客户端的分流规则」的性质，不是网址自身的性质。同一个网址
+# 在不同网络下答案可以相反。实测反例就是这么发生的：某网络下 www.gstatic.com 与
+# connectivitycheck.gstatic.com 直连就回 204（国内有落地），而用户的代理客户端
+# 恰好把这两个域名走了直连分流——于是节点早已死亡、所有真被墙的站点一律回 502，
+# 本工具仍从这两个端点收到 204，判成"翻墙中"，把一条死代理注入到每个人的终端里。
+# 屏幕上是绿的，终端里每条命令都失败——这正是本工具最不能犯的错。
+#
+# 所以判据从"端点通不通"收紧成"经代理通、**且**直连不通"，两个条件缺一不可。
+# 直连那一侧每个端点只问一次（网段与被墙状态不会每 15 秒变一次），结论进程内缓存。
+# 这样"哪个端点能用"就由现场事实决定，换网络、换客户端、换分流规则都不用改代码。
+$EndpointProofKinds = @{
+    Walled    = 'walled'      # 直连不通 -> 它的「通」是代理挣来的，可以当证据
+    Reachable = 'reachable'   # 直连也通 -> 证明不了代理，不能当证据
+}
+# 直连那一侧的单次上限。比经代理的 6 秒短：被墙的地址多半是"连上没人应"或直接被 RST，
+# 2.5 秒够用；这条路径只在首次遇到某个端点时走，不参与每 15 秒的稳态探测。
+$EndpointDirectTimeoutMs = 2500
+$script:EndpointProofCache = @{}
+
+# 直连（不经任何代理）问一次这个端点，按它自己声明的期望值判"通没通"。
+# 判据与 Test-SingleEndpoint 共用 Test-EndpointStatus，只是不经过代理端口。
+# 返回 $true = 直连就能通（这个端点不能当证据）。
+function Test-EndpointDirect([string]$HostName, [string]$Path, [string]$Expect = "204") {
+    $handler = $null
+    $client = $null
+    try {
+        if (-not ("System.Net.Http.HttpClient" -as [type])) {
+            Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        }
+        $handler = New-Object System.Net.Http.HttpClientHandler
+        # 关掉一切代理来源：环境变量与系统代理（WinINET / PAC）都不许参与。
+        # 这一行是整条判据的根——开着它，这里问到的就是"代理那一侧"，
+        # 与经代理的探测同源，两边永远一致，合格证会恒为"可以当证据"，等于没验。
+        $handler.UseProxy = $false
+        $handler.AllowAutoRedirect = $false
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        $client.Timeout = [TimeSpan]::FromMilliseconds($EndpointDirectTimeoutMs)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyCheck")
+        $resp = $client.GetAsync("http://$HostName$Path", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        $code = [int]$resp.StatusCode
+        try { $resp.Dispose() } catch {}
+        return (Test-EndpointStatus $code $Expect)
+    } catch {
+        # 连不上、超时、被重置、DNS 被污染——都归"直连不通"，正是我们要的那一半。
+        return $false
+    } finally {
+        if ($client) { try { $client.Dispose() } catch {} }
+        if ($handler) { try { $handler.Dispose() } catch {} }
+    }
+}
+
+# 这个端点能不能当证据（进程内缓存，每个端点只问一次直连）。
+# 只由 Test-RealConnectivity 在"经代理已经拿到期望应答"之后调用：
+# 节点正常时这里每进程至多付 6 次直连询问，之后一律命中缓存。
+function Get-EndpointProof([int]$Index) {
+    $key = "$Index"
+    if ($script:EndpointProofCache.ContainsKey($key)) { return $script:EndpointProofCache[$key] }
+    $e = $CheckEndpoints[$Index]
+    $proof = if (Test-EndpointDirect $e.Host $e.Path $e.Expect) {
+        $EndpointProofKinds.Reachable
+    } else {
+        $EndpointProofKinds.Walled
+    }
+    $script:EndpointProofCache[$key] = $proof
+    return $proof
+}
+
+# 一条端点证据算不算数（唯一的判据实现）。
+# 抽成纯函数是为了能被回归直接钉住：只靠真网络去验，"直连也通就不算证据"这条规则
+# 恰恰会在当初让它漏过去的那台机器上验不出来。
+function Test-EndpointEvidence([bool]$Answered, [string]$Proof) {
+    if (-not $Answered) { return $false }
+    return ($Proof -eq $EndpointProofKinds.Walled)
+}
+
+# 经代理问一个端点，再判它的应答能不能当证据。三条探测路径（快路、并行兜底、串行兜底）
+# 都只调用它，判据不会各写一套。
+# 直连合格证只在**端点真的应答了**之后才去问：没应答就无从谈起，白问一次是净损失。
+function Test-ProxyEndpointEvidence([int]$Port, [int]$Index) {
+    $e = $CheckEndpoints[$Index]
+    $answered = Test-SingleEndpoint $Port $e.Host $e.Path $e.Expect
+    if (-not $answered) { return $false }
+    return (Test-EndpointEvidence $true (Get-EndpointProof $Index))
+}
+
 # 单个端点应答的状态码判定（唯一的判据实现）。$Expect 取自端点表。
 function Test-EndpointStatus([int]$Code, [string]$Expect) {
     if ($Expect -eq "204") { return ($Code -eq 204) }
@@ -971,10 +1059,10 @@ function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path, [stri
 #         照样兜底证明"节点活着"，杜绝单域段盲区误删；且正常延迟/流量不受影响。
 function Test-RealConnectivity([int]$Port) {
     # ---- 快路：只测上次成功的端点（正常路径，毫秒级，1 个请求）----
+    # 快路也必须过合格证：一个端点"直连就通"时，它回的 204 说明不了代理能出去。
+    # 只加在兜底那边会让"上次命中的正是这种端点"变成后门，而且它恰恰是最常走的路径。
     $last = $script:LastGoodEndpoint
-    if (Test-SingleEndpoint $Port $CheckEndpoints[$last].Host $CheckEndpoints[$last].Path $CheckEndpoints[$last].Expect) {
-        return $true
-    }
+    if (Test-ProxyEndpointEvidence $Port $last) { return $true }
 
     # ---- 兜底：上次端点失败 → 并行探测其余全部端点（6 秒封顶）----
     $handler = $null
@@ -1024,9 +1112,15 @@ function Test-RealConnectivity([int]$Port) {
                         $resp.Dispose()
                     } catch { $ok = $false }
                     if ($ok) {
-                        # 动态自学习：把兜底命中的端点记为新的最优端点（下次走快路）
-                        $script:LastGoodEndpoint = $k
-                        return $true
+                        # 通了还要过合格证：直连也通的端点证明不了代理能出去（见上面那段说明）。
+                        # **只对真应答了的端点去问**，而且就在这里问——预先批量问会把
+                        # 5 个直连询问串行叠起来（最坏 12.5 秒），把兜底的 6 秒预算撑爆。
+                        # 这条路径每次最多问一个，首次之后一律命中缓存。
+                        if (Test-EndpointEvidence $true (Get-EndpointProof $k)) {
+                            # 动态自学习：把兜底命中的端点记为新的最优端点（下次走快路）
+                            $script:LastGoodEndpoint = $k
+                            return $true
+                        }
                     }
                     $tasks.Remove($k)
                 }
@@ -1041,7 +1135,7 @@ function Test-RealConnectivity([int]$Port) {
             # 第 4 个参数（期望值）必须传：不传就吃默认 204，而 wikipedia 的
             # 期望值是 3xx——它们正常就回重定向，按 204 判会永远判死，端点池退化成纯 Google 段。
             # 同一判断只准有一处实现：这条串行兜底与上面的并行兜底必须同判据。
-            if (Test-SingleEndpoint $Port $CheckEndpoints[$i].Host $CheckEndpoints[$i].Path $CheckEndpoints[$i].Expect) {
+            if (Test-ProxyEndpointEvidence $Port $i) {
                 $script:LastGoodEndpoint = $i
                 return $true
             }

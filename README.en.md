@@ -558,7 +558,7 @@ It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does
 
 1. **A port is listening** — some program on this machine opened a proxy port
 2. **It really is a proxy** — a `CONNECT` handshake must answer `HTTP/1.x 200`. This rules out development servers and ordinary web servers
-3. **It really reaches the internet** — the port is used to reach **6 different endpoints**, and **any one** returning a real response is enough
+3. **It really reaches the internet** — the port is used to reach **6 different endpoints**, and **any one** returning a real response is enough. With one condition: that endpoint must **not be reachable on your machine without the proxy**. If it opens directly too (some connectivity-check sites have servers inside the country), whatever it answers proves nothing about the proxy
 
 All three must hold before any variable is written. A web server on your machine is never mistaken for a proxy.
 
