@@ -618,37 +618,69 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     if test_endpoint_status 404 3xx; then _ep_f=1; else _ep_f=0; fi
     _selftest_assert_eq "端点判据：3xx 类收到 404 不算通" "0" "$_ep_f"
 
-    # 端点合格证：一个端点的"通"只有在**直连它不通**时才证明得了代理能出去。
+    # 端点合格证：三态。只有"确定被墙"算证据。
     #
     # 这一组挡的是一个真实发生过的误判（2026-11-06）：用户换节点后节点域名消失，
     # 所有真被墙的站点一律回 502，而 www.gstatic.com 与 connectivitycheck.gstatic.com
     # 在那个网络下直连就回 204（国内有落地）。旧代码只看"经代理拿到期望应答"，
     # 于是从这两个端点收到 204、判成"翻墙中"，把一条死代理注入到每个终端里。
+    #
+    # 三态的意义在下面第 2、3 两条：两态时"问不出来"和"确定被墙"是同一个返回值，
+    # 于是 DNS 一挂、门户一拦，全都变成"被墙"——合格证恒真，判据退化成旧判据。
+    _selftest_assert_eq "合格证：三态取值互不相同" "1" \
+        "$([ "$ENDPOINT_PROOF_BLOCKED" != "$ENDPOINT_PROOF_REACHABLE" ] && [ "$ENDPOINT_PROOF_REACHABLE" != "$ENDPOINT_PROOF_UNKNOWN" ] && echo 1 || echo 0)"
+
+    if endpoint_proof_counts "$ENDPOINT_PROOF_BLOCKED"; then _ep_a=1; else _ep_a=0; fi
+    _selftest_assert_eq "合格证：确定被墙算证据" "1" "$_ep_a"
+    if endpoint_proof_counts "$ENDPOINT_PROOF_REACHABLE"; then _ep_b=1; else _ep_b=0; fi
+    _selftest_assert_eq "合格证：直连就能通不算证据" "0" "$_ep_b"
+    if endpoint_proof_counts "$ENDPOINT_PROOF_UNKNOWN"; then _ep_c=1; else _ep_c=0; fi
+    _selftest_assert_eq "合格证：问不出来不算证据（读不出来 ≠ 被墙）" "0" "$_ep_c"
+
     # 直连那一侧换掉取值函数，用例因此不依赖这台机器能不能翻墙。
+    # 计数用文件：endpoint_proof 里是走 $( ) 调的，子 shell 里的变量赋值出不来。
     _ep_saved_direct=$(declare -f test_endpoint_direct 2>/dev/null || true)
-    _ep_saved_checked="$ENDPOINT_PROOF_CHECKED"
-    _ep_saved_walled="$ENDPOINT_PROOF_WALLED"
-    # 造一个"直连也通"的答案：全部返回 0（= 直连就能通）
-    eval 'test_endpoint_direct() { return 0; }'
-    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
-    if endpoint_is_walled 0; then _ep_g=1; else _ep_g=0; fi
-    _selftest_assert_eq "合格证：直连就能通的端点不算证据" "0" "$_ep_g"
-    # 再造一个"直连不通"的答案
-    eval 'test_endpoint_direct() { return 1; }'
-    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
-    if endpoint_is_walled 0; then _ep_h=1; else _ep_h=0; fi
-    _selftest_assert_eq "合格证：直连不通的端点算证据" "1" "$_ep_h"
+    _ep_saved_cache="$ENDPOINT_PROOF_CACHE"
+    _ep_saved_baseline=$(declare -f direct_baseline_alive 2>/dev/null || true)
+    eval 'direct_baseline_alive() { return 0; }'
+
+    eval "test_endpoint_direct() { printf '%s' \"\$ENDPOINT_PROOF_REACHABLE\"; }"
+    ENDPOINT_PROOF_CACHE=""
+    endpoint_proof 0
+    _selftest_assert_eq "合格证：直连就能通的端点不算证据" "$ENDPOINT_PROOF_REACHABLE" "$PROOF_KIND"
+
+    eval "test_endpoint_direct() { printf '%s' \"\$ENDPOINT_PROOF_BLOCKED\"; }"
+    ENDPOINT_PROOF_CACHE=""
+    endpoint_proof 0
+    _selftest_assert_eq "合格证：确定打不开的端点算证据" "$ENDPOINT_PROOF_BLOCKED" "$PROOF_KIND"
+
+    eval "test_endpoint_direct() { printf '%s' \"\$ENDPOINT_PROOF_UNKNOWN\"; }"
+    ENDPOINT_PROOF_CACHE=""
+    endpoint_proof 0
+    _selftest_assert_eq "合格证：问不出来的端点不入缓存" "" "$ENDPOINT_PROOF_CACHE"
+
     # 缓存必须真的生效：问过一次就不再问（否则每轮都白问六个直连）
-    _ep_calls=0
-    eval 'test_endpoint_direct() { _ep_calls=$((_ep_calls + 1)); return 1; }'
-    ENDPOINT_PROOF_CHECKED=""; ENDPOINT_PROOF_WALLED=""
-    endpoint_is_walled 0 >/dev/null 2>&1 || true
-    endpoint_is_walled 0 >/dev/null 2>&1 || true
-    endpoint_is_walled 0 >/dev/null 2>&1 || true
-    _selftest_assert_eq "合格证：同一个端点只问一次直连" "1" "$_ep_calls"
+    _ep_cf=$(mktemp 2>/dev/null) || _ep_cf=""
+    if [ -n "$_ep_cf" ]; then
+        echo 0 > "$_ep_cf"
+        eval "test_endpoint_direct() { _n=\$(cat \"\$_ep_cf\"); echo \$((_n+1)) > \"\$_ep_cf\"; printf '%s' \"\$ENDPOINT_PROOF_BLOCKED\"; }"
+        ENDPOINT_PROOF_CACHE=""
+        endpoint_proof 0 >/dev/null 2>&1 || true
+        endpoint_proof 0 >/dev/null 2>&1 || true
+        endpoint_proof 0 >/dev/null 2>&1 || true
+        _ep_calls=$(cat "$_ep_cf" 2>/dev/null || echo 0)
+        _selftest_assert_eq "合格证：同一个端点只问一次直连" "1" "$_ep_calls"
+        rm -f "$_ep_cf" 2>/dev/null || true
+    fi
+
+    # 索引越界不许静默发证：那是没有依据的合格证，而且它让判决朝"判活"方向错。
+    ENDPOINT_PROOF_CACHE=""
+    endpoint_proof 99
+    _selftest_assert_eq "合格证：越界索引发 unknown" "$ENDPOINT_PROOF_UNKNOWN" "$PROOF_KIND"
+
     if [ -n "$_ep_saved_direct" ]; then eval "$_ep_saved_direct"; else unset -f test_endpoint_direct 2>/dev/null || true; fi
-    ENDPOINT_PROOF_CHECKED="$_ep_saved_checked"
-    ENDPOINT_PROOF_WALLED="$_ep_saved_walled"
+    if [ -n "$_ep_saved_baseline" ]; then eval "$_ep_saved_baseline"; else unset -f direct_baseline_alive 2>/dev/null || true; fi
+    ENDPOINT_PROOF_CACHE="$_ep_saved_cache"
 
     echo "[3] 注入核对回收往返"
     set_user_env_vars "17890" || true

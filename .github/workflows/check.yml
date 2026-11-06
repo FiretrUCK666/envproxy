@@ -1240,6 +1240,33 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
+          # d0) 端点合格证的根：直连侧必须关掉一切代理来源。
+          #
+          # 这一行是整条判据的承重墙，也是唯一一个"删掉之后程序照跑、测试照绿、
+          # 线上永久误判、屏幕全绿"的点——因为测试把 Test-EndpointDirect 整个换成了替身，
+          # 真实现里的 UseProxy 从来没被执行过。删掉它的后果不是报错，是合格证变成
+          # "直连也通"的恒假（永远判不通）或恒真（死节点判活），两种都不会有任何提示。
+          # 所以只能靠静态检查钉住：两个直连函数体里必须各有那一行。
+          $winDirect = Grab $ps '(?ms)function Test-EndpointDirect.*?^\}' 'Win 直连探测函数'
+          $macDirect = Grab $sh '(?ms)test_endpoint_direct\(\) \{.*?^\}' 'Mac 直连探测函数'
+          if (-not $winDirect) { Write-Host '找不到 Test-EndpointDirect 函数体'; $fail = 1 }
+          elseif ($winDirect -notmatch 'UseProxy\s*=\s*\$false') {
+            Write-Host 'Test-EndpointDirect 里没有 UseProxy = $false：直连问到的会是代理那一侧，合格证失效'
+            $fail = 1
+          }
+          if (-not $macDirect) { Write-Host '找不到 test_endpoint_direct 函数体'; $fail = 1 }
+          elseif ($macDirect -notmatch "--noproxy") {
+            Write-Host 'test_endpoint_direct 里没有 --noproxy：直连问到的会是代理那一侧，合格证失效'
+            $fail = 1
+          }
+          # 三态常数必须在两侧各有一份且取值一致：两态会把「问不出来」读成「被墙」，
+          # 合格证恒真、判据退化成旧判据，而屏幕上完全看不出来。
+          if ($ps -notmatch "Blocked\s*=\s*'blocked'") { Write-Host 'Win 侧缺 EndpointProofKinds.Blocked'; $fail = 1 }
+          if ($ps -notmatch "Reachable\s*=\s*'reachable'") { Write-Host 'Win 侧缺 EndpointProofKinds.Reachable'; $fail = 1 }
+          if ($ps -notmatch "Unknown\s*=\s*'unknown'") { Write-Host 'Win 侧缺 EndpointProofKinds.Unknown'; $fail = 1 }
+          if ($sh -notmatch 'ENDPOINT_PROOF_BLOCKED="blocked"') { Write-Host 'Mac 侧缺 ENDPOINT_PROOF_BLOCKED'; $fail = 1 }
+          if ($sh -notmatch 'ENDPOINT_PROOF_REACHABLE="reachable"') { Write-Host 'Mac 侧缺 ENDPOINT_PROOF_REACHABLE'; $fail = 1 }
+          if ($sh -notmatch 'ENDPOINT_PROOF_UNKNOWN="unknown"') { Write-Host 'Mac 侧缺 ENDPOINT_PROOF_UNKNOWN'; $fail = 1 }
           # d1a) 三处"注释声称门禁 6 核对"的表，必须真的被核对。
           # 留着假承诺比没有承诺更糟：下一个人会相信已经有人看着了，于是放心只改一侧。
           # 这三句注释都写着"与 Win 侧同形，门禁 6 核对"，而门禁里一个都没提到过它们。

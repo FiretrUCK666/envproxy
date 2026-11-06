@@ -71,7 +71,7 @@ PATTERNS=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' 'NF>=4 {print $4}' | tr -
 # 端点池的两条硬要求，缺一不可：
 #   1) 跨厂商/跨域段——单个域段被干扰时其余端点仍能证明节点活着；
 #   2) 响应体"零字节或极小"——探针发 HEAD 请求（--head），只收响应头、不收正文。
-#      现有 6 个端点：5 个 /generate_204（0 字节 204）+ 1 个被墙站点（重定向）。
+#      现有 6 个端点：5 个 /generate_204（0 字节 204）+ 1 个重定向类兜底。
 # 新增端点必须同时满足这两条，否则"每次不足 1KB"的流量口径立刻失真。
 # 端点表：三张平行字符串（host / path / expect）必须逐项对齐，条数由门禁 6 核对。
 #
@@ -129,75 +129,258 @@ check_endpoint_field() {
 # 端点个数（各处要遍历时用它，不写死数字）。
 check_endpoint_count() { printf '%s' "${#CHECK_ENDPOINTS[@]}"; }
 
-# 端点合格证：一个端点的"通"，只有在**本机直连它是不通的**时候才证明得了别的什么。
+# 三态，不是两态。
 #
-# 为什么必须现场验，而不是挑一批"确定被墙"的网址：一个端点通不通、被谁通，
-# 是「本机网络 × 代理客户端的分流规则」的性质，不是网址自身的性质。同一个网址
-# 在不同网络下答案可以相反。实测反例就是这么发生的：某网络下 www.gstatic.com 与
-# connectivitycheck.gstatic.com 直连就回 204（国内有落地），而用户的代理客户端
-# 恰好把这两个域名走了直连分流——于是节点早已死亡、所有真被墙的站点一律回 502，
-# 本工具仍从这两个端点收到 204，判成"翻墙中"，把一条死代理注入到每个人的终端里。
-# 屏幕上是绿的，终端里每条命令都失败——这正是本工具最不能犯的错。
+# 两态（walled / reachable）是这一层出过事的地方：它把「直连没拿到期望应答」整个当成
+# 「被墙」，于是 DNS 一挂、强制门户一拦、网慢一超时，全都变成「这个端点被墙了」——
+# 合格证恒真，新判据退化成旧判据，而且屏幕上看不出任何异常。
 #
-# 所以判据从"端点通不通"收紧成"经代理通、**且**直连不通"，两个条件缺一不可。
-# 直连那一侧每个端点只问一次（网段与被墙状态不会每 15 秒变一次），结论进程内缓存。
-# 这样"哪个端点能用"就由现场事实决定，换网络、换客户端、换分流规则都不用改代码。
-#
-# 缓存用两个索引串（bash 3.2 无关数组可用，但这里要的只是"问过没有 / 是不是被墙"）：
-#   ENDPOINT_PROOF_CHECKED  已经问过直连的端点索引（0 起）
-#   ENDPOINT_PROOF_WALLED   其中"直连不通"的那几个
-ENDPOINT_PROOF_CHECKED=""
-ENDPOINT_PROOF_WALLED=""
+# 三态的分界线是**我们到底证明了什么**：
+#   blocked   直连确定打不开：域名解析得出、直连本身也能上网，但这个站点拿不到应答。
+#             只有这一种能当证据——它的「通」确实是代理挣来的。
+#   reachable 直连就能拿到期望应答：证明不了代理，不能当证据。
+#   unknown   问不出来：解析失败、整条直连都不通、拿到个不是它该回的应答。
+#             「不知道」**绝不许**被当成「被墙」——那是把它变成免费合格证。
+ENDPOINT_PROOF_BLOCKED="blocked"
+ENDPOINT_PROOF_REACHABLE="reachable"
+ENDPOINT_PROOF_UNKNOWN="unknown"
+
+# 缓存：每个端点一条记录 "索引|结论|单调秒|网络指纹"。
+# 用空格分隔的记录串而不是关联数组——bash 3.2 没有关联数组。
+ENDPOINT_PROOF_CACHE=""
 # 直连那一侧的单次上限（秒）。比经代理的 6 秒短：被墙的地址多半是"连上没人应"
 # 或直接被 RST，2 秒够用；这条路径只在首次遇到某个端点时走，不参与稳态探测。
 ENDPOINT_DIRECT_TIMEOUT=2
+# 合格证有效期（秒）。它描述的是「本机网络 × 客户端分流规则」，而这两样都会变
+# （换 Wi-Fi、插拔网线、开关 TUN、改分流）。永久缓存等于把开机那一瞬间的判断
+# 钉死一辈子。
+ENDPOINT_PROOF_TTL_SEC=600
+# 直连基线的有效期，比合格证短：它是判"打不开"的前提，前提过期比结论过期更危险。
+DIRECT_BASELINE_TTL_SEC=60
+# 网络指纹的缓存时长。它只在"要不要重问合格证"这一处用，不值得每轮枚举网卡。
+NETWORK_FP_TTL_SEC=30
+# 兜底阶段给合格证判定的总预算（秒）。命中一个就返回，通常用不满。
+ENDPOINT_PROOF_SWEEP_BUDGET_SEC=8
+# 直连基线的对照站点：只用来回答"直连还能不能上网"，不参与端点表。
+DIRECT_BASELINE_HOST="www.baidu.com"
+# 直连基线 / 网络指纹的进程内缓存
+DIRECT_BASELINE_STATE=""     # "活/死|单调秒|指纹"
+NETWORK_FP_VALUE=""
+NETWORK_FP_AT=""
+# 本轮是不是"合格证整体失效、已退回旧判据"。由 test_real_connectivity 每轮重置。
+PROOF_DEGRADED=0
 
-# 直连（不经任何代理）问一次这个端点，返回 0 = 直连就能通（这个端点不能当证据）。
-# 判据与 test_single_endpoint 共用 test_endpoint_status，只是不经过代理端口。
-test_endpoint_direct() {
-    local _ed_code _ed_first _ed_out
-    # --noproxy '*' 让 curl 完全不看代理设置（含环境变量与系统代理）。
-    # 这一项是整条判据的根——漏了它，这里问到的就是"代理那一侧"，
-    # 与经代理的探测同源，两边永远一致，合格证会恒为"可以当证据"，等于没验。
-    _ed_out=$(curl_direct --disable -s -D - -o /dev/null --head \
-        --noproxy '*' --connect-timeout 2 --max-time "$ENDPOINT_DIRECT_TIMEOUT" \
-        "http://$1$2" 2>/dev/null)
-    [ -n "$_ed_out" ] || return 1
-    _ed_first=$(printf '%s' "$_ed_out" | head -n 1)
-    _ed_code=$(printf '%s' "$_ed_first" | sed -n 's/^HTTP\/[0-9.]*[[:space:]]\{1,\}\([0-9]\{3\}\).*/\1/p')
-    [ -n "$_ed_code" ] || return 1
-    test_endpoint_status "$_ed_code" "$3"
-}
-
-# 这个端点能不能当证据（进程内缓存，每个端点只问一次直连）。
-# 只由 test_real_connectivity 在"经代理已经拿到期望应答"之后调用。
-endpoint_is_walled() {
-    local _iw_i
-    _iw_i="$1"
-    if _in_list "$_iw_i" "$ENDPOINT_PROOF_CHECKED"; then
-        _in_list "$_iw_i" "$ENDPOINT_PROOF_WALLED" && return 0 || return 1
+# 本机的网络指纹：默认网关 + 各网卡的本机地址。
+# 换 Wi-Fi / 插拔网线 / 开关虚拟网卡都会让它变，而这三件事恰好都会推翻
+# 「这个端点会不会被墙」的结论。
+# 只用系统命令（route -n get default 在 macOS 上有，Linux 上缺），取不到就退回空串：
+# 空串会让缓存键一致，但有效期还在，不会永久钉死。
+network_fingerprint() {
+    local _nf_now _nf_age _nf_gw _nf_ips
+    monotonic_now; _nf_now=$MONO_NOW
+    if [ -n "$NETWORK_FP_VALUE" ] && [ -n "$NETWORK_FP_AT" ]; then
+        _nf_age=$((_nf_now - NETWORK_FP_AT))
+        if [ "$_nf_age" -ge 0 ] && [ "$_nf_age" -lt "$NETWORK_FP_TTL_SEC" ]; then
+            NETWORK_FP="$NETWORK_FP_VALUE"
+            return 0
+        fi
     fi
-    ENDPOINT_PROOF_CHECKED="$ENDPOINT_PROOF_CHECKED $_iw_i"
-    if test_endpoint_direct "$(check_endpoint_field $((_iw_i + 1)) 1)" \
-                            "$(check_endpoint_field $((_iw_i + 1)) 2)" \
-                            "$(check_endpoint_field $((_iw_i + 1)) 3)"; then
-        return 1
-    fi
-    ENDPOINT_PROOF_WALLED="$ENDPOINT_PROOF_WALLED $_iw_i"
+    _nf_gw=""
+    _nf_gw=$(route -n get default 2>/dev/null | awk '/gateway:/ {print $2; exit}')
+    _nf_ips=$(ifconfig 2>/dev/null | awk '/inet /{print $2}' | sort -u | tr '\n' ',')
+    NETWORK_FP_VALUE="gw:${_nf_gw:-none},ip:${_nf_ips:-none}"
+    NETWORK_FP_AT="$_nf_now"
+    NETWORK_FP="$NETWORK_FP_VALUE"
     return 0
 }
 
-# 经代理问一个端点，再判它的应答能不能当证据。三处探测（快路、并行兜底、串行兜底）
-# 都只调用它，判据不会各写一套。
+# 直连（不经任何代理）能不能上网：拿一个国内稳定站点试，拿到任何 HTTP 应答就算能。
+# 它存在只为一件事：把「这个站点打不开」和「整台机器都出不去」分开。
+# 没有它的话，断网、DNS 全挂、刚开机网卡还没起来——全都会被读成「所有端点都被墙」，
+# 于是每个端点都发一张合格证，而那时候根本没有任何东西被证明。
+direct_baseline_alive() {
+    local _db_now _db_age _db_fp _db_rec _db_alive _db_at _db_stored_fp _db_out
+    monotonic_now; _db_now=$MONO_NOW
+    network_fingerprint; _db_fp="$NETWORK_FP"
+    if [ -n "$DIRECT_BASELINE_STATE" ]; then
+        _db_alive=${DIRECT_BASELINE_STATE%%|*}
+        _db_rec=${DIRECT_BASELINE_STATE#*|}
+        _db_at=${_db_rec%%|*}
+        _db_stored_fp=${_db_rec#*|}
+        if [ "$_db_stored_fp" = "$_db_fp" ]; then
+            _db_age=$((_db_now - _db_at))
+            if [ "$_db_age" -ge 0 ] && [ "$_db_age" -lt "$DIRECT_BASELINE_TTL_SEC" ]; then
+                [ "$_db_alive" = "1" ] && return 0 || return 1
+            fi
+        fi
+    fi
+    # --noproxy '*'：这一侧问的是"直连还能不能出去"，走了代理就答非所问。
+    # 拿到任何 HTTP 应答就够——状态码是什么无所谓，这里问的是"路通不通"。
+    _db_out=$(curl_direct --disable -s -D - -o /dev/null --head \
+        --noproxy '*' --connect-timeout 2 --max-time "$ENDPOINT_DIRECT_TIMEOUT" \
+        "http://$DIRECT_BASELINE_HOST/" 2>/dev/null | head -n 1)
+    case "$_db_out" in
+        HTTP/*) _db_alive=1 ;;
+        *)      _db_alive=0 ;;
+    esac
+    DIRECT_BASELINE_STATE="$_db_alive|$_db_now|$_db_fp"
+    [ "$_db_alive" = "1" ] && return 0 || return 1
+}
+
+# 直连（不经任何代理）问一次这个端点，输出三态之一。
+# 判据与 test_single_endpoint 共用 test_endpoint_status，只是不经过代理端口。
+test_endpoint_direct() {
+    local _ed_host _ed_path _ed_exp _ed_code _ed_first _ed_out
+    _ed_host="$1"; _ed_path="$2"; _ed_exp="${3:-204}"
+
+    # 第一关：解析得出吗。解析不出来是「不知道」，不是「被墙」——
+    # 把 DNS 故障读成被墙，等于给每个端点免费发一张合格证。
+    # dscacheutil 是 macOS 自带；取不到就跳过这一关（宁可少一层，不能误判）。
+    if command -v dscacheutil >/dev/null 2>&1; then
+        _ed_out=$(dscacheutil -q host -a name "$_ed_host" 2>/dev/null | grep -c '^ip_address')
+        case "$_ed_out" in
+            ''|*[!0-9]*) : ;;          # 数不出来就不下结论，交给下面那一步
+            0) printf '%s' "$ENDPOINT_PROOF_UNKNOWN"; return 0 ;;
+        esac
+    fi
+
+    # --noproxy '*' 让 curl 完全不看代理设置（含环境变量与系统代理）。
+    # 这一项是整条判据的根——漏了它，这里问到的就是"代理那一侧"，
+    # 与经代理的探测同源，两边永远一致，任何端点都当不成证据（表现为永远判不通）。
+    # 用 GET 而不是 HEAD：部分端点对 HEAD 回 405，那会把"这一问没结果"错读成"被墙"。
+    _ed_out=$(curl_direct --disable -s -D - -o /dev/null \
+        --noproxy '*' --connect-timeout 2 --max-time "$ENDPOINT_DIRECT_TIMEOUT" \
+        "http://$_ed_host$_ed_path" 2>/dev/null)
+    if [ -z "$_ed_out" ]; then
+        # 一个字节都没拿到：只有在「直连本身能上网」的前提下，才轮得到说这个站点打不开。
+        if direct_baseline_alive; then
+            printf '%s' "$ENDPOINT_PROOF_BLOCKED"
+        else
+            printf '%s' "$ENDPOINT_PROOF_UNKNOWN"
+        fi
+        return 0
+    fi
+    _ed_first=$(printf '%s' "$_ed_out" | head -n 1)
+    _ed_code=$(printf '%s' "$_ed_first" | sed -n 's/^HTTP\/[0-9.]*[[:space:]]\{1,\}\([0-9]\{3\}\).*/\1/p')
+    if [ -z "$_ed_code" ]; then
+        printf '%s' "$ENDPOINT_PROOF_UNKNOWN"
+        return 0
+    fi
+    if test_endpoint_status "$_ed_code" "$_ed_exp"; then
+        printf '%s' "$ENDPOINT_PROOF_REACHABLE"
+    else
+        # 拿到了应答但不是它该回的（门户劫持回 200、405、403）：
+        # 这说明不了这个站点"被墙"，只说明这一问没结果。
+        printf '%s' "$ENDPOINT_PROOF_UNKNOWN"
+    fi
+    return 0
+}
+
+# 这个端点的合格证（带有效期 + 网络指纹，每个端点问一次就够）。
+# 结果放进 PROOF_KIND。索引越界一律 unknown，不许静默发证。
+endpoint_proof() {
+    local _ep_idx _ep_now _ep_fp _ep_rec _ep_hit _ep_kind _ep_at _ep_fp2
+    _ep_idx="$1"
+    PROOF_KIND="$ENDPOINT_PROOF_UNKNOWN"
+    case "$_ep_idx" in ''|*[!0-9]*) return 0 ;; esac
+    [ "$_ep_idx" -lt "$(check_endpoint_count)" ] || return 0
+
+    monotonic_now; _ep_now=$MONO_NOW
+    network_fingerprint; _ep_fp="$NETWORK_FP"
+
+    _ep_hit=""
+    for _ep_rec in $ENDPOINT_PROOF_CACHE; do
+        [ "${_ep_rec%%|*}" = "$_ep_idx" ] || continue
+        _ep_rec=${_ep_rec#*|}
+        _ep_kind=${_ep_rec%%|*}
+        _ep_rec=${_ep_rec#*|}
+        _ep_at=${_ep_rec%%|*}
+        _ep_fp2=${_ep_rec#*|}
+        if [ "$_ep_fp2" = "$_ep_fp" ]; then
+            if [ $((_ep_now - _ep_at)) -ge 0 ] && [ $((_ep_now - _ep_at)) -lt "$ENDPOINT_PROOF_TTL_SEC" ]; then
+                _ep_hit="$_ep_kind"
+            fi
+        fi
+        break
+    done
+    if [ -n "$_ep_hit" ]; then
+        PROOF_KIND="$_ep_hit"
+        return 0
+    fi
+
+    # 过期，或者换了网络：这个结论不再描述现在，丢掉重问。
+    local _ep_newcache _ep_drop
+    _ep_newcache=""
+    for _ep_drop in $ENDPOINT_PROOF_CACHE; do
+        [ "${_ep_drop%%|*}" = "$_ep_idx" ] || _ep_newcache="$_ep_newcache $_ep_drop"
+    done
+    ENDPOINT_PROOF_CACHE="$_ep_newcache"
+
+    _ep_kind=$(test_endpoint_direct "$(check_endpoint_field $((_ep_idx + 1)) 1)" \
+                                   "$(check_endpoint_field $((_ep_idx + 1)) 2)" \
+                                   "$(check_endpoint_field $((_ep_idx + 1)) 3)")
+    PROOF_KIND="${_ep_kind:-$ENDPOINT_PROOF_UNKNOWN}"
+    # Unknown 不入缓存：它回答的是"这一次没问出来"，不是这个端点的性质。
+    # 缓存它等于把一次瞬时故障钉成永久结论。
+    if [ "$PROOF_KIND" != "$ENDPOINT_PROOF_UNKNOWN" ]; then
+        ENDPOINT_PROOF_CACHE="$ENDPOINT_PROOF_CACHE $_ep_idx|$PROOF_KIND|$_ep_now|$_ep_fp"
+    fi
+    return 0
+}
+
+# 一条端点证据算不算数（唯一的判据实现）。
+# 只有 blocked 算——reachable 证明不了代理，unknown 什么都不证明。
+endpoint_proof_counts() {
+    [ "${1:-}" = "$ENDPOINT_PROOF_BLOCKED" ] && return 0 || return 1
+}
+
+# 端点表里还有没有"确定被墙"的端点。全都没有时判据在本机不可用。
+any_endpoint_blocked() {
+    local _ab_i
+    _ab_i=0
+    while [ "$_ab_i" -lt "$(check_endpoint_count)" ]; do
+        endpoint_proof "$_ab_i"
+        if endpoint_proof_counts "$PROOF_KIND"; then return 0; fi
+        _ab_i=$((_ab_i + 1))
+    done
+    return 1
+}
+
+# 六个端点是不是**每一个**都直连可达。
+#
+# 这是"本机直连被整体接管"的签名（TUN、透明代理、全局 VPN）：流量根本没走真实网络，
+# 走的是那台内核，所以每个端点都能"直连"拿到正确应答。这时合格证这套判据在本机
+# 是恒真的，它证明不了任何事——既不能说代理好，也不能说代理坏。
+#
+# 为什么要跟"全是 unknown"分开：那是另一件事，说明本机根本问不出来（DNS 挂了、
+# 整条直连断了）。那时的正确回答是"没法证明"，不是"退回旧判据"——退回旧判据
+# 恰好会让一个死节点靠随便一个 204 重新骗过判决，也就是这次要修的那个事故。
+all_endpoints_reachable() {
+    local _ar_i
+    _ar_i=0
+    while [ "$_ar_i" -lt "$(check_endpoint_count)" ]; do
+        endpoint_proof "$_ar_i"
+        [ "$PROOF_KIND" = "$ENDPOINT_PROOF_REACHABLE" ] || return 1
+        _ar_i=$((_ar_i + 1))
+    done
+    return 0
+}
+
+# 经代理问一个端点，再判它的应答能不能当证据。**三条探测路径都只调用它**：
+#   -AlreadyAnswered 给并行兜底用：那一侧请求已经发出去了，再打一次是白花流量。
 # 直连合格证只在**端点真的应答了**之后才去问：没应答就无从谈起，白问一次是净损失。
 test_proxy_endpoint_evidence() {
-    local _pe_idx _pe_port
-    _pe_port="$1"; _pe_idx="$2"
-    test_single_endpoint "$_pe_port" \
-        "$(check_endpoint_field $((_pe_idx + 1)) 1)" \
-        "$(check_endpoint_field $((_pe_idx + 1)) 2)" \
-        "$(check_endpoint_field $((_pe_idx + 1)) 3)" || return 1
-    endpoint_is_walled "$_pe_idx"
+    local _pe_idx _pe_port _pe_answered
+    _pe_port="$1"; _pe_idx="$2"; _pe_answered="${3:-0}"
+    if [ "$_pe_answered" != "1" ]; then
+        case "$_pe_idx" in ''|*[!0-9]*) return 1 ;; esac
+        test_single_endpoint "$_pe_port" \
+            "$(check_endpoint_field $((_pe_idx + 1)) 1)" \
+            "$(check_endpoint_field $((_pe_idx + 1)) 2)" \
+            "$(check_endpoint_field $((_pe_idx + 1)) 3)" || return 1
+    fi
+    endpoint_proof "$_pe_idx"
+    endpoint_proof_counts "$PROOF_KIND"
 }
 
 
@@ -762,8 +945,10 @@ _probe_endpoint_one() {
 }
 
 test_real_connectivity() {
-    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited _pick
+    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited _pick _hw
+    local _answered _k _sweep_deadline
     _port="$1"
+    PROOF_DEGRADED=0
     # 先定下这个端口该走哪个回环地址（只算一次，下面所有端点共用）。
     # 只绑 ::1 的代理在 IPv4 上主动拒绝——不在这里定，下面每个端点都会连错地址。
     proxy_url_for_port "$_port"
@@ -776,8 +961,7 @@ test_real_connectivity() {
     # 快路也要过合格证：只加在兜底那边会让"上次命中的正是直连也通的端点"变成后门，
     # 而它恰恰是最常走的路径。
     if [ -n "$_fast_host" ] && [ -n "$_fast_path" ] \
-        && test_single_endpoint "$_port" "$_fast_host" "$_fast_path" "${_fast_exp:-204}" \
-        && endpoint_is_walled "$LAST_GOOD_ENDPOINT"; then
+        && test_proxy_endpoint_evidence "$_port" "$LAST_GOOD_ENDPOINT"; then
         return 0
     fi
     _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}conn.XXXXXX" 2>/dev/null) || return 1
@@ -796,42 +980,79 @@ test_real_connectivity() {
     done
     # 收集阶段：并行探针只报"这个端点应答了"，合格证由父 shell 判。
     #
-    # 为什么不在子进程里顺手判：合格证要写缓存（ENDPOINT_PROOF_CHECKED / _WALLED），
+    # 为什么不在子进程里顺手判：合格证要写缓存（ENDPOINT_PROOF_CACHE），
     # 而 `&` 起的子 shell 里赋值出不来——每个端点会被反复重问一遍直连，
     # 正是这条缓存要省掉的开销。判据本身也因此只有一处实现。
     #
-    # 收集窗口不能是固定时长：早先只要有人应答就立刻收工，于是一个"应了声但
-    # 直连也能通"的端点会让判决空转。现在等到"有人应答 **且** 直连不通"为止；
-    # 一直等不到就把窗口耗满，然后再照着**已经拿到的应答**逐个补判一遍——
-    # 宁可多花几秒也要能下结论，不能因为错过截止时刻就说"不知道"。
-    _waited=0
-    while [ $_waited -lt 70 ]; do
+    # 收集窗口用**单调钟**算截止时刻，不数循环次数：`sleep 0.1` 在忙机器上
+    # 实测每次可到 190ms，数 70 次就成了 24 秒，把整轮探测拖垮。
+    mono_tick
+    monotonic_now; _sweep_deadline=$((MONO_NOW + 7))
+    while :; do
+        monotonic_now
+        [ "$MONO_NOW" -lt "$_sweep_deadline" ] || break
         for _pick in "$_tmpdir"/answered.*; do
             [ -f "$_pick" ] || continue
             _idx=$(cat "$_pick" 2>/dev/null || echo "")
             case "$_idx" in ''|*[!0-9]*) continue;; esac
-            if endpoint_is_walled "$_idx"; then
+            endpoint_proof "$_idx"
+            if endpoint_proof_counts "$PROOF_KIND"; then
                 LAST_GOOD_ENDPOINT="$_idx"
                 rm -rf "$_tmpdir" 2>/dev/null || true
-                wait 2>/dev/null || true
+                # 只收掉已经答完的：无参 wait 会把还在跑的那些（各自最长 6 秒）全等一遍，
+                # 让一次"判通"白等十几秒——而那是监控主循环里最不该慢的一条路。
+                for _hw in $(jobs -p 2>/dev/null); do
+                    wait "$_hw" 2>/dev/null || true
+                done
                 return 0
             fi
         done
         sleep 0.1
-        _waited=$((_waited + 1))
     done
-    # 窗口耗尽：并行探针可能还没收齐，这里对每一个端点再串行确认一次（全部带合格证）。
+    # 窗口耗尽：把并行探针收干净，然后**只用已拿到的应答**判证据，不再重发经代理请求。
     wait 2>/dev/null || true
-    _idx=0
-    while [ "$_idx" -lt "$(check_endpoint_count)" ]; do
-        if [ $_idx -ne $LAST_GOOD_ENDPOINT ] && test_proxy_endpoint_evidence "$_port" "$_idx"; then
-            LAST_GOOD_ENDPOINT="$_idx"
-            rm -rf "$_tmpdir" 2>/dev/null || true
-            return 0
-        fi
-        _idx=$((_idx + 1))
+    _answered=""
+    for _pick in "$_tmpdir"/answered.*; do
+        [ -f "$_pick" ] || continue
+        _idx=$(cat "$_pick" 2>/dev/null || echo "")
+        case "$_idx" in ''|*[!0-9]*) continue;; esac
+        _answered="$_answered $_idx"
     done
     rm -rf "$_tmpdir" 2>/dev/null || true
+
+    # 判定阶段：请求都发完了，这里只做本地判断，另给自己的预算。
+    if [ -n "$_answered" ]; then
+        mono_tick
+        monotonic_now; _sweep_deadline=$((MONO_NOW + ENDPOINT_PROOF_SWEEP_BUDGET_SEC))
+        for _k in $_answered; do
+            monotonic_now
+            [ "$MONO_NOW" -lt "$_sweep_deadline" ] || break
+            endpoint_proof "$_k"
+            if endpoint_proof_counts "$PROOF_KIND"; then
+                LAST_GOOD_ENDPOINT="$_k"
+                return 0
+            fi
+        done
+    fi
+
+    # ---- 走到这里说明：代理对端点有应答，但没有一个端点的「通」能证明代理真能出去 ----
+    #
+    # 三种情况必须分开处置，混在一起就是这次事故的根源：
+    #   ① 有"确定被墙"的端点 -> 判据可用，是代理真连不出去 -> 返回不通（正常路径）
+    #   ② 六个端点全部直连可达 -> 本机直连被整体接管（TUN / 透明代理），判据在这里恒真、
+    #      证明不了任何事。判"不通"会让一个正常工作的代理永远被判死且不自愈，
+    #      所以退回旧判据（有应答就算通），并标记 PROOF_DEGRADED 让上层记一笔。
+    #   ③ 其余（全是 Unknown，或混着） -> 本机问不出来，正确回答是"没法证明"。
+    #      这时**不许**退回旧判据：那恰好会让一个死节点靠随便一个 204 重新骗过判决。
+    if any_endpoint_blocked; then return 1; fi
+    if all_endpoints_reachable; then
+        PROOF_DEGRADED=1
+        if [ -n "$_answered" ]; then
+            set -- $_answered
+            LAST_GOOD_ENDPOINT="$1"
+        fi
+        return 0
+    fi
     return 1
 }
 

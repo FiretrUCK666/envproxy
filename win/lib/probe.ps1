@@ -775,9 +775,9 @@ function Confirm-CandidatePort([int[]]$Candidates, $Preferred) {
 }
 
 # 验证端点（多端点轮换，防止单一端点被干扰/墙导致误判"断开"）。
-# 选型原则：必须是"明确被墙 + 官方连通性检查端点 + 零字节响应 + 全球极稳"的站点。
+# 选型原则：官方连通性检查端点 + 零字节响应 + 全球极稳；跨域段要有兜底（见下）。
 # 端点池刻意跨厂商、跨域段：
-#   Google 主域段 / gstatic CDN 段 / YouTube 段 / 非 Google 兜底（被墙站点）。
+#   Google 主域段 / gstatic CDN 段 / YouTube 段 / 非 Google 兜底（重定向类）。
 # 任何一个域段被干扰（DNS 污染、节点线路问题、站点封锁节点出口 IP）时其余幸存；
 # 只有"所有域段全部不通"才判节点死——杜绝单域段盲区导致的误删。
 # 上次成功的端点优先复用——稳定的端点持续走快路，异常时自动切换。
@@ -922,19 +922,93 @@ $CheckEndpoints = @(
 # 所以判据从"端点通不通"收紧成"经代理通、**且**直连不通"，两个条件缺一不可。
 # 直连那一侧每个端点只问一次（网段与被墙状态不会每 15 秒变一次），结论进程内缓存。
 # 这样"哪个端点能用"就由现场事实决定，换网络、换客户端、换分流规则都不用改代码。
+# 三态，不是两态。
+#
+# 两态（walled / reachable）是这一层出过事的地方：它把「直连没拿到期望应答」整个当成
+# 「被墙」，于是 DNS 一挂、强制门户一拦、网慢一超时，全都变成「这个端点被墙了」——
+# 合格证恒真，新判据退化成旧判据，而且屏幕上看不出任何异常。
+#
+# 三态的分界线是**我们到底证明了什么**：
+#   Blocked   直连确定打不开：域名解析得出、直连本身也能上网，但这个站点拿不到应答。
+#             只有这一种能当证据——它的「通」确实是代理挣来的。
+#   Reachable 直连就能拿到期望应答：证明不了代理，不能当证据。
+#   Unknown   问不出来：解析失败、整条直连都不通、拿到个不是它该回的应答。
+#             「不知道」**绝不许**被当成「被墙」——那是把它变成免费合格证。
 $EndpointProofKinds = @{
-    Walled    = 'walled'      # 直连不通 -> 它的「通」是代理挣来的，可以当证据
-    Reachable = 'reachable'   # 直连也通 -> 证明不了代理，不能当证据
+    Blocked   = 'blocked'
+    Reachable = 'reachable'
+    Unknown   = 'unknown'
 }
 # 直连那一侧的单次上限。比经代理的 6 秒短：被墙的地址多半是"连上没人应"或直接被 RST，
 # 2.5 秒够用；这条路径只在首次遇到某个端点时走，不参与每 15 秒的稳态探测。
 $EndpointDirectTimeoutMs = 2500
-$script:EndpointProofCache = @{}
+# 合格证的有效期。它描述的是「本机网络 × 客户端分流规则」，而这两样都会变
+# （换 Wi-Fi、插拔网线、开关 TUN、改分流）。永久缓存等于把开机那一瞬间的判断
+# 钉死一辈子——实测：开机时网络没就绪，六个端点全判 Blocked，之后节点死了也照样判活。
+$EndpointProofTtlSec = 600
+# 直连基线（"这台机器的直连还能不能上网"）的有效期，比合格证短：它是判"打不开"
+# 的前提，前提过期比结论过期更危险。
+$DirectBaselineTtlSec = 60
+# 网络指纹的缓存时长。它只在"要不要重问合格证"这一处用，不值得每轮枚举网卡。
+$NetworkFingerprintTtlSec = 30
+# 兜底阶段给合格证判定的总预算。命中一个就返回，通常用不满。
+$EndpointProofSweepBudgetSec = 8
+# 直连基线的对照站点：只用来回答"直连还能不能上网"，不参与端点表。
+$DirectBaselineHost = "www.baidu.com"
+$DirectBaselinePath = "/"
 
-# 直连（不经任何代理）问一次这个端点，按它自己声明的期望值判"通没通"。
-# 判据与 Test-SingleEndpoint 共用 Test-EndpointStatus，只是不经过代理端口。
-# 返回 $true = 直连就能通（这个端点不能当证据）。
-function Test-EndpointDirect([string]$HostName, [string]$Path, [string]$Expect = "204") {
+$script:EndpointProofCache = @{}
+$script:DirectBaseline = $null
+$script:NetworkFingerprint = $null
+$script:NetworkFingerprintAt = $null
+# 本轮是不是"合格证整体失效、已退回旧判据"。由 Test-RealConnectivity 每轮重置，
+# 由 runtime 决定要不要记一笔日志。状态页不读它（快照字段两侧同形，加字段要两侧一起动）。
+$script:ProofDegraded = $false
+
+# 本机的网络指纹：默认网关 + 各网卡的本机地址。换 Wi-Fi / 插拔网线 / 开关虚拟网卡
+# 都会让它变，而这三件事恰好都会推翻「这个端点会不会被墙」的结论。
+# 只用 .NET 的网卡枚举，不起外部进程（热路径上的老规矩）。
+function Get-NetworkFingerprint {
+    $now = Get-MonotonicSeconds
+    if ($null -ne $script:NetworkFingerprint -and $null -ne $script:NetworkFingerprintAt) {
+        $age = ConvertTo-MonotonicDelta ($script:NetworkFingerprintAt * 1000.0) ($now * 1000.0)
+        if ($age -ge 0 -and $age -lt $NetworkFingerprintTtlSec) { return $script:NetworkFingerprint }
+    }
+    $parts = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
+            if ($ni.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
+            if ($ni.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback) { continue }
+            $props = $ni.GetIPProperties()
+            foreach ($gw in $props.GatewayAddresses) {
+                if ($gw -and $gw.Address) { [void]$parts.Add('gw:' + $gw.Address.ToString()) }
+            }
+            foreach ($ua in $props.UnicastAddresses) {
+                if ($ua -and $ua.Address -and $ua.Address.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+                    [void]$parts.Add('ip:' + $ua.Address.ToString())
+                }
+            }
+        }
+    } catch { }
+    $fp = (($parts | Sort-Object -Unique) -join ',')
+    $script:NetworkFingerprint = $fp
+    $script:NetworkFingerprintAt = $now
+    return $fp
+}
+
+# 直连（不经任何代理）能不能上网：拿一个国内稳定站点试，拿到任何 HTTP 应答就算能。
+# 它存在只为一件事：把「这个站点打不开」和「整台机器都出不去」分开。
+# 没有它的话，断网、DNS 全挂、刚开机网卡还没起来——全都会被读成「所有端点都被墙」，
+# 于是每个端点都发一张合格证，而那时候根本没有任何东西被证明。
+function Test-DirectBaselineAlive {
+    $now = Get-MonotonicSeconds
+    $fp = Get-NetworkFingerprint
+    if ($null -ne $script:DirectBaseline) {
+        $b = $script:DirectBaseline
+        $age = ConvertTo-MonotonicDelta ($b.At * 1000.0) ($now * 1000.0)
+        if ($b.Fingerprint -eq $fp -and $age -ge 0 -and $age -lt $DirectBaselineTtlSec) { return $b.Alive }
+    }
+    $alive = $false
     $handler = $null
     $client = $null
     try {
@@ -942,9 +1016,49 @@ function Test-EndpointDirect([string]$HostName, [string]$Path, [string]$Expect =
             Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
         }
         $handler = New-Object System.Net.Http.HttpClientHandler
+        # 同样必须关代理：这一侧问的是"直连还能不能出去"，走了代理就答非所问。
+        $handler.UseProxy = $false
+        $handler.AllowAutoRedirect = $false
+        $client = New-Object System.Net.Http.HttpClient($handler)
+        $client.Timeout = [TimeSpan]::FromMilliseconds($EndpointDirectTimeoutMs)
+        $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyCheck")
+        $resp = $client.GetAsync("http://$DirectBaselineHost$DirectBaselinePath", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+        # 拿到任何 HTTP 应答就够——状态码是什么无所谓，这里问的是"路通不通"。
+        if ($resp) { $alive = $true; try { $resp.Dispose() } catch {} }
+    } catch {
+        $alive = $false
+    } finally {
+        if ($client) { try { $client.Dispose() } catch {} }
+        if ($handler) { try { $handler.Dispose() } catch {} }
+    }
+    $script:DirectBaseline = @{ Alive = $alive; At = $now; Fingerprint = $fp }
+    return $alive
+}
+
+# 直连（不经任何代理）问一次这个端点，返回三态之一。
+# 判据与 Test-SingleEndpoint 共用 Test-EndpointStatus，只是不经过代理端口。
+function Test-EndpointDirect([string]$HostName, [string]$Path, [string]$Expect = "204") {
+    # 第一关：解析得出吗。解析不出来是「不知道」，不是「被墙」——
+    # 把 DNS 故障读成被墙，等于给每个端点免费发一张合格证。
+    $resolved = $false
+    try {
+        $addrs = [System.Net.Dns]::GetHostAddresses($HostName)
+        if ($addrs) { foreach ($a in $addrs) { if ($a) { $resolved = $true; break } } }
+    } catch { $resolved = $false }
+    if (-not $resolved) { return $EndpointProofKinds.Unknown }
+
+    $handler = $null
+    $client = $null
+    $gotResponse = $false
+    $matched = $false
+    try {
+        if (-not ("System.Net.Http.HttpClient" -as [type])) {
+            Add-Type -AssemblyName System.Net.Http -ErrorAction Stop
+        }
+        $handler = New-Object System.Net.Http.HttpClientHandler
         # 关掉一切代理来源：环境变量与系统代理（WinINET / PAC）都不许参与。
         # 这一行是整条判据的根——开着它，这里问到的就是"代理那一侧"，
-        # 与经代理的探测同源，两边永远一致，合格证会恒为"可以当证据"，等于没验。
+        # 与经代理的探测同源，两边永远一致，任何端点都当不成证据（表现为永远判不通）。
         $handler.UseProxy = $false
         $handler.AllowAutoRedirect = $false
         $client = New-Object System.Net.Http.HttpClient($handler)
@@ -953,48 +1067,93 @@ function Test-EndpointDirect([string]$HostName, [string]$Path, [string]$Expect =
         $resp = $client.GetAsync("http://$HostName$Path", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
         $code = [int]$resp.StatusCode
         try { $resp.Dispose() } catch {}
-        return (Test-EndpointStatus $code $Expect)
+        $gotResponse = $true
+        $matched = (Test-EndpointStatus $code $Expect)
     } catch {
-        # 连不上、超时、被重置、DNS 被污染——都归"直连不通"，正是我们要的那一半。
-        return $false
+        $gotResponse = $false
     } finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
     }
+
+    if ($matched) { return $EndpointProofKinds.Reachable }
+    # 拿到了应答但不是它该回的（门户劫持回 200、HEAD 不被支持回 405、CDN 回 403）：
+    # 这说明不了这个站点"被墙"，只说明这一问没结果。
+    if ($gotResponse) { return $EndpointProofKinds.Unknown }
+    # 一个字节都没拿到：只有在「直连本身能上网」的前提下，才轮得到说这个站点打不开。
+    if (Test-DirectBaselineAlive) { return $EndpointProofKinds.Blocked }
+    return $EndpointProofKinds.Unknown
 }
 
-# 这个端点能不能当证据（进程内缓存，每个端点只问一次直连）。
-# 只由 Test-RealConnectivity 在"经代理已经拿到期望应答"之后调用：
-# 节点正常时这里每进程至多付 6 次直连询问，之后一律命中缓存。
+# 这个端点的合格证（带有效期 + 网络指纹，每个端点问一次就够）。
+# 只由 Test-RealConnectivity 在"经代理已经拿到期望应答"之后调用。
 function Get-EndpointProof([int]$Index) {
+    # 索引越界不许静默发证：那是一张没有任何依据的合格证，而它会让判决朝"判活"方向错，
+    # 正是代价最大的那一边。
+    if ($Index -lt 0 -or $Index -ge $CheckEndpoints.Count) { return $EndpointProofKinds.Unknown }
     $key = "$Index"
-    if ($script:EndpointProofCache.ContainsKey($key)) { return $script:EndpointProofCache[$key] }
-    $e = $CheckEndpoints[$Index]
-    $proof = if (Test-EndpointDirect $e.Host $e.Path $e.Expect) {
-        $EndpointProofKinds.Reachable
-    } else {
-        $EndpointProofKinds.Walled
+    $now = Get-MonotonicSeconds
+    $fp = Get-NetworkFingerprint
+    if ($script:EndpointProofCache.ContainsKey($key)) {
+        $c = $script:EndpointProofCache[$key]
+        $age = ConvertTo-MonotonicDelta ($c.At * 1000.0) ($now * 1000.0)
+        if ($c.Fingerprint -eq $fp -and $age -ge 0 -and $age -lt $EndpointProofTtlSec) { return $c.Kind }
+        # 过期，或者换了网络：这个结论不再描述现在，丢掉重问。
+        $script:EndpointProofCache.Remove($key)
     }
-    $script:EndpointProofCache[$key] = $proof
-    return $proof
+    $e = $CheckEndpoints[$Index]
+    $kind = Test-EndpointDirect $e.Host $e.Path $e.Expect
+    # Unknown 不入缓存：它回答的是"这一次没问出来"，不是这个端点的性质。
+    # 缓存它等于把一次瞬时故障钉成永久结论。
+    if ($kind -ne $EndpointProofKinds.Unknown) {
+        $script:EndpointProofCache[$key] = @{ Kind = $kind; At = $now; Fingerprint = $fp }
+    }
+    return $kind
 }
 
 # 一条端点证据算不算数（唯一的判据实现）。
+# 只有 Blocked 算——Reachable 证明不了代理，Unknown 什么都不证明。
 # 抽成纯函数是为了能被回归直接钉住：只靠真网络去验，"直连也通就不算证据"这条规则
 # 恰恰会在当初让它漏过去的那台机器上验不出来。
-function Test-EndpointEvidence([bool]$Answered, [string]$Proof) {
-    if (-not $Answered) { return $false }
-    return ($Proof -eq $EndpointProofKinds.Walled)
+function Test-EndpointEvidence([string]$Proof) {
+    return ($Proof -eq $EndpointProofKinds.Blocked)
 }
 
-# 经代理问一个端点，再判它的应答能不能当证据。三条探测路径（快路、并行兜底、串行兜底）
-# 都只调用它，判据不会各写一套。
+# 端点表里还有没有一个"确定被墙"的端点。全都没有时，合格证这套判据在本机就不可用
+# （典型：TUN / 透明代理把直连也接管了，六个端点全 Reachable）。
+function Test-AnyEndpointBlocked {
+    for ($i = 0; $i -lt $CheckEndpoints.Count; $i++) {
+        if ((Get-EndpointProof $i) -eq $EndpointProofKinds.Blocked) { return $true }
+    }
+    return $false
+}
+
+# 六个端点是不是**每一个**都直连可达。
+#
+# 这是"本机直连被整体接管"的签名（TUN、透明代理、全局 VPN）：流量根本没走真实网络，
+# 走的是那台内核，所以每个端点都能"直连"拿到正确应答。这时合格证这套判据在本机
+# 是恒真的，它证明不了任何事——既不能说代理好，也不能说代理坏。
+#
+# 为什么要跟"全是 Unknown"分开：那是另一件事，说明本机根本问不出来（DNS 挂了、
+# 整条直连断了）。那时的正确回答是"没法证明"，不是"退回旧判据"——退回旧判据
+# 恰好会让一个死节点靠随便一个 204 重新骗过判决，也就是这次要修的那个事故。
+function Test-AllEndpointsReachable {
+    for ($i = 0; $i -lt $CheckEndpoints.Count; $i++) {
+        if ((Get-EndpointProof $i) -ne $EndpointProofKinds.Reachable) { return $false }
+    }
+    return $true
+}
+
+# 经代理问一个端点，再判它的应答能不能当证据。**三条探测路径都只调用它**：
+#   -AlreadyAnswered 给并行兜底用：那一侧请求已经发出去了，再打一次是白花流量。
 # 直连合格证只在**端点真的应答了**之后才去问：没应答就无从谈起，白问一次是净损失。
-function Test-ProxyEndpointEvidence([int]$Port, [int]$Index) {
-    $e = $CheckEndpoints[$Index]
-    $answered = Test-SingleEndpoint $Port $e.Host $e.Path $e.Expect
-    if (-not $answered) { return $false }
-    return (Test-EndpointEvidence $true (Get-EndpointProof $Index))
+function Test-ProxyEndpointEvidence([int]$Port, [int]$Index, [bool]$AlreadyAnswered = $false) {
+    if (-not $AlreadyAnswered) {
+        if ($Index -lt 0 -or $Index -ge $CheckEndpoints.Count) { return $false }
+        $e = $CheckEndpoints[$Index]
+        if (-not (Test-SingleEndpoint $Port $e.Host $e.Path $e.Expect)) { return $false }
+    }
+    return (Test-EndpointEvidence (Get-EndpointProof $Index))
 }
 
 # 单个端点应答的状态码判定（唯一的判据实现）。$Expect 取自端点表。
@@ -1058,6 +1217,8 @@ function Test-SingleEndpoint([int]$Port, [string]$HostName, [string]$Path, [stri
 #   这样：单个域段（如 Google 主域）整体抽风时，其余域段（gstatic/维基/推特等）
 #         照样兜底证明"节点活着"，杜绝单域段盲区误删；且正常延迟/流量不受影响。
 function Test-RealConnectivity([int]$Port) {
+    $script:ProofDegraded = $false
+
     # ---- 快路：只测上次成功的端点（正常路径，毫秒级，1 个请求）----
     # 快路也必须过合格证：一个端点"直连就通"时，它回的 204 说明不了代理能出去。
     # 只加在兜底那边会让"上次命中的正是这种端点"变成后门，而且它恰恰是最常走的路径。
@@ -1067,6 +1228,7 @@ function Test-RealConnectivity([int]$Port) {
     # ---- 兜底：上次端点失败 → 并行探测其余全部端点（6 秒封顶）----
     $handler = $null
     $client = $null
+    $answered = @()
     try {
         # HttpClient（.NET 内置，零依赖）：并发发起所有端点请求
         if (-not ("System.Net.Http.HttpClient" -as [type])) {
@@ -1111,23 +1273,25 @@ function Test-RealConnectivity([int]$Port) {
                         $ok = (Test-EndpointStatus $code $CheckEndpoints[$k].Expect)
                         $resp.Dispose()
                     } catch { $ok = $false }
-                    if ($ok) {
-                        # 通了还要过合格证：直连也通的端点证明不了代理能出去（见上面那段说明）。
-                        # **只对真应答了的端点去问**，而且就在这里问——预先批量问会把
-                        # 5 个直连询问串行叠起来（最坏 12.5 秒），把兜底的 6 秒预算撑爆。
-                        # 这条路径每次最多问一个，首次之后一律命中缓存。
-                        if (Test-EndpointEvidence $true (Get-EndpointProof $k)) {
-                            # 动态自学习：把兜底命中的端点记为新的最优端点（下次走快路）
-                            $script:LastGoodEndpoint = $k
-                            return $true
-                        }
-                    }
+                    if ($ok) { $answered += $k }
                     $tasks.Remove($k)
                 }
             }
             if ($tasks.Count -gt 0) { Start-Sleep -Milliseconds 100 }
         }
-        return $false
+        # 没赶上截止时刻的，不能当成"没应答"——它们可能只是慢。
+        # 这里只把它们记进候选，判定留给下面那一段（那时网络请求已经结束，不会有半截状态）。
+        foreach ($k in @($tasks.Keys)) {
+            $t = $tasks[$k]
+            if ($t.IsCompleted) {
+                try {
+                    $resp = $t.Result
+                    $code = [int]$resp.StatusCode
+                    if (Test-EndpointStatus $code $CheckEndpoints[$k].Expect) { $answered += $k }
+                    $resp.Dispose()
+                } catch {}
+            }
+        }
     } catch {
         # HttpClient 不可用等极端环境：回退串行 TCP 探测（原逻辑）
         foreach ($i in 0..($CheckEndpoints.Count - 1)) {
@@ -1145,6 +1309,40 @@ function Test-RealConnectivity([int]$Port) {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
     }
+
+    # ---- 判定阶段：请求都发完了，这里只做本地判断 ----
+    #
+    # 合格证判定不许放在上面那个循环里：每问一个端点要付一次直连探测（最坏 2.5 秒），
+    # 串行叠起来会把「6 秒封顶」撑成十几秒，而这段时间是卡在监控主循环上的。
+    # 拆开之后，请求阶段严格 6 秒封顶，判定阶段另有自己的预算。
+    if ($answered.Count -eq 0) { return $false }
+
+    $sweepDeadline = (Get-MonotonicSeconds) + $EndpointProofSweepBudgetSec
+    foreach ($k in ($answered | Sort-Object -Unique)) {
+        if ((Get-MonotonicSeconds) -ge $sweepDeadline) { break }
+        if (Test-EndpointEvidence (Get-EndpointProof $k)) {
+            # 动态自学习：把兜底命中的端点记为新的最优端点（下次走快路）
+            $script:LastGoodEndpoint = $k
+            return $true
+        }
+    }
+
+    # ---- 走到这里说明：代理对端点有应答，但没有一个端点的「通」能证明代理真能出去 ----
+    #
+    # 三种情况必须分开处置，混在一起就是这次事故的根源：
+    #   ① 有"确定被墙"的端点 -> 判据可用，是代理真连不出去 -> 返回不通（正常路径）
+    #   ② 六个端点全部直连可达 -> 本机直连被整体接管（TUN / 透明代理），判据在这里恒真、
+    #      证明不了任何事。判"不通"会让一个正常工作的代理永远被判死且不自愈，
+    #      所以退回旧判据（有应答就算通），并标记 degraded 让上层记一笔。
+    #   ③ 其余（全是 Unknown，或混着） -> 本机问不出来，正确回答是"没法证明"。
+    #      这时**不许**退回旧判据：那恰好会让一个死节点靠随便一个 204 重新骗过判决。
+    if (Test-AnyEndpointBlocked) { return $false }
+    if (Test-AllEndpointsReachable) {
+        $script:ProofDegraded = $true
+        $script:LastGoodEndpoint = @($answered | Sort-Object -Unique)[0]
+        return $true
+    }
+    return $false
 }
 
 # 节点连通性判定（自适应节流 + 双条件迟滞）：

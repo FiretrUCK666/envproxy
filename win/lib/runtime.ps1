@@ -876,6 +876,18 @@ function Run-MonitorLoop {
         if (-not $ScriptPath -or -not (Test-Item $ScriptPath)) { $selfExit = $true; break }
         try {
             $state = Get-CurrentState
+            # 本轮"端点合格证整体失效、已退回旧判据"要给用户留一句话。
+            # 判据是怎么退化的（TUN 把直连接管了）用户看不出来，但那正是"为什么这一版
+            # 在某些网络下行为和之前一样"的唯一线索。只在翻转时记一次，不刷屏。
+            try {
+                if ($script:ProofDegraded -and -not $script:ProofDegradedLogged) {
+                    Write-MonitorLog "本机所有检测网址不挂代理也能打开（多半是虚拟网卡接管了全部流量）-> 回到旧判据：经代理拿到回应就算通"
+                    $script:ProofDegradedLogged = $true
+                } elseif (-not $script:ProofDegraded -and $script:ProofDegradedLogged) {
+                    Write-MonitorLog "检测网址恢复正常（能区分出哪些是被墙的）-> 重新按新判据判断"
+                    $script:ProofDegradedLogged = $false
+                }
+            } catch {}
             # 本轮是不是"读不出来"。unknown 既不是"变化"也不是"稳定"，
             # 它**不参与去抖记账**——见下面 if 处的说明。
             $stateUnknown = $false

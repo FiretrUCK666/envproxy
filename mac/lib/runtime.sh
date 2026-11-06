@@ -1079,6 +1079,16 @@ run_monitor_loop() {
         else
             _snap_enum="ok"
             _snap_reason=""
+            # 本轮"端点合格证整体失效、已退回旧判据"要给用户留一句话。
+            # 判据是怎么退化的（TUN 把直连接管了）用户看不出来，但那正是"为什么这一版
+            # 在某些网络下行为和之前一样"的唯一线索。只在翻转时记一次，不刷屏。
+            if [ "$PROOF_DEGRADED" = "1" ] && [ "${_proof_degraded_logged:-0}" != "1" ]; then
+                log_msg "本机所有检测网址不挂代理也能打开（多半是虚拟网卡接管了全部流量）-> 回到旧判据：经代理拿到回应就算通"
+                _proof_degraded_logged=1
+            elif [ "$PROOF_DEGRADED" != "1" ] && [ "${_proof_degraded_logged:-0}" = "1" ]; then
+                log_msg "检测网址恢复正常（能区分出哪些是被墙的）-> 重新按新判据判断"
+                _proof_degraded_logged=0
+            fi
         fi
         _st="$CURRENT_STATE"
         if [ "$_st_unknown" = "1" ]; then
