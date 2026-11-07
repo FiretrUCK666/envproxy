@@ -417,36 +417,46 @@ bash envproxy.sh status
 
 ## 4. What is inside Advanced (three modules)
 
-Menu `5` is where these live. It holds three unrelated things, each solving one concrete annoyance:
+Menu `5` is where these live. It holds three unrelated things, each solving one concrete annoyance.
 
-| Module | When you need it | What it does |
-|---|---|---|
-| **One program, one rule** | One program should use the proxy, or not | Builds an icon that sets up the env |
-| **Network and proxy repair** | Pages or terminals fail | Clears a leftover to a closed program |
-| **Places this tool cannot reach** | You want WSL or Docker to use it too | Explains only, changes nothing |
+Each subsection stands on its own; there is no need to read them in order.
 
-Each one below.
+**Jump straight to what you need:**
 
-### Module one: give one program its own rule
+| What you want to do | Section |
+|---|---|
+| One program should use the proxy, or not | [4.1](#41-give-one-program-its-own-rule) |
+| Pages or terminal tools fail | [4.2](#42-network-and-proxy-repair) |
+| You want WSL or Docker to use it too | [4.3](#43-places-this-tool-cannot-reach) |
+
+### 4.1 Give one program its own rule
 
 <details>
 <summary>Build an icon that sends one program through the proxy, or keeps it off (the original program is untouched)</summary>
 
-**Where the problem comes from.** This setting is all-or-nothing: it defines one proxy for the whole machine, and every program gets the same one. That leaves two situations awkward:
+**Where the problem comes from.**
+
+This setting is all-or-nothing: it defines one proxy for the whole machine, and every program gets the same one. That leaves two situations awkward:
 
 - Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
 - The opposite case: you do **not** want a particular program to use the proxy (online banking, an intranet tool), yet the machine-wide setting drags it along.
 
-**How it helps.** It builds an icon for that program. Double-clicking it prepares the environment first (setting what should be set, clearing what should be cleared), then hands control to the real program. Two rules to pick from:
+**How it helps.**
+
+It builds an icon for that program. Double-clicking it prepares the environment first (setting what should be set, clearing what should be cleared), then hands control to the real program. Two rules to pick from:
 
 | Rule | What happens on double-click |
 |---|---|
-| **Use the proxy** | The program starts with the current proxy, following your proxy app |
-| **Always direct** | The program never uses a proxy, even while everything else does |
+| Use the proxy | The program starts with the current proxy, following your proxy app |
+| Always direct | The program never uses a proxy, even while everything else does |
 
-**One program can have both.** The two icons do not fight each other: `WeChat (proxy)` and `WeChat (direct)` are independent icons, each minding its own business, and your original WeChat is untouched. Remove them under "Manage" when you no longer want them.
+**One program can have both.**
 
-**Why the address never needs changing.** A proxy app's local port changes: switch apps, a random port on restart, or the port is taken and the app moves on. When that happens, some programs keep the old address and stop connecting — and you have to fix it in their own settings.
+The two icons do not fight each other: `WeChat (proxy)` and `WeChat (direct)` are independent icons, each minding its own business, and your original WeChat is untouched. Remove them under "Manage" when you no longer want them.
+
+**Why the address never needs changing.**
+
+A proxy app's local port changes: switch apps, a random port on restart, or the port is taken and the app moves on. When that happens, some programs keep the old address and stop connecting — and you have to fix it in their own settings.
 
 This tool opens a **fixed entry** on your machine (an address that never changes). Proxy icons only know that address, and behind it the tool follows the proxy app. So changing ports are none of your business, and you never rebuild an icon.
 
@@ -457,16 +467,20 @@ This tool opens a **fixed entry** on your machine (an address that never changes
 - **Icons you already made need no rebuild** — every launch reads the current state again.
 - **Chromium-based programs are adapted automatically (Windows only).** Chrome, Edge, VS Code and Discord ignore environment variables and only honour a launch flag. You answer no questions: the tool recognises them itself and adds one line to the confirmation screen saying the program needs the flag and it has been added. The macOS build does no such adaptation; use the system proxy for those programs.
 
-Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
+**The two platforms do it differently.**
+
+Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
 </details>
 
-### Module two: network and proxy repair
+### 4.2 Network and proxy repair
 
 <details>
-<summary>Repair three leftovers: the system proxy, terminal config files, and DNS</summary>
+<summary>Repair three leftovers: the system proxy, terminal config files, and DNS; plus where it stops working</summary>
 
-**Where the problem comes from.** A proxy app removes its system proxy setting when it closes normally. But when it is **killed** — a hard shutdown, power loss, End Task, or a crash — it never gets the chance.
+**Where the problem comes from.**
+
+A proxy app removes its system proxy setting when it closes normally. But when it is **killed** — a hard shutdown, power loss, End Task, or a crash — it never gets the chance.
 
 The system still says "send browser traffic to `127.0.0.1:7078`", but nothing is listening there any more. Every time the browser goes online it knocks on a door that no longer exists, so **even domestic sites fail**.
 
@@ -477,35 +491,38 @@ The system still says "send browser traffic to `127.0.0.1:7078`", but nothing is
 
 This screen looks at all three and lists the conclusions in the order network, browser, terminal tools.
 
-**The tell: the environment variables this tool manages are fine.** So when it breaks you feel "the network obviously works, just not this one thing".
+**What it looks like when this is the problem.**
 
-**How it repairs.** It turns off only the switch that is wrong and leaves every other byte alone:
+The environment variables this tool manages are fine, so you feel "the network obviously works, just not this one thing".
+
+**How it repairs.**
+
+It turns off only the switch that is wrong and leaves every other byte alone:
 
 | Situation | What it does |
 |---|---|
 | Loopback address, port already gone | Turns that setting off, or deletes the line |
-| Not a loopback address (company, school) | **Leaves it alone** |
-| Port still alive (you are using it) | **Leaves it alone** |
-| Managed by administrator policy | **Leaves it alone** |
-| Cannot tell | **Leaves it alone** |
-| Name resolution broken | **Warns only, changes nothing** (see below) |
+| Not a loopback address (company, school) | Leaves it alone |
+| Port still alive (you are using it) | Leaves it alone |
+| Managed by administrator policy | Leaves it alone |
+| Cannot tell | Leaves it alone |
+| Name resolution broken | Warns only, changes nothing (see below) |
 
 It saves the original first, so you can put it back (press `r` on that screen; it undoes the **last** repair).
 
-**Why DNS is only reported, never changed.** Changing it back automatically would require knowing which DNS your router will hand out once you switch to automatic — and that answer does not exist before the change. Guessing wrong swaps a working address for a broken one, which is worse than the original fault. So this item explains what it found and leaves the one click in system settings to you.
+**Why DNS is only reported, never changed.**
 
-**It also points out one thing you would never find yourself.** If you set DNS for "all networks" and also for one particular Wi-Fi, the system only uses one of them and the other silently does nothing. Nothing on screen tells you that; this screen does.
+Changing it back automatically would require knowing which DNS your router will hand out once you switch to automatic — and that answer does not exist before the change. Guessing wrong swaps a working address for a broken one, which is worse than the original fault. So this item explains what it found and leaves the one click in system settings to you.
 
-</details>
+**It also points out one thing you would never find yourself.**
 
-### What it cannot reach
+If you set DNS for "all networks" and also for one particular Wi-Fi, the system only uses one of them and the other silently does nothing. Nothing on screen tells you that; this screen does.
 
-<details>
-<summary>It reads settings, not whether the network actually works</summary>
+**Where it stops working.**
 
 This matters more than everything above, because it tells you where to look next.
 
-**It looks at three places only: the proxy setting the browser uses, terminal tool config files, and the name-resolution addresses.** If it says nothing is wrong, that does not mean your network is fine — only that these three are clean.
+It looks at three places only: the proxy setting the browser uses, terminal tool config files, and the name-resolution addresses. If it says nothing is wrong, that does not mean your network is fine — only that these three are clean.
 
 If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, firewall rules, or an adapter that never got an address. It cannot see any of those, and will not touch them.
 
@@ -513,12 +530,14 @@ If the network still fails, the cause may be elsewhere: a virtual adapter (TUN),
 
 </details>
 
-### Module three: places this tool cannot reach
+### 4.3 Places this tool cannot reach
 
 <details>
 <summary>How to set up WSL and Docker networking (explained only, nothing is changed)</summary>
 
-**This item only explains; it changes nothing of yours.** It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
+**This item only explains; it changes nothing of yours.**
+
+It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
 
 **The short version:** your computer has three separate rooms.
 
@@ -530,7 +549,7 @@ Docker            one more room, where Docker Desktop lives
 
 Each room **manages its own network settings**. The note you stick on your own door (environment variables) is invisible to the next room.
 
-So:
+**So who decides:**
 
 | Who | Who decides whether it uses the proxy |
 |---|---|
@@ -539,13 +558,17 @@ So:
 | Things inside WSL | WSL's own settings |
 | Things inside Docker | Docker's own settings |
 
-**To make WSL use the proxy**, the right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer). **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
+**To make WSL use the proxy.**
 
-**To make Docker use the proxy**, slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+The right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer). **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
 
-The exact commands are on screen under menu `5` then `6` / `7` on Windows, ready to copy.
-**This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac,
-it simply has no dedicated page there.
+**To make Docker use the proxy.**
+
+Slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+
+**Where to copy the exact commands.**
+
+On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac, it simply has no dedicated page there.
 
 </details>
 
@@ -794,7 +817,7 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
 
-**That is why Mac needs no "fixed entry"** (the thing described under module one in section 4): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
+**That is why Mac needs no "fixed entry"** (the thing described in 4.1): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
 
 On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `bash` 3.2 is still shipped.
 
