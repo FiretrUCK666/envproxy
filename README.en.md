@@ -19,10 +19,9 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 <!-- toc:start -->
 
-- [0. What happens after installing](#0-what-happens-after-installing)
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
-- [3. Everyday commands on one page](#3-everyday-commands-on-one-page)
+- [3. The eight help entries, one section each](#3-the-eight-help-entries-one-section-each)
 - [4. What is inside Advanced (three modules)](#4-what-is-inside-advanced-three-modules)
 - [5. Something is wrong: check in this order](#5-something-is-wrong-check-in-this-order)
 - [6. How it decides whether you are behind a proxy](#6-how-it-decides-whether-you-are-behind-a-proxy)
@@ -37,33 +36,13 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 <!-- toc:end -->
 
-## 0. What happens after installing
-
-Almost always nothing. Of the three cases below, only the first needs nothing from you; the other two cost at most reopening one window.
-
-| Your situation | What happens | What you do |
-|---|---|---|
-| **Opened after installing** | It reads the state at startup | **Nothing** |
-| **Kept open, proxy changed later** | It still holds the old state | Press Enter (cmd must be reopened) |
-| **Opened before installing** | The sync code was never loaded | Open a new window, or load it as in 3.1 |
-
-### Why an open window needs one Enter press
-
-Each program reads the environment variables once, at startup, and keeps that copy. Changing them later in the system does not reach a window that is already running.
-
-So new windows are always right, and old ones need to read again. EnvProxy reads at the moment a command finishes and the cursor comes back, which happens all the time anyway.
-
-### AI tools, editors, IDEs
-
-They usually open a terminal as a new process, so they are correct automatically.
-
-Two need a restart: it was already open before you installed EnvProxy, or it runs in the background rather than on demand. If unsure, restart it once.
-
 ## 1. Install (3 steps, 5 minutes)
 
 1. Click **[here to download the Windows package](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-win.zip)** (Mac: [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz))
 2. Unzip anywhere; the folder can be renamed. Open `win` and double-click **`打开菜单.cmd`** (Mac: open `mac`, double-click **`打开菜单.command`**), pick **`1 Install / Repair`**
 3. When you see the monitor started message, you are done
+
+That is the end of it: in most cases there is nothing left to do. The three window cases (opened after installing, left open, opened before installing) are covered in [3.2](#32-what-do-i-do-after-installing).
 
 Installing does four things: it saves your current variable values (restored on uninstall), registers start at login, adds a small sync script to your terminal's startup configuration, and starts the monitor plus corrects the variables once.
 
@@ -111,24 +90,6 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 The numbers run top to bottom and are grouped by how often you need them, so there is nothing to memorise.
 
 **Pressing Enter directly means show status**, the item you look at most. The menu header shows whether the monitor is running and the current version, so you do not need to go in.
-
-The menu and help use only two actions: **type a number** to do that thing; **press Enter** to go back — in the main menu that means show status, in help it means go back one level. There are no other keys to remember.
-
-Pick `4` for help: one entry answers one question, chosen by what you are stuck on.
-
-| No. | One entry answers one question |
-|---|---|
-| 1 | What is this for |
-| 2 | What do I do after installing |
-| 3 | Keep this window off the proxy / use a corporate proxy |
-| 4 | Make one command skip the proxy |
-| 5 | One program still cannot reach blocked sites |
-| 6 | The other way round: one program should not go through the proxy |
-| 7 | Something is wrong: how to check, how to report |
-| 8 | No internet after closing the proxy app |
-
-Once inside, the bottom line lists every number, with the one you are reading in brackets.
-
 <img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects">
 
 ### Logs
@@ -137,9 +98,11 @@ Once inside, the bottom line lists every number, with the one you are reading in
 
 Uninstalling asks whether to keep it. Keep it and this is the only file left; everything else is removed.
 
-## 3. Everyday commands on one page
+## 3. The eight help entries, one section each
 
-**You do not normally need this section.** The proxy app switching on and off is all it takes; the terminal follows without any command. Read on only when you want to manage one specific window, or want to confirm the install really took.
+Menu `4` opens Help: eight numbered entries, one entry answers one question, and the bottom line lists every number.
+
+This chapter expands each one. The help screen gives you an answer you can use on the spot; this chapter gives you every command and every exception.
 
 Each subsection stands on its own; there is no need to read them in order.
 
@@ -147,67 +110,94 @@ Each subsection stands on its own; there is no need to read them in order.
 
 | What you want to do | Section |
 |---|---|
-| A window is stuck on old values | [3.1](#31-a-window-you-already-have-open-needs-one-enter-press) |
-| Keep this window direct | [3.2](#32-pin-this-window-to-a-direct-connection--go-back-to-automatic) |
-| Use a corporate proxy | [3.3](#33-send-this-window-through-a-corporate-proxy) |
-| Skip the proxy for one command | [3.4](#34-make-one-command-skip-the-proxy) |
-| Confirm it is installed | [3.5](#35-how-to-confirm-it-really-took) |
-| Use switches, not the menu | [3.6](#36-use-it-without-the-menu-scripts-remote-sessions) |
+| Work out what this does | [3.1](#31-what-is-this-for) |
+| Just installed, unsure what to do | [3.2](#32-what-do-i-do-after-installing) |
+| Keep this window off the proxy, or use a corporate one | [3.3](#33-off-the-proxy-or-on-a-corporate-one) |
+| Make one command skip the proxy | [3.4](#34-make-one-command-skip-the-proxy) |
+| One program still cannot connect | [3.5](#35-one-program-still-cannot-connect) |
+| One program that must never be proxied | [3.6](#36-never-send-one-program-through-it) |
+| Something is wrong | [3.7](#37-something-is-wrong-check-and-report) |
+| No internet after closing the app | [3.8](#38-no-internet-after-closing-the-app) |
 
-### 3.1 A window you already have open needs one Enter press
+### 3.1 What is this for
 
 <details>
-<summary>Which terminals follow, and which do not (cmd needs a reopen)</summary>
+<summary>What gap it fills, and how it decides you are behind a proxy</summary>
 
-> **A cmd window is the exception: pressing Enter does nothing, you have to reopen it.**
->
-> cmd has no "run this on every prompt" mechanism, so it follows nothing at all.
-> PowerShell, Git Bash and the Mac Terminal all catch up when you press Enter; cmd does not.
-> If you work in cmd, reopen the window once after installing, and again each time the proxy app switches.
+**What gap it fills.**
 
-**For every other terminal:**
+The proxy app only manages your browser. `git`, `npm` and `curl` in the terminal are not its business; they read a set of settings called environment variables. That is why you can open pages in the browser while `git clone` hangs forever.
 
-EnvProxy follows the proxy app: connect it and the terminal uses the proxy; disconnect it and the terminal goes direct again. **A newly opened window is always current.**
+EnvProxy maintains those settings for you: written when the proxy app is up, removed when it goes down. No commands to remember, no switch to flip.
 
-A window that was already open does not change on its own. Every program reads the environment once, at the moment it starts; after that it cannot see later changes. To update it, **press Enter in that window** (or run any command).
+**How it knows you are behind a proxy.**
 
-| Your window | What state it holds | What to do |
+It checks every 2 to 3 seconds, and three conditions must all hold:
+
+| Check | What must be true | What it rules out |
 |---|---|---|
-| Opened after installing | Already current | Nothing |
-| Kept open while the proxy app was switched | The old state | Press Enter once |
-| Opened before installing EnvProxy | The sync code was never loaded | Open a new window |
+| 1 | Something on this machine is listening on a port | Nothing is running at all |
+| 2 | That port answers the way a proxy does | Ordinary local services (web servers, dev servers) |
+| 3 | It reaches outside, and one of 6 test sites fails without it | A live port with a dead node |
 
+All three must pass before it touches anything. **It goes by none of brand, program name or port number** — those only speed up the search, they are never the evidence. Switch proxy apps, change ports: nothing needs reconfiguring.
 
-**A cmd window can only be reopened.** Pressing Enter does nothing there: cmd has no "run this before every prompt" mechanism.
+**Why check 3 has to be that roundabout.**
 
-If you would rather not reopen and not press Enter, load it by hand once:
+Whether a given site opens directly is not a property of the site. It is a property of your machine's network plus your proxy app's routing rules, and the same site can go either way on a different network.
+
+So the rule has to be "reachable through the proxy, and not reachable without it" — both halves, or neither counts. Drop either half and a dead proxy gets reported as working: every light on screen green, every command in the terminal failing.
+
+The details (three-state judgement, expiry, the TUN case) are in [section 6](#6-how-it-decides-whether-you-are-behind-a-proxy).
+
+</details>
+
+### 3.2 What do I do after installing
+
+<details>
+<summary>Three window cases; you almost certainly fall into the first</summary>
+
+**Most of the time: nothing at all.**
+
+| Your situation | What happens | What you do |
+|---|---|---|
+| A window or program opened after installing | It read the current state when it started | Nothing |
+| Left open while the proxy app switched | Holds the old state | Press Enter (cmd: reopen) |
+| Opened before installing | No sync code was loaded | Run the line below, or reopen |
+
+**To bring an old window up to date right now, load it by hand once:**
 
 | Window | Command |
 |---|---|
 | PowerShell | `. $PROFILE` |
 | Git Bash | `source ~/.bashrc` |
 | Mac Terminal | `. ~/.envproxy/prompt-sync.sh` |
+| cmd | No such command; reopen the window |
 
-The leading `.` and the space after it are both required; it means "run this file in this window". It affects only this window, so other open windows each need their own. If EnvProxy was never installed from this window, you may see a red "cannot find path" error: that is expected, just open a new window.
+The leading `.` and the space after it are both required; the pair means "run this file in this window". It affects only the current window — every other open window needs its own turn.
 
-**Confirm it took:**
+If that window was opened before EnvProxy was ever installed, you will see a red "path not found" — normal, just reopen the window.
 
-| Window | Type this | What success looks like |
-|---|---|---|
-| PowerShell | `$env:HTTPS_PROXY` | A value means it caught up; empty means still direct |
-| cmd | `set HTTPS_PROXY` | Same as above |
-| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+**Why an open window needs one Enter press.**
 
-If the proxy app is running and you see nothing, this window has not caught up yet: press Enter once more.
+Every program reads "which proxy should I use" exactly once, at the moment it starts, and then it is fixed. Changes made later are invisible to a window that is already running.
+
+EnvProxy picks the moment when each command finishes and your cursor comes back — you are typing commands anyway, so there is nothing extra to do.
+
+**AI tools, editors, IDEs.**
+
+They usually start the terminal as a new process, so they are current automatically.
+
+Two cases need a restart of that tool: it was already running when you installed EnvProxy, or it sits in the background rather than starting on demand. If unsure, restart it once.
 
 </details>
 
-### 3.2 Pin this window to a direct connection / go back to automatic
+### 3.3 Off the proxy, or on a corporate one
 
 <details>
-<summary>How to set the switch, verify it, and revert</summary>
+<summary>Three things: always direct, a corporate proxy, and back to automatic</summary>
 
-**Keep this one window off the proxy.** Only this window is affected; the others still follow the proxy app.
+**One: keep this window off the proxy.**
 
 | Window | Set this switch |
 |---|---|
@@ -215,10 +205,9 @@ If the proxy app is running and you see nothing, this window has not caught up y
 | Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` |
 | cmd | No such switch; see below |
 
-A variable set on a command line takes effect at the **next prompt**, not on that same line.
+This affects only the current window; other windows still follow the proxy app. It takes effect **on the next return to the prompt**; a command run on the same line still sees the old value.
 
-**cmd has no prompt hook, so clear the five variables yourself.** One per line (a single line also works,
-but leave no spaces around `&`: a space makes the value a single space, and the proxy keeps working):
+**cmd has no prompt hook, so you clear the 5 variables yourself.** One at a time (a single line works too, but there must be no spaces around `&`; with a space the value becomes a space instead of empty, and the proxy still applies):
 
 ```
 set HTTP_PROXY=
@@ -228,190 +217,281 @@ set NO_PROXY=
 set NODE_USE_ENV_PROXY=
 ```
 
-**Do not use `unset HTTP_PROXY`.** In Git Bash the hook writes the lower-case spellings (`http_proxy` and friends);
-unsetting the upper-case one leaves them behind, curl still honours them, and the next prompt writes them back.
-The switch above is the only real takeover.
+**Do not use `unset HTTP_PROXY`.** In Git Bash the hook writes lowercase names (`http_proxy` and friends); clearing the uppercase one leaves it in place, curl still goes through the proxy, and the next prompt writes it back anyway. The switch above is the real takeover.
 
 **Confirm it took:**
 
-| Window | Type this | What success looks like |
+| Window | Run this | What success looks like |
 |---|---|---|
-| PowerShell | `$env:HTTPS_PROXY` | Empty means it is pinned to direct |
-| cmd | `set HTTPS_PROXY` | Same as above |
-| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
+| PowerShell | `$env:HTTPS_PROXY` | Empty means the window is now pinned direct |
+| cmd | `set HTTPS_PROXY` | Same |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same |
 
-**Going back to following the proxy app:**
+**Two: send this window through a corporate proxy.**
 
-| Window | Do this | What success looks like |
-|---|---|---|
-| PowerShell | `Remove-Item Env:ENVPROXY_TERM` | At the next prompt `$env:HTTPS_PROXY` has a value |
-| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | At the next prompt `echo $HTTPS_PROXY` has a value |
-| cmd | Reopen the window | — |
-
-Still empty while the proxy app is running means the monitor is not running: pick 1 (Install / repair) in the menu.
-
-These changes only live in that window. Close it and they are gone.
-
-</details>
-
-### 3.3 Send this window through a corporate proxy
-
-<details>
-<summary>Two steps, one addition, and how to revert</summary>
-
-A corporate proxy and auto-follow are **mutually exclusive**; pick one.
-
-**Step 1: take over. Step 2: set the address. The order matters.**
+A corporate proxy and automatic following are **mutually exclusive**; pick one. **Step one hands over control, step two sets the address — the order matters.**
 
 | Window | Step 1 | Step 2 |
 |---|---|---|
-| PowerShell | `$env:ENVPROXY_TERM = 'off'` | `$env:HTTPS_PROXY = 'http://your-host:port'` |
-| Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` | `export HTTPS_PROXY=http://your-host:port` |
-| cmd | Clear those 5 variables (full line below) | `set HTTPS_PROXY=http://your-host:port` |
+| PowerShell | `$env:ENVPROXY_TERM = 'off'` | `$env:HTTPS_PROXY = 'http://your-address:port'` |
+| Git Bash / Mac Terminal | `export ENVPROXY_TERM=off` | `export HTTPS_PROXY=http://your-address:port` |
+| cmd | Clear those 5 variables | `set HTTPS_PROXY=http://your-address:port` |
 
-**The cmd clearing command (copy this whole line):**
+**The cmd command that clears them (copy the whole line):**
 
 ```
 set HTTP_PROXY=&set HTTPS_PROXY=&set ALL_PROXY=&set NO_PROXY=&set NODE_USE_ENV_PROXY=
 ```
 
-Skip the takeover and the next change the proxy app makes overwrites the address you just set.
+Without handing over control first, the next change from the proxy app overwrites the address you just set.
 
-Replace `your-host:port` with what your company gave you — ask IT. This is **not** the proxy app's port.
+Ask your company IT for `your-address:port`. **It is not the proxy app's port** — do not go looking there.
 
-**Confirm it took:**
-
-| Window | Type this | What success looks like |
-|---|---|---|
-| PowerShell | `$env:HTTPS_PROXY` | Your corporate address means it took |
-| cmd | `set HTTPS_PROXY` | Same as above |
-| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same as above |
-
-Seeing the `127.0.0.1` address instead means step 1 did not take: go back and redo it.
-
-**Some programs ignore that one; add one more line**
-
-Most tools (git, curl, pip, npm) are fine with `HTTPS_PROXY`.
-The rest need `ALL_PROXY` — **copy the whole line below**, it complements the line above; you need both.
+**Most tools (git, curl, pip, npm) are satisfied with `HTTPS_PROXY`.** If some program still does not comply, add one more line — it builds on the previous one, and you need both:
 
 | Window | Copy this whole line |
 |---|---|
-| PowerShell | `$env:ALL_PROXY = 'http://your-host:port'; $env:NODE_USE_ENV_PROXY = '1'` |
-| Git Bash / Mac Terminal | `export ALL_PROXY=http://your-host:port; export NODE_USE_ENV_PROXY=1` |
-| cmd | `set ALL_PROXY=http://your-host:port&set NODE_USE_ENV_PROXY=1` |
+| PowerShell | `$env:ALL_PROXY = 'http://your-address:port'; $env:NODE_USE_ENV_PROXY = '1'` |
+| Git Bash / Mac Terminal | `export ALL_PROXY=http://your-address:port; export NODE_USE_ENV_PROXY=1` |
+| cmd | `set ALL_PROXY=http://your-address:port&set NODE_USE_ENV_PROXY=1` |
 
-**Confirm the extra one took:**
+**Confirm it took:**
 
-| Window | Type this | What success looks like |
+| Window | Run this | What success looks like |
 |---|---|---|
-| PowerShell | `$env:ALL_PROXY` | A value means it took |
-| cmd | `set ALL_PROXY` | Same as above |
-| Git Bash / Mac Terminal | `echo $ALL_PROXY` | Same as above |
+| PowerShell | `$env:HTTPS_PROXY` | It shows the corporate address you set |
+| cmd | `set HTTPS_PROXY` | Same |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same |
 
-**Going back to following the proxy app (undoes everything above)**
+If it shows the `127.0.0.1` port instead, step one did not take; go back and redo it.
+
+**Three: go back to following the proxy app (undo everything above).**
 
 | Window | Do this | What success looks like |
 |---|---|---|
 | PowerShell | `Remove-Item Env:ENVPROXY_TERM` | At the next prompt the address is the proxy app's again |
-| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | At the next prompt the address is the proxy app's again |
+| Git Bash / Mac Terminal | `unset ENVPROXY_TERM` | Same |
 | cmd | Reopen the window | — |
 
-After that, the corporate address you set is overwritten by the proxy app's — **that is correct**,
-it means the window is back on auto. Your address was not deleted; this window just stops using it.
+Clearing `ENVPROXY_TERM` withdraws all of it. The corporate address you set by hand will be overwritten by the proxy app — **that is correct**: it means "this window is back on automatic". The address itself is not deleted, the window just stops using it.
+
+All of this applies only to the current window and disappears when you close it.
 
 </details>
 
 ### 3.4 Make one command skip the proxy
 
 <details>
-<summary>The syntax for curl, git, npm, wget and docker</summary>
+<summary>The syntax for five tools, plus three traps</summary>
 
-Tools differ, and there is no single universal command.
+Every tool does it differently, and there is no universal command.
 
 | Tool | PowerShell | cmd | Git Bash / Mac |
 |---|---|---|---|
 | `curl` | `curl.exe --noproxy "*" URL` | `curl --noproxy "*" URL` | `curl --noproxy '*' URL` |
-| `git` | `git -c http.proxy= -c https.proxy= clone REPO` | same | same |
-| `npm` | `npm --noproxy=registry.npmjs.org install PKG` | same | same |
-| `wget` | not bundled; if installed, `wget.exe --no-proxy URL` | same | `wget --no-proxy URL` |
-| `docker` | change Docker's own settings; no per-command flag | same | same |
+| `git` | `git -c http.proxy= -c https.proxy= clone REPO` | Same | Same |
+| `npm` | `npm --noproxy=registry.npmjs.org install PKG` | Same | Same |
+| `wget` | Not bundled; if installed, `wget.exe --no-proxy URL` | Same | `wget --no-proxy URL` |
+| `docker` | Change Docker's own settings; no single-command form | Same | Same |
 
-Three traps, all measured:
+Three traps, all found by testing:
 
-- **Only in PowerShell 5.1 are `curl` and `wget` aliases** pointing at `Invoke-WebRequest`, so typing them there fails with "parameter not found" and you must write `curl.exe`. **In cmd and in PowerShell 7, `curl` is the real curl.exe**, so the plain form works.
-- **npm's `--noproxy` accepts domains only; `*` does nothing.** It does not complain, requests still go through the proxy, and you think you bypassed it. Use a real domain.
-- **`npm --no-proxy` is read as `--proxy=false`**, which is not the same as "skip the proxy". Use `--noproxy=domain`.
+- **Only PowerShell 5.1 aliases `curl` and `wget`** to `Invoke-WebRequest`; typing them there gives "parameter not found", so write `curl.exe`. **In cmd and PowerShell 7, `curl` is the real curl.exe** and either form works.
+- **npm's `--noproxy` only understands host names; `*` does nothing.** It does not complain, requests still go through the proxy, and you will believe you bypassed it. Name the host.
+- **`npm --no-proxy` is read as `--proxy=false`**, which is not the same as skipping the proxy. Use `--noproxy=host`.
 
-Also: `git`'s `-c http.proxy=` must be left empty — empty means "this command skips the proxy", any other value means "use that proxy instead". npm reads only `HTTPS_PROXY`, not `HTTP_PROXY`; EnvProxy writes both, so npm works, but if you set only `HTTP_PROXY` yourself npm will not be proxied.
+Also: `git`'s `-c http.proxy=` must be left empty; empty means "this command does not use a proxy", any other value means "use that proxy instead". npm reads only `HTTPS_PROXY`, not `HTTP_PROXY` — EnvProxy writes both, which is why npm works normally.
 
-These flags belong to each tool, not to EnvProxy. Without them, the tools read the variables EnvProxy wrote.
+These switches belong to each tool, not to EnvProxy. Without them, the tools read what EnvProxy wrote.
 
-**Confirm it took:** run the same command you just added the flag to. **If it works, the proxy really was bypassed.** If it fails instead, drop the flag and try again, which tells you whether the flag or the network was at fault.
+**Confirm it took:** run the command you just added the switch to. **If it works, the proxy was bypassed**; if it now fails, drop the switch and try again — that tells you whether the problem was the switch or the network.
 
 </details>
 
-### 3.5 How to confirm it really took
+### 3.5 One program still cannot connect
 
 <details>
-<summary>What the six values of that status row mean</summary>
+<summary>Why it ignores the setting, and how to give it an icon of its own</summary>
 
-Pick **2 Check status** in the menu and look at the "terminal sync" line:
+**Why it ignores the setting.**
 
-| Shown | Meaning | What to do |
+Some programs never read the system-wide proxy; they read "which proxy should I use" once at start-up and ignore later changes. And they are usually launched from the desktop or taskbar, a layer that never sees what EnvProxy wrote.
+
+The symptom: `git` works fine in the terminal while some GUI program cannot connect at all.
+
+**The fix: give it an icon.**
+
+Open the menu, pick `5 Advanced`, then `1 One program, one rule`. Choose the program (or type its path), choose where to put the icon, confirm.
+
+It creates a new icon whose name ends in "proxy". Launch the program from that icon from then on.
+
+**Three things to know:**
+
+- **A program that is already running will not switch**; close it first, then use the icon.
+- **Microsoft Store apps** (the kind with no standalone .exe) are not supported.
+- The new icon can be pinned to the taskbar; deleting the desktop copy afterwards does not break the pin.
+
+**After the proxy app changes ports.**
+
+Programs launched from those icons are **unaffected** and keep working — they use a fixed entry (see below).
+
+Only programs that read the setting once at start-up (the desktop-launched kind) stay on the old address. In a terminal, a newly opened window follows automatically; in PowerShell and Git Bash one Enter press is enough. When this happens a hint appears on screen, so you do not have to watch for it.
+
+**What the fixed entry is for.**
+
+Some programs copy the address you give them into their own settings and keep using it. When the proxy app changes ports they can no longer connect, and you have to go into that program's settings and fix it.
+
+The fixed entry opens one address on this machine that never changes. Programs only know that address, and behind it the tool follows the proxy app. Icons use it automatically; there is nothing for you to do, and it runs alongside the monitor with no switch to flip.
+
+It not working is not a problem either: the icon falls back to reading the current address and still works. To see how it is doing: menu `5` then `4` (view relay); that screen only reports.
+
+**Done with it:** menu `5` then `3` (manage icons) shows the status and lets you delete them one by one.
+
+The full description of this module (how the two platforms differ, the automatic adaptation for Chromium-based programs) is in [4.1](#41-give-one-program-its-own-rule).
+
+</details>
+
+### 3.6 Never send one program through it
+
+<details>
+<summary>Banking, government, intranet tools: they need "always direct"</summary>
+
+**Why anyone needs this.**
+
+Some programs break when they go through a proxy. Banking, government sites and company intranets are the usual cases: behind a proxy they refuse to log in, or get too slow to use. What they need is "always direct", even while everything else is proxied.
+
+**The fix: give it an always-direct icon.**
+
+Open the menu, pick `5 Advanced`, then `1 One program, one rule`, and choose the "always direct" rule. It creates a new icon whose name ends in "direct". Launching from that icon never uses a proxy.
+
+**One program can have both** — one icon ending in "proxy" and one ending in "direct", independent of each other, with your original program untouched.
+
+**How that works.**
+
+When you double-click the icon, the proxy settings are **removed from that program's environment** before it starts. What it sees is exactly what it would see without this tool installed — not bypassed, genuinely absent.
+
+Child processes it starts see the same, so the whole chain is clean.
+
+**Two things to note:**
+
+- **A program that is already running is unaffected**; close it, then use the icon.
+- **The icon does not depend on the proxy app**: it opens the program normally even when the proxy app is off or not installed at all.
+
+</details>
+
+### 3.7 Something is wrong: check and report
+
+<details>
+<summary>Three checks, two common misunderstandings, how to file a report, and the switches</summary>
+
+**Check one: look at the proxy variable in the failing window.**
+
+| Window | Run this | What it means |
 |---|---|---|
-| Active | Normal | Nothing |
-| Installed but cannot run | Execution policy blocks it | Follow that hint (section 5) |
-| Markers are unpaired | Something left half a marker | Delete that lone marker line, then pick 1 |
-| No sync block in the profile | Never installed, or cleaned away | Run **1 Install / repair** |
-| Cannot read the profile path | Rare; this run cannot tell | Look again shortly; if it stays, run 1 |
-| Sync block is outdated | That block is old code | Nothing; picking 1 refreshes it |
+| PowerShell | `$env:HTTPS_PROXY` | An address means it is set; empty means it is not |
+| cmd | `set HTTPS_PROXY` | Same |
+| Git Bash / Mac Terminal | `echo $HTTPS_PROXY` | Same |
 
-</details>
+If it is empty, reopen the window first (see [3.2](#32-what-do-i-do-after-installing)).
 
-### 3.6 Use it without the menu (scripts, remote sessions)
+**Check two: read the top line of the menu.**
 
-<details>
-<summary>The eleven-switch reference plus two worked examples</summary>
+If it says "not running", pick `1 Install / Repair`. That line also shows the current version, so you never need to go in.
 
-The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first eight rows below match the eight menu actions one to one; the next row (`-Menu`) simply opens the menu itself; the last two rows (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
+**Check three: two common misunderstandings.**
 
-| Goal | Windows | Mac |
+- **npm reads only `HTTPS_PROXY`, never `HTTP_PROXY`.** If you cleared it yourself, npm stops working. EnvProxy writes both, which is why npm normally works.
+- **"Proxy app" shows an address but "proxy variables" is empty** means the proxy app is running and EnvProxy has been stopped. Nothing is broken; pick `1` to restore.
+
+**Match your symptom to a row.**
+
+The table in [section 5](#5-something-is-wrong-check-in-this-order) lists the common symptoms and what to do about each, one per line.
+
+**Still failing: file a report.**
+
+Menu `8 Report`. It asks you four questions, adds the facts about this machine, saves a file and copies the path. You do not hunt for logs or type commands.
+
+Then paste the file's contents on the project page (that is the only place issues are collected): https://github.com/FiretrUCK666/envproxy/issues
+
+**To remove it completely.**
+
+Menu `7 Uninstall`. It asks whether to keep the logs.
+
+**Using it without the menu (scripts, remote sessions):**
+
+| Task | Windows | Mac |
 |---|---|---|
 | Install / repair | `-Install` | `install` |
 | Show status | `-Status` | `status` |
 | Check for updates | `-Update` | `update` |
 | Help | `-Help` | `help` |
 | Advanced | `-Advanced` | `advanced` |
-| Stop monitoring | `-Stop` | `stop` |
-| Full restore | `-Uninstall` | `uninstall` |
-| Problem report | `-Report` | `report` |
+| Stop the monitor | `-Stop` | `stop` |
+| Uninstall | `-Uninstall` | `uninstall` |
+| Report a problem | `-Report` | `report` |
 | Open the menu | `-Menu` | `menu` |
-| Self-check (troubleshooting) | — | `self-test` |
-| Repair a broken marker in your profile | `-RepairProfile` | `repair-profile` |
+| Self-test (diagnostics) | — | `self-test` |
+| Strip a broken marker from the profile | `-RepairProfile` | `repair-profile` |
 
-The order matches the menu: four everyday items, then the advanced one, then the two upkeep ones, then the support one. The last two rows are troubleshooting helpers: `self-test` (Mac only) runs an internal check inside a throwaway sandbox and touches neither your profile nor your environment variables; `-RepairProfile` removes a lone marker line left in a profile file (it backs the file up first).
-
-`-Purge` (Mac: `--purge`) pairs with full restore only and means delete the log too. `-Yes` (Mac: `--yes`) pairs with check-for-updates and full restore: it means stop asking. For restore it is also the only way to uninstall where nothing can ask (scripts, remote sessions), since that command refuses to run without an answer.
-
-Go into the folder that holds the program first. **Skipping this gives "file not found"**, because the program lives under `win\` and `mac\`.
-
-Windows (cmd or PowerShell):
+Change into the program folder (`win` or `mac`) first; skipping that gives "file not found".
 
 ```
 cd win
 powershell -ExecutionPolicy Bypass -File envproxy.ps1 -Status
 ```
 
-macOS (Terminal):
-
 ```
 cd mac
 bash envproxy.sh status
 ```
 
-**Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
+**Write parameters in full; abbreviations are rejected.** `-Instal` with a letter missing is refused — deliberately, because a typo would otherwise perform a real install.
 
-**Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
+`-Yes` (Mac: `--yes`) goes with check-for-updates and uninstall and means do not ask. For uninstall it is also the **only** way to remove the tool where no question can be asked (scripts, remote sessions).
+
+</details>
+
+### 3.8 No internet after closing the app
+
+<details>
+<summary>Work out which kind of "no internet" this is, then decide what to touch</summary>
+
+**Work out which kind it is.**
+
+| Symptom | Whose problem | Where to go |
+|---|---|---|
+| Only the browser fails, others fine | The browser proxy points at nothing | "Fix it yourself" below |
+| Only one tool (`git`, `npm`) fails | That tool's own config file | "How to fix it yourself" below |
+| Nothing works at all | The network itself; unrelated to this tool | Check the cable, Wi-Fi, router first |
+
+**The most common cause: the proxy app did not exit cleanly.**
+
+Most proxy apps remove their system settings on a normal exit. But when one is **killed** — a hard shutdown, power loss, End Task, a crash — it never gets the chance.
+
+The setting remains, so the browser and the tools keep knocking on a program that no longer exists, and even domestic sites fail. **The network is not down; the signpost points the wrong way.**
+
+**How to fix it yourself.**
+
+Open the menu, pick `5 Advanced`, then `2 Network and proxy repair`. It looks at three places: the system proxy settings, the config files of terminal tools (`git config`, `~/.npmrc` and the like), and name resolution.
+
+Anything fixable is confirmed with you first, and the original is saved before it changes. Afterwards, close and reopen both the browser and the failing tool.
+
+**What it will not touch.**
+
+- A corporate or school proxy is left byte for byte alone.
+- Anything managed by administrator policy is left alone; changing it would just be reverted.
+- A port that is still alive (you are using it) is left alone.
+- It only repairs "points at this machine, and that program is gone".
+
+**If it repaired the wrong thing.**
+
+Open that screen again and press `r` to undo the most recent repair.
+
+**What it cannot see.**
+
+It reads settings, not whether the network works. An unplugged cable, an unjoined Wi-Fi or a dead router will also report "nothing wrong".
+
+The full description is in [4.2](#42-network-and-proxy-repair).
 
 </details>
 
@@ -579,7 +659,7 @@ On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **Th
 | What you see | Most likely cause | What to do |
 |---|---|---|
 | "Unrecognized switch" / "argument" | A typo, or an abbreviation | Write parameters in full |
-| Proxy still not used | Window opened before installing | Open a new window, or see 3.1 |
+| Proxy still not used | Window opened before installing | Open a new window, or see 3.2 |
 | Still failing after that | The monitor is not running | Menu, pick 1 (Install / Repair) |
 | "Missing program files" | Folder not copied in full, or deleted | Re-download and unzip over it |
 | Variables come back after removal | Node is unstable | Expected. If it persists, switch nodes |
@@ -723,6 +803,9 @@ Day to day you only open `win\` (or `mac\`).
 
 ### Where the installer writes things
 
+<details>
+<summary>What it writes outside this folder (registry, config files, run logs), and what uninstall clears</summary>
+
 All of it is **outside** this folder, so an update that overwrites the program files never touches them:
 
 | Where | What | What it is for |
@@ -757,6 +840,8 @@ Uninstalling removes all of the above, keeping only the `monitor.log` you chose 
 `~\.envproxy\` contains **exactly one file, `prompt-sync.sh`**. Anything else appearing there means something other than this tool wrote it — uninstall names each one and reports it, but does not delete it for you (it may be yours).
 
 <img src="./assets/readme/boundary.en.svg" width="100%" alt="Three areas: the program folder, the runtime folder, and the folder root">
+
+</details>
 
 ## 10. Copying and backing up the folder
 
@@ -815,6 +900,9 @@ Mac adds one: **the `launchctl` environment is cleared at login and reboot**, so
 
 ### 13.1 Difference from the Windows version
 
+<details>
+<summary>Where it writes, why macOS needs no fixed entry, and which shells are supported</summary>
+
 Windows writes the registry and broadcasts a change notification; Mac writes `~/.envproxy/proxy.env` and calls `launchctl setenv`. Both paths are updated together, so the behaviour you see is the same.
 
 **That is why Mac needs no "fixed entry"** (the thing described in 4.1): `launchctl setenv` reaches programs the system launches afterwards, so a program sees the current address the moment it starts — nothing stashes an old one. Windows is the other case: a program started from the desktop or Start menu inherits the environment fixed at login, which is why an unchanging address is needed there.
@@ -827,7 +915,12 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 <img src="./assets/readme/mac-paths.en.svg" width="100%" alt="Two write paths on macOS: proxy.env for terminals, launchctl for Dock-launched apps">
 
+</details>
+
 ### 13.2 Install (3 steps)
+
+<details>
+<summary>How to install, what it needs, minimum macOS</summary>
 
 1. Put the Mac package (`EnvProxy-mac.tar.gz`) anywhere on the Mac, or copy the whole folder that contains `mac\` (USB drive, AirDrop, or an archive all work)
 2. Open `mac` and double-click `打开菜单.command`, then pick `1 Install / Repair`
@@ -835,7 +928,12 @@ On the terminal side, the Mac default shell is `zsh` (since macOS 10.15) and `ba
 
 No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with macOS 12 and later is enough. (Mac only: download [`EnvProxy-mac.tar.gz`](https://github.com/FiretrUCK666/envproxy/releases/latest/download/EnvProxy-mac.tar.gz).)
 
+</details>
+
 ### 13.3 Menu (same as Windows)
+
+<details>
+<summary>Numbering matches, but from 4 onwards the two mean different things</summary>
 
 The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
@@ -848,13 +946,23 @@ Mac lacks these 3: **view relay** (Windows uses a fixed entry to survive a chang
 differently, see section 4), **WSL behind a proxy**, and **Docker behind a proxy** (the last two are about Windows
 things that do not exist on a Mac).
 
+</details>
+
 ### 13.4 What is in the `mac` folder
+
+<details>
+<summary>Only two files are Mac-only</summary>
 
 See the folder structure in section 9. Two files are Mac-only with no Windows counterpart: `prompt-sync.sh` (the terminal sync script used by zsh and bash) and `test-mac-pure.sh` (the self-test script).
 
 The locator has a source file on each platform — `locator.sh` on Mac, `win\locator.ps1` on Windows. The installer uses it to generate the copy that actually runs at login, in a fixed location (Windows: `%LOCALAPPDATA%\EnvProxy\launcher.ps1`).
 
+</details>
+
 ### 13.5 Three problems you may hit on first install on a Mac
+
+<details>
+<summary>Will not open, permission denied, shows not running</summary>
 
 <img src="./assets/readme/mac-blockers.en.svg" width="100%" alt="Three problems on a first Mac install">
 
@@ -880,7 +988,12 @@ Two possible causes. After fixing either one, open the menu and pick **1 安装 
 - **The background item was blocked**: System Settings, General, Login Items & Extensions, allow it to run
 - **The "access your Documents folder" prompt was denied**: System Settings, Privacy & Security, Files and Folders
 
+</details>
+
 ### 13.6 What the installer adds
+
+<details>
+<summary>Where it writes what, and what each of the three menu actions touches</summary>
 
 Installing writes files to three places. **None of them is the folder you downloaded.**
 
@@ -942,9 +1055,16 @@ One rule applies to all three: `~/.envproxy/` is only removed when it is empty. 
 
 **Uninstalling is the only irreversible action**, so it asks first. When it cannot ask (a pipe, a script) it **will not decide for you**: it refuses and requires `--yes`.
 
+</details>
+
 ### 13.7 Setting it up for a friend or a new Mac
 
+<details>
+<summary>Copy it over, double-click, pick 1</summary>
+
 Copy the whole folder over, open `mac`, double-click `打开菜单.command`, pick `1 Install / Repair`, and you are done.
+
+</details>
 
 ## 14. License and feedback
 
