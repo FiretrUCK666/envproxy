@@ -154,23 +154,6 @@ Each subsection stands on its own; there is no need to read them in order.
 | Confirm it is installed | [3.5](#35-how-to-confirm-it-really-took) |
 | Use switches, not the menu | [3.6](#36-use-it-without-the-menu-scripts-remote-sessions) |
 
-First, work out which terminal you are in. The four take different commands:
-
-| Prompt looks like | What you are using | How to open it |
-|---|---|---|
-| `PS C:\...>` | PowerShell (ships with Windows) | Start menu, search PowerShell |
-| `C:\...>` | cmd (Command Prompt, ships with Windows) | Start menu, search Command Prompt |
-| `name@host MINGW64 ~ $` | Git Bash (a bash shell **on Windows**) | Start menu, search Git Bash |
-| `name@host ~ %` | Mac Terminal (zsh by default) | Launchpad, search Terminal |
-
-Three things that trip people up:
-
-- **Git Bash is a Windows thing.** It comes with Git for Windows; there is no such name on a Mac. It and the Mac Terminal both use bash-style syntax, which is why the sections below often cover them together.
-- **The Mac Terminal is not bash by default, it is zsh**, so the prompt ends with `%` rather than `$`. The syntax is the same as bash, so the commands below work as written.
-- Windows Terminal is only the window that hosts a shell: what you open inside it (PowerShell, cmd or Git Bash) is your choice. It is not a shell itself.
-
-**Follows automatically**: PowerShell, Git Bash, and the Mac Terminal (zsh and bash both work). **Does not follow**: cmd (it has no "run something on every prompt" mechanism, so reopen the window) and fish (we have not written that implementation yet, see 13.1).
-
 ### 3.1 A window you already have open needs one Enter press
 
 <details>
@@ -446,6 +429,9 @@ Each one below.
 
 ### Module one: give one program its own rule
 
+<details>
+<summary>Build an icon that sends one program through the proxy, or keeps it off (the original program is untouched)</summary>
+
 **Where the problem comes from.** This setting is all-or-nothing: it defines one proxy for the whole machine, and every program gets the same one. That leaves two situations awkward:
 
 - Some programs read environment variables only at the moment they start and never look again. The environment Explorer hands them may have been fixed at login, so later proxy changes never reach them. The symptom: `git` works fine in the terminal, but some GUI program cannot connect at all.
@@ -473,7 +459,12 @@ This tool opens a **fixed entry** on your machine (an address that never changes
 
 Both platforms have this module, but the mechanics differ: Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper (`MyApp (proxy).app`). **What they share is that neither touches the original program** — modifying it on macOS breaks its code signature and the system refuses to open it.
 
+</details>
+
 ### Module two: network and proxy repair
+
+<details>
+<summary>Repair three leftovers: the system proxy, terminal config files, and DNS</summary>
 
 **Where the problem comes from.** A proxy app removes its system proxy setting when it closes normally. But when it is **killed** — a hard shutdown, power loss, End Task, or a crash — it never gets the chance.
 
@@ -505,7 +496,12 @@ It saves the original first, so you can put it back (press `r` on that screen; i
 
 **It also points out one thing you would never find yourself.** If you set DNS for "all networks" and also for one particular Wi-Fi, the system only uses one of them and the other silently does nothing. Nothing on screen tells you that; this screen does.
 
+</details>
+
 ### What it cannot reach
+
+<details>
+<summary>It reads settings, not whether the network actually works</summary>
 
 This matters more than everything above, because it tells you where to look next.
 
@@ -515,9 +511,12 @@ If the network still fails, the cause may be elsewhere: a virtual adapter (TUN),
 
 **It looks at settings, not at whether the network works.** So an unplugged cable, an unjoined Wi-Fi or a dead router will also report "nothing wrong" — what it checks is whether something points the wrong way, not whether the road itself is open.
 
-
+</details>
 
 ### Module three: places this tool cannot reach
+
+<details>
+<summary>How to set up WSL and Docker networking (explained only, nothing is changed)</summary>
 
 **This item only explains; it changes nothing of yours.** It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
 
@@ -547,6 +546,8 @@ So:
 The exact commands are on screen under menu `5` then `6` / `7` on Windows, ready to copy.
 **This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac,
 it simply has no dedicated page there.
+
+</details>
 
 ## 5. Something is wrong: check in this order
 
