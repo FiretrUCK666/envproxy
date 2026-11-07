@@ -1430,7 +1430,10 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         _rm_code_keys=$(for _rm_i in "${MENU_ITEMS[@]}"; do printf '%s\n' "${_rm_i%%|*}"; done | tr '\n' ',')
         _selftest_assert_eq "$_rm_pair 菜单表编号与代码一致" "$_rm_code_keys" "$_rm_doc_keys"
         # 帮助目录表：表头「编号 / No.」，取每行第一格。
-        _rm_help_keys=$(awk '/^\| *(编号|No\.) *\|/{f=1;next} f&&/^\|/{print}' "$_rm_f" | grep -oE '^\|\s*[0-9]+' | tr -cd '0-9\n' | tr '\n' ',')
+        # 表结束就收尾：遇到表后的第一个非管道行立刻退出。没有这一条时，表后面的
+        # 任何一张「| 1 | ...」形状的表都会被一起收进来（实测把第 3 章那张
+        # 「三条判据」算成了帮助编号），与 Windows 侧 Get-TableByHeader 的语义也对不上。
+        _rm_help_keys=$(awk '/^\| *(编号|No\.) *\|/{f=1;next} f&&/^\|/{print;next} f{exit}' "$_rm_f" | grep -oE '^\|\s*[0-9]+' | tr -cd '0-9\n' | tr '\n' ',')
         _rm_code_help=$(printf '%s\n' "${HELP_TOPIC_KEYS[@]}" | tr '\n' ',')
         _selftest_assert_eq "$_rm_pair 帮助目录编号与代码一致" "$_rm_code_help" "$_rm_help_keys"
     done

@@ -106,18 +106,18 @@ This chapter expands each one. The help screen gives you an answer you can use o
 
 Each subsection stands on its own; there is no need to read them in order.
 
-**Jump straight to what you need:**
+Below are the eight help entries, worded as they appear on that screen, with the matching section on the right:
 
-| What you want to do | Section |
-|---|---|
-| Work out what this does | [3.1](#31-what-is-this-for) |
-| Just installed, unsure what to do | [3.2](#32-what-do-i-do-after-installing) |
-| Keep this window off the proxy, or use a corporate one | [3.3](#33-off-the-proxy-or-on-a-corporate-one) |
-| Make one command skip the proxy | [3.4](#34-make-one-command-skip-the-proxy) |
-| One program still cannot connect | [3.5](#35-one-program-still-cannot-connect) |
-| One program that must never be proxied | [3.6](#36-never-send-one-program-through-it) |
-| Something is wrong | [3.7](#37-something-is-wrong-check-and-report) |
-| No internet after closing the app | [3.8](#38-no-internet-after-closing-the-app) |
+| No. | One entry answers one question | In detail |
+|---|---|---|
+| 1 | What is this for | [3.1](#31-what-is-this-for) |
+| 2 | What do I do after installing | [3.2](#32-what-do-i-do-after-installing) |
+| 3 | Off the proxy, or on a corporate one | [3.3](#33-off-the-proxy-or-on-a-corporate-one) |
+| 4 | Make one command skip the proxy | [3.4](#34-make-one-command-skip-the-proxy) |
+| 5 | One program still cannot connect | [3.5](#35-one-program-still-cannot-connect) |
+| 6 | Never send one program through it | [3.6](#36-never-send-one-program-through-it) |
+| 7 | Something is wrong: check and report | [3.7](#37-something-is-wrong-check-and-report) |
+| 8 | No internet after closing the app | [3.8](#38-no-internet-after-closing-the-app) |
 
 ### 3.1 What is this for
 
