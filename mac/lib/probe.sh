@@ -149,8 +149,12 @@ ENDPOINT_PROOF_UNKNOWN="unknown"
 # 用空格分隔的记录串而不是关联数组——bash 3.2 没有关联数组。
 ENDPOINT_PROOF_CACHE=""
 # 直连那一侧的单次上限（秒）。比经代理的 6 秒短：被墙的地址多半是"连上没人应"
-# 或直接被 RST，2 秒够用；这条路径只在首次遇到某个端点时走，不参与稳态探测。
-ENDPOINT_DIRECT_TIMEOUT=2
+# 或直接被 RST，两秒半够用；这条路径只在首次遇到某个端点时走，不参与稳态探测。
+# 取值必须与 Windows 侧一致（$EndpointDirectTimeoutMs）：这个数是"直连算不算通"的
+# 分界线，两侧不同就会出现"同一个网站在 Mac 上算被墙、在 Windows 上算直连可达"，
+# 同一个代理被两台机器判成相反结论。门禁 6 逐值核对。
+# curl 的秒级粒度里表示 2.5 秒只能用小数；--connect-timeout 与 --max-time 都接受小数。
+ENDPOINT_DIRECT_TIMEOUT=2.5
 # 合格证有效期（秒）。它描述的是「本机网络 × 客户端分流规则」，而这两样都会变
 # （换 Wi-Fi、插拔网线、开关 TUN、改分流）。永久缓存等于把开机那一瞬间的判断
 # 钉死一辈子。

@@ -1240,7 +1240,17 @@ jobs:
             if ((-not $a) -or (-not $b)) { $fail = 1; continue }
             if ($a -ne $b) { Write-Host ("{0} 两侧不一致：Win {1} / Mac {2}" -f $p[2], $a, $b); $fail = 1 }
           }
-          # d0) 端点合格证的根：直连侧必须关掉一切代理来源。
+          # 直连探测的单次上限。这个数是"直连算不算通"的分界线：两侧不同就会出现
+          # "同一个网站在 Mac 上算被墙、在 Windows 上算直连可达"，同一个代理被两台机器
+          # 判成相反结论。两侧单位不同（Win 毫秒 / Mac 秒），所以换算后比。
+          $winMs = Grab $ps '\$EndpointDirectTimeoutMs\s*=\s*(\d+)' 'Win 直连探测超时'
+          $macSec = Grab $sh 'ENDPOINT_DIRECT_TIMEOUT=([0-9.]+)' 'Mac 直连探测超时'
+          if ($winMs -and $macSec) {
+            if ([math]::Abs([double]$winMs / 1000.0 - [double]$macSec) -gt 0.001) {
+              Write-Host ("直连探测超时两侧不一致：Win " + $winMs + "ms / Mac " + $macSec + "s")
+              $fail = 1
+            }
+          }          # d0) 端点合格证的根：直连侧必须关掉一切代理来源。
           #
           # 这一行是整条判据的承重墙，也是唯一一个"删掉之后程序照跑、测试照绿、
           # 线上永久误判、屏幕全绿"的点——因为测试把 Test-EndpointDirect 整个换成了替身，
