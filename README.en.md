@@ -173,6 +173,9 @@ Three things that trip people up:
 
 ### 3.1 A window you already have open needs one Enter press
 
+<details>
+<summary>Which terminals follow, and which do not (cmd needs a reopen)</summary>
+
 > **A cmd window is the exception: pressing Enter does nothing, you have to reopen it.**
 >
 > cmd has no "run this on every prompt" mechanism, so it follows nothing at all.
@@ -214,7 +217,12 @@ The leading `.` and the space after it are both required; it means "run this fil
 
 If the proxy app is running and you see nothing, this window has not caught up yet: press Enter once more.
 
+</details>
+
 ### 3.2 Pin this window to a direct connection / go back to automatic
+
+<details>
+<summary>How to set the switch, verify it, and revert</summary>
 
 **Keep this one window off the proxy.** Only this window is affected; the others still follow the proxy app.
 
@@ -261,7 +269,12 @@ Still empty while the proxy app is running means the monitor is not running: pic
 
 These changes only live in that window. Close it and they are gone.
 
+</details>
+
 ### 3.3 Send this window through a corporate proxy
+
+<details>
+<summary>Two steps, one addition, and how to revert</summary>
 
 A corporate proxy and auto-follow are **mutually exclusive**; pick one.
 
@@ -323,7 +336,12 @@ The rest need `ALL_PROXY` — **copy the whole line below**, it complements the 
 After that, the corporate address you set is overwritten by the proxy app's — **that is correct**,
 it means the window is back on auto. Your address was not deleted; this window just stops using it.
 
+</details>
+
 ### 3.4 Make one command skip the proxy
+
+<details>
+<summary>The syntax for curl, git, npm, wget and docker</summary>
 
 Tools differ, and there is no single universal command.
 
@@ -347,7 +365,12 @@ These flags belong to each tool, not to EnvProxy. Without them, the tools read t
 
 **Confirm it took:** run the same command you just added the flag to. **If it works, the proxy really was bypassed.** If it fails instead, drop the flag and try again, which tells you whether the flag or the network was at fault.
 
+</details>
+
 ### 3.5 How to confirm it really took
+
+<details>
+<summary>What the six values of that status row mean</summary>
 
 Pick **2 Check status** in the menu and look at the "terminal sync" line:
 
@@ -360,7 +383,12 @@ Pick **2 Check status** in the menu and look at the "terminal sync" line:
 | Cannot read the profile path | Rare; this run cannot tell | Look again shortly; if it stays, run 1 |
 | Sync block is outdated | That block is old code | Nothing; picking 1 refreshes it |
 
+</details>
+
 ### 3.6 Use it without the menu (scripts, remote sessions)
+
+<details>
+<summary>The eleven-switch reference plus two worked examples</summary>
 
 The menu is for double-clicking. When you write a script, or connect remotely with no graphical desktop, use the command-line parameters. The first eight rows below match the eight menu actions one to one; the next row (`-Menu`) simply opens the menu itself; the last two rows (`self-test`, `-RepairProfile`) have no menu entry, as they exist for troubleshooting.
 
@@ -401,6 +429,8 @@ bash envproxy.sh status
 **Spell the switch out; abbreviations are rejected.** `-Instal` missing one letter is refused on purpose — otherwise a typo would turn into a real install.
 
 **Confirm it took:** the output of that `-Status` (Mac: `status`) command is the confirmation. It is the same content as picking 2 in the menu — **if it prints, the command-line path works**.
+
+</details>
 
 ## 4. What is inside Advanced (three modules)
 
