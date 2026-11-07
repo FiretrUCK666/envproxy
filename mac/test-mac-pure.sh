@@ -194,7 +194,7 @@ _sandbox=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_selftest.XXXXXX" 2>/dev/null) || 
     # ANSI 颜色序列不占格子。Windows 侧 Get-DisplayWidth 会先剥掉再算，
     # 这里不剥就会把一行 34 格的标题算成 51 格，"这帧太宽画不下"而白白降级。
     _selftest_assert_eq "宽度：ANSI 转义不占格" "11" \
-        "$(_display_width "$(printf '\033[36m版本 v2.0.0\033[0m')")"
+        "$(_display_width "$(printf '\033[36m版本 v3.0.0\033[0m')")"
 
     # 截断：结果宽度**不超过**上限（含补上的省略号）。
     # 若按"截到上限再补…"算，实际宽度是上限+1：日志行正好顶满终端宽度而自动折行，
@@ -1700,7 +1700,7 @@ EOF
     _selftest_assert_eq "换源：同版本接受" "0" "$(source_acceptable 9.9.9 9.9.9 1.0.0; echo $?)"
     _selftest_assert_eq "换源：更旧于胜出版本要拒绝" "1" "$(source_acceptable 1.5.0 9.9.9 1.0.0; echo $?)"
     _selftest_assert_eq "换源：不比本地新要拒绝" "1" "$(source_acceptable 1.0.0 9.9.9 1.0.0; echo $?)"
-    _selftest_assert_eq "换源：没有胜出版本时只比本地" "0" "$(source_acceptable 2.0.0 '' 1.0.0; echo $?)"
+    _selftest_assert_eq "换源：没有胜出版本时只比本地" "0" "$(source_acceptable 3.0.0 '' 1.0.0; echo $?)"
     _selftest_assert_eq "换源：空版本要拒绝" "1" "$(source_acceptable '' 9.9.9 1.0.0; echo $?)"
     # 从重定向目标取标签必须做形态校验：仓库改名时对方会先 302 到改名后的路径，
     # 最后一段是字面量 "latest"，naive 取尾段会把垃圾当成版本号去拼下载地址。
