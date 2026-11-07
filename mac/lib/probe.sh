@@ -693,11 +693,16 @@ _probe_proxy_one() {
 
 # 并行批量 CONNECT 探测：多个端口同时握手，~2 秒内出结果
 test_http_proxy_batch() {
-    local _bdir _hit _i
+    local _bdir _hit _i _bpids _bp
     [ $# -eq 0 ] && return 1
     _bdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}found.XXXXXX" 2>/dev/null) || return 1
+    # 记下自己起的 worker pid。`kill $(jobs -p)` / 无参 `wait` 收拾的是**整个 shell**
+    # 的后台作业——调用方（测试、别的集成）在同一个 shell 里还有别的后台进程时，
+    # 这里会把它们一起杀掉或一起等，实测会把一次自检卡死二十分钟。
+    _bpids=""
     for _p in "$@"; do
         _probe_proxy_one "$_p" "$_bdir" &
+        _bpids="$_bpids $!"
     done
     _i=0
     while [ $_i -lt 30 ]; do
@@ -705,9 +710,13 @@ test_http_proxy_batch() {
         sleep 0.1
         _i=$((_i + 1))
     done
-    # 有结果就收掉其余探针再返回，不空等全部跑完。
-    kill $(jobs -p) 2>/dev/null || true
-    wait 2>/dev/null || true
+    # 有结果就收掉其余 worker 再返回，不空等全部跑完。只碰自己的。
+    for _bp in $_bpids; do
+        kill "$_bp" 2>/dev/null || true
+    done
+    for _bp in $_bpids; do
+        wait "$_bp" 2>/dev/null || true
+    done
     _hit=$(ls "$_bdir" 2>/dev/null | head -n 1)
     rm -rf "$_bdir" 2>/dev/null || true
     if [ -n "$_hit" ]; then
@@ -949,7 +958,7 @@ _probe_endpoint_one() {
 }
 
 test_real_connectivity() {
-    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited _pick _hw
+    local _ep_n _fast_exp _fast_host _fast_path _idx _port _tmpdir _waited _pick _hw _probe_pids
     local _answered _k _sweep_deadline
     _port="$1"
     PROOF_DEGRADED=0
@@ -969,6 +978,7 @@ test_real_connectivity() {
         return 0
     fi
     _tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/${PROBE_TMP_PREFIX}conn.XXXXXX" 2>/dev/null) || return 1
+    _probe_pids=""
     # 逐个按索引展开 host/path，避免后台闭包竞态（参数在父进程展开后传值）
     _idx=0
     _ep_n=0
@@ -979,6 +989,9 @@ test_real_connectivity() {
         _exp_for_idx=$(check_endpoint_field $((_idx + 1)) 3)
         if [ $_idx -ne $LAST_GOOD_ENDPOINT ] && [ -n "$_pa_for_idx" ]; then
             _probe_endpoint_one "$_port" "$_h" "$_pa_for_idx" "$_idx" "$_tmpdir" "${_exp_for_idx:-204}" &
+            # 记下自己起的探针 pid：只等这些。无参 wait 会把 shell 里所有后台作业一起等，
+            # 一旦调用方（测试、别的集成）在同一个 shell 里还有别的后台进程，就会永远等不到头。
+            _probe_pids="$_probe_pids $!"
         fi
         _idx=$((_idx + 1))
     done
@@ -1003,9 +1016,10 @@ test_real_connectivity() {
             if endpoint_proof_counts "$PROOF_KIND"; then
                 LAST_GOOD_ENDPOINT="$_idx"
                 rm -rf "$_tmpdir" 2>/dev/null || true
-                # 只收掉已经答完的：无参 wait 会把还在跑的那些（各自最长 6 秒）全等一遍，
-                # 让一次"判通"白等十几秒——而那是监控主循环里最不该慢的一条路。
-                for _hw in $(jobs -p 2>/dev/null); do
+                # 只收掉**自己起的**那几个探针：无参 wait 会把 shell 里所有后台作业
+                # （包括调用方的）一起等，一旦有别的东西在跑就永远等不到头（实测卡死）。
+                # 也不能等全部探针——还在跑的那些各自最长 6 秒，会把一次"判通"白等十几秒。
+                for _hw in $_probe_pids; do
                     wait "$_hw" 2>/dev/null || true
                 done
                 return 0
@@ -1014,7 +1028,10 @@ test_real_connectivity() {
         sleep 0.1
     done
     # 窗口耗尽：把并行探针收干净，然后**只用已拿到的应答**判证据，不再重发经代理请求。
-    wait 2>/dev/null || true
+    # 只等自己起的那几个——无参会连调用方的后台作业一起等。
+    for _hw in $_probe_pids; do
+        wait "$_hw" 2>/dev/null || true
+    done
     _answered=""
     for _pick in "$_tmpdir"/answered.*; do
         [ -f "$_pick" ] || continue
