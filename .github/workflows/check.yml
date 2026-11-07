@@ -1247,8 +1247,8 @@ jobs:
           # 真实现里的 UseProxy 从来没被执行过。删掉它的后果不是报错，是合格证变成
           # "直连也通"的恒假（永远判不通）或恒真（死节点判活），两种都不会有任何提示。
           # 所以只能靠静态检查钉住：两个直连函数体里必须各有那一行。
-          $winDirect = Grab $ps '(?ms)function Test-EndpointDirect.*?^\}' 'Win 直连探测函数'
-          $macDirect = Grab $sh '(?ms)test_endpoint_direct\(\) \{.*?^\}' 'Mac 直连探测函数'
+          $winDirect = Grab $ps '(?ms)(function Test-EndpointDirect.*?^\})' 'Win 直连探测函数'
+          $macDirect = Grab $sh '(?ms)(test_endpoint_direct\(\) \{.*?^\})' 'Mac 直连探测函数'
           if (-not $winDirect) { Write-Host '找不到 Test-EndpointDirect 函数体'; $fail = 1 }
           elseif ($winDirect -notmatch 'UseProxy\s*=\s*\$false') {
             Write-Host 'Test-EndpointDirect 里没有 UseProxy = $false：直连问到的会是代理那一侧，合格证失效'
@@ -1636,8 +1636,8 @@ jobs:
           # 恰恰是不知道的——只有把该查的列全，才谈得上"查过"。
           # 每项：文件、正则（第 1 组是数字）、给用户看的说法。
           $epPlaces = @(
-            @('win/lib/help.ps1',                 '试 (\d+) 个端点',        'win 帮助'),
-            @('mac/lib/help.sh',                  '试 (\d+) 个端点',        'mac 帮助'),
+            @('win/lib/help.ps1',                 '试 (\d+) 个',        'win 帮助'),
+            @('mac/lib/help.sh',                  '试 (\d+) 个',        'mac 帮助'),
             @('README.md',                        '(\d+) 个不同的端点',     '中文 README'),
             @('README.en.md',                     '(\d+) different endpoints', '英文 README'),
             @('assets/readme/mechanism.svg',      '(\d+) 个端点',           '中文配图'),

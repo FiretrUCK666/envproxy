@@ -558,7 +558,7 @@ It checks every 2 to 3 seconds (2 while proxying, 3 while direct), but **it does
 
 1. **A port is listening** — some program on this machine opened a proxy port
 2. **It really is a proxy** — a `CONNECT` handshake must answer `HTTP/1.x 200`. This rules out development servers and ordinary web servers
-3. **It really reaches the internet** — the port is used to reach **6 test URLs**, and **any one** returning the right answer is enough. But that alone is not enough: on your machine that URL must **not** give the right answer without the proxy (unreachable, timed out, or hijacked to a login page all count as "not giving it"). If it opens just fine directly too, whatever it answers proves nothing about the proxy. **One exception**: if your proxy client captures all traffic (TUN mode), all six URLs open directly, the tool cannot tell good from bad, and it falls back to the old rule (any reply counts as working) and says so in the log
+3. **It really reaches the internet** — the port is used to reach **6 different endpoints** (a handful of well-known test URLs), and **any one** returning the right answer is enough. But that alone is not enough: on your machine that URL must **not** give the right answer without the proxy (unreachable, timed out, or hijacked to a login page all count as "not giving it"). If it opens just fine directly too, whatever it answers proves nothing about the proxy. **One exception**: if your proxy client captures all traffic (TUN mode), all six URLs open directly, the tool cannot tell good from bad, and it falls back to the old rule (any reply counts as working) and says so in the log
 
 All three must hold before any variable is written. A web server on your machine is never mistaken for a proxy.
 
