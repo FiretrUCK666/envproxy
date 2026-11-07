@@ -1,0 +1,12 @@
+# 提交作者显示名映射（只影响显示，不改历史）。
+#
+# 这里曾经有 5 个提交的作者邮箱写成了 noreply@anthropic.com，
+# 于是 GitHub 的 Contributors 列表里多出一个 claude 账号。
+# .mailmap 把它们重新指回仓库所有者。
+#
+# 格式：正主 <正主邮箱> 旧名 <旧邮箱>
+# 只写邮箱时是"不管名字、按邮箱匹配"的兜底写法。
+
+FiretrUCK666 <326200973+FiretrUCK666@users.noreply.github.com> <noreply@anthropic.com>
+FiretrUCK666 <326200973+FiretrUCK666@users.noreply.github.com> EnvProxy <noreply@anthropic.com>
+FiretrUCK666 <326200973+FiretrUCK666@users.noreply.github.com> Claude <noreply@anthropic.com>
