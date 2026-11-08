@@ -90,12 +90,16 @@ set_user_env_vars() {
             *) launchctl setenv "$_v" "$_http" 2>/dev/null || ENVPROXY_LAUNCHCTL_FAILED=1 ;;
         esac
     done
+    # launchctl 那一路的成败**单独记进日志**：它在无 GUI 会话里必然失败，
+    # 不该阻断安装（终端路才是主路），但失败意味着 Dock/Spotlight 启动的 App
+    # 拿不到代理——那件事必须有地方说出来，不能只挂在一个没人读的全局变量上。
+    if [ "$ENVPROXY_LAUNCHCTL_FAILED" = "1" ]; then
+        log_msg "launchctl 没能设上环境变量（无 GUI 会话时正常）：Dock / Spotlight 启动的 App 读不到代理，终端工具不受影响。"
+    fi
     # 写没写成由**复读**决定，不由"我执行了 mv"决定。
-    # 上面每一处 `|| true` 都是必要的容错（launchctl 在无 GUI 会话里必然失败，
+    # 上面每一处 `|| true` 都是必要的容错（launchctl 那一路可能整条失败，
     # 而终端路才是主路），但它们把"两个文件一个都没写出来"这种真故障也一起吞了。
     # 复读判据只问一件事：终端路的两份文件（当前值 + 归属记录）在不在、有没有内容。
-    # launchctl 的成败由 ENVPROXY_LAUNCHCTL_FAILED 带出去，谁要显示谁去读——
-    # 不写"状态页会体现"这种没人兑现的承诺（它原来就从不读 launchctl）。
     [ -s "$PROXY_ENV" ] && [ -s "$OWNED_ENV" ]
 }
 
@@ -350,6 +354,7 @@ classify_no_proxy_entry() {
     if is_default_no_proxy_entry "$1"; then return 0; fi
     return 2
 }
+
 remove_user_env_vars() {
     local _node _rmv_file_ok _rmv_mode
     # 只回收**本工具自己写下的**东西。

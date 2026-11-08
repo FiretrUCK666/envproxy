@@ -1389,23 +1389,7 @@ get_current_state() {
 # 「网络与代理修复」里被每个网络服务 × 每一层各调一次，2 秒 × 十几个调用确实
 # 拖得久，但它换来的是"不可能误判"——判错的代价是删掉活着的代理。
 # 要提速就减少调用次数，不是换成一个可能建隧道的实现。
-#
-# IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西（冒号当分隔符）。
 # ------------------------------------------------------------------------------
-port_alive_bounded() {
-    _pab_addr="$1"; _pab_port="$2"
-    [ -n "$_pab_addr" ] && [ -n "$_pab_port" ] || return 1
-    case "$_pab_addr" in
-        *:*) _pab_host="[$_pab_addr]" ;;
-        *)   _pab_host="$_pab_addr" ;;
-    esac
-    if (exec 3<>"/dev/tcp/${_pab_host}/${_pab_port}") 2>/dev/null; then
-        exec 3<&- 2>/dev/null || true
-        return 0
-    fi
-    return 1
-}
-
 # 单个地址上试一次 TCP 连接，只回答"这个端口还在不在"。
 # 状态页用它判两件事：注入的代理变量指向的端口、系统代理指向的端口。
 # 与 Windows 侧 Test-TcpAlive 同一判据（那边按地址族建套接字，这边同样只连一次）。
@@ -1419,10 +1403,18 @@ port_alive_bounded() {
 #   - 与 doctor 层 sysproxy_port_state 同一套实现：同一件事不许有两套判据。
 #
 # IPv6 要带方括号才拼得进 /dev/tcp；裸 ::1 会被解析成别的东西（冒号当分隔符）。
-_port_alive() {
-    # 与 port_alive_bounded 同一实现：同一件事只许有一处判据，
-    # 否则"状态页说活着、另一处说死了"这种分叉迟早出现。
-    port_alive_bounded "$1" "$2"
+port_alive_bounded() {
+    _pab_addr="$1"; _pab_port="$2"
+    [ -n "$_pab_addr" ] && [ -n "$_pab_port" ] || return 1
+    case "$_pab_addr" in
+        *:*) _pab_host="[$_pab_addr]" ;;
+        *)   _pab_host="$_pab_addr" ;;
+    esac
+    if (exec 3<>"/dev/tcp/${_pab_host}/${_pab_port}") 2>/dev/null; then
+        exec 3<&- 2>/dev/null || true
+        return 0
+    fi
+    return 1
 }
 
 # ------------------------------------------------------------------------------

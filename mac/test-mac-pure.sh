@@ -61,15 +61,22 @@ _selftest_assert_contains() {
 # 加载代价实测可忽略：全部运行时库点源一遍只要几十毫秒（shell 只解析函数定义，不执行函数体）。
 
 self_test() {
-    # 自检**不能**跑在 `set -eu` 下面。
+    # 自检**必须**跑在 `set -u` 下，只关掉 `-e`。
     #
-    # 入口为了自己在运行期"任何意外都别硬撑"开了 set -u；但同一套选项套在测试上就变成
-    # 反效果：任何一处意外的非零——包括某个被测函数内部的临时失败——都会让**整个套件
-    # 静默中止**，日志停在一句 PASS 后面，既没有 FAIL 也没有错误信息。真实症状：
-    # CI 上跑到一半就 exit 1，本地（Git Bash）却全绿，两边都看不出是哪一步出的问题。
-    # 测试的职责是把问题**报出来**，不是自己先倒下。所以这里显式关掉，并且留一个
+    # 关 -e 的理由：入口为了自己在运行期"任何意外都别硬撑"开了 `set -u`；但同一套选项
+    # 套在测试上就变成反效果——任何一处意外的非零（包括某个被测函数内部的临时失败）
+    # 会让**整个套件静默中止**，日志停在一句 PASS 后面，既没有 FAIL 也没有错误信息。
+    # 真实症状：CI 上跑到一半就 exit 1，本地却全绿，两边都看不出是哪一步出的问题。
+    # 测试的职责是把问题**报出来**，不是自己先倒下。
+    #
+    # **但 `-u` 要开着**，这一点与生产入口一致：关掉它，所有"变量没定义就用了"的
+    # 缺陷都会在自检里静默滑过。实测过两次：`_sba_base` 漏赋值让「给程序建图标」
+    # 在生产里 100% 失败（入口开着 -u，直接 unbound variable），而自检里它静默展开成
+    # 空串、生成的壳子叫「（翻墙）.app」，断言照样通过——自检全绿、功能全坏。
+    # 所以这里显式 set -u，把生产那种"拼写错误当场炸"的约束带进回归。
     # 兜底 trap：真有人再让 shell 中途退出，也要在日志里点出是哪一行。
-    set +eu
+    set +e
+    set -u
     _selftest_done=0
     # shellcheck disable=SC2064
     trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检在第 ${LINENO} 行意外中止（退出码 $?）"; fi' EXIT
@@ -986,6 +993,38 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     if is_monitor_args "/usr/bin/sleep 100"; then _r5=0; else _r5=1; fi
     _selftest_assert_eq "别的进程不算监控" "1" "$_r5"
 
+    # 上面几条是抽查，抽查挡不住"加了一个新子命令却忘了补清单"——
+    # 所以这里把入口**所有分派分支**取出来逐个过一遍。
+    # 为什么必须这样钉：清单是手抄的（入口是 case 分派，没有可读的表），
+    # 而漏一个的症状是"带那个子命令的进程被当成监控"——状态页报假、
+    # 安装时还可能把它当旧监控停掉。report 与 advanced 都漏过一次。
+    _mc_entry="$SCRIPT_DIR/envproxy.sh"
+    _mc_bad=""
+    _mc_n=0
+    if [ -f "$_mc_entry" ]; then
+        # 分支行的形状是 `    install|update|stop|uninstall)` 或 `    status) ...`。
+        # 只认"行首缩进 + 纯小写字母/竖线 + 右括号"，注释行与 case 变量行都不会命中。
+        while IFS= read -r _mc_line; do
+            _mc_names=${_mc_line%%\)*}
+            _mc_names=$(printf '%s' "$_mc_names" | tr -d ' ')
+            [ -n "$_mc_names" ] || continue
+            # 跳过通配分支：`""` 是监控模式本身，`*)` 是用法错误，两者都不是子命令。
+            case "$_mc_names" in ''|'*'|'""') continue ;; esac
+            for _mc_cmd in $(printf '%s' "$_mc_names" | tr '|' ' '); do
+                case "$_mc_cmd" in ''|'*'|'""') continue ;; esac
+                _mc_n=$((_mc_n + 1))
+                if is_monitor_args "/bin/bash /Users/me/mac/envproxy.sh $_mc_cmd"; then
+                    _mc_bad="$_mc_bad $_mc_cmd"
+                fi
+            done
+        done <<EOF_MC
+$(grep -E '^    [a-z][a-z|-]*\)' "$_mc_entry" 2>/dev/null)
+EOF_MC
+    fi
+    _selftest_assert_eq "入口分派里取到了子命令（空集说明抽取正则失效）" "1" \
+        "$([ "$_mc_n" -gt 0 ] && echo 1 || echo 0)"
+    _selftest_assert_eq "每个子命令都不被当成监控（漏的会在这里点名）" "" "$_mc_bad"
+
     # 操作锁：拿锁必须原子的。分两步（先 mkdir 再写 pid）会留一个空窗——
     # 中间那个空窗里另一个进程读到空的 pid，会把锁当成陈旧的接管掉，
     # 两个安装同时跑就互相覆盖文件。现在用 ln：锁一出现就是完整的。
@@ -1119,26 +1158,32 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     # 快扫每轮都返回空；若当成"集合变空"就判 off、删变量，终端突然断网。
     # 判据：快扫(_full=0) + 候选集空 + 上次全扫记得有端口 -> 本轮不下结论。
     if [ "$(type -t get_current_state 2>/dev/null || true)" = "function" ]; then
-        _gs_saved_round="$ROUND"; _gs_saved_full="$NEED_DEEP_SCAN"; _gs_saved_efs="$EVER_FULL_SCANNED"
-        _gs_saved_seen="$LAST_SEEN_SET"; _gs_saved_alive="$LAST_ALIVE_PORT"; _gs_saved_state="$CURRENT_STATE"
-        _gs_saved_fcp="$(type -t find_candidate_ports 2>/dev/null || true)"
-        # 桩：快扫返回空（模拟"端口不在常见表里"），且不是全扫轮
-        find_candidate_ports() { return 0; }
-        # 显式声明"已经做过全扫"：不声明的话首轮会走"必须全扫"那条路
-        # （EVER_FULL_SCANNED=0 -> _need_first=1），而这条用例要测的是**快扫**行为。
-        # 顺手也当一条回归：少了 EVER_FULL_SCANNED 时这里是红的——
-        # 说明"首轮强制全扫"那个机制真的接上了，不是写着好看的。
-        ROUND=3; NEED_DEEP_SCAN=0; EVER_FULL_SCANNED=1
-        LAST_SEEN_SET="7099"; LAST_ALIVE_PORT="7099"; CURRENT_STATE="on:7099"
-        _gs_before="$LAST_SEEN_SET"
-        if get_current_state >/dev/null 2>&1; then :; fi
-        _selftest_assert_eq "快扫空结果不清签名（不当成集合变空）" "$_gs_before" "$LAST_SEEN_SET"
-        _selftest_assert_eq "快扫空结果不改判 off" "on:7099" "$CURRENT_STATE"
-        # 还原
-        ROUND="$_gs_saved_round"; NEED_DEEP_SCAN="$_gs_saved_full"; EVER_FULL_SCANNED="$_gs_saved_efs"
-        LAST_SEEN_SET="$_gs_saved_seen"; LAST_ALIVE_PORT="$_gs_saved_alive"; CURRENT_STATE="$_gs_saved_state"
-        if [ -n "$_gs_saved_fcp" ]; then eval "find_candidate_ports() { $(declare -f find_candidate_ports | sed -n '2,$p'); }" 2>/dev/null || true; fi
-        unset -f find_candidate_ports 2>/dev/null || true
+        # 这一段在子 shell 里跑：桩只在里面存在，出去就自动消失。
+        # 原来的还原写法是错的两重：_gs_saved_fcp 存的是 type -t 的字符串
+        # （"function"），根本不含函数体，所以"还原"实际是把桩又定义了一遍；
+        # 紧接着又无条件 unset -f，结果 find_candidate_ports **彻底消失**——
+        # 后续任何一次调用都是 command not found（rc=127）。
+        # 子 shell 是最短的解法：不保存、不还原、也不可能漏还原。
+        (
+            _gs_saved_round="$ROUND"; _gs_saved_full="$NEED_DEEP_SCAN"; _gs_saved_efs="$EVER_FULL_SCANNED"
+            _gs_saved_seen="$LAST_SEEN_SET"; _gs_saved_alive="$LAST_ALIVE_PORT"; _gs_saved_state="$CURRENT_STATE"
+            # 桩：快扫返回空（模拟"端口不在常见表里"），且不是全扫轮
+            find_candidate_ports() { return 0; }
+            # 显式声明"已经做过全扫"：不声明的话首轮会走"必须全扫"那条路
+            # （EVER_FULL_SCANNED=0 -> _need_first=1），而这条用例要测的是**快扫**行为。
+            # 顺手也当一条回归：少了 EVER_FULL_SCANNED 时这里是红的——
+            # 说明"首轮强制全扫"那个机制真的接上了，不是写着好看的。
+            ROUND=3; NEED_DEEP_SCAN=0; EVER_FULL_SCANNED=1
+            LAST_SEEN_SET="7099"; LAST_ALIVE_PORT="7099"; CURRENT_STATE="on:7099"
+            _gs_before="$LAST_SEEN_SET"
+            if get_current_state >/dev/null 2>&1; then :; fi
+            _selftest_assert_eq "快扫空结果不清签名（不当成集合变空）" "$_gs_before" "$LAST_SEEN_SET"
+            _selftest_assert_eq "快扫空结果不改判 off" "on:7099" "$CURRENT_STATE"
+        )
+        # 子 shell 退出后，桩与临时改的全局变量都不在了；真身从未被覆盖。
+        _selftest_assert_eq "快扫那段的桩没有污染真身（函数还在）" "function" \
+            "$(type -t find_candidate_ports 2>/dev/null || echo missing)"
+    fi
 
     # 握手判定：什么才算"这是个代理端口"。
     # 这是区分"代理端口"与"其他服务端口"的唯一判据，不依赖进程名/端口号猜测。
@@ -1166,7 +1211,6 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         _selftest_assert_eq "握手：空应答不算" "no" "$(_ha_check "")"
         _selftest_assert_eq "握手：非 HTTP 应答不算" "no" "$(_ha_check "SSH-2.0-OpenSSH_8.9")"
         unset -f _ha_check 2>/dev/null || true
-    fi
     fi
 
     # 换端口必须重新判定，不能沿用上个端口的结论——Mac 单槽曾因此把死端口报成"通"。
@@ -2206,7 +2250,7 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     # 编码器的回归全绿，撤销功能整体不存在。测编码器证明不了调用点。
     # 这里直接走真实写入路径：造一条 sysproxy 还原点，再读回来必须非空。
     _lg_snap=$(printf 'Wi-Fi\tweb\tYes\t127.0.0.1\t7078')
-    add_doctor_journal_entry 'sysproxy-repair' "inspector=sysproxy" "legacy=" "services=$(_bak_enc "$_lg_snap")" >/dev/null 2>&1
+    add_doctor_journal_entry 'sysproxy-repair' "inspector=sysproxy" "services=$(_bak_enc "$_lg_snap")" >/dev/null 2>&1
     _lg_back=$(doctor_journal_last_field services)
     [ -n "$_lg_back" ] && _selftest_assert_eq "journal: the repair path writes a non-empty snapshot" "yes" "yes" \
         || _selftest_assert_eq "journal: the repair path writes a non-empty snapshot" "yes" "no"
@@ -2345,6 +2389,132 @@ EOF
     invoke_doctor_check full | grep -q '^[^	]*\.error' && _ic_flag=1
     _selftest_assert_eq "全量档没有检查器崩掉" "0" "$_ic_flag"
 
+    echo "[14c2] 救援页的分区判定（一条记录归哪一区）"
+    # 「毛病真实、但本工具不自动改」必须自成一档。
+    # 它既不能算「挡住了网络」（那承诺的是按 y 能修好），也不能算「没发现问题」——
+    # 落进后者就是屏幕第一句说没事、紧接着的提醒区却在说网页打不开。
+    # DNS 指向本机死端口就是这一类：Kind 是 blocking，而 dns 那一层根本没有 Fix。
+    _selftest_assert_eq "分区：可修的 blocking 进「要修的」" "blocking" \
+        "$(rescue_bucket "$FINDING_KIND_BLOCKING" 1 1 0 0)"
+    _selftest_assert_eq "分区：不可修的 blocking 自成一档（不是 blocking）" "unfixable" \
+        "$(rescue_bucket "$FINDING_KIND_BLOCKING" 0 0 0 0)"
+    _selftest_assert_eq "分区：不可修的 slowing 同理" "unfixable" \
+        "$(rescue_bucket "$FINDING_KIND_SLOWING" 0 0 0 0)"
+    _selftest_assert_eq "分区：端口活着但连不出去" "alivebroken" \
+        "$(rescue_bucket "$FINDING_KIND_ALIVE" 0 0 0 1)"
+    _selftest_assert_eq "分区：端口活着（正常）" "alive" \
+        "$(rescue_bucket "$FINDING_KIND_ALIVE" 0 0 0 0)"
+    _selftest_assert_eq "分区：别处来的地址进「不归我碰」" "foreign" \
+        "$(rescue_bucket "$FINDING_KIND_FOREIGN" 0 0 0 0)"
+    _selftest_assert_eq "分区：地址冲突进提醒" "hint" \
+        "$(rescue_bucket "$FINDING_KIND_FOREIGN" 0 0 1 0)"
+    _selftest_assert_eq "分区：读不出来既不报平安也不报问题" "clean" \
+        "$(rescue_bucket "$FINDING_KIND_UNREADABLE" 0 0 0 0)"
+    # 提醒区的收录判据必须与上面的计数同源，否则"收了几条"与"列了几条"会对不上。
+    _selftest_assert_eq "提醒区：不可修的真问题要显示" "1" \
+        "$(rescue_in_hint "$FINDING_KIND_BLOCKING" 0 1 0 && echo 1 || echo 0)"
+    _selftest_assert_eq "提醒区：可修的项不重复显示" "0" \
+        "$(rescue_in_hint "$FINDING_KIND_BLOCKING" 1 1 0 && echo 1 || echo 0)"
+    _selftest_assert_eq "提醒区：地址冲突要显示" "1" \
+        "$(rescue_in_hint "$FINDING_KIND_FOREIGN" 0 0 1 && echo 1 || echo 0)"
+    _selftest_assert_eq "提醒区：普通 foreign 不重复显示" "0" \
+        "$(rescue_in_hint "$FINDING_KIND_FOREIGN" 0 0 0 && echo 1 || echo 0)"
+    # 整屏：只有一条不可修的记录时，第一句结论**不许**是「没发现问题」。
+    _rp_only_unfixable=$(
+        invoke_doctor_check() {
+            finding_new 'dns.loopback' "$FINDING_KIND_BLOCKING" '网址解析' 'Wi-Fi 的 DNS 设置' '127.0.0.1' \
+                '网址解析被指到本机，但那里没有程序在听。' '到系统设置里把 DNS 改回「自动」。' ''
+        }
+        clear_screen_safe() { :; }
+        style_out() { shift; printf '%s\n' "$*"; }
+        show_rescue_page </dev/null
+    )
+    case "$_rp_only_unfixable" in
+        *'不自动改'*) _selftest_assert_eq "整屏：不可修的真问题不许报平安" "1" "1" ;;
+        *)            _selftest_assert_eq "整屏：不可修的真问题不许报平安" "1" "0" ;;
+    esac
+    case "$_rp_only_unfixable" in
+        *'没发现问题'*) _selftest_assert_eq "整屏：不可修的真问题不进「没发现问题」那一支" "0" "1" ;;
+        *)              _selftest_assert_eq "整屏：不可修的真问题不进「没发现问题」那一支" "0" "0" ;;
+    esac
+
+    echo "[14c3] 撤销系统代理：命令怎么拼、成没成怎么判"
+    # 两条腿分别钉，分开的理由是它们坏起来的症状差得远：
+    #   命令拼错 -> 用户点「撤销」，屏幕说改回去了，浏览器却拿着一个坏地址；
+    #   判定错   -> 撤对了也报「[未完成]」，用户被劝着反复撤销、越撤越乱。
+    #
+    # 快照第 4 列在两种来源里形状不同：手动代理层存的是整条 URL（sysproxy_layers 的第 4 列），
+    # 旧单槽位备份存的是裸主机。networksetup 要的是**裸主机**，喂它整条 URL
+    # 会把 "http://127.0.0.1:7078" 原样写成服务器名，而这条命令自己返回 0。
+    _selftest_assert_eq "还原命令：手动代理写裸主机，不写 URL" \
+        "networksetup -setwebproxy 'Wi-Fi' '127.0.0.1' '7078' on" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' web 'http://127.0.0.1:7078' '7078')"
+    _selftest_assert_eq "还原命令：旧格式（裸主机）同样能拼" \
+        "networksetup -setwebproxy 'Wi-Fi' '127.0.0.1' '7078' on" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' web '127.0.0.1' '7078')"
+    # PAC 是两条命令：只写回地址、不打开状态，用户的 PAC 就永远停在"关着"。
+    _selftest_assert_eq "还原命令：PAC 要连状态一起打开" \
+        "networksetup -setautoproxyurl 'Wi-Fi' 'http://127.0.0.1:7078/proxy.pac'; networksetup -setautoproxystate 'Wi-Fi' on" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' autoproxy 'http://127.0.0.1:7078/proxy.pac' '7078')"
+    _selftest_assert_eq "还原命令：服务名里的单引号要转义" \
+        "networksetup -setwebproxy 'Bob'\\''s Wi-Fi' '127.0.0.1' '7078' on" \
+        "$(_sysproxy_restore_cmd "Bob's Wi-Fi" web 'http://127.0.0.1:7078' '7078')"
+    # 拼不出来的那一条必须返回非零：返回 0 却给了半截命令，会把 set -e 整串打断或写坏设置。
+    _selftest_assert_eq "还原命令：端口不是数字时不发命令" "1" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' web 'http://127.0.0.1:7078' 'not-a-port' >/dev/null 2>&1; echo $?)"
+    _selftest_assert_eq "还原命令：地址空时不发命令" "1" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' web '' '7078' >/dev/null 2>&1; echo $?)"
+    _selftest_assert_eq "还原命令：认不出的勾选框不发命令" "1" \
+        "$(_sysproxy_restore_cmd 'Wi-Fi' bogus '127.0.0.1' '7078' >/dev/null 2>&1; echo $?)"
+
+    # 判定：**与快照一致**才算成功，不是"现在还有没有可修项"。
+    # 撤销本来就是把当初关掉的死端口代理重新打开，撤完之后必然又出现可修项——
+    # 拿 finding_fixable 当判据，这个函数恒返回 failed，屏幕上永远「[未完成]」。
+    unset -f networksetup 2>/dev/null || true
+    networksetup() {
+        case "$1" in
+            -getwebproxy)     printf 'Enabled: Yes\nServer: 127.0.0.1\nPort: 7078\n' ;;
+            -getautoproxyurl) printf 'URL: http://127.0.0.1:7078/proxy.pac\nEnabled: Yes\n' ;;
+            *) return 0 ;;
+        esac
+    }
+    _selftest_assert_eq "还原判定：四项都对上 -> 成功" "0" \
+        "$(_sysproxy_restored_ok 'Wi-Fi' web 'http://127.0.0.1:7078' '7078'; echo $?)"
+    _selftest_assert_eq "还原判定：端口对不上 -> 失败" "1" \
+        "$(_sysproxy_restored_ok 'Wi-Fi' web 'http://127.0.0.1:7078' '9999'; echo $?)"
+    _selftest_assert_eq "还原判定：PAC 一旦没打开就不算还原" "1" \
+        "$(_sysproxy_restored_ok 'Wi-Fi' autoproxy 'http://127.0.0.1:7078/other.pac' '7078'; echo $?)"
+    networksetup() {
+        case "$1" in
+            -getwebproxy) printf 'Enabled: No\nServer: 127.0.0.1\nPort: 7078\n' ;;
+            *) return 0 ;;
+        esac
+    }
+    _selftest_assert_eq "还原判定：状态没打开 -> 失败" "1" \
+        "$(_sysproxy_restored_ok 'Wi-Fi' web 'http://127.0.0.1:7078' '7078'; echo $?)"
+    unset -f networksetup 2>/dev/null || true
+
+    # 三态：整份还原的结论不许被塌缩。
+    # 快照里没有任何被启用的项 = 空操作，**算成功**（否则这条还原点永远消费不掉，
+    # 界面上的「输 r 撤销」一直挂着，按下去还是它）。
+    unset -f networksetup 2>/dev/null || true
+    networksetup() { case "$1" in -listallnetworkservices) printf 'Wi-Fi\n' ;; *) return 0 ;; esac; }
+    unset -f osascript 2>/dev/null || true
+    osascript() { return 0; }
+    _selftest_assert_eq "撤销三态：快照里没有启用的项 = 空操作，算成功" "ok" \
+        "$(restore_sysproxy_snapshot 'Wi-Fi	web	No	127.0.0.1	7078')"
+    _selftest_assert_eq "撤销三态：坏记录一条都还原不了 = 失败（不说成没事）" "failed" \
+        "$(restore_sysproxy_snapshot 'Wi-Fi	web	Yes	127.0.0.1	not-a-port')"
+    unset -f osascript 2>/dev/null || true
+    networksetup() { case "$1" in -listallnetworkservices) printf 'Wi-Fi\n' ;; *) return 0 ;; esac; }
+    osascript() { printf '%s' 'some other failure' >&2; return 1; }
+    _selftest_assert_eq "撤销三态：不是取消的失败 = 失败（不许说成跳过）" "failed" \
+        "$(restore_sysproxy_snapshot 'Wi-Fi	web	Yes	127.0.0.1	7078' 2>/dev/null)"
+    osascript() { printf '%s' 'execution error: User canceled. (-128)' >&2; return 1; }
+    _selftest_assert_eq "撤销三态：用户点了取消 = 跳过" "skip" \
+        "$(restore_sysproxy_snapshot 'Wi-Fi	web	Yes	127.0.0.1	7078' 2>/dev/null)"
+    unset -f networksetup osascript 2>/dev/null || true
+
     echo "[14d] 终端工具代理的判据（cli-proxy）"
     # 与系统代理同构：本机回环 + 端口死 = 可修；其余一律不动。
     # 每一条都对应一种「删掉用户唯一的上网路径」或「删了他公司代理」的真实后果。
@@ -2482,12 +2652,12 @@ EOF
     printf 'registry=https://r/\nproxy=http://127.0.0.1:65001\n' > "$_cli_dir/repair.npmrc"
     _cli_plan="drop$(printf '\t')2$(printf '\t')2$(printf '\t')127.0.0.1$(printf '\t')65001$(printf '\t')0
 "
-    _cli_apply_plan "$_cli_dir/repair.npmrc" "$_cli_plan" 0 '' ''
+    _cli_apply_plan "$_cli_dir/repair.npmrc" "$_cli_plan" '' ''
     _selftest_assert_eq "cli 修复：死的那一行被删掉" "registry=https://r/" "$(cat "$_cli_dir/repair.npmrc" 2>/dev/null)"
     printf 'org.gradle.jvmargs=-Xmx2g\nsystemProp.http.proxyHost=127.0.0.1\nsystemProp.http.proxyPort=65001\n' > "$_cli_dir/repair.gradle"
     _cli_plan2="port$(printf '\t')2,3$(printf '\t')3$(printf '\t')127.0.0.1$(printf '\t')65001$(printf '\t')1
 "
-    _cli_apply_plan "$_cli_dir/repair.gradle" "$_cli_plan2" 1 '127.0.0.1' '17001'
+    _cli_apply_plan "$_cli_dir/repair.gradle" "$_cli_plan2" '127.0.0.1' '17001'
     _selftest_assert_eq "cli 修复：端口行改到当前端口" "17001" "$(sed -n '3p' "$_cli_dir/repair.gradle" | sed 's/.*=//')"
     _selftest_assert_eq "cli 修复：主机行原样留着" "1" "$(grep -c 'proxyHost=127.0.0.1' "$_cli_dir/repair.gradle")"
     _selftest_assert_eq "cli 修复：无关的行原样留着" "1" "$(grep -c 'jvmargs=-Xmx2g' "$_cli_dir/repair.gradle")"
@@ -2789,15 +2959,16 @@ EOF
         *) _selftest_assert_eq "高级功能：编号单独上色" "1" "0" ;;
     esac
 
-    rm -rf "$_sandbox" 2>/dev/null || true
-    _selftest_done=1
-    # 撤掉 launchctl 替身：bash 的函数定义是全局的，留着它会让本进程后面
-    # 每一次 launchctl 调用都拿到假结果（details 见替身定义处的说明）。
     # --------------------------------------------------------------------------
     # shortcut.sh：按程序定规矩这一层
     #
     # 这一层最危险的失效是"屏幕上看不出来"：两个规矩算出同一个壳子名，
     # 后建的覆盖先建的，两个图标行为相同而画面上一切正常。
+    #
+    # **必须放在沙箱清理之前**：这一段里的 _shortcut_extra_dirs / _shortcut_records
+    # 读写的都是 $ENVPROXY_HOME（在沙箱里）。沙箱先删掉的话，那些断言会在
+    # "往一个已经不存在的目录写"的状态下运行——今天恰好看不出异常，
+    # 明天改动一下路径就会变成静默空转。收尾统一放到文件最末。
     # --------------------------------------------------------------------------
     echo '[shortcut] mode table and wrapper identity'
 
@@ -2830,14 +3001,30 @@ EOF
         printf '#!/bin/sh\nexit 0\n' > "$_st_t1/app.sh"
         chmod 755 "$_st_t1/app.sh" 2>/dev/null || true
         mkdir -p "$_st_t1/out" 2>/dev/null || true
-        _st_w1=$(_shortcut_new "$_st_t1/app.sh" proxy "$_st_t1/out" 2>/dev/null)
-        _st_w2=$(_shortcut_new "$_st_t1/app.sh" direct "$_st_t1/out" 2>/dev/null)
+        # 建壳子这一步必须在 `set -u` 子壳里跑：生产入口就是开着 -u 的，
+        # 而"某个变量漏了赋值"恰恰只在那个约束下才炸。原来整套自检关了 -u，
+        # 于是 `_sba_base` 漏赋值时壳子静默叫「（翻墙）.app」、断言照样通过——
+        # 生产里 100% 失败、自检里全绿，是最难查的一类。子壳不改变外层的选项。
+        _st_w1=$( set -u; _shortcut_new "$_st_t1/app.sh" proxy "$_st_t1/out" 2>/dev/null )
+        _st_w2=$( set -u; _shortcut_new "$_st_t1/app.sh" direct "$_st_t1/out" 2>/dev/null )
         _st_p1=${_st_w1#ok|}; _st_p1=${_st_p1%%|*}
         _st_p2=${_st_w2#ok|}; _st_p2=${_st_p2%%|*}
         _selftest_assert_eq '同一程序两个规矩都能建' '1' \
             "$([ -d "$_st_p1" ] && [ -d "$_st_p2" ] && echo 1 || echo 0)"
         _selftest_assert_eq '两个规矩的壳子不是同一个（少一维就会互相覆盖）' '1' \
             "$([ "$_st_p1" != "$_st_p2" ] && echo 1 || echo 0)"
+        # 产物名必须是「程序基名 + 后缀」。名字里的基名来自 _sba_base；
+        # 漏赋值时它静默变空，桌面上的图标于是叫「（翻墙）.app」——
+        # 一路正常、没有报错，只是名字里少了程序名。
+        _selftest_assert_eq '壳子名字里带着程序基名' '1' \
+            "$(case "$(basename "$_st_p1")" in app.sh*) echo 1 ;; *) echo 0 ;; esac)"
+        # 落点目录带空格：调用链里任何一处漏了引号，路径都会在这里被切成两段。
+        # 空串碰巧不暴露（展开成空），带空格的目录才暴露。
+        mkdir -p "$_st_t1/my apps" 2>/dev/null || true
+        _st_w3=$( set -u; _shortcut_new "$_st_t1/app.sh" proxy "$_st_t1/my apps" 2>/dev/null )
+        _st_p3=${_st_w3#ok|}; _st_p3=${_st_p3%%|*}
+        _selftest_assert_eq '落点带空格也能建' '1' \
+            "$([ -d "$_st_p3" ] && [ -d "$_st_t1/my apps" ] && echo 1 || echo 0)"
         # 壳子里必须有归属标记，否则删不掉（也认不出是不是我们造的）。
         _st_l1="$_st_p1/Contents/MacOS/launcher"
         _selftest_assert_eq '壳子里有归属标记' '1' \
@@ -2861,6 +3048,13 @@ EOF
             "$(_shortcut_records 2>/dev/null | grep -F "$(basename "$_st_p1")" | grep -q 'proxy' && echo 1 || echo 0)"
         rm -rf "$_st_t1" 2>/dev/null || true
     fi
+    # ---- 收尾：所有用例都跑完之后才清理 ----
+    # 沙箱必须在最后删：它下面的 $ENVPROXY_HOME 是好几段用例的落点，
+    # 提前删掉会让后面的断言在"往不存在的目录写"的状态下静默空转。
+    # _selftest_done 同理：它是 EXIT trap 的"正常收尾"标记，
+    # 提前置位就等于把后面的段落划进监控盲区——那里崩了 trap 不会报。
+    rm -rf "$_sandbox" 2>/dev/null || true
+    _selftest_done=1
     unset -f launchctl 2>/dev/null || true
     trap - EXIT
     if [ "$_selftest_fails" -eq 0 ]; then

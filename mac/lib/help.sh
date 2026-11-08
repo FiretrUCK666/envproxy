@@ -924,7 +924,7 @@ show_menu() {
 # 而这类改动在屏幕上看不出错，只是每行都少显示一个字。
 #
 #   1 Key      用户敲的数字，该侧连续
-#   2 Action   稳定语义标识（Windows 侧叫 Switch），与显示编号无关
+#   2 Action   稳定语义标识（两侧同名，门禁按它配对），与显示编号无关
 #   3 Handler  处理器函数名。**分派只认这一列**
 #   4 Module   分组，只影响打印顺序，不影响编号
 #   5 Kind     do = 会改东西 / read = 只看不改
@@ -1186,7 +1186,7 @@ show_advanced_menu() {
                 [ "$_adv_out" = "$_adm_mid" ] || continue
                 _adv_field "$_adm_i" 1; _adm_k=$_adv_out
                 _adv_field "$_adm_i" 6; _adm_nm=$_adv_out
-                _adv_field "$_adm_i" 7 || _adm_out=''; _adm_hint=$_adv_out
+                _adv_field "$_adm_i" 7; _adm_hint=$_adv_out
                 _adm_gap=$((_adm_nw - $(_display_width "$_adm_nm"))); [ "$_adm_gap" -lt 0 ] && _adm_gap=0; _adm_pad=$(printf "%*s" "$_adm_gap" "")
                 # 只给**编号**上色（绿 = 你要敲的东西），名字与说明用正文色。
                 # 整行同色会让编号混进正文里，用户得逐字找；与 Windows 侧同一条规则。

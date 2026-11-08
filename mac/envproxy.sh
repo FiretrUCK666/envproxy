@@ -55,10 +55,12 @@ set -u
 #     lib/runtime.sh    日志、监控进程、主循环、自启动定位器、shell 集成
 #     lib/package.sh    覆盖安装区、备份与回滚
 #     lib/update.sh     版本检查、下载校验、确认流程
-#     lib/doctor.sh     系统代理各层判定与修复
+#     lib/doctor.sh     系统代理各层判定与修复（叶子，只依赖 base+probe）
+#     lib/insp.sh       检查器表、编排、网络与代理修复那一屏
 #     lib/ops.sh        安装/停止/卸载/日常操作的编排
 #     lib/pages.sh      状态页渲染、问题报告、问题清单
-#     lib/help.sh       菜单渲染、帮助主题与渲染、高级功能三屏
+#     lib/help.sh       菜单渲染、帮助主题与渲染
+#     lib/shortcut.sh   按程序定规矩（造 wrapper .app、扫描、管理）
 #   库清单的唯一权威处是下面的 CORE_LIBS；门禁会核对它与 lib/ 实际内容一致。
 # ------------------------------------------------------------------------------
 SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
@@ -268,8 +270,8 @@ case "$_CMD_NORM" in
     # 入口同时持有所有层，是唯一适合把这条能力接起来的地方。
     update) UPDATE_INSTALL_FINISH="install_envproxy" update_envproxy "$_YES"; exit $?;;
     menu) show_menu;;
-    # 高级功能：与 Windows 侧同名同号的二级菜单。mac 这边 4 项（图标三屏 + 网络救援），
-    # Windows 侧 7 项——多的三项是 WSL / Docker 这类只讲怎么改的说明页。
+    # 高级功能：与 Windows 侧同名同号的二级菜单，项数各自由菜单表派生（这里不复述数字）。
+    # 共有项按 Action 配对，两侧的名字与 Kind 逐项相等由门禁 16 的 G-C 守着。
     # DIVERGE(Mac): 中继（固定入口）只有 Windows 有；图标层两端都有，但机制不同
     # （Win 造 .lnk + .vbs，Mac 造 wrapper .app）。
     advanced) show_advanced_menu;;

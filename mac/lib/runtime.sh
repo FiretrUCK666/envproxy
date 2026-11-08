@@ -108,9 +108,9 @@ write_state_snapshot() {
 read_state_snapshot() {
     SNAP_STATUS="none"
     SNAP_AGE=0
-    SNAP_STATE=""; SNAP_PORT_ENUMERATION=""; SNAP_PORT_REASON=""; SNAP_LOG_TAIL=""
-    SNAP_ROUND=0; SNAP_PID=0; SNAP_PREV_STATE=""; SNAP_PENDING_STATE=""
-    SNAP_PENDING_COUNT=0; SNAP_VARS_MATCH=""; SNAP_APPLY_RESULT=""; SNAP_NODE_HANDSHAKE=""
+    SNAP_STATE=""; SNAP_PORT_ENUMERATION=""; SNAP_PORT_REASON=""
+    SNAP_ROUND=0; SNAP_PID=0; SNAP_PENDING_STATE=""
+    SNAP_VARS_MATCH=""; SNAP_APPLY_RESULT=""; SNAP_NODE_HANDSHAKE=""
     [ -f "$SNAPSHOT_FILE" ] || return 0
     if [ ! -r "$SNAPSHOT_FILE" ]; then SNAP_STATUS="unreadable"; return 0; fi
 
@@ -131,11 +131,9 @@ read_state_snapshot() {
     _rss_get() { sed -n "s/^$1=//p" "$SNAPSHOT_FILE" 2>/dev/null | head -1; }
     _rss_written=$(_rss_get written)
     SNAP_STATE=$(_snapshot_unescape "$(_rss_get state)")
-    SNAP_PREV_STATE=$(_snapshot_unescape "$(_rss_get prev_state)")
     SNAP_PENDING_STATE=$(_snapshot_unescape "$(_rss_get pending_state)")
     SNAP_PORT_ENUMERATION=$(_rss_get port_enumeration)
     SNAP_PORT_REASON=$(_snapshot_unescape "$(_rss_get port_reason)")
-    SNAP_LOG_TAIL=$(_snapshot_unescape "$(_rss_get log_tail)")
     SNAP_VARS_MATCH=$(_rss_get vars_match)
     SNAP_APPLY_RESULT=$(_rss_get apply_result)
     # **可选字段**：老版本监控写不出它，所以它不进 SNAPSHOT_KEYS（进了会让升级瞬间
@@ -143,7 +141,6 @@ read_state_snapshot() {
     SNAP_NODE_HANDSHAKE=$(_snapshot_unescape "$(_rss_get node_handshake)")
     SNAP_ROUND=$(_rss_get round); case "$SNAP_ROUND" in ''|*[!0-9]*) SNAP_ROUND=0;; esac
     SNAP_PID=$(_rss_get pid); case "$SNAP_PID" in ''|*[!0-9]*) SNAP_PID=0;; esac
-    SNAP_PENDING_COUNT=$(_rss_get pending_count); case "$SNAP_PENDING_COUNT" in ''|*[!0-9]*) SNAP_PENDING_COUNT=0;; esac
 
     # 时刻：BSD date 与 GNU date 的 -j/-d 语法不同，逐条试。
     # 判据只用它算年龄，解析不出来就按"过旧"处理（保守方向）。
@@ -714,8 +711,11 @@ is_monitor_args() {
         # repair-profile 与 help 是——少一个就多认一个，多一个就少认一个。
         # report 曾经漏在这里：入口认得它（envproxy.sh 的 report) 分支），
         # 于是跑「问题反馈」的那个进程被认成监控——状态页可能报"监控在跑"，
-        # 安装/停止时也可能把它当成旧监控停掉。
-        install|stop|uninstall|status|repair-profile|update|menu|help|self-test|report) return 1;;
+        # 安装/停止时也可能把它当成旧监控停掉。advanced 漏的那一刻同理：
+        # 进二级菜单的进程被当成监控。清单本身没法从入口派生（入口是 case 分派，
+        # 没有可读的表），所以由自检钉住：它把入口里所有分派分支取出来逐个比对，
+        # 少一个就红。改入口加子命令时，自检会点名告诉你这里要补。
+        install|stop|uninstall|status|repair-profile|update|menu|advanced|help|self-test|report) return 1;;
     esac
     return 0
 }

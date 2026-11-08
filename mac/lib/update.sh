@@ -173,6 +173,12 @@ _gtw_retry_needed() {
 
 UPDATE_FAILURE_KINDS="local network quota server bad-content missing"
 
+# 本平台安装包的资产名。**只写这一处**：API 查编号与直连下载两条路都按这个名字找文件，
+# 而且两处必须逐字相同——直连拿到的就是 API 那一份资产，所以它的 sha256 才能通用。
+# 各写一遍的话，改一处忘一处，症状是"下载内容不完整"（对不上 digest 归 bad-content），
+# 而真实原因是名字打错了。
+UPDATE_ASSET_NAME="EnvProxy-mac.tar.gz"
+
 # 把 HTTP 状态码归到失败原因。403/429 有两种含义（限流 vs 真的被拒），
 # 靠响应头里的 X-RateLimit-Remaining 区分：剩 0 就是配额用尽。
 # $2 传剩余配额（可空）；传空表示"没拿到这个头"，此时按"真的被拒"处理。
@@ -824,7 +830,12 @@ remove_stale_update_temp() {
 # 标签要编码后才拼进 URL。
 # 标签来自远端应答（tag_name 或重定向目标），不是我们写的——带空格、#、/ 的标签
 # 会把地址拼坏（甚至把路径拼到别处去）。编码后才是合法地址。
-# 只留 A-Za-z0-9-._~，其余逐字节 %XX（纯 POSIX，不依赖任何外部命令以外的工具）。
+#
+# 实现是**逐字符替换表**（下面那一串），不是"除了 unreserved 全都编码"的通用编码器：
+# A-Za-z0-9 与 `-._~` 原样留下，表里列出的那些字符换成 %XX，其余字符（例如 `<>|\!`）
+# 原样通过。这够用是因为标签的正常形状是 `v1.2.3`，而真正会把 URL 拼坏的
+# 分隔符（/ ? # & = : @ 空格 % 引号括号等）都在表里。
+# **加字符就加一行**；不要指望它等价于 RFC 3986 的全集编码。
 url_encode() {
     # 用 bash 的参数展开做替换：不起任何子进程（逐字节起进程的话，
     # 一个几十字节的标签就是几十个进程，白白拖慢一次更新）。
@@ -1080,7 +1091,7 @@ update_envproxy() {
         _got=1
         # 资产编号与校验值是**全局变量**（get_asset_from_json 写全局）：
         # 用命令替换捕获会在子 shell 里跑，取回来的永远是空——所以这里直接调用再读全局。
-        get_update_asset "$_sapirepo" "$(url_encode "$REMOTE_TAG")" "EnvProxy-mac.tar.gz" || true
+        get_update_asset "$_sapirepo" "$(url_encode "$REMOTE_TAG")" "$UPDATE_ASSET_NAME" || true
         _asset_id="$ASSET_ID"
         _asset_digest="$ASSET_DIGEST"
         if [ -z "$_asset_id" ] && [ -n "$ASSET_FAILURE" ]; then
@@ -1101,7 +1112,7 @@ update_envproxy() {
         if [ "$_got" -ne 0 ]; then
             # 直连拿到的也是同一份资产（同一个 tag 下的同一个文件），所以 digest 一样适用——
             # 校验值不是只管 API 那条路。
-            fetch_update_file "$_sbase/releases/download/$(url_encode "$REMOTE_TAG")/EnvProxy-mac.tar.gz" "$_try_tgz" ""
+            fetch_update_file "$_sbase/releases/download/$(url_encode "$REMOTE_TAG")/$UPDATE_ASSET_NAME" "$_try_tgz" ""
             _rc=$?
             if [ "$_rc" -eq 0 ]; then
                 if _accept_downloaded_package "$_try_tgz" "$_asset_digest"; then _got=0; fi

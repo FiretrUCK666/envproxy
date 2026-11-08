@@ -648,7 +648,19 @@ show_status() {
                 _age_note="（${SNAP_AGE} 秒前的判断）"
             fi
         fi
-        _status_row "$STATUS_LABEL_PROXY" "已开启（本地端口 $_port 监听中）${_age_note}" ok
+        # 正在去抖：状态已经疑似变了，但还没确认够轮数。
+        # 这一行与 Windows 侧逐字对应（那边读 Snapshot.PendingState 画同一句话）——
+        # 缺了它，用户看到的仍是上一轮的结论，而实际探测已经开始怀疑了；
+        # 两种实现各说一半就是行为漂移。快照里没有这个字段时（老监控写的）不显示。
+        _pending=""
+        if [ -n "${SNAP_PENDING_STATE:-}" ]; then
+            case "$SNAP_PENDING_STATE" in
+                on:*) _pending="  · 正在确认：刚发现端口 ${SNAP_PENDING_STATE#on:}" ;;
+                off)  _pending="  · 正在确认：刚发现代理不在了" ;;
+                *)    _pending="  · 正在确认：$SNAP_PENDING_STATE" ;;
+            esac
+        fi
+        _status_row "$STATUS_LABEL_PROXY" "已开启（本地端口 $_port 监听中）${_age_note}${_pending}" ok
     elif [ "$_port_unknown" = "1" ]; then
         _status_row "$STATUS_LABEL_PROXY" "这一轮没读到本机端口，无法判断（正常，会自动重试）" warn
     else
@@ -866,7 +878,17 @@ get_status_snapshot() {
             _ts_unpaired=$((_ts_unpaired + 1))
             # 顺带记下孤立标记的行号：状态页要能告诉用户"删哪一行"。
             # 只说"标记不成对"等于让用户自己去几千行里找。
-            [ -z "$_ts_badline" ] && _ts_badline=$(grep -nxF -e "$HOOK_START" -e "$HOOK_END" "$_ts_p" 2>/dev/null | head -n 1 | cut -d: -f1)
+            #
+            # **必须用 _hook_marker_line，不能拿 grep -nxF 另写一套**：
+            # 那个函数按"去掉首尾空白后逐字节相等"认行（用户编辑器常给行尾留空格），
+            # 而 grep -nxF 要求整行一字不差——尾随空格时 `_hook_marker_present` 认、
+            # `_hook_block_paired` 判不成对，这里却取不到行号，
+            # 于是屏幕退回到那句含糊的"删掉配置文件里孤立的那一行标记"。
+            # 同一判据只准有一处实现。
+            if [ -z "$_ts_badline" ]; then
+                _ts_badline=$(_hook_marker_line "$_ts_p" "$HOOK_START")
+                [ -n "$_ts_badline" ] || _ts_badline=$(_hook_marker_line "$_ts_p" "$HOOK_END")
+            fi
             continue
         fi
         # 成对了还要看钩子行是不是当前版本：标记在、钩子行被改过就不算生效。
@@ -907,8 +929,9 @@ EOF
         _cur_addr=$(printf '%s' "$_cur_hostport" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
         if [ -n "$_cur_port" ]; then
             _cur_alive=1
-            # 用带超时的版本：状态页是用户盯着看的，不能因为路径上有设备丢包就卡住不动。
-            # _port_alive 没有时限（/dev/tcp 走内核 connect()，会等到系统级超时，实测 85 秒量级）。
+            # 状态页是用户盯着看的，不能因为路径上有设备丢包就卡住不动。
+            # 判活只有 port_alive_bounded 一个实现（/dev/tcp 走内核 connect()，
+            # 没有自己的时限，本机死端口实测 2 秒量级，但跨设备转发会久得多）。
             port_alive_bounded "$_cur_addr" "$_cur_port" || _cur_alive=0
         fi
     fi
@@ -923,7 +946,6 @@ EOF
     # 公司 VPN 上残留、Wi-Fi 上干净的情况它完全看不见。
     # quick 只查手动代理两层：状态页每次刷新都调它，全量档会拖慢刷新。
     _sp_bad=0
-    _sp_first_url=""
     _sp_first_kind=""
     _sp_count=0
     # 列要**读全**：sysproxy_layers 每行 7 个 TAB 字段。这里只用到前 5 个，
@@ -935,7 +957,6 @@ EOF
         if finding_fixable "$_sp_kind"; then
             _sp_count=$((_sp_count + 1))
             if [ -z "$_sp_first_kind" ]; then
-                _sp_first_url="$_sp_url"
                 _sp_first_kind="$_sp_kind"
             fi
         fi
