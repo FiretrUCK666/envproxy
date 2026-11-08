@@ -146,11 +146,14 @@ new_problem_report() {
             printf "%s\n" "$_npr_layers" | while IFS="$(printf '\t')" read -r _nl_l _nl_s _nl_k _nl_u _nl_p _nl_b _nl_h; do
                 [ -n "$_nl_s" ] || continue
                 if finding_fixable "$_nl_k"; then _nl_flag="【可修】"; else _nl_flag=""; fi
-                case "$_nl_k" in
-                    alive)    _nl_flag="（正在用）" ;;
-                    managed)  _nl_flag="（被管理员锁定）" ;;
-                    foreign)  _nl_flag="（不是本机的，未动）" ;;
-                esac
+                # 这里**不许写 case**：整段正文在 _npr_body=$( ... ) 里，而 macOS 自带的
+                # bash 3.2 在命令替换里遇到 case 模式的右括号（`alive)`）就把替换提前收尾，
+                # 于是 pages.sh 从那一行起整份解析失败——状态页、问题报告、status --json
+                # 在真机上全都"命令不存在"，而 bash 5 上 bash -n 一切正常，屏幕上看不出来。
+                if [ "$_nl_k" = "alive" ]; then _nl_flag="（正在用）"
+                elif [ "$_nl_k" = "managed" ]; then _nl_flag="（被管理员锁定）"
+                elif [ "$_nl_k" = "foreign" ]; then _nl_flag="（不是本机的，未动）"
+                fi
                 echo "  $_nl_l  $_nl_u  -> $_nl_k $_nl_flag"
             done
             _npr_fix=$(printf "%s\n" "$_npr_layers" | awk -F"\t" 'NF>=3 {print $3}' | while read -r _k; do finding_fixable "$_k" && echo x; done | wc -l | tr -d " ")
@@ -160,7 +163,8 @@ new_problem_report() {
         if [ -n "$_npr_all" ]; then
             printf "%s\n" "$_npr_all" | while IFS="$(printf '\t')" read -r _na_id _na_kind _na_subj _na_where _na_val _na_reason _na_advice _na_fix; do
                 [ -n "$_na_id" ] || continue
-                case "$_na_id" in sysproxy.*) continue ;; esac
+                # 同上：命令替换里不许出现 case（bash 3.2 会把模式里的右括号当成替换结尾）。
+                [ "${_na_id%%.*}" = "sysproxy" ] && continue
                 _na_flag=""
                 finding_repairable "$_na_kind" "$_na_id" && _na_flag="【可修】"
                 echo "  $_na_subj  ${_na_val:-（无）}  -> $_na_kind $_na_flag"

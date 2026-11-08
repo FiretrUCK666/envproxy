@@ -2629,7 +2629,28 @@ EOF
     _json=$(SNAP_VARS_MATCH='a"b\c'; format_status_json)
     _selftest_assert_eq "json：引号与反斜杠被转义" "1" "$(printf '%s' "$_json" | grep -c 'a\\"b\\\\c')"
     _port="${_jm_saved_port}"; _port_unknown="${_jm_saved_unknown}"
-    _selftest_assert_eq "json：入口接受 status --json（用法层）" "0" "$(USAGE_COMMAND=status; USAGE_COMMAND_COUNT=1; USAGE_SWITCHES='json'; USAGE_EXTRA=''; usage_error; echo $?)"
+    _selftest_assert_eq "json：入口接受 status --json（用法层）" "0" "$(USAGE_COMMAND=status; USAGE_COMMAND_COUNT=1; USAGE_SWITCHES='json'; USAGE_EXTRA=''; usage_error; echo $?)"    # ----------------------------------------------------------------------
+    # [14g] 每个脚本都要能被**当前这个 bash** 解析
+    # ----------------------------------------------------------------------
+    # 这是真事故留下的守卫：macOS 自带 bash 3.2 在命令替换 $( ) 里遇到 case 模式的
+    # 右括号（`alive)`）就把替换提前收尾，于是 pages.sh 从那一行起整份解析失败——
+    # 状态页、问题报告、`status --json` 在真机上全部"命令不存在"。
+    # 而 ubuntu 的 bash 5 上 `bash -n` 一切正常，Git Bash 上跑自检也正常，
+    # 屏幕上看不出任何异常：一份代码在两种 bash 上命运相反，只有真机才看得见。
+    _bs_bad=''
+    for _bs_f in "$SCRIPT_DIR"/*.sh "$SCRIPT_DIR"/lib/*.sh; do
+        [ -f "$_bs_f" ] || continue
+        bash -n "$_bs_f" 2>/dev/null || _bs_bad="$_bs_bad ${_bs_f##*/}"
+    done
+    _selftest_assert_eq "每个脚本都能被当前 bash 解析（macOS 上就是 3.2）" "" "$_bs_bad"
+    # 解析失败是"静默的"：source 报一句错就继续往下跑，缺的函数要到用的时候才暴露。
+    # 所以再点名几个关键函数——它们住在 pages.sh 的后半段，一旦解析断在前面就全没了。
+    _bs_missing=''
+    for _bs_fn in show_status show_status_live show_status_json format_status_json \
+                  get_status_snapshot format_status_lines new_problem_report; do
+        declare -F "$_bs_fn" >/dev/null 2>&1 || _bs_missing="$_bs_missing $_bs_fn"
+    done
+    _selftest_assert_eq "关键函数真的定义出来了（解析断在前面就会缺）" "" "$_bs_missing"
     echo "[15] PAC 端口解析、裸 IPv6、地址形态"
     # 三条都对应"永远修不好"或"误判"的真实缺陷。
     # ① PAC 的端口必须从 URL 里解析出来，否则 port=0 → unknown → foreign，

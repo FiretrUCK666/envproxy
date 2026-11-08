@@ -898,12 +898,16 @@ _cli_repoint_line() {
     _rl_line="$1"; _rl_oh="$2"; _rl_op="$3"; _rl_nh="$4"; _rl_np="$5"; _rl_po="$6"
     [ -n "$_rl_np" ] || return 1
     [ -n "$_rl_op" ] || return 1
+    # **不用 ${var/pat/"rep"}**：macOS 自带 bash 3.2 会把替换串两侧的引号当字面量，
+    # 于是 `proxy = http://127.0.0.1:7890` 变成 `proxy = http://"127.0.0.1:9999"`
+    # ——配置被改坏，而 bash 5 上一切正常（实测由 CI 的 macOS 作业逮到）。
+    # 改成「切前缀 + 拼回去」：${var%%pat} / ${var#*pat} 在 3.2 与 5.x 上语义完全一致。
     if [ "$_rl_po" = "1" ]; then
         # 那一行上只有一个端口数字（Gradle 的 port 行、XML 的 <port> 元素）。
-        case "$_rl_line" in
-            *"$_rl_op"*) printf '%s' "${_rl_line/"$_rl_op"/"$_rl_np"}"; return 0 ;;
-        esac
-        return 1
+        _rl_pre=${_rl_line%%"$_rl_op"*}
+        [ "$_rl_pre" != "$_rl_line" ] || return 1
+        printf '%s' "$_rl_pre$_rl_np${_rl_line#*"$_rl_op"}"
+        return 0
     fi
     case "$_rl_nh" in
         *:*) _rl_new="[$_rl_nh]:$_rl_np" ;;
@@ -911,14 +915,12 @@ _cli_repoint_line() {
     esac
     _rl_c1="[$_rl_oh]:$_rl_op"
     _rl_c2="$_rl_oh:$_rl_op"
-    if [ "${_rl_line#*"$_rl_c1"}" != "$_rl_line" ]; then
-        printf '%s' "${_rl_line/"$_rl_c1"/"$_rl_new"}"
+    for _rl_c in "$_rl_c1" "$_rl_c2"; do
+        _rl_pre=${_rl_line%%"$_rl_c"*}
+        [ "$_rl_pre" != "$_rl_line" ] || continue
+        printf '%s' "$_rl_pre$_rl_new${_rl_line#*"$_rl_c"}"
         return 0
-    fi
-    if [ "${_rl_line#*"$_rl_c2"}" != "$_rl_line" ]; then
-        printf '%s' "${_rl_line/"$_rl_c2"/"$_rl_new"}"
-        return 0
-    fi
+    done
     return 1
 }
 
