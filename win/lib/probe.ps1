@@ -628,7 +628,7 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         # 原因：默认取值路径是进程内的 GetActiveTcpListeners()，它返回的每个元素
         # 只有 Address/Port，**结构上不提供 PID**，于是那里把 OwningProcess 写成 0。
         # 原来用"这一路有没有 PID"当作要不要提速的开关，结果是：正常机器上第一层
-        # 永远成功，$hasPid 恒为假，整段提速**从未执行过**——实测 68 个监听口 PID>0 的
+        # 永远成功，那一支恒为假，整段提速**从未执行过**——实测 68 个监听口 PID>0 的
         # 有 0 个。而 mac 侧用的是 lsof+ps，同一功能是活的，两端行为就分了叉。
         # 正确做法是按需取一次 PID 表（实测 netstat -ano 34ms + 解析 8ms），
         # 而且只在"确实有点可查"时才付这个开销。

@@ -440,9 +440,17 @@ foreach (`$n in @('base','probe','env','runtime','relay')) { . (Join-Path (Join-
 Write-Output ("{0}|{1}|{2}" -f `$s.Running, `$s.Port, `$s.Upstream)
 "@
             $f = Join-Path ([System.IO.Path]::GetTempPath()) ("relayprobe_" + [guid]::NewGuid().ToString('N') + ".ps1")
+            # 本机可能没有 pwsh（只有 powershell.exe）。取不到就先判 SKIP——
+            # 直接 `& $null` 会抛 InvalidOperation，而套件是 Stop 语义，
+            # 一个可选依赖缺失会把整场测试中止在这里（后面一条都不会跑）。
+            $pwshExe = $null
+            try { $pwshExe = (Get-Command pwsh -ErrorAction SilentlyContinue).Source } catch { $pwshExe = $null }
+            if (-not $pwshExe) {
+                Write-Host '  SKIP 跨进程中继判据（本机没有 pwsh）'
+            } else {
             try {
                 [System.IO.File]::WriteAllText($f, $probe, (New-Object System.Text.UTF8Encoding($true)))
-                $out = @(& (Get-Command pwsh -ErrorAction SilentlyContinue).Source -NoProfile -File $f 2>$null)
+                $out = @(& $pwshExe -NoProfile -File $f 2>$null)
                 $line = @($out | Where-Object { $_ -match '^\w+\|\d+\|\d+$' }) | Select-Object -First 1
                 if ($line) {
                     $parts = $line -split '\|'
@@ -454,6 +462,7 @@ Write-Output ("{0}|{1}|{2}" -f `$s.Running, `$s.Port, `$s.Upstream)
                 }
             } finally {
                 if (Test-Path -LiteralPath $f) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
+            }
             }
         }
     } finally {
@@ -653,6 +662,27 @@ if ($locRaw.Success) {
     if ($locVal.Length -ge 2) { $locVal = $locVal.Substring(1, $locVal.Length - 2) }
     Assert-Eq '定位器与核心脚本的监控命令行判据完全相同' $MonitorCmdLinePattern $locVal
 }
+# 核心脚本里还有一份**带捕获组**的同一判据（停止时要按它推算那个进程自己的 monitor 目录）。
+# 判据不是"字面逐字相同"——捕获版把 `*` 换成 `*?`（保住"取尽可能短的路径"），
+# 两者字面本来就有差别。要钉的是**认出同一批命令行**：拿一组真实的命令行样本喂两条正则，
+# 结论必须一致，且捕获版抓到的路径就是主判据认下的那条命令里的入口。
+$monSamples = @(
+    'powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "D:\EnvProxy\win\envproxy.ps1"',
+    'powershell.exe -NoProfile -File C:\Apps\EnvProxy\win\envproxy.ps1',
+    'pwsh -File "C:\a b\EnvProxy\win\envproxy.ps1"',
+    'powershell.exe -File "C:\x\envproxy.ps1" -Status',
+    'powershell.exe -Command "Get-Content envproxy.ps1"',
+    'notepad.exe C:\x\envproxy.ps1.txt'
+)
+$monMismatch = @()
+foreach ($s in $monSamples) {
+    $mainHit = [bool]($s -match $MonitorCmdLinePattern)
+    $capHit = [bool]($s -match $MonitorCmdLineCapture)
+    if ($mainHit -ne $capHit) { $monMismatch += $s }
+    # 捕获版必须真的抓到路径（主判据认下而捕获不到，停止时就推算不出目录）
+    if ($capHit -and -not $Matches[1]) { $monMismatch += ('no-capture: ' + $s) }
+}
+Assert-Eq '捕获版判据与主判据对同一批命令行结论一致' '' ($monMismatch -join ' | ')
 
 # ------------------------------------------------------------------------------
 # [10] 快照归属判定：首次安装时，本机地址的代理变量是使用者自己的

@@ -996,7 +996,8 @@ try {
     $lockOk = $lk.WaitOne(3000)
 } catch { $lockOk = $false }
 if ($lockOk) {
-    Assert-Eq '这把锁真能拿到（名称与命名空间有效）' $true $true
+    # 断言要真的看 $lockOk，别写 $true $true——那样这条在任何情况下都绿。
+    Assert-Eq '这把锁真能拿到（名称与命名空间有效）' $true $lockOk
 } else {
     Write-Host '  SKIP 锁可用性（本平台建不出具名互斥）'
 }

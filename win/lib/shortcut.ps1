@@ -551,7 +551,7 @@ function New-ProxyShortcut {
     # 不合法的值（别的工具写坏的、手工填错的）照样会建成功——快捷方式本身没毛病，
     # 它只是读不到可用的代理而已；但要在结果里说一句，否则用户点了图标发现没走代理，
     # 只会以为这个功能坏了。判断规则只写在 ConvertTo-ProxyUrl 那一处。
-    try { $res.ProxyRaw = [string](Get-EnvProxyValue $PrimaryProxyVarName) } catch {}
+    try { $res.ProxyRaw = [string](Get-EnvProxyValue) } catch {}
     $res.ProxyOk = [bool](ConvertTo-ProxyUrl $res.ProxyRaw)
     if (-not $WorkingDirectory) { $WorkingDirectory = Split-Path -Parent $TargetPath }
     if (-not (Test-Path -LiteralPath $WorkingDirectory)) { $WorkingDirectory = Split-Path -Parent $TargetPath }

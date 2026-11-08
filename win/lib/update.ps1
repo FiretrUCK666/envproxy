@@ -639,9 +639,7 @@ function Save-UpdateFile([string]$Url, [string]$DestFile, [hashtable]$Headers = 
     # Windows 侧直接失败，而 mac 侧（用同一个判据）换个出口就成功了。同一个版本、
     # 同一条网络，两端给出不同结果，用户只会觉得"Windows 版坏了"。
     if (Test-RetryWithProxy $r) {
-        $port = $null
-        try { $port = Get-ActiveProxyPort -FullScan:$false } catch {}
-        if (-not $port) { try { $port = Get-ActiveProxyPort -FullScan:$true } catch {} }
+        $port = Get-UpdateRetryProxyPort
         if ($port) { return (Save-UpdateFileVia $Url $DestFile "$port" $Headers) }
     }
     return $r
@@ -795,10 +793,21 @@ function Get-UpdatePackage([hashtable]$Remote) {
         if ($dl -eq "ok") {
             Write-Styled 'title' "正在解压并校验..."
             try {
-                # -LiteralPath 而不是 -Path：-Path 会把路径当通配模式，
-                # 临时目录里带方括号（如 [1]）时直接报 PathNotFound（实测），
-                # 而那会被误归成"内容不对"，让人以为是发布包有问题。
-                Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force -ErrorAction Stop
+                # 用 .NET 的 ZipFile，不用 Expand-Archive。
+                #
+                # 两个理由，都不是风格问题：
+                #   ① Expand-Archive 是**模块里的命令**（Microsoft.PowerShell.Archive），
+                #      而本项目的红线上写着"不依赖 PowerShell 模块里的命令"——模块自动加载
+                #      会挑版本，PSModulePath 上排着别的版本时它静默缺失，症状是"解压永远失败、
+                #      每次都报内容不对"。同一份契约在别处都守住了（算 sha256 特意用 .NET
+                #      而不 Get-FileHash），这里不该例外。
+                #   ② ZipFile 走的是**路径参数**，天然不吃通配符，不会有 -Path 把
+                #      路径里的方括号当模式那件事（临时目录名带 [1] 时直接报 PathNotFound，
+                #      而我们又会把它归成"内容不对"，冤枉发布方）。
+                # 程序集与 Test-UsableZip 用的是同一个（System.IO.Compression.FileSystem），
+                # 那条路已经证明它在 5.1 上可用。
+                Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($zipFile, $extractDir)
             } catch {
                 $script:PackageFetchFailure = "bad-content"
                 Remove-ItemSafe $zipFile

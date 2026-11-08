@@ -94,6 +94,36 @@ Remove-Item -LiteralPath $leg -Recurse -Force
 Remove-Item -LiteralPath $spk -Recurse -Force
 Remove-Item -LiteralPath $stg -Recurse -Force
 
+Write-Host '[6c] leftover temp files are swept wherever the caller stands'
+# 上一次覆盖若在中途被杀，安装区里会留下写了一半的临时文件（*.envproxy-new* / *.tmp<数字>）。
+# 清扫的范围必须是**安装根**下那几个作用域目录，不能拿 "win"/"mac" 这类相对名去查：
+# Get-ChildItem 按**当前工作目录**解析相对路径，而更新既可以由 win\ 里的菜单触发，
+# 也可以被别的调用方换过工作目录——那时它查的是 win\win 这种不存在的路径，
+# 被 -ErrorAction SilentlyContinue 静静吞掉，残留永远清不掉而屏幕一切正常。
+$leg2 = New-TempDir 'envproxy_sweep_'
+$spk2 = New-TempDir 'envproxy_sweep_pkg_'
+$stg2 = New-TempDir 'envproxy_sweep_stage_'
+New-Item -Path (Join-Path $leg2 'win\lib'), (Join-Path $leg2 'win\monitor'), (Join-Path $spk2 'win\lib') -ItemType Directory -Force | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $leg2 'win\envproxy.ps1'), '# entry OLD', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $leg2 'win\lib\base.ps1'), '# lib OLD', $bomEnc)
+Write-TestFile (Join-Path $leg2 'VERSION') '1.0.0'
+Write-TestFile (Join-Path $spk2 'VERSION') '9.9.9'
+[System.IO.File]::WriteAllText((Join-Path $spk2 'win\envproxy.ps1'), '# entry NEW', $bomEnc)
+[System.IO.File]::WriteAllText((Join-Path $spk2 'win\lib\base.ps1'), '# lib NEW', $bomEnc)
+# 残留放在 monitor\ 里：那是**唯一**不参与"旧版本残留删除"的目录（运行时状态），
+# 所以它只能被清扫逻辑带走——放在别处会被正常的旧文件删除顺手删掉，测不出清扫这一段。
+Write-TestFile (Join-Path $leg2 'win\monitor\monitor.log.envproxy-new.abc123') 'half-written'
+Write-TestFile (Join-Path $leg2 'win\monitor\state.tmp4242') 'half-written'
+$savedCwd = (Get-Location).Path
+Push-Location (Join-Path $leg2 'win')
+try { Install-Package -SrcRoot $spk2 -ProjectRoot $leg2 -Stage $stg2 -ShipDirs @('win') } finally { Pop-Location }
+Assert-Eq 'cwd outside the root still sweeps leftovers' 0 `
+    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win\monitor') -File | Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -match '\.tmp\d+$' }).Count)
+Assert-Eq 'the sweep does not touch ordinary files' 0 `
+    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win\monitor') -File -ErrorAction SilentlyContinue).Count)
+foreach ($p in @($leg2, $spk2, $stg2)) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+Set-Location $savedCwd
+
 Write-Host '[7] the library set declared by the entry'
 # The entry is a thin loader: it owns the library list and nothing else. These assertions keep
 # that budget from eroding silently.

@@ -652,7 +652,7 @@ function Start-Monitor([bool]$Force = $false) {
     } catch {}
     if ($other) {
         $otherPath = ""
-        if ($other.CommandLine -match '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$') { $otherPath = $Matches[1] }
+        if ($other.CommandLine -match $MonitorCmdLineCapture) { $otherPath = $Matches[1] }
         $otherDir = if ($otherPath) { Split-Path -Parent (Split-Path -Parent $otherPath) } else { "" }
         Write-Styled 'warn' ("监控进程未能确认运行：另一个副本的监控正占着单实例锁（{0}）。" -f $(if ($otherDir) { $otherDir } else { $otherPath }))
         Write-Styled 'warn' "      还用那份就继续用它；不用了，进上面那个文件夹打开菜单选 一键恢复，再回到这里选 安装。"
@@ -680,7 +680,7 @@ function Stop-Monitor {
     # 引号可有可无：引号是启动方式决定的，不是身份的一部分（与 $MonitorCmdLinePattern 同一条道理）。
     # 要求带引号时，手工起的监控拿不到它自己的目录：停止标志写进了"我们"的 monitor 目录，
     # 优雅停止退化成强杀，还留下一个谁也不会消费的 stop.flag。
-    if ($w.CommandLine -match '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$') {
+    if ($w.CommandLine -match $MonitorCmdLineCapture) {
         $targetDir = Join-Path (Split-Path -Parent $Matches[1]) "monitor"
     }
     $targetFlag = Join-Path $targetDir "stop.flag"
@@ -736,7 +736,7 @@ function Stop-Monitor {
         Write-Styled 'warn' "监控进程未能停止（请检查是否有别的窗口正在运行它）。"
         # 定论由复读决定，不由"我发了停止信号"决定：进程还在就不能报"已停止"。
         # 返回值也必须跟着这个结论走——原来两支都只写屏幕、函数隐式返回 $null，
-        # 于是入口那句 `if (-not $stopOk) { exit 1 }` 永远不成立：屏幕说"未能停止"，
+        # 于是入口那句 `if (-not $monOk) { exit 1 }` 永远不成立：屏幕说"未能停止"，
         # 脚本里的 `envproxy.ps1 -Stop && 下一步` 却照常往下走。
         # 与 mac 侧 stop_monitor 的 return 1 / return 0 同一套。
         return 1

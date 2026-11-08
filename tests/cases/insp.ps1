@@ -18,7 +18,7 @@ $hk = @(
   @{ R='';                                         W='silent' }
 )
 foreach ($c in $hk) {
-    Assert-Eq ("handshake: " + $c.R) $c.W $c.W (Get-HandshakeKind $c.R)
+    Assert-Eq ("handshake: " + $c.R) $c.W (Get-HandshakeKind $c.R)
 }
 Assert-Eq 'inspector: the registry is non-empty' $true (@($DoctorInspectors).Count -gt 0)
 # 每个描述符必须有这五列。缺 Id 会让还原点分不清是谁的，缺 Detect 会让那一层静默消失。
@@ -107,12 +107,20 @@ try {
 }
 Assert-Eq 'rescue: an unfixable problem is reported before the all-clear' 'True' `
     ([bool]([regex]::IsMatch($rescueSrc2, '(?s)realButUnfixable.{0,400}没发现问题')))
+# Windows 这一侧的分区判据必须与 macOS 侧的 rescue_bucket 同形：不可修的真问题自成一档，
+# 既不算「挡住了网络」（那承诺按 y 能修好），也不算「没发现问题」。
+# 两侧各写一套内联条件时，改一侧漏另一侧不会有任何报错——这一条把它钉在结构化判据上。
+Assert-Eq 'rescue: an unfixable finding is counted separately from the fixable ones' 'True' `
+    ([bool]([regex]::IsMatch($rescueSrc2, '(?s)\$realButUnfixable\s*=\s*@\(\$hints\s*\|\s*Where-Object\s*\{\s*Test-FindingFixable')))
+Assert-Eq 'rescue: the unfixable branch prints a count, not a fixed phrase' 'True' `
+    ([bool]([regex]::IsMatch($rescueSrc2, '(?s)查完了：发现 \{0\} 处问题，但本工具不自动改')))
 Assert-Eq 'repairable: an unknown layer is not repairable' 'False' `
     ([string](Test-FindingRepairable (New-Finding -Id 'nope.thing' -Kind 'residue-blocking')))
 # 判据只有一处实现：不许再出现第二个名字指向同一件事。
-if (Get-Command Test-SysProxyFixable -ErrorAction SilentlyContinue) {
-    Assert-Eq 'fixable 判据只有 Test-FindingFixable 一个名字' 'absent' 'present'
-}
+# 判据写成"取不到这个命令"，不写成"取到了就断言失败"——后者在函数存在时
+# 报的是一句 want 'absent' have 'present'，读日志的人还得反推这句话的意思。
+Assert-Eq 'fixable 判据只有 Test-FindingFixable 一个名字' $true `
+    ($null -eq (Get-Command Test-SysProxyFixable -ErrorAction SilentlyContinue))
 
 Write-Host '[33] Terminal tool proxy configuration (cli-proxy)'
 # 这一节守的是「误伤率为零」：

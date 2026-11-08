@@ -19,7 +19,7 @@
 function Install-EnvProxy {
     Write-Styled 'title' "======== EnvProxy 安装 ========"
     # 四步里哪几步真的做成了，要一路记到函数末尾：入口靠这个值决定退出码，
-    # 脚本里写 `envproxy.ps1 -Install; if (Test-Succeeded) ...` 的人也靠它。
+    # 脚本里写 `envproxy.ps1 -Install; if ($LASTEXITCODE -eq 0) { ... }` 的人也靠它。
     # 原来这个函数没有返回值，于是"监控没起来""变量写不进去"这类明确的失败
     # 在退出码上是看不见的——用户只能靠肉眼读屏幕。与 mac 侧 _inst_ok 同一套语义。
     $instOk = 0
@@ -348,17 +348,31 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
         }
     }
     if ($keepShortcuts) {
-        # 只删明确属于运行时的那两个文件，跳过 launchers\。
-        # 不能对整个目录 -Recurse：那会把用户选择保留的启动脚本一起带走，
-        # 而任务栏上那些图标正指着它们——图标会全部失效。
-        Get-ChildItem -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ne 'launchers' } |
-            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-        # 目录只剩空壳时才删；还留着 launchers 就保留目录本身
+        # 逐个具名删，**不是**"删掉除 launchers\ 之外的一切"。
+        #
+        # 黑名单写法（`Where-Object { $_.Name -ne 'launchers' }`）看着等价，实际会连带删掉
+        # 同目录下的 shortcut-dirs.txt——那是"用户自选过的图标落点"的记录。
+        # 丢了它的后果是一整条静默失效链：图标还在桌面上，但扫描看不见它的落点，
+        # 它的启动脚本于是被当成孤儿；用户在管理页删掉那条"孤儿"，图标就变成双击报错。
+        # 而保留快捷方式时下面那条复检不把目录算脏，屏幕上从头到尾没人提过一个字。
+        #
+        # 白名单的判据：**这里列出的每一个，都是"没有它反而更好"的运行时产物**——
+        # launcher.ps1 是登录定位器（卸载就是要在它不再需要）、terminal.env 是给 Git Bash
+        # 钩子的镜像、relay.port 是中继端口记录。而 launchers\ 与 shortcut-dirs.txt 是
+        # **用户资产**（他选过的东西），留着才有意义。
+        # 新增运行时文件时记得加进这张表——漏了它只会在重装后被旧值误导，不会静默生效。
+        $runtimeFiles = @('launcher.ps1', 'terminal.env', 'relay.port')
+        foreach ($n in $runtimeFiles) {
+            $p = Join-Path $LauncherDir $n
+            if (Test-Item $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+        }
+        # 目录只剩空壳时才删；还留着 launchers\ 或落点记录就保留目录本身
         try {
             if (-not (Test-Item (Join-Path $LauncherDir 'launchers'))) {
-                if (-not (Get-ChildItem -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
-                    Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Item (Get-ShortcutExtraDirsFile))) {
+                    if (-not (Get-ChildItem -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+                        Remove-Item -LiteralPath $LauncherDir -Force -ErrorAction SilentlyContinue
+                    }
                 }
             }
         } catch {}
@@ -504,13 +518,12 @@ function Uninstall-EnvProxy([bool]$Purge = $false, [bool]$Yes = $false) {
     # 复检不能只靠一条通道：进程身份原来全走 WMI，而 WMI 被精简工具关掉时它返回空，
     # 于是"监控仍在"这一项永远进不了 $dirty，屏幕上打印"[完成] 已恢复到安装前的状态"，
     # 而实际上监控还活着、还会把自启动项重建回来。
-    # 所以补一条**不依赖任何进程查询**的事后判据：卸载已经把 Run 键删掉了，
-    # 如果几秒之内它又出现了，那只能是活着的监控自愈写回来的。
-    if (-not $dirty.Contains("监控进程仍在")) {
-        Start-Sleep -Seconds 3
-        $runAfter = (Get-ItemProperty $RunKeyPath -ErrorAction SilentlyContinue).$RunKeyName
-        if ($runAfter) { $dirty += "监控进程仍在（开机自启被它重建了）" }
-    }
+    #
+    # **补的不是"等几秒再看 Run 键"**：这个函数从头到尾持有 EnvProxyInstallOp，
+    # 而监控那边的自愈（Repair-AutoRun）拿同一把锁、拿不到就立刻让路，
+    # 且每 30 轮才跑一次（约 60–90 秒）。持锁期间的任何等待都不可能观察到它写回，
+    # 只会让每次卸载白等。真正的第二通道是下面这些**不依赖进程查询**的落盘判据：
+    # 自启动项、定位脚本、路径记录、运行时文件——它们各自已经是独立一条。
     if ($removeLog -and (Test-Item (Join-Path $MonitorDir "monitor.log"))) { $dirty += "历史日志未能删除" }
     if ($dirty.Count -eq 0) {
         Write-Styled 'ok' "[完成] 监控已停，开机自启、代理变量和定位用的小脚本都已删除。"

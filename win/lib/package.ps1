@@ -252,7 +252,6 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         } catch {}
     }
     try {
-        $removed = 0
         foreach ($d in $effShip) {
             $destDir = Join-Path $ProjectRoot $d
             if (-not (Test-Item $destDir)) { continue }
@@ -264,7 +263,6 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 if (-not $pkg.ContainsKey($rel.ToLower())) {
                     Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
                     Write-Styled 'dim' ("  已移除旧版本残留：{0}" -f $rel)
-                    $removed++
                 }
             }
             Get-ChildItem -LiteralPath $destDir -Recurse -Directory -Force -ErrorAction SilentlyContinue |
@@ -297,14 +295,21 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             Copy-FileAtomic (Join-Path $SrcRoot 'VERSION') (Join-Path $ProjectRoot 'VERSION')
         }
         # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
-        # 上一次覆盖若在中途被杀，安装区可能留下写了一半的临时文件；顺手清干净，不留垃圾。
         #
         # **只在本次覆盖写过的位置扫**：原来是整个 $ProjectRoot 递归扫 *.tmp[0-9]*，
         # 而用户在安装根里放一个叫 notes.tmp1.txt 的文件会被静默删掉——
         # 那与「安装根只覆盖同名文件、绝不删东西」这条边界直接冲突。
         # 两个命名分别来自 Copy-FileAtomic（*.envproxy-new*）与 Write-Text（*.tmp<数字>），
         # 它们只会出现在 $effShip 里。
-        Get-ChildItem -LiteralPath $effShip -Recurse -File -Force -ErrorAction SilentlyContinue |
+        #
+        # 路径必须拼成**绝对**再传：$effShip 里是 "win"/"mac" 这样的相对目录名，
+        # 而 Get-ChildItem 按**当前工作目录**解析相对路径。从 win\ 里跑更新、
+        # 或工作目录被别的调用方改过时，它去查的是 win\win 这种不存在的路径，
+        # 被 -ErrorAction SilentlyContinue 静静吞掉——残留文件永远清不掉，
+        # 而屏幕上一切正常。同一个作用域在备份、删除、回滚三处都是
+        # Join-Path $ProjectRoot 拼出来的，清理这一处不许例外。
+        $cleanRoots = @($effShip | ForEach-Object { Join-Path $ProjectRoot $_ } | Where-Object { Test-Item $_ })
+        Get-ChildItem -LiteralPath $cleanRoots -Recurse -File -Force -ErrorAction SilentlyContinue |
             Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -match '\.tmp\d+$' } |
             ForEach-Object { Remove-ItemSafe $_.FullName }
         # 覆盖全部成功：撤掉"更新进行中"标记。

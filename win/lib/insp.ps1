@@ -252,13 +252,10 @@ function Get-CliProxyRoot([string]$Root) {
         'appdata' {
             try { return [string]$env:APPDATA } catch { return '' }
         }
-        'support' {
-            $h = ''
-            try { $h = [string]$env:USERPROFILE } catch { $h = '' }
-            if (-not $h) { try { $h = [string]$env:HOME } catch { $h = '' } }
-            if (-not $h) { return '' }
-            return (Join-Path $h 'Library/Application Support')
-        }
+        # 'support'（mac 的 ~/Library/Application Support）在 Windows 侧不可达：
+        # 本侧 $CliProxyTargets 的 Files 只用 home:/appdata: 两种前缀。
+        # 这里不保留那个分支——留着会让后来的人以为"支持"是可用选项，
+        # 写进表里却永远解析成空路径，症状是那一行的检查静默跳过。
         default {
             $h = ''
             try { $h = [string]$env:USERPROFILE } catch { $h = '' }
@@ -500,7 +497,7 @@ function Read-CliProxyXml($Target, $Lines, $Result) {
     $inProxy = $false
     $blockStart = 0
     $hostName = ''; $port = 0; $active = 'true'; $proto = ''
-    $hostLine = 0; $portLine = 0
+    $portLine = 0
     $n = 0
     foreach ($line in $Lines) {
         $n++
@@ -512,7 +509,7 @@ function Read-CliProxyXml($Target, $Lines, $Result) {
             if ($t -match '<proxy[\s>]' -or $t -match '<proxy$') {
                 $inProxy = $true; $blockStart = $n
                 $hostName = ''; $port = 0; $active = 'true'; $proto = ''
-                $hostLine = 0; $portLine = 0
+                $portLine = 0
             } else {
                 # NuGet 的写法：<add key="http_proxy" value="http://127.0.0.1:7890" />
                 if ($t -match '<add\b' -and $t -match '(?i)key\s*=\s*"http_proxy"' -and $t -match '(?i)value\s*=\s*"([^"]*)"') {
@@ -532,7 +529,7 @@ function Read-CliProxyXml($Target, $Lines, $Result) {
                 continue
             }
         }
-        if ($t -match '<host>\s*([^<]*?)\s*</host>') { $hostName = $Matches[1]; $hostLine = $n }
+        if ($t -match '<host>\s*([^<]*?)\s*</host>') { $hostName = $Matches[1] }
         if ($t -match '<port>\s*(\d{1,5})\s*</port>') { $port = [int]$Matches[1]; $portLine = $n }
         if ($t -match '<active>\s*([^<]*?)\s*</active>') { $active = $Matches[1].ToLower() }
         if ($t -match '<protocol>\s*([^<]*?)\s*</protocol>') { $proto = $Matches[1].ToLower() }

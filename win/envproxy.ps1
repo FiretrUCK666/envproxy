@@ -175,7 +175,6 @@ function Get-OpLock {
             $m = New-Object System.Threading.Mutex($false, (Get-MutexName "EnvProxyInstallOp" -Local:$local))
             if (-not $m.WaitOne(0)) {
                 # 锁建出来了但被占着：这才是真的"另一个安装正在进行"。
-                $script:OpLockBusy = $true
                 return $null
             }
             if ($local) { Write-MonitorLog "操作锁降级到 Local 命名空间（Global 不可用）。" }
@@ -187,7 +186,6 @@ function Get-OpLock {
     return $null
 }
 function Exit-IfOpBusy {
-    $script:OpLockBusy = $false
     $script:OpLockUnavailable = $false
     $m = Get-OpLock
     if (-not $m) {

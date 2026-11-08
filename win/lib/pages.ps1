@@ -188,7 +188,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     if ($relayIconCount -gt 0) {
         $rs = $null
         try { $rs = Get-RelayStatus } catch {}
-        & $line '' '' 'text'
+        & $line '' 'text'
         if ($rs -and $rs.Running) {
             & $row $StatusLabels.Advanced ("{0} 个图标，固定入口 http://127.0.0.1:{1} 正常" -f $relayIconCount, $rs.Port) 'ok'
         } else {
@@ -199,7 +199,7 @@ function Format-StatusLines($st, [switch]$NoLog) {
     # 文案从 Get-VersionText 取——与静态页**同一份判断**。
     # 这里原来自己写了一小套（只认"相等=最新 / 否则=新版可用"），
     # 于是静态页说"开发副本"、实时帧说"已是最新"，同一台机器两句话。
-    & $line '' '' 'text'
+    & $line '' 'text'
     $vt = Get-VersionText $st
     & $row $StatusLabels.Version $vt.Text $vt.Role
 

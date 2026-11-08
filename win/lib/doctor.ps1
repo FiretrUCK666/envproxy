@@ -92,9 +92,11 @@ function New-Finding {
 }
 
 # WinINET 的连接标志位。值与 Windows SDK 一致，改动会导致写进去的开关错位。
+# 只列我们真正要看的两层：手动代理与自动配置脚本。
+# 自动检测（WPAD，0x08）不单列——修复走"逐位改、只碰出问题的那一位"，
+# 它天然被保留在 $Flags 里，不需要单独解析出一个从没人读的字段。
 $ProxyTypeProxy        = 0x02
 $ProxyTypeAutoProxyUrl = 0x04
-$ProxyTypeAutoDetect   = 0x08
 
 # 判据里「哪个结论允许被修」只有一处：**只有 residue 两类**。
 # 界面要判断「这项能不能修」时调这个，不许自己写 -eq 比较——
@@ -158,7 +160,6 @@ function ConvertFrom-ProxyConnectionBlob {
         Flags       = 0
         ManualProxy = $false
         AutoConfig  = $false
-        AutoDetect  = $false
         ProxyServer = ''
         AutoConfigUrl = ''
     }
@@ -169,7 +170,6 @@ function ConvertFrom-ProxyConnectionBlob {
     $r.Flags       = $flags
     $r.ManualProxy = (($flags -band $ProxyTypeProxy) -ne 0)
     $r.AutoConfig  = (($flags -band $ProxyTypeAutoProxyUrl) -ne 0)
-    $r.AutoDetect  = (($flags -band $ProxyTypeAutoDetect) -ne 0)
     # 三个字符串依次是：代理地址、例外列表、自动配置脚本地址。
     # 每个都是「4 字节长度（小端）+ 那么多字节的 ASCII」。
     # 越界一律停下、保留已解析的部分：读坏的数据不该抛异常到界面上，
@@ -697,10 +697,9 @@ function Get-SysProxyAdvice([string]$Kind, [int]$Port) {
         default            { return '' }
     }
 }
-# 读 WinHTTP 的代理设置。返回 $null = 没设或读不出来。
-#
 # 用 netsh 而不是直接读注册表：注册表里那份是二进制（WinHttpSettings），
 # 解析它等于再写一遍微软的内部格式。netsh 是系统自带、输出稳定、且是官方入口。
+#
 # 读 WinHTTP 那一层。**返回三态，不许把「读不出来」和「没设」混成一个 $null**：
 #   @{ State='set';     Server='host:port' }  确实设了代理
 #   @{ State='none' }                          确实没设（Direct access）

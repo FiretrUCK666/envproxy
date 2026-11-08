@@ -169,7 +169,10 @@ foreach ($L in $lay) {
 # 空数组经管道会被展平成 $null，所以判据用 @() 包一层再数个数：
 # 这一步只要"能调用、能返回、不抛"就算过，条数由真机决定。
 $otherConnsProbe = @(Get-OtherConnectionProxyNames)
-Assert-Eq 'other connections: detector runs and yields a countable list' $true ($otherConnsProbe.Count -ge 0)
+# `-ge 0` 对空数组和 $null 都成立，那样的断言只证明"没抛"。
+# 这里要的是"真的可数"：结果必须是数组（不是 $null、不是被展平的单个对象）。
+Assert-Eq 'other connections: the detector yields a countable list' $true ($otherConnsProbe -is [array])
+Assert-Eq 'other connections: the detector does not throw' $true ($null -ne $otherConnsProbe)
 Write-Host '[30] Evidence text and the node-problem branch'
 # 这一节守的是"端口活着但连不上外面"这一档：说错方向会让用户去动系统代理，
 # 而删掉代理设置并不恢复网络（程序还在跑、还占着端口），只会把他能用的路径删掉。

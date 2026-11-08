@@ -501,6 +501,11 @@ $StopFlag   = Join-Path $MonitorDir "stop.flag"
 # 单实例锁又把第二份挡掉 → 于是再也起不来监控，状态页还报"未运行"。判身份要看实质。
 # DIVERGE(Mac): macOS 侧等价实现是 `pgrep -f "envproxy\.sh$"`（见 mac/locator.sh），语义相同。
 $MonitorCmdLinePattern = '-File\s+"?[^"]*envproxy\.ps1"?\s*$'
+# 同一判据的**捕获版本**：语义完全相同，只多一个捕获组——停下来时要按它
+# 推算"那个进程自己的 monitor 目录在哪"，跨位置停止信号才写得对。
+# 它是上面那条的子集（去掉括号就应当逐字相同），由自检钉住这一点；
+# 换成运行时拼正则的话，读代码的人反而看不出这条判据到底长什么样。
+$MonitorCmdLineCapture = '-File\s+"?([^"]*?envproxy\.ps1)"?\s*$'
 
 # 判据一：监控自己写下的 pid 文件（它在抢到单实例互斥之后才写）。
 # 这是"监控真的在跑"的唯一可靠判据——命令行特征只能说明"有这么个进程"，
@@ -975,12 +980,10 @@ function Remove-OneShellProfile([string]$path) {
     # Mac 侧那边是一次摘干净的（awk 反复开关），这里对齐它。
     $keep = New-Object System.Collections.ArrayList
     $skipping = $false
-    $removed = 0
     for ($i = 0; $i -lt $existing.Count; $i++) {
         $line = $existing[$i]
         if (-not $skipping -and $line.Trim() -ceq $ProfileBlockStart.Trim()) {
             $skipping = $true
-            $removed++
             continue
         }
         if ($skipping) {
