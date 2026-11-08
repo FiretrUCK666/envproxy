@@ -90,6 +90,7 @@ Double-click `打开菜单.cmd` (Mac: `打开菜单.command`). It only passes th
 The numbers run top to bottom and are grouped by how often you need them, so there is nothing to memorise.
 
 **Pressing Enter directly means show status**, the item you look at most. The menu header shows whether the monitor is running and the current version, so you do not need to go in.
+
 <img src="./assets/readme/buttons.en.svg" width="100%" alt="What each menu item affects">
 
 ### Logs
