@@ -153,7 +153,10 @@ $entryCases = @(
     @{ Name = 'purge-misuse';         Args = @('-Install', '-Purge'); Want = 2 },
     @{ Name = 'switch-without-command'; Args = @('-Yes');            Want = 2 },
     @{ Name = 'unknown-switch';       Args = @('-Status', '-Foo');   Want = 2 },
-    @{ Name = 'two-commands';         Args = @('-Install', '-Uninstall'); Want = 2 }
+    @{ Name = 'two-commands';         Args = @('-Install', '-Uninstall'); Want = 2 },
+    # -Json 只描述"怎么输出"：跟着 -Status 才有意义，跟别的命令一律是用法错误。
+    # 与 mac 侧 `install --json` 同一套判据（门禁 10 拿这一行退出码互比）。
+    @{ Name = 'json-misuse';          Args = @('-Install', '-Json'); Want = 2 }
 )
 foreach ($c in $entryCases) {
     $rc = Invoke-EntryChild $c.Args
@@ -190,6 +193,8 @@ Assert-Eq '用法判定：-Yes 配 update 放行' '假' (Usage-Rejected (Get-Usa
 Assert-Eq '用法判定：-Yes 配 uninstall 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('yes')))
 Assert-Eq '用法判定：-Yes 配 uninstall 且带 -Purge 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('yes','purge')))
 Assert-Eq '用法判定：-Purge 配 uninstall 放行' '假' (Usage-Rejected (Get-UsageError -Command 'uninstall' -CommandCount 1 -Switches @('purge')))
+Assert-Eq '用法判定：-Json 配 status 放行' '假' (Usage-Rejected (Get-UsageError -Command 'status' -CommandCount 1 -Switches @('json')))
+Assert-Eq '用法判定：-Json 跟着别的命令要拒' '真' (Usage-Rejected (Get-UsageError -Command 'install' -CommandCount 1 -Switches @('json')))
 
 # ------------------------------------------------------------------------------
 # [7c] 端口枚举失败 = 这一轮不知道，不是"没有端口"

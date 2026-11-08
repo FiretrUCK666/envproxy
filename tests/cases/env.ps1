@@ -1,6 +1,14 @@
 ﻿Write-Host '[1] pure functions'
-Assert-Eq 'merge keeps user entries' 'localhost,127.0.0.1,::1,example.com' (Merge-NoProxy 'localhost,example.com,::1' $DefaultNoProxy)
-Assert-Eq 'merge empty' 'localhost,127.0.0.1,::1' (Merge-NoProxy '' $DefaultNoProxy)
+Assert-Eq 'merge keeps user entries' ($DefaultNoProxy + ',example.com') (Merge-NoProxy 'localhost,example.com,::1' $DefaultNoProxy)
+Assert-Eq 'merge empty' $DefaultNoProxy (Merge-NoProxy '' $DefaultNoProxy)
+# 默认集本身的性质：裸写 ::1、不含方括号、没有 CIDR、含内网专用后缀与云元数据地址。
+# 这几条是行为契约（不是格式偏好）：方括号会让 httpx 每次请求抛 InvalidURL；
+# CIDR 在各工具里表现不一，写了等于没写。
+Assert-Eq 'default no_proxy: bare ::1' $true ([bool]((Get-NormalizedNoProxyEntries $DefaultNoProxy) -contains '::1'))
+Assert-Eq 'default no_proxy: no brackets' $false ($DefaultNoProxy -match '\[')
+Assert-Eq 'default no_proxy: no CIDR' $false ($DefaultNoProxy -match '/')
+Assert-Eq 'default no_proxy: intranet suffixes' $true ([bool]((Get-NormalizedNoProxyEntries $DefaultNoProxy) -contains '.local'))
+Assert-Eq 'default no_proxy: metadata ip' $true ([bool]((Get-NormalizedNoProxyEntries $DefaultNoProxy) -contains '169.254.169.254'))
 Assert-Eq 'normalize' 'localhost|foo' ((Get-NormalizedNoProxyEntries ' Localhost , FOO ') -join '|')
 Assert-Eq 'versions 1.0.10 > 1.0.9' '1' (Compare-Versions '1.0.10' '1.0.9')
 Assert-Eq 'versions 1.0 == 1.0.0' '0' (Compare-Versions '1.0' '1.0.0')

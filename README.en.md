@@ -21,7 +21,7 @@ EnvProxy maintains those settings for you. While the proxy app is running it wri
 
 - [1. Install (3 steps, 5 minutes)](#1-install-3-steps-5-minutes)
 - [2. Open the menu](#2-open-the-menu)
-- [3. The eight help entries, one section each](#3-the-eight-help-entries-one-section-each)
+- [3. The nine help entries, one section each](#3-the-nine-help-entries-one-section-each)
 - [4. What is inside Advanced (three modules)](#4-what-is-inside-advanced-three-modules)
 - [5. Something is wrong: check in this order](#5-something-is-wrong-check-in-this-order)
 - [6. How it decides whether you are behind a proxy](#6-how-it-decides-whether-you-are-behind-a-proxy)
@@ -98,15 +98,15 @@ The numbers run top to bottom and are grouped by how often you need them, so the
 
 Uninstalling asks whether to keep it. Keep it and this is the only file left; everything else is removed.
 
-## 3. The eight help entries, one section each
+## 3. The nine help entries, one section each
 
-Menu `4` opens Help: eight numbered entries, one entry answers one question, and the bottom line lists every number.
+Menu `4` opens Help: nine numbered entries, one entry answers one question, and the bottom line lists every number.
 
 This chapter expands each one. The help screen gives you an answer you can use on the spot; this chapter gives you every command and every exception.
 
 Each subsection stands on its own; there is no need to read them in order.
 
-Below are the eight help entries, worded as they appear on that screen, with the matching section on the right:
+Below are the nine help entries, worded as they appear on that screen, with the matching section on the right:
 
 | No. | One entry answers one question | In detail |
 |---|---|---|
@@ -118,6 +118,7 @@ Below are the eight help entries, worded as they appear on that screen, with the
 | 6 | Never send one program through it | [3.6](#36-never-send-one-program-through-it) |
 | 7 | Something is wrong: check and report | [3.7](#37-something-is-wrong-check-and-report) |
 | 8 | No internet after closing the app | [3.8](#38-no-internet-after-closing-the-app) |
+| 9 | A tool's own proxy settings | [3.9](#39-a-tools-own-proxy-settings) |
 
 ### 3.1 What is this for
 
@@ -432,6 +433,7 @@ Menu `7 Uninstall`. It asks whether to keep the logs.
 | Open the menu | `-Menu` | `menu` |
 | Self-test (diagnostics) | — | `self-test` |
 | Strip a broken marker from the profile | `-RepairProfile` | `repair-profile` |
+| Status as one JSON line (for scripts) | `-Status -Json` | `status --json` |
 
 Change into the program folder (`win` or `mac`) first; skipping that gives "file not found".
 
@@ -448,6 +450,8 @@ bash envproxy.sh status
 **Write parameters in full; abbreviations are rejected.** `-Instal` with a letter missing is refused — deliberately, because a typo would otherwise perform a real install.
 
 `-Yes` (Mac: `--yes`) goes with check-for-updates and uninstall and means do not ask. For uninstall it is also the **only** way to remove the tool where no question can be asked (scripts, remote sessions).
+
+`-Json` (Mac: `--json`) goes only with show status: one machine-readable JSON line for scripts, status bars and scripted rollouts. The fields are fixed (`schema` / `state` / `port` / `proxy` / `monitor` / `issues` and so on) and all ASCII; `state` has three values, and `unknown` means "this round could not read the port", not "there is no proxy".
 
 </details>
 
@@ -492,6 +496,58 @@ Open that screen again and press `r` to undo the most recent repair.
 It reads settings, not whether the network works. An unplugged cable, an unjoined Wi-Fi or a dead router will also report "nothing wrong".
 
 The full description is in [4.2](#42-network-and-proxy-repair).
+
+</details>
+
+### 3.9 A tool's own proxy settings
+
+<details>
+<summary>Which tools read the variables, which need their own config, and why git@github.com fails</summary>
+
+**Most tools need nothing.**
+
+`git`, `npm`, `curl`, `pip`, `cargo`, `wget`, `Bun`, `Go` and `Deno` read the environment variables only. Once this tool sets them, those tools follow; you do not edit any config file.
+
+**A few read only their own settings.**
+
+They ignore the variables and read their own config, so setting the variables changes nothing:
+
+| Tool | Where to set it | What this tool does |
+|---|---|---|
+| Maven | `<proxies>` in `settings.xml` | Finds it; rewrites the `<port>` line only |
+| Gradle | `gradle.properties` `systemProp...` lines | Finds it; repoints the port |
+| Docker Desktop | its own settings (it ignores the proxy in `daemon.json`) | Mentions it, never touches it |
+| SSH | `ProxyCommand` in `~/.ssh/config` | Finds it; repoints or deletes that line |
+
+**Why these files cause the worst failures.**
+
+A port written into them **outranks** the environment variables. Once an old port from a program that is no longer running sits there, that tool can never connect — and the error message does not mention EnvProxy, so you go looking at the network.
+
+Menu `5 Advanced` → `2 Network and proxy repair` reads all of these files and points out the line that names a local port nothing is listening on:
+
+- `git`, `npm`, `curl`, `pip`, `cargo`, `wget` and Yarn read the variables themselves → it **deletes that line**, so the tool falls back to the variables.
+- Gradle and SSH → if a proxy is running it **repoints the port**; otherwise it deletes the line.
+- Conda, Maven and NuGet → their format cannot lose half an entry, so it **rewrites the port only**; with no proxy running it reports and leaves them alone.
+
+Every edit records an undo point first; `r` on that screen restores the most recent one.
+
+**Why `git@github.com:xxx/yyy.git` cannot connect.**
+
+That is SSH. OpenSSH never reads `HTTP_PROXY` / `HTTPS_PROXY`; it reads only its own config. Two ways out.
+
+First, have git rewrite it to the equivalent https address:
+
+```
+git config --global url.https://github.com/.insteadOf git@github.com:
+```
+
+After that, `git clone git@github.com:...` goes through the proxy from the variables. To undo:
+
+```
+git config --global --unset url.https://github.com/.insteadOf
+```
+
+Second, add a `ProxyCommand` line for that host in `~/.ssh/config`, pointing at the local proxy port. On Windows, point it at the fixed entry `127.0.0.1:17099` (menu `5` → `4 View the relay` shows whether it is up; [4.3](#43-places-this-tool-cannot-reach) has ready-made settings). On macOS there is no fixed entry, so use the current port (the `2` screen shows it).
 
 </details>
 
@@ -556,7 +612,7 @@ Windows builds an ordinary shortcut, macOS builds a small standalone app wrapper
 ### 4.2 Network and proxy repair
 
 <details>
-<summary>Repair three leftovers: the system proxy, terminal config files, and DNS; plus where it stops working</summary>
+<summary>Repair four leftovers: the system proxy, terminal config files, DNS, and SOCKS-only ports</summary>
 
 **Where the problem comes from.**
 
@@ -564,12 +620,13 @@ A proxy app removes its system proxy setting when it closes normally. But when i
 
 The system still says "send browser traffic to `127.0.0.1:7078`", but nothing is listening there any more. Every time the browser goes online it knocks on a door that no longer exists, so **even domestic sites fail**.
 
-**The same fault shows up in two more places**, and either one can keep you offline:
+**The same fault shows up in three more places**, and any of them can keep you offline:
 
 - **Config files of terminal tools.** Plenty of people have run `git config --global http.proxy …` from an online tutorial, or written an address into `~/.npmrc`. Those settings **outrank environment variables** — this tool can manage the variables perfectly and still lose. The symptom: the browser is fine and only `git clone` or `npm install` keeps failing.
-- **Name resolution (DNS).** Some proxy apps change the system DNS addresses and never change them back on exit.
+- **Name resolution (DNS).** Some proxy apps change the system DNS addresses and never change them back on exit. Both Windows and macOS are checked.
+- **SOCKS-only ports.** Some clients open a SOCKS port and nothing else; this tool, like most terminal tools, speaks HTTP proxy, so it cannot use that port. The screen names it and tells you how to turn on the HTTP or mixed port in the client.
 
-This screen looks at all three and lists the conclusions in the order network, browser, terminal tools.
+This screen looks at all four and lists the conclusions in the order network, browser, terminal tools.
 
 **What it looks like when this is the problem.**
 
@@ -594,7 +651,7 @@ It saves the original first, so you can put it back (press `r` on that screen; i
 
 Changing it back automatically would require knowing which DNS your router will hand out once you switch to automatic — and that answer does not exist before the change. Guessing wrong swaps a working address for a broken one, which is worse than the original fault. So this item explains what it found and leaves the one click in system settings to you.
 
-**It also points out one thing you would never find yourself.**
+**On Windows it also points out one thing you would never find yourself.**
 
 If you set DNS for "all networks" and also for one particular Wi-Fi, the system only uses one of them and the other silently does nothing. Nothing on screen tells you that; this screen does.
 
@@ -602,7 +659,7 @@ If you set DNS for "all networks" and also for one particular Wi-Fi, the system 
 
 This matters more than everything above, because it tells you where to look next.
 
-It looks at three places only: the proxy setting the browser uses, terminal tool config files, and the name-resolution addresses. If it says nothing is wrong, that does not mean your network is fine — only that these three are clean.
+It looks at four places only: the proxy setting the browser uses, terminal tool config files (including Maven, Gradle, NuGet, Conda and SSH), the name-resolution addresses, and whether this machine has a SOCKS-only port. If it says nothing is wrong, that does not mean your network is fine — only that these four are clean.
 
 If the network still fails, the cause may be elsewhere: a virtual adapter (TUN), the routing table, firewall rules, or an adapter that never got an address. It cannot see any of those, and will not touch them.
 
@@ -613,11 +670,11 @@ If the network still fails, the cause may be elsewhere: a virtual adapter (TUN),
 ### 4.3 Places this tool cannot reach
 
 <details>
-<summary>How to set up WSL and Docker networking (explained only, nothing is changed)</summary>
+<summary>WSL, Docker, and tools that only read their own config (explained only, nothing is changed)</summary>
 
 **This item only explains; it changes nothing of yours.**
 
-It covers WSL and Docker — two places with their own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
+It covers WSL, Docker, and the few tools that only read their own config file — each with its own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
 
 **The short version:** your computer has three separate rooms.
 
@@ -637,6 +694,7 @@ Each room **manages its own network settings**. The note you stick on your own d
 | Browsers / desktop apps | Your proxy app (they only read the system-wide notice board) |
 | Things inside WSL | WSL's own settings |
 | Things inside Docker | Docker's own settings |
+| Maven / Gradle / SSH | Their own config files (last part of this section) |
 
 **To make WSL use the proxy.**
 
@@ -648,7 +706,22 @@ Slow image pulls need Docker Desktop's own settings (Settings → Resources → 
 
 **Where to copy the exact commands.**
 
-On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **This item is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac, it simply has no dedicated page there.
+On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **The WSL page is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac, it simply has no dedicated page there.
+
+**Programs that only accept a fixed address: Maven, Gradle, Docker, SSH.**
+
+These four ignore the environment variables and only use the address written in their own settings. The Windows version opens a **fixed entry** (`127.0.0.1:17099`) on this machine: the address never changes, and it follows the proxy app in the background, so you write it once and never touch these files again. Menu `5` → `4 View the relay` says whether it is running.
+
+Menu `5` → `8 Programs that only accept a fixed address` holds the four settings to copy:
+
+| Program | What to fill in |
+|---|---|
+| Maven | `127.0.0.1:17099` inside `<proxy>` in `~/.m2/settings.xml` |
+| Gradle | `systemProp...Port=17099` in `~/.gradle/gradle.properties` |
+| Docker Desktop | Settings → Resources → Proxies |
+| SSH | `ProxyCommand ... 127.0.0.1:17099` in `~/.ssh/config` |
+
+The macOS version has no such layer (see [13.1](#131-difference-from-the-windows-version)): you fill in the current port, and change it once when the proxy port moves. You do not have to hunt for it — `4.2 Network and proxy repair` points at the line with the stale port and repoints it for you.
 
 </details>
 
@@ -666,6 +739,7 @@ On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **Th
 | Variables linger after disconnect | "Disconnect" leaves the core running | Expected. Quit the app |
 | Sync "installed but cannot run" | Execution policy blocks the profile | See the section below |
 | Only `git` / `npm` fail | A proxy is hard-coded in their config | Menu 5 → network and proxy repair |
+| Only Maven / Gradle / SSH fail | They read only their own config | Menu 5 → network and proxy repair (3.9) |
 | All of the above tried | — | Pick 2, screenshot, then pick 1 |
 
 **If "Terminal sync" says "installed but cannot run"**
@@ -721,7 +795,7 @@ Removing your variables by mistake costs more than waiting a little. After a con
 | `HTTP_PROXY` | `http://127.0.0.1:port` | Proxy for http:// requests |
 | `HTTPS_PROXY` | `http://127.0.0.1:port` | Proxy for https:// requests |
 | `ALL_PROXY` | `http://127.0.0.1:port` | Fallback for protocols the others do not cover |
-| `NO_PROXY` | `localhost,127.0.0.1,::1` | Local addresses bypass the proxy |
+| `NO_PROXY` | `localhost,127.0.0.1,::1,…` | Local and intranet addresses bypass it |
 | `NODE_USE_ENV_PROXY` | `1` | Makes newer Node tools read the proxy from the environment |
 
 Windows gets 5, macOS gets 9 (the same 5, plus a lowercase spelling of the 3 address entries and of the exception list `NO_PROXY`; `NODE_USE_ENV_PROXY` is a switch, so it has no lowercase form). Windows variable names are case-insensitive, so a lowercase entry only overwrites the same one; macOS treats each case separately and some tools read only lowercase.
@@ -732,6 +806,7 @@ Windows gets 5, macOS gets 9 (the same 5, plus a lowercase spelling of the 3 add
 - Proxy values always use `http://`, never `socks5://`. The local proxy port answers both protocols, some tools accept only `http://`, and unifying gives the widest compatibility with no loss of function. Tools such as `dsh` warn and skip when they see a SOCKS value.
 - Why Windows gets only one spelling: the two spellings are the same variable there, and a duplicate makes .NET hosts fail while building their table with `An item with the same key has already been added`, affecting everything running in that terminal window.
 - IPv6 addresses inside `NO_PROXY` must be written as bare `::1`. Written as `[::1]`, httpx treats it as an ordinary domain, builds an invalid pattern, and every request afterwards fails with `InvalidURL`. Brackets are URL literal syntax, in the wrong position here.
+- The full value is `localhost,127.0.0.1,::1,.local,.lan,.internal,169.254.169.254`. The first three are local addresses, the middle three are intranet-only suffixes (never public domain names), and the last is the cloud metadata address: those three suffixes are never public domain names, and sending them into a tunnel is always wrong. **No CIDR ranges**: curl, Python and Node each parse `NO_PROXY` differently, so a range is usually ignored and only makes you think the intranet is covered. Add your own corporate suffix by hand, for example `.corp.example.com`.
 - Your own `NO_PROXY` entries are never removed, only added to. Uninstalling reclaims only what this tool wrote.
 - If another program corrupts the variables (overwrites, clears, or drops an entry), nothing needs doing: the monitor re-checks the whole table every 30 rounds and writes back only what is missing.
 - The tools below do not read those 5 variables and need separate configuration. This is not a defect in this tool:
@@ -742,6 +817,9 @@ Windows gets 5, macOS gets 9 (the same 5, plus a lowercase spelling of the 3 add
 | Gradle | `systemProp.http(s).proxyHost/Port` in `gradle.properties` |
 | JDK native HttpClient | JVM system properties (or `java.net.useSystemProxies` to use the system proxy) |
 | Docker Desktop `docker pull` | Docker Desktop's own settings; it ignores the proxy in `daemon.json` |
+| SSH (`git@github.com` addresses) | `ProxyCommand` in `~/.ssh/config` |
+
+Conversely, these tools read **only** the environment variables — set them and you never edit those tools' own config: `git`, `npm` / `pnpm` / Yarn / `Bun`, `curl`, `wget`, `pip` / `uv` / Poetry / Conda, `cargo` / `rustup`, `Go`, `Deno`, `dotnet`, Homebrew, Composer.
 
 - `NODE_USE_ENV_PROXY` only affects newer Node: `node:http(s)` needs 22.21 / 24.5 or later, and `fetch()` needs 22.21 / 24.0 or later. Older versions ignore it, which is expected.
 
@@ -937,14 +1015,16 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
-**`5 Advanced` has 4 items on Mac and 7 on Windows.** The first 3 share the same name on both (make a proxied
+**`5 Advanced` has 5 items on Mac and 8 on Windows.** The first 3 share the same name on both (make a proxied
 icon, make a direct icon, manage what you made). **From item 4 onward the meanings diverge** — Windows item 4 is
 "view relay" (read only, changes nothing) while Mac item 4 is "network and proxy repair" (it changes system settings).
 So do not match items across platforms by number; match by name.
 
 Mac lacks these 3: **view relay** (Windows uses a fixed entry to survive a changing proxy port; Mac solves that
 differently, see section 4), **WSL behind a proxy**, and **Docker behind a proxy** (the last two are about Windows
-things that do not exist on a Mac).
+things that do not exist on a Mac). Both sides do have the last item, **programs that only accept a fixed address**:
+that page explains how to fill in Maven, Gradle, Docker and SSH and changes nothing; Windows uses the fixed entry
+17099 there, Mac uses the current port.
 
 </details>
 

@@ -134,9 +134,10 @@ $cliCases = @(
 foreach ($c in $cliCases) {
     Assert-Eq ('cli-proxy: ' + $c[0]) $c[4] (Get-CliProxyVerdict -Value $c[1] -Alive $c[2] -HasInclude ([bool]$c[3]))
 }
-# 行解析：三种文件写法都要认，注释必须不认。
-Assert-Eq 'cli-proxy: ini style key/value' 'proxy|http://127.0.0.1:7890' `
-    ((ConvertFrom-CliConfigLine 'proxy = http://127.0.0.1:7890').Key + '|' + (ConvertFrom-CliConfigLine 'proxy = http://127.0.0.1:7890').Value)
+
+# 行解析：三种写法都要认（= / : / 空格），注释必须不认，行尾注释必须剥掉。
+$p1 = ConvertFrom-CliConfigLine 'proxy = http://127.0.0.1:7890'
+Assert-Eq 'cli-proxy: ini style key/value' 'proxy|http://127.0.0.1:7890' ($p1.Key + '|' + $p1.Value)
 Assert-Eq 'cli-proxy: double quotes are stripped' 'http://127.0.0.1:7890' (ConvertFrom-CliConfigLine 'proxy = "http://127.0.0.1:7890"').Value
 Assert-Eq 'cli-proxy: single quotes are stripped' 'http://127.0.0.1:7890' (ConvertFrom-CliConfigLine "proxy='http://127.0.0.1:7890'").Value
 Assert-Eq 'cli-proxy: trailing spaces are trimmed' 'http://127.0.0.1:7890' (ConvertFrom-CliConfigLine 'proxy = http://127.0.0.1:7890   ').Value
@@ -147,9 +148,23 @@ Assert-Eq 'cli-proxy: semicolon comment is not a setting' '' ([string](ConvertFr
 Assert-Eq 'cli-proxy: a section header is not a setting' '' ([string](ConvertFrom-CliConfigLine '[http]'))
 Assert-Eq 'cli-proxy: a dotted key keeps its full name' 'http.proxy|v' `
     ((ConvertFrom-CliConfigLine 'http.proxy = v').Key + '|' + (ConvertFrom-CliConfigLine 'http.proxy = v').Value)
-# 读文件的真实路径：段名要拼进键名，include 要能被认出来。
-# **落点用 Path 指到临时目录**：这跑的是真的 Read-CliProxyFile，但一个字节都不碰使用者家目录。
+# 行尾注释必须剥掉。`proxy = 127.0.0.1:7890 # clash` 是最常见的写法之一；
+# 不剥的话地址解析失败、判成「值认不出来」，那个死端口永远查不出来（静默漏检）。
+Assert-Eq 'cli-proxy: inline hash comment is stripped' '127.0.0.1:7890' (ConvertFrom-CliConfigLine 'proxy = 127.0.0.1:7890 # clash').Value
+Assert-Eq 'cli-proxy: inline semicolon comment is stripped' '127.0.0.1:7890' (ConvertFrom-CliConfigLine 'proxy = 127.0.0.1:7890 ; old').Value
+Assert-Eq 'cli-proxy: quoted value plus comment' '127.0.0.1:7890' (ConvertFrom-CliConfigLine 'proxy = "127.0.0.1:7890" # 旧代理').Value
+# 另外两种写法：YAML 的 `键: 值`、yarnrc 的 `键 "值"`。
+Assert-Eq 'cli-proxy: yaml colon form' 'httpProxy|http://127.0.0.1:7890' `
+    ((ConvertFrom-CliConfigLine 'httpProxy: "http://127.0.0.1:7890"' 'colon').Key + '|' + (ConvertFrom-CliConfigLine 'httpProxy: "http://127.0.0.1:7890"' 'colon').Value)
+Assert-Eq 'cli-proxy: yarnrc space form' 'proxy|http://127.0.0.1:7890' `
+    ((ConvertFrom-CliConfigLine 'proxy "http://127.0.0.1:7890"' 'space').Key + '|' + (ConvertFrom-CliConfigLine 'proxy "http://127.0.0.1:7890"' 'space').Value)
+Assert-Eq 'cli-proxy: a dotted key is not truncated' 'systemProp.http.proxyHost' (ConvertFrom-CliConfigLine 'systemProp.http.proxyHost=127.0.0.1').Key
+
+# 读文件的真实路径。**落点用 Path 指到临时目录**：这跑的是真的 Read-CliProxyFile，
+# 但一个字节都不碰使用者家目录。
 $cfgDir = New-TempDir 'envproxy_cli_'
+
+# --- INI（.gitconfig）：段名拼进键名、include 要能被认出来 ---
 $gitCfg = Join-Path $cfgDir 'gitconfig'
 Write-TestFile $gitCfg @"
 [user]
@@ -161,26 +176,171 @@ Write-TestFile $gitCfg @"
 [include]
     path = ../other.gitconfig
 "@
-$gitTarget = @{ Id = 'git'; Name = 'Git'; FileName = 'gitconfig'; Scope = 'home'; Path = $gitCfg; Keys = @('http.proxy', 'https.proxy') }
-$gitRead = Read-CliProxyFile $gitTarget
+$gitTarget = @{ Id = 'git'; Name = 'Git'; Format = 'kv'; Section = ''; Keys = @('http.proxy', 'https.proxy'); Pair = @{}; Fix = 'drop'; Files = @('home:.gitconfig'); Path = $gitCfg }
+$gitRead = Read-CliProxyFile $gitTarget $gitCfg
 Assert-Eq 'cli-proxy: ini reader finds both proxy keys' 2 (@($gitRead.Entries).Count)
 Assert-Eq 'cli-proxy: ini reader reports include' 'True' $gitRead.HasInclude
 Assert-Eq 'cli-proxy: ini keys carry their section' 'http.proxy' ([string](@($gitRead.Entries)[0]).Key)
 Assert-Eq 'cli-proxy: ini keys are not the bare name' $false ('proxy' -eq [string](@($gitRead.Entries)[0]).Key)
-# 注释里的 proxy= 不许被读成设置：读到了就会去改一个用户没设过的东西。
+
+# --- .npmrc：注释里的 proxy= 不许被读成设置；行尾注释要剥掉 ---
 $npmCfg = Join-Path $cfgDir '.npmrc'
-Write-TestFile $npmCfg "# proxy=http://127.0.0.1:9999`nregistry=https://registry.npmjs.org/`nproxy=http://127.0.0.1:7890"
-$npmTarget = @{ Id = 'npm'; Name = 'npm'; FileName = '.npmrc'; Scope = 'home'; Path = $npmCfg; Keys = @('proxy', 'https-proxy') }
-$npmRead = Read-CliProxyFile $npmTarget
+Write-TestFile $npmCfg "# proxy=http://127.0.0.1:9999`nregistry=https://registry.npmjs.org/`nproxy=127.0.0.1:7890 # clash"
+$npmTarget = @{ Id = 'npm'; Name = 'npm'; Format = 'kv'; Section = ''; Keys = @('proxy', 'https-proxy'); Pair = @{}; Fix = 'drop'; Files = @('home:.npmrc'); Path = $npmCfg }
+$npmRead = Read-CliProxyFile $npmTarget $npmCfg
 Assert-Eq 'cli-proxy: a commented-out proxy is not an entry' 1 (@($npmRead.Entries).Count)
-Assert-Eq 'cli-proxy: the live proxy is the entry' 'http://127.0.0.1:7890' ([string](@($npmRead.Entries)[0]).Value)
-# 文件不存在时：读成功、零条目（「这一层不存在」不是「读不出来」）。
-$missingTarget = @{ Id = 'x'; Name = 'x'; FileName = 'nope'; Scope = 'home'; Path = (Join-Path $cfgDir 'no-such-file'); Keys = @('proxy') }
-$missingRead = Read-CliProxyFile $missingTarget
+Assert-Eq 'cli-proxy: the live proxy is the entry' '127.0.0.1:7890' ([string](@($npmRead.Entries)[0]).Value)
+
+# --- Cargo：TOML 的 [http] 段，值是带引号的 ---
+$cargoCfg = Join-Path $cfgDir 'config.toml'
+Write-TestFile $cargoCfg "[net]`nretry = 2`n[http]`nproxy = `"http://127.0.0.1:7890`"`n"
+$cargoTarget = @{ Id = 'cargo'; Name = 'Cargo'; Format = 'kv'; Section = 'http'; Keys = @('proxy'); Pair = @{}; Fix = 'drop'; Files = @('home:.cargo/config.toml'); Path = $cargoCfg }
+Assert-Eq 'cli-proxy: cargo reads the [http] proxy' 'http://127.0.0.1:7890' ([string](@((Read-CliProxyFile $cargoTarget $cargoCfg).Entries)[0]).Value)
+# 段不匹配时不算：别的段里叫 proxy 的东西不是 http 代理。
+$cargoOther = Join-Path $cfgDir 'config2.toml'
+Write-TestFile $cargoOther "[net]`nproxy = `"http://127.0.0.1:7890`"`n"
+Assert-Eq 'cli-proxy: a proxy in another section is not ours' 0 (@((Read-CliProxyFile $cargoTarget $cargoOther).Entries).Count)
+
+# --- Gradle：主机与端口分两行写，必须凑齐才算一项 ---
+$gradleCfg = Join-Path $cfgDir 'gradle.properties'
+Write-TestFile $gradleCfg "org.gradle.jvmargs=-Xmx2g`nsystemProp.http.proxyHost=127.0.0.1`nsystemProp.http.proxyPort=7890`n"
+$gradleTarget = @{ Id = 'gradle'; Name = 'Gradle'; Format = 'kv'; Section = ''; Keys = @(); Fix = 'port'
+                   Pair = @{ 'systemProp.http.proxyHost' = 'systemProp.http.proxyPort' }; Files = @('home:.gradle/gradle.properties'); Path = $gradleCfg }
+$gradleRead = Read-CliProxyFile $gradleTarget $gradleCfg
+Assert-Eq 'cli-proxy: gradle pairs host and port into one entry' 1 (@($gradleRead.Entries).Count)
+Assert-Eq 'cli-proxy: gradle entry carries the port' '7890' ([string](@($gradleRead.Entries)[0]).Port)
+Assert-Eq 'cli-proxy: gradle entry knows the port line' 'True' ([string](@($gradleRead.Entries)[0]).PortOnly)
+Assert-Eq 'cli-proxy: gradle entry deletes both lines' 2 (@(@($gradleRead.Entries)[0]).Lines.Count)
+# 只写主机不写端口 = 半截配置：那一行不生效，判死会让用户以为这里挡住了网络。
+$gradleHalf = Join-Path $cfgDir 'gradle-half.properties'
+Write-TestFile $gradleHalf "systemProp.http.proxyHost=127.0.0.1`n"
+Assert-Eq 'cli-proxy: gradle without a port yields nothing' 0 (@((Read-CliProxyFile $gradleTarget $gradleHalf).Entries).Count)
+
+# --- Conda：嵌套 YAML，父键下面挂 http / https ---
+$condaCfg = Join-Path $cfgDir '.condarc'
+Write-TestFile $condaCfg "proxy_servers:`n  http: http://127.0.0.1:7890`n  https: http://127.0.0.1:7890`nchannels:`n  - defaults`n"
+$condaTarget = @{ Id = 'conda'; Name = 'Conda'; Format = 'yaml-nested'; Section = 'proxy_servers'; Keys = @('http', 'https'); Pair = @{}; Fix = 'port-only'; Files = @('home:.condarc'); Path = $condaCfg }
+$condaRead = Read-CliProxyFile $condaTarget $condaCfg
+Assert-Eq 'cli-proxy: conda finds both nested proxies' 2 (@($condaRead.Entries).Count)
+Assert-Eq 'cli-proxy: conda keys carry the parent' 'proxy_servers.http' ([string](@($condaRead.Entries)[0]).Key)
+
+# --- Maven：<proxy> 块，<active>false</active> 的那一块不算 ---
+$mavenCfg = Join-Path $cfgDir 'settings.xml'
+Write-TestFile $mavenCfg @"
+<settings>
+  <proxies>
+    <proxy>
+      <id>local</id>
+      <active>true</active>
+      <host>127.0.0.1</host>
+      <port>7890</port>
+    </proxy>
+    <proxy>
+      <id>off</id>
+      <active>false</active>
+      <host>127.0.0.1</host>
+      <port>7891</port>
+    </proxy>
+  </proxies>
+</settings>
+"@
+$mavenTarget = @{ Id = 'maven'; Name = 'Maven'; Format = 'xml'; Section = ''; Keys = @(); Pair = @{}; Fix = 'port-only'; Files = @('home:.m2/settings.xml'); Path = $mavenCfg }
+$mavenRead = Read-CliProxyFile $mavenTarget $mavenCfg
+Assert-Eq 'cli-proxy: maven skips the inactive proxy' 1 (@($mavenRead.Entries).Count)
+Assert-Eq 'cli-proxy: maven reads the port element' '7890' ([string](@($mavenRead.Entries)[0]).Port)
+Assert-Eq 'cli-proxy: maven repoints the port element' 'True' ([string](@($mavenRead.Entries)[0]).PortOnly)
+
+# --- NuGet：<add key="http_proxy" value="..." /> ---
+$nugetCfg = Join-Path $cfgDir 'NuGet.Config'
+Write-TestFile $nugetCfg '<configuration><config><add key="http_proxy" value="http://127.0.0.1:7890" /></config></configuration>'
+$nugetTarget = @{ Id = 'nuget'; Name = 'NuGet'; Format = 'xml'; Section = ''; Keys = @(); Pair = @{}; Fix = 'port-only'; Files = @('appdata:NuGet/NuGet.Config'); Path = $nugetCfg }
+Assert-Eq 'cli-proxy: nuget reads the http_proxy value' '7890' ([string](@((Read-CliProxyFile $nugetTarget $nugetCfg).Entries)[0]).Port)
+
+# --- SSH：ProxyCommand 里的本机代理；域名别名不是本机代理 ---
+$sshCfg = Join-Path $cfgDir 'ssh_config'
+Write-TestFile $sshCfg "Host github.com`n  ProxyCommand nc -X connect -x 127.0.0.1:7890 %h %p`nHost *`n  ProxyJump bastion`n"
+$sshTarget = @{ Id = 'ssh'; Name = 'SSH'; Format = 'ssh'; Section = ''; Keys = @(); Pair = @{}; Fix = 'port'; Files = @('home:.ssh/config'); Path = $sshCfg }
+$sshRead = Read-CliProxyFile $sshTarget $sshCfg
+Assert-Eq 'cli-proxy: ssh finds the loopback proxy command' 1 (@($sshRead.Entries).Count)
+Assert-Eq 'cli-proxy: ssh keeps the port' '7890' ([string](@($sshRead.Entries)[0]).Port)
+$sshCfg2 = Join-Path $cfgDir 'ssh_config2'
+Write-TestFile $sshCfg2 "Host *`n  ProxyJump bastion`n"
+Assert-Eq 'cli-proxy: a jump host alias is not a local proxy' 0 (@((Read-CliProxyFile $sshTarget $sshCfg2).Entries).Count)
+
+# --- 文件不存在时：读成功、零条目（「这一层不存在」不是「读不出来」）---
+$missingTarget = @{ Id = 'x'; Name = 'x'; Format = 'kv'; Section = ''; Keys = @('proxy'); Pair = @{}; Fix = 'drop'; Files = @('home:nope'); Path = (Join-Path $cfgDir 'no-such-file') }
+$missingRead = Read-CliProxyFile $missingTarget $missingTarget.Path
 Assert-Eq 'cli-proxy: a missing file reads as ok with no entries' 'True' $missingRead.Ok
 Assert-Eq 'cli-proxy: a missing file yields no findings' 0 (@(Get-CliProxyFindings | Where-Object { $_.Where -eq $missingTarget.Path }).Count)
 Remove-Item -LiteralPath $cfgDir -Recurse -Force
 
+# 修法三档：删行 / 改端口 / 只报告。判据同时看「这层怎么修」与「现在有没有活代理」。
+Assert-Eq 'mode: a drop-only tool always drops' 'drop' ([string](Get-CliProxyEntryMode @{ Fix = 'drop' } $null))
+Assert-Eq 'mode: a port tool without a live proxy falls back to drop' 'drop' ([string](Get-CliProxyEntryMode @{ Fix = 'port' } $null))
+Assert-Eq 'mode: a port tool with a live proxy repoints' 'port' ([string](Get-CliProxyEntryMode @{ Fix = 'port' } @{ Host = '127.0.0.1'; Port = 1 }))
+Assert-Eq 'mode: a port-only tool without a live proxy only reports' 'none' ([string](Get-CliProxyEntryMode @{ Fix = 'port-only' } $null))
+Assert-Eq 'mode: a port-only tool with a live proxy repoints' 'port' ([string](Get-CliProxyEntryMode @{ Fix = 'port-only' } @{ Host = '127.0.0.1'; Port = 1 }))
+
+# 「能不能动」的第三维：同一层里 .npmrc 能删、settings.xml 不能改结构。
+# 没有这一维，救援页会对 XML 也亮出「可以修」，按下去什么也没修好。
+Assert-Eq 'repairable: a droppable entry is repairable' 'True' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.npm' -Kind 'residue-blocking' -Data @{ Repairable = $true })))
+Assert-Eq 'repairable: a format we cannot edit is reported only' 'False' `
+    ([string](Test-FindingRepairable (New-Finding -Id 'cli-proxy.maven' -Kind 'residue-blocking' -Data @{ Repairable = $false })))
+
+# 改端口那一行只替换地址，别的一个字都不许动：账号密码被抹掉是数据损坏。
+Assert-Eq 'repoint: replaces host and port only' 'proxy = http://127.0.0.1:9999' `
+    (Set-CliProxyEndpointOnLine 'proxy = http://127.0.0.1:7890' '127.0.0.1' 7890 '127.0.0.1' 9999 $false)
+Assert-Eq 'repoint: keeps credentials' 'proxy = http://u:p@127.0.0.1:9999' `
+    (Set-CliProxyEndpointOnLine 'proxy = http://u:p@127.0.0.1:7890' '127.0.0.1' 7890 '127.0.0.1' 9999 $false)
+Assert-Eq 'repoint: a port-only line keeps its markup' '  <port>9999</port>' `
+    (Set-CliProxyEndpointOnLine '  <port>7890</port>' '' 7890 '127.0.0.1' 9999 $true)
+Assert-Eq 'repoint: ipv6 keeps its brackets' 'proxy=http://[::1]:9999' `
+    (Set-CliProxyEndpointOnLine 'proxy=http://[::1]:7890' '::1' 7890 '::1' 9999 $false)
+Assert-Eq 'repoint: no endpoint means no edit' '' `
+    ([string](Set-CliProxyEndpointOnLine 'proxy=nothing' '127.0.0.1' 7890 '127.0.0.1' 9999 $false))
+
+# 真跑一遍修复：删行与改端口两条路都要落到文件上，而且不许碰别的行。
+$repairDir = New-TempDir 'envproxy_clirepair_'
+$savedTargets = $CliProxyTargets
+$savedLiveFn = ${function:Get-CliLiveProxyEndpoint}
+$savedMonitorForRepair = $MonitorDir
+try {
+    $script:MonitorDir = $repairDir
+    # (1) 没有活代理：把死的那一行删掉，其余原样。
+    $dropFile = Join-Path $repairDir '.npmrc'
+    Write-TestFile $dropFile "registry=https://registry.npmjs.org/`nproxy=http://127.0.0.1:65001`n"
+    $CliProxyTargets = @(@{ Id = 'npm'; Name = 'npm'; Format = 'kv'; Section = ''; Keys = @('proxy', 'https-proxy'); Pair = @{}; Fix = 'drop'; Files = @('home:.npmrc'); Path = $dropFile })
+    ${function:Get-CliLiveProxyEndpoint} = { return $null }
+    $dr = Repair-CliProxyConfig
+    Assert-Eq 'repair: dropping the dead line reports fixed' 'fixed' ([string]$dr.Result)
+    Assert-Eq 'repair: only the dead line is gone' "registry=https://registry.npmjs.org/`n" ([System.IO.File]::ReadAllText($dropFile))
+
+    # (2) 有活代理：把端口改过去（Gradle 的成对键）。
+    $portFile = Join-Path $repairDir 'gradle.properties'
+    Write-TestFile $portFile "org.gradle.jvmargs=-Xmx2g`nsystemProp.http.proxyHost=127.0.0.1`nsystemProp.http.proxyPort=65001`n"
+    $CliProxyTargets = @(@{ Id = 'gradle'; Name = 'Gradle'; Format = 'kv'; Section = ''; Keys = @(); Pair = @{ 'systemProp.http.proxyHost' = 'systemProp.http.proxyPort' }; Fix = 'port'; Files = @('home:.gradle/gradle.properties'); Path = $portFile })
+    ${function:Get-CliLiveProxyEndpoint} = { return @{ Host = '127.0.0.1'; Port = 17001 } }
+    $pr = Repair-CliProxyConfig
+    Assert-Eq 'repair: repointing reports fixed' 'fixed' ([string]$pr.Result)
+    Assert-Eq 'repair: the port line is rewritten' 'True' ([bool]([System.IO.File]::ReadAllText($portFile) -match 'systemProp\.http\.proxyPort=17001'))
+    Assert-Eq 'repair: the host line is untouched' 'True' ([bool]([System.IO.File]::ReadAllText($portFile) -match 'systemProp\.http\.proxyHost=127\.0\.0\.1'))
+    Assert-Eq 'repair: unrelated lines survive' 'True' ([bool]([System.IO.File]::ReadAllText($portFile) -match 'org\.gradle\.jvmargs=-Xmx2g'))
+
+    # (3) 只能改端口的格式、又没有活代理：一条都不许改（只报告）。
+    $xmlFile = Join-Path $repairDir 'settings.xml'
+    Write-TestFile $xmlFile "<settings>`n  <proxies>`n    <proxy>`n      <active>true</active>`n      <host>127.0.0.1</host>`n      <port>7890</port>`n    </proxy>`n  </proxies>`n</settings>`n"
+    $CliProxyTargets = @(@{ Id = 'maven'; Name = 'Maven'; Format = 'xml'; Section = ''; Keys = @(); Pair = @{}; Fix = 'port-only'; Files = @('home:.m2/settings.xml'); Path = $xmlFile })
+    ${function:Get-CliLiveProxyEndpoint} = { return $null }
+    $xr = Repair-CliProxyConfig
+    Assert-Eq 'repair: a port-only format with no live proxy reports nothing done' 'none' ([string]$xr.Result)
+    Assert-Eq 'repair: and the file is byte-identical' 'True' ([bool]([System.IO.File]::ReadAllText($xmlFile) -match '<port>7890</port>'))
+} finally {
+    $CliProxyTargets = $savedTargets
+    ${function:Get-CliLiveProxyEndpoint} = $savedLiveFn
+    $script:MonitorDir = $savedMonitorForRepair
+    Remove-Item -LiteralPath $repairDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 Write-Host '[34] DNS layering (dns)'
 # 判据只说两件能证伪的事。这一节把它们钉死：宽松一点就会把用户自己设的
 # 公共 DNS 说成「故障」，或者把 198.18（翻墙软件的虚拟段）漏过去。
@@ -279,3 +439,111 @@ try {
     $script:MonitorDir = $__savedMonitor3
     Remove-Item -LiteralPath $jDir3 -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+Write-Host '[36] SOCKS-only ports (socks inspector)'
+# 判据只有一条：3 字节问候之后，回包的**版本字节**是 0x05。
+# 这条判据的作用只有解释：把「本机有代理在跑、工具却说没有」变成一句能行动的话。
+Assert-Eq 'socks: port 0 is never a socks proxy' 'False' ([string](Test-Socks5Port 0 200))
+Assert-Eq 'socks: a closed port is not a socks proxy' 'False' ([string](Test-Socks5Port 65002 200))
+
+# 真起一个只回 SOCKS 问候应答的端口，确认判据认得出它（不是恒假）。
+# 与 probe 测试里的假代理同一手法：真监听、真连接、一直服务到测试进程结束。
+function Start-SocksReplyServer {
+    $port = 0
+    for ($try = 0; $try -lt 30; $try++) {
+        $candidate = 20000 + (Get-Random -Maximum 2000)
+        $probe = $null
+        try {
+            $probe = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $candidate)
+            $probe.Start(); $port = $candidate
+        } catch { $port = 0 } finally { if ($probe) { try { $probe.Stop() } catch {} } }
+        if ($port -ne 0) { break }
+    }
+    if ($port -eq 0) { throw 'no free port for the socks mock' }
+    $rs = [runspacefactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [powershell]::Create()
+    $ps.Runspace = $rs
+    $null = $ps.AddScript({
+        $p = $args[0]
+        $tcp = New-Object System.Net.Sockets.TcpListener ([System.Net.IPAddress]::Loopback, $p)
+        $tcp.Start()
+        try {
+            while ($true) {
+                $accept = $tcp.AcceptTcpClientAsync()
+                if (-not $accept.Wait(1000)) { continue }
+                $client = $accept.Result
+                try {
+                    $stream = $client.GetStream()
+                    $buf = New-Object byte[] 3
+                    $null = $stream.Read($buf, 0, 3)
+                    # SOCKS5 方法选择应答：版本 5，无需认证。
+                    $reply = [byte[]]@(0x05, 0x00)
+                    $stream.Write($reply, 0, 2)
+                    $stream.Flush()
+                } catch {}
+                try { $client.Close() } catch {}
+            }
+        } catch {}
+        $tcp.Stop()
+    }).AddArgument($port)
+    $null = $ps.BeginInvoke()
+    # 等它真的监听起来：固定 sleep 不够（机器一忙就随机红）。
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline) {
+        $c = $null
+        try {
+            $c = New-Object System.Net.Sockets.TcpClient
+            $c.Connect('127.0.0.1', $port)
+            break
+        } catch { Start-Sleep -Milliseconds 50 } finally { if ($c) { try { $c.Close() } catch {} } }
+    }
+    return $port
+}
+$socksPort = Start-SocksReplyServer
+Assert-Eq 'socks: a socks-only port is recognised' 'True' ([string](Test-Socks5Port $socksPort 500))
+# 混合端口（HTTP 与 SOCKS 都应答）不算「只认 SOCKS」：那由 Get-SocksOnlyPorts 的
+# 握手前置挡住，这里只钉住"能连上、会回话"这一半判据。
+Write-Host '[37] Status JSON (machine-readable output)'
+# 给脚本、状态栏、批量部署读的：一行、纯 ASCII、字段名与取值是契约。
+# 手写序列化（不用 ConvertTo-Json）：它是模块命令，PSModulePath 排着别的版本时会静默缺失，
+# 症状是整条输出变成空白而退出码仍是 0。
+$stJson = @{
+    LocalVersion = '9.9.9'; NeverInstalled = $false; Monitor = $true; AutoRunOk = $true
+    Port = 7078; PortUnknown = $false
+    ProxyValue = 'http://127.0.0.1:7078'; ProxyAlive = $true
+    NodeHandshake = 'proxy-ok'; VarsMatch = 'yes'
+    TermSync = $null; SysProxy = $null; UpdateInProgress = $false; StopIntent = $false
+    ApplyResult = 'ok'
+}
+$jsonLine = Format-StatusJson $stJson
+Assert-Eq 'json: a single line' 1 (@($jsonLine -split "`n").Count)
+# 纯 ASCII 是契约的一部分：Windows PowerShell 5.1 把中文重定向到文件/管道时按控制台
+# 代码页编码，脚本那边会读到乱码。机器读的东西本来也不该靠文案。
+Assert-Eq 'json: pure ascii' 'True' ([string]([bool]($jsonLine -match '^[\x20-\x7E]+$')))
+$j1 = $jsonLine | ConvertFrom-Json
+Assert-Eq 'json: schema' 1 $j1.schema
+Assert-Eq 'json: version' '9.9.9' $j1.version
+Assert-Eq 'json: installed' 'True' ([string]$j1.installed)
+Assert-Eq 'json: monitor' 'True' ([string]$j1.monitor)
+Assert-Eq 'json: state on' 'on' $j1.state
+Assert-Eq 'json: port' 7078 $j1.port
+Assert-Eq 'json: proxy' 'http://127.0.0.1:7078' $j1.proxy
+Assert-Eq 'json: node handshake' 'proxy-ok' $j1.nodeHandshake
+Assert-Eq 'json: vars match' 'yes' $j1.varsMatch
+Assert-Eq 'json: issues count' 0 $j1.issues
+Assert-Eq 'json: relay field exists' 'True' ([string]($j1.PSObject.Properties.Name -contains 'relayPort'))
+# 三态不许塌缩：端口枚举失败是「不知道」，不是「没有代理」。
+# 塌缩成 off 会让脚本以为"现在该直连"，而事实是"这一轮没读到端口"。
+$stJson.Port = $null; $stJson.PortUnknown = $true
+$j2 = (Format-StatusJson $stJson) | ConvertFrom-Json
+Assert-Eq 'json: unknown is not collapsed to off' 'unknown' $j2.state
+Assert-Eq 'json: unknown keeps port null' $null $j2.port
+$stJson.PortUnknown = $false
+$j3 = (Format-StatusJson $stJson) | ConvertFrom-Json
+Assert-Eq 'json: off when nothing is running' 'off' $j3.state
+# 引号与反斜杠必须转义：状态里的值来自系统（可能被别的工具改坏），
+# 一个裸引号就会让整行 JSON 变成解析不了的垃圾。
+$stJson.ProxyValue = 'http://x/"q"\back'
+$j4 = (Format-StatusJson $stJson) | ConvertFrom-Json
+Assert-Eq 'json: quotes and backslashes round trip' 'http://x/"q"\back' $j4.proxy

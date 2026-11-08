@@ -81,11 +81,12 @@ function New-Finding {
         Reason   = $Reason
         Advice   = $Advice
         Evidence = $Evidence
-        # **Finding 上没有 Fix 字段，故意的。**
-        # 可修性由「这条记录的 Id → 检查器表 → 该层有没有 Fix」推出来；
-        # 存在这里就成了第二个真相。两边一分叉，代码不会报错，
-        # 而读代码的人无从判断哪份算数。权威判据只有一个：
-        # insp 层的 Test-FindingRepairable（Kind + 该层有没有 Fix）。
+        # **Finding 上没有「用哪个函数修」那样的字段，故意的。**
+        # 可修性由三件事推出来：Kind → 检查器表里该层有没有 Fix → 这条记录
+        # 自己声明的 Repairable（存在 Data 里，只有看得见文件格式的那一层能回答）。
+        # 把「哪个函数修」存进 Finding 就成了第二个真相，两边分叉时不会报错，
+        # 读代码的人也无从判断哪份算数。权威判据只有一个：
+        # insp 层的 Test-FindingRepairable。
         Data     = $Data
     }
 }

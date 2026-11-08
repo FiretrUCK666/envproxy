@@ -1069,6 +1069,9 @@ $AdvancedItems = @(
     @{ Key='7'; Action='DockerGuide';   Module='guide';  Kind='read'
        Name='Docker 里也想翻墙';        Hint='要改 Docker 自己的设置，这里只讲怎么改'
        Handler='Show-DockerGuidePage' }
+    @{ Key='8'; Action='ToolGuides';    Module='guide';  Kind='read'
+       Name='只认固定地址的程序';       Hint='Maven、Gradle、Docker、SSH 这类怎么填'
+       Handler='Show-ToolGuidePage' }
 )
 
 # 按 Action 取项。分派与「按语义名找编号」都走它。
@@ -1150,9 +1153,9 @@ $AdvancedModules = @(
               '公司/学校给你的代理，它一个字节都不碰。') }
     @{ Id='guide';  Title='本工具管不到的地方'
        Why=@('浏览器和桌面应用看的是「系统代理」，不是这里的设置——那一层由你的翻墙软件管。',
-             'WSL 和 Docker 各自是一套独立的系统，读的是它们自己的设置。',
-             '下面两项只讲怎么改，不会替你动任何配置。')
-       Note=@('这两项按回车只会看到说明，不会改你的设置。') }
+             'WSL、Docker 和 Maven 这类各自有一套自己的设置，读的不是这里的变量。',
+             '下面三项只讲怎么改，不会替你动任何配置。')
+       Note=@('这三项按回车只会看到说明，不会改你的设置。') }
 )
 
 # 按模块取项。打印用，分派不用（分派只按编号查）。
@@ -2075,4 +2078,45 @@ function Show-DockerGuidePage {
         @{ Role='dim'; Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
     )
     Show-GuidePage 'Docker 里也想翻墙' $blocks '这一页只讲解，没有改你的任何设置。'
+}
+function Show-ToolGuidePage {
+    # 为什么单独一页：这几个程序的设置位置分散在四份不同的文件/界面里，
+    # 而「填哪个地址」是同一件事——填固定入口就不用再改。
+    # 把它们放在一屏，用户按自己的工具挑一段抄，不用去别处找。
+    $blocks = @(
+        @{ Role='text'; Text='  有些程序把代理地址记在自己的设置里，之后一直用那个。' }
+        @{ Role='text'; Text='  翻墙软件一换端口，它们就连不上，而报错里没有本工具的名字。' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  一、Maven' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  在 ~/.m2/settings.xml 的 <proxies> 里加一段：' }
+        @{ Role='cmd';  Text='    <proxy><id>local</id><active>true</active>' }
+        @{ Role='cmd';  Text='      <protocol>http</protocol>' }
+        @{ Role='cmd';  Text='      <host>127.0.0.1</host><port>17099</port></proxy>' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  二、Gradle（含 Android Studio 的构建）' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  在 ~/.gradle/gradle.properties 里加四行：' }
+        @{ Role='cmd';  Text='    systemProp.http.proxyHost=127.0.0.1' }
+        @{ Role='cmd';  Text='    systemProp.http.proxyPort=17099' }
+        @{ Role='cmd';  Text='    systemProp.https.proxyHost=127.0.0.1' }
+        @{ Role='cmd';  Text='    systemProp.https.proxyPort=17099' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  三、Docker Desktop' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  Settings → Resources → Proxies，地址填 127.0.0.1:17099' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  四、SSH（git@github.com 那种地址）' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  在 ~/.ssh/config 里加两行（connect 是 Git 自带的）：' }
+        @{ Role='cmd';  Text='    Host github.com' }
+        @{ Role='cmd';  Text='      ProxyCommand connect -H 127.0.0.1:17099 %h %p' }
+        @{ Role='blank'; Text='' }
+        @{ Role='heading'; Text='  为什么都填 17099' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  它是本工具的固定入口：自己跟着翻墙软件换端口，地址永远不变。' }
+        @{ Role='text'; Text='  所以这些文件填一次就不用再改。' }
+        @{ Role='text'; Text=('  它现在在不在、转发到哪个端口，看' + (Get-AdvancedRef 'ViewRelay' 20) + '那一屏。') }
+    )
+    Show-GuidePage '只认固定地址的程序' $blocks '这一页只讲解，没有改你的任何设置。'
 }

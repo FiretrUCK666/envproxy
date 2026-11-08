@@ -94,12 +94,14 @@ if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
 _CMD="${1:-}"
 _PURGE="0"
 _YES="0"
+_JSON="0"
 # 开关名与命令词一样不区分大小写（Windows 的参数绑定也不区分）：
 # 先小写化再比对，不要写死几种拼写——漏掉的组合会变成"参数写错"。
 for _a in "$@"; do
     _al=$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')
     case "$_al" in --purge|-purge) _PURGE="1";; esac
     case "$_al" in --yes|-yes) _YES="1";; esac
+    case "$_al" in --json|-json) _JSON="1";; esac
 done
 # shellcheck disable=SC2001
 _CMD_NORM=$(printf '%s' "$_CMD" | sed 's/^--*//; s/^-//' | tr '[:upper:]' '[:lower:]')
@@ -113,8 +115,9 @@ if [ -n "$_CMD" ]; then USAGE_COMMAND_COUNT=1; fi
 USAGE_SWITCHES=""
 if [ "$_PURGE" = "1" ]; then USAGE_SWITCHES="purge"; fi
 if [ "$_YES" = "1" ]; then USAGE_SWITCHES="$USAGE_SWITCHES yes"; fi
+if [ "$_JSON" = "1" ]; then USAGE_SWITCHES="$USAGE_SWITCHES json"; fi
 # 多余的位置参数与不认识的开关都算"无法识别的参数"。
-# 只认 --purge / --yes 两个开关名：它们本来就占一个参数位，
+# 只认 --purge / --yes / --json 三个开关名：它们本来就占一个参数位，
 # 把它们也算成"多余的位置参数"的话，"uninstall --purge" 这种合法用法会被一起拒掉。
 # 第一个位置参数是命令词；它为空时也要报出来——"传了个空参数"是参数写错，
 # "没传参数"才是监控模式，两者不能压成同一个空串。
@@ -123,7 +126,7 @@ _extra_first=1
 for _a in "$@"; do
     _al=$(printf '%s' "$_a" | tr '[:upper:]' '[:lower:]')
     case "$_al" in
-        --purge|-purge|--yes|-yes) continue ;;
+        --purge|-purge|--yes|-yes|--json|-json) continue ;;
     esac
     if [ $_extra_first -eq 1 ]; then
         _extra_first=0
@@ -136,7 +139,7 @@ _usage_err=$(usage_error)
 _usage_rc=$?
 if [ $_usage_rc -ne 0 ]; then
     echo "$_usage_err" >&2
-    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes]" >&2
+    echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes] [--json]" >&2
     exit 2
 fi
 
@@ -256,7 +259,7 @@ case "$_CMD_NORM" in
     uninstall) uninstall_envproxy "$_PURGE" "$_YES"; exit $?;;
     # 交互终端里走实时刷新（自己动、不用按键）；重定向/无终端/窗口太小时
     # show_status_live 会自动退回一次性静态输出，两种情况都能走这里。
-    status) show_status_live;;
+    status) if [ "$_JSON" = "1" ]; then show_status_json; else show_status_live; fi;;
     # 显式修复"配置文件里标记不成对"。安装/卸载遇到它会一个字节都不改（猜必错），
     # 所以那个状态本来是死路：照文档重跑安装，每次都被拒绝。人明确说"我同意修"时要能修。
     repair-profile) repair_hook_markers; exit $?;;
@@ -293,6 +296,6 @@ case "$_CMD_NORM" in
         fi;;
     "") run_monitor_loop;;
     # 用法错误统一退出码 2（与 Windows 侧一致）：调用方能据此分辨"用法错了"和"动作失败"。
-    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes]"; exit 2;;
+    *) echo "用法: bash $0 {menu|install|stop|uninstall|status|update|help|advanced|self-test|repair-profile|report} [--purge] [--yes] [--json]"; exit 2;;
 esac
 fi

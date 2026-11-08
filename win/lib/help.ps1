@@ -333,7 +333,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '4'; Title = '某条命令不想翻墙'; Short = '命令行'
+            Key = '4'; Title = '某条命令不想翻墙'; Short = '命令'
             Lines = @(
                 'h 每个工具写法不一样，没有通用的一条命令',
                 'h curl',
@@ -396,7 +396,7 @@ function Get-HelpTopics {
             )
         },
         @{
-            Key = '6'; Title = '反过来：不想让某个程序翻墙'; Short = '不翻墙'
+            Key = '6'; Title = '反过来：不想让某个程序翻墙'; Short = '直连'
             Lines = @(
                 'h 为什么会有这个需求',
                 't 有些程序跟着翻墙走反而出问题。',
@@ -445,10 +445,11 @@ function Get-HelpTopics {
                 'r 日常|-Install -Status -Stop -Uninstall -Update',
                 'r 其它|-Help -Menu -Advanced -Report',
                 'r 补充|-Yes 跳过确认  -Purge 连日志一起删  -RepairProfile 摘掉孤立标记'
+                'r 给脚本|-Status -Json 输出一行机器可读的 JSON'
             )
         },
         @{
-            Key = '8'; Title = '上不了网（关了翻墙软件之后）'; Short = '上不了网'
+            Key = '8'; Title = '上不了网（关了翻墙软件之后）'; Short = '断网'
             Lines = @(
                 'h 先分清是哪种"上不了网"',
                 't 只有浏览器打不开、别的程序照常 = 浏览器这边的设置指错了。',
@@ -462,7 +463,8 @@ function Get-HelpTopics {
                 'b ',
                 'h 怎么自己修',
                 ('i 1. 打开菜单，' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'Rescue' 40) + '。'),
-                't2 它一次看三个地方：系统的代理、工具自己的配置、网址解析。',
+                't2 它一次看四个地方：系统的代理、工具自己的配置、网址解析，',
+                't2 以及「只认 SOCKS 的端口」——那种端口本工具用不了，但你会想知道它在。',
                 't2 能修的问你一句才动手，改之前先留还原点。',
                 'i 2. 按 y 回车',
                 't2 修完把浏览器和那个工具都关掉重开一次再看。',
@@ -476,6 +478,37 @@ function Get-HelpTopics {
                 't 再进那一屏，按 r 回车就能还原最近修的那一次。',
                 "t 还不行就用菜单$(Get-MenuRef 'Report')生成报告贴到项目页面，",
                 't 报告里有网络体检的结论，不用你另外描述。'
+            )
+        },
+        @{
+            Key = '9'; Title = '工具自己的代理设置'; Short = '工具'
+            Lines = @(
+                'h 多数工具不用管',
+                't git、npm、curl、pip、cargo、wget、Bun、Go、Deno 这些只认环境变量，',
+                't 本工具设好了它们就跟着变，你不需要改任何配置文件。',
+                'h 少数工具只认自己的设置',
+                't 它们读的不是环境变量，而是自己的配置文件——变量设了也没用：',
+                'r Maven|settings.xml 里的 <proxies>',
+                'r Gradle|gradle.properties 里的 systemProp.http(s).proxyHost/Port',
+                'r Docker|Docker Desktop 自己的设置（不看 daemon.json 里的代理）',
+                'r SSH|~/.ssh/config 里的 ProxyCommand',
+                'w 这些文件里一旦写死过一个旧端口，翻墙软件一换端口它们就连不上，',
+                'w 而报错里没有本工具的名字——所以你会去查网络。',
+                'h 写死了旧端口怎么办',
+                ('t 打开菜单，' + (Get-MenuRef 'Advanced') + '，再' + (Get-AdvancedRef 'Rescue' 40) + '：'),
+                't2 它会读这些文件，指出哪一行指着一个已经不存在的本机端口。',
+                't2 能改的会问一句才动手（删掉，或改成当前端口），并先留还原点。',
+                't2 XML 与嵌套的 YAML 它只报告、不替你改，按屏幕上那句话手动改即可。',
+                'h git@github.com 这种地址用不了代理',
+                't OpenSSH 不认 HTTP_PROXY / HTTPS_PROXY，只认它自己的配置。',
+                't 两个办法，挑一个。办法一，让 git 把它换成等价的 https 地址：',
+                'c git config --global url.https://github.com/.insteadOf git@github.com:',
+                't2 换出来的 https 地址就会跟着环境变量里的代理走。要撤回：',
+                'c git config --global --unset url.https://github.com/.insteadOf',
+                't 办法二，在 ~/.ssh/config 里给那个站点写一行 ProxyCommand，',
+                't 指向本机代理端口。Windows 上推荐指向固定入口 127.0.0.1:17099：',
+                't 那个地址永远不变，翻墙软件换端口也不用改。',
+                ('t 它现在在不在，去菜单' + (Get-MenuRef 'Advanced') + '里看「查看中继」那一屏。')
             )
         }
     )
@@ -545,16 +578,29 @@ function Format-HelpIndex {
     return ($out -join "`n")
 }
 
-# 主题页底部那一行：把全部编号和短名并排列出来，当前这条用方括号标。
+# 主题页底部的导航：把全部编号和短名并排列出来，当前这条用方括号标。
 # 为什么需要它：用户在主题里只看到「输编号看别的」，却不知道别的编号是几号——
 # 那句话等于白说。列出编号既回答了"编号是什么"，也顺手回答了"还有哪几条"。
+#
+# **要折行**：主题加到九条之后一行放不下（80 列的窗口会把它折成两行、
+# 第二行顶到最左边，与上面的正文糊在一起）。所以这里按预算贪心折行，
+# 返回可能是多行（用换行分隔），调用方逐行打印。
 function Format-HelpNavLine([string]$CurrentKey) {
-    $parts = @()
+    $budget = 78
+    $lines = New-Object System.Collections.Generic.List[string]
+    $cur = '  '
     foreach ($t in (Get-HelpTopics)) {
         $label = if ($t.Key -eq $CurrentKey) { '[' + $t.Key + ']' + $t.Short } else { $t.Key + ' ' + $t.Short }
-        $parts += $label
+        $sep = if ($cur.Trim()) { ' ' } else { '' }
+        if ($cur.Trim() -and ((Get-DisplayWidth ($cur + $sep + $label)) -gt $budget)) {
+            [void]$lines.Add($cur)
+            $cur = '  ' + $label
+        } else {
+            $cur = $cur + $sep + $label
+        }
     }
-    return ('  ' + ($parts -join '  '))
+    if ($cur.Trim()) { [void]$lines.Add($cur) }
+    return ($lines -join "`n")
 }
 
 # 把一组编号写成人话。连续就写「1-6」，中间有断层就逐个列出来。
@@ -599,7 +645,7 @@ function Format-HelpTopic([string]$Key) {
     [void]$out.Add('')
     foreach ($r in (Get-HelpRenderedLines $t.Lines)) { [void]$out.Add($r.Text) }
     [void]$out.Add('')
-    [void]$out.Add((Format-HelpNavLine $t.Key))
+    foreach ($nl in @(Format-HelpNavLine $t.Key -split "`n")) { [void]$out.Add($nl) }
     [void]$out.Add((Format-ListExitHint '输编号看别的' '0' 'BackToParent'))
     return ($out -join "`n")
 }
@@ -620,7 +666,7 @@ function Show-HelpTopicColored([string]$Key) {
         Write-Host ''
     }
     Write-Host ''
-    Write-Styled 'dim' (Format-HelpNavLine $t.Key)
+    foreach ($nl in @(Format-HelpNavLine $t.Key -split "`n")) { Write-Styled 'dim' $nl }
     Write-Styled 'dim' (Format-ListExitHint '输编号看别的' '0' 'BackToParent')
     return $true
 }

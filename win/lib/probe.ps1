@@ -953,9 +953,29 @@ $DirectBaselineTtlSec = 60
 $NetworkFingerprintTtlSec = 30
 # 兜底阶段给合格证判定的总预算。命中一个就返回，通常用不满。
 $EndpointProofSweepBudgetSec = 8
-# 直连基线的对照站点：只用来回答"直连还能不能上网"，不参与端点表。
-$DirectBaselineHost = "www.baidu.com"
-$DirectBaselinePath = "/"
+# 直连基线的对照站点池：只用来回答"直连还能不能上网"，不参与端点表。
+#
+# **为什么是一个池而不是一个域名**：这台机器在不在线的判据，不能押在某一家身上。
+# 海外分支、海外云主机、严格管控的企业内网都可能让某一个站点超时或根本不放行；
+# 一旦唯一裁判不回话，"本机直连不通"就会被当成事实，合格证全变成 unknown，
+# 于是一个好好的节点被判死、变量被删掉——用户以为工具坏了，其实只是裁判掉线了。
+#
+# 判据宽松且方向正确：**任一条拿到任何 HTTP 应答就算在线**。
+# 这里问的只是"路通不通"，不问哪个站点通；三个站点分属不同骨干/不同用途，
+# 单点被墙、被门户劫持、DNS 抽风都不会同时灭掉三个。
+#
+# 顺序固定、逐个试，第一个应答就返回。单条上限比端点取证短（2 秒），
+# 最坏 3×2 秒仍在兜底总预算之内。
+# 两侧必须逐条相同（门禁 6 核对）：同一个网络在 Windows 上判"在线"、
+# 在 Mac 上判"离线"，会让同一个代理被两台机器判成相反结论。
+$DirectBaselinePool = @(
+    @{ Host = "www.baidu.com";            Path = "/" }
+    @{ Host = "detectportal.firefox.com"; Path = "/success.txt" }
+    @{ Host = "www.qq.com";               Path = "/" }
+)
+# 单条基线的上限（毫秒）。与 $EndpointDirectTimeoutMs 分开：那个是"判一个端点被没被墙"，
+# 这个是"判这台机器还能不能上网"，后者三条串行，单条必须更短。
+$DirectBaselineTimeoutMs = 2000
 
 $script:EndpointProofCache = @{}
 $script:DirectBaseline = $null
@@ -996,10 +1016,13 @@ function Get-NetworkFingerprint {
     return $fp
 }
 
-# 直连（不经任何代理）能不能上网：拿一个国内稳定站点试，拿到任何 HTTP 应答就算能。
+# 直连（不经任何代理）能不能上网：拿池里任一站点试，拿到任何 HTTP 应答就算能。
 # 它存在只为一件事：把「这个站点打不开」和「整台机器都出不去」分开。
 # 没有它的话，断网、DNS 全挂、刚开机网卡还没起来——全都会被读成「所有端点都被墙」，
 # 于是每个端点都发一张合格证，而那时候根本没有任何东西被证明。
+#
+# **任一条通即返回**，所以代价通常只是一次往返；三条都不通才付满 3×2 秒。
+# 结论连同"是哪一条通的"一起缓存，日志里能看出裁判是谁——排障时这是关键线索。
 function Test-DirectBaselineAlive {
     $now = Get-MonotonicSeconds
     $fp = Get-NetworkFingerprint
@@ -1009,6 +1032,7 @@ function Test-DirectBaselineAlive {
         if ($b.Fingerprint -eq $fp -and $age -ge 0 -and $age -lt $DirectBaselineTtlSec) { return $b.Alive }
     }
     $alive = $false
+    $via = ''
     $handler = $null
     $client = $null
     try {
@@ -1020,18 +1044,28 @@ function Test-DirectBaselineAlive {
         $handler.UseProxy = $false
         $handler.AllowAutoRedirect = $false
         $client = New-Object System.Net.Http.HttpClient($handler)
-        $client.Timeout = [TimeSpan]::FromMilliseconds($EndpointDirectTimeoutMs)
+        $client.Timeout = [TimeSpan]::FromMilliseconds($DirectBaselineTimeoutMs)
         $client.DefaultRequestHeaders.UserAgent.ParseAdd("EnvProxyCheck")
-        $resp = $client.GetAsync("http://$DirectBaselineHost$DirectBaselinePath", [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        # 拿到任何 HTTP 应答就够——状态码是什么无所谓，这里问的是"路通不通"。
-        if ($resp) { $alive = $true; try { $resp.Dispose() } catch {} }
+        foreach ($probe in $DirectBaselinePool) {
+            $resp = $null
+            try {
+                $resp = $client.GetAsync(("http://" + $probe.Host + $probe.Path), [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+                # 拿到任何 HTTP 应答就够——状态码是什么无所谓，这里问的是"路通不通"。
+                if ($resp) { $alive = $true; $via = $probe.Host }
+            } catch {
+                $alive = $false
+            } finally {
+                if ($resp) { try { $resp.Dispose() } catch {} }
+            }
+            if ($alive) { break }
+        }
     } catch {
         $alive = $false
     } finally {
         if ($client) { try { $client.Dispose() } catch {} }
         if ($handler) { try { $handler.Dispose() } catch {} }
     }
-    $script:DirectBaseline = @{ Alive = $alive; At = $now; Fingerprint = $fp }
+    $script:DirectBaseline = @{ Alive = $alive; At = $now; Fingerprint = $fp; Via = $via }
     return $alive
 }
 
@@ -1722,4 +1756,83 @@ function Get-CurrentState {
         }
     }
     return "off"
+}
+
+# ------------------------------------------------------------------------------
+# 只认 SOCKS 的端口（体检页用；不进主循环）
+# ------------------------------------------------------------------------------
+# 解决的是最气人的一种"不管用"：客户端只开了 SOCKS 口（Surge 的 socks-port、
+# mihomo 的 socks-port、ssh -D），本工具的三层判据里第二层（CONNECT 握手）
+# 必然不过，于是状态页说"没检测到代理"，而终端里也确实没被设成代理。
+# 用户看不出这是"端口协议不对"，只会觉得工具坏了。
+#
+# 这里做的是**解释**，不是判决：只回答"本机是不是有一个只认 SOCKS 的端口"。
+# 判决照旧走三层，绝不因为"发现了 SOCKS 口"就把它当代理注入——
+# 那会让 ALL_PROXY 指向一个 HTTP 客户端不认的端口。
+#
+# 候选集只取客户端目录里的默认端口（约 40 个，且只查真的在监听的）：
+# 全端口扫一遍再逐个握手会把体检页拖到几十秒，而"用户自己改到表外端口的纯 SOCKS 口"
+# 本来就不是这个检查器能负责的事（那种情况用户自己知道改了什么）。
+
+# 这个端口是不是一个 SOCKS5 服务端。3 字节问候（05 01 00），只看回包的版本字节。
+# 方法字节不看（00 = 无需认证 / FF = 没有可接受的方法）——两者都说明"这里是 SOCKS5"。
+function Test-Socks5Port([int]$Port, [int]$TimeoutMs = 300) {
+    if ($Port -le 0) { return $false }
+    $client = $null
+    $stream = $null
+    try {
+        $conn = Connect-Loopback $Port $TimeoutMs
+        if (-not $conn) { return $false }
+        $client = $conn.Client
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $TimeoutMs
+        $stream.WriteTimeout = $TimeoutMs
+        $req = [byte[]]@(0x05, 0x01, 0x00)
+        $stream.Write($req, 0, $req.Length)
+        $stream.Flush()
+        $buf = New-Object byte[] 2
+        $n = $stream.Read($buf, 0, 2)
+        if ($n -lt 1) { return $false }
+        return ($buf[0] -eq 0x05)
+    } catch {
+        return $false
+    } finally {
+        if ($stream) { try { $stream.Close() } catch {} }
+        if ($client) { try { $client.Close() } catch {} }
+    }
+}
+
+# 找出「在监听、但只认 SOCKS5」的端口。返回 @( @{ Port; Client } )。
+#
+# **先问"在不在听"，再动手**：一次监听枚举约 10 毫秒，而逐个端口做握手，
+# 每个不开的端口都要白等到超时（实测四十个候选端口串行握手花了 25 秒，
+# 体检页直接不可用）。所以候选先跟监听集合取交集。
+#
+# 顺序也是性能决定：先发 3 字节 SOCKS 问候（最坏 300 毫秒），只有它应话了
+# 才做 CONNECT 握手去排除混合端口。混合端口两种协议都应答，属于"能用"，不报。
+function Get-SocksOnlyPorts {
+    $listening = @{}
+    try {
+        foreach ($c in @(Get-ListeningTcpConnections)) {
+            $lp = 0
+            try { $lp = [int]$c.LocalPort } catch { $lp = 0 }
+            if ($lp -gt 0) { $listening[$lp] = $true }
+        }
+    } catch { }
+    $out = @()
+    $seen = @{}
+    foreach ($c in $ClientCatalog) {
+        foreach ($p in @($c.Ports)) {
+            $port = [int]$p
+            if ($port -le 0) { continue }
+            if ($seen.ContainsKey($port)) { continue }
+            $seen[$port] = $true
+            if (-not $listening.ContainsKey($port)) { continue }
+            if (-not (Test-Socks5Port $port 300)) { continue }
+            $hk = Get-ConnectHandshakeKind $port 300
+            if ($hk -ne $ConnectHandshakeKinds.Silent -and $hk -ne $ConnectHandshakeKinds.NotHttp) { continue }
+            $out += @{ Port = $port; Client = [string]$c.Name }
+        }
+    }
+    return $out
 }

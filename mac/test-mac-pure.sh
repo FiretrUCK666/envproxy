@@ -434,8 +434,35 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     fi
 
     echo "[2] 合并与归属"
-    _selftest_assert_eq "补默认项、留用户条目" "localhost,127.0.0.1,::1,example.com" "$(merge_no_proxy 'localhost,example.com,::1' "$DEFAULT_NO_PROXY")"
-    _selftest_assert_eq "含单引号条目丢弃" "localhost,127.0.0.1,::1,ok.example" "$(merge_no_proxy "ok.example,a'b" "$DEFAULT_NO_PROXY")"
+    _selftest_assert_eq "补默认项、留用户条目" "$DEFAULT_NO_PROXY,example.com" "$(merge_no_proxy 'localhost,example.com,::1' "$DEFAULT_NO_PROXY")"
+    _selftest_assert_eq "含单引号条目丢弃" "$DEFAULT_NO_PROXY,ok.example" "$(merge_no_proxy "ok.example,a'b" "$DEFAULT_NO_PROXY")"
+    # 默认集本身的性质：裸写 ::1、无方括号、无 CIDR、含内网后缀与云元数据地址。
+    # 方括号会让 httpx 每次请求抛 InvalidURL；CIDR 各工具解析不一，写了等于没写。
+    case ",$DEFAULT_NO_PROXY," in
+        *",::1,"*) _dnp_bare=1 ;;
+        *) _dnp_bare=0 ;;
+    esac
+    _selftest_assert_eq "默认集：裸写 ::1" "1" "$_dnp_bare"
+    case "$DEFAULT_NO_PROXY" in
+        *\[*) _dnp_br=1 ;;
+        *) _dnp_br=0 ;;
+    esac
+    _selftest_assert_eq "默认集：不含方括号" "0" "$_dnp_br"
+    case "$DEFAULT_NO_PROXY" in
+        */*) _dnp_cidr=1 ;;
+        *) _dnp_cidr=0 ;;
+    esac
+    _selftest_assert_eq "默认集：不含 CIDR" "0" "$_dnp_cidr"
+    case ",$DEFAULT_NO_PROXY," in
+        *",.local,"*) _dnp_local=1 ;;
+        *) _dnp_local=0 ;;
+    esac
+    _selftest_assert_eq "默认集：含内网后缀" "1" "$_dnp_local"
+    case ",$DEFAULT_NO_PROXY," in
+        *",169.254.169.254,"*) _dnp_meta=1 ;;
+        *) _dnp_meta=0 ;;
+    esac
+    _selftest_assert_eq "默认集：含云元数据地址" "1" "$_dnp_meta"
     # 「装了才认领」与「这值是不是本机地址」是两件独立的事实，各自要有用例。
     # 先造安装记录：下面这两条测的是"装好之后的注入值归我们回收"；
     # 没有安装记录时它会被正确判成"不知道"，那是紧接着单独测的另一件事。
@@ -617,6 +644,18 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
     _selftest_assert_eq "端点判据：3xx 类收到 204 不算通" "0" "$_ep_e"
     if test_endpoint_status 404 3xx; then _ep_f=1; else _ep_f=0; fi
     _selftest_assert_eq "端点判据：3xx 类收到 404 不算通" "0" "$_ep_f"
+
+    # 直连基线的池：形状本身就是契约。
+    # 少于两条就等于回到"押在某一家身上"的单点依赖；路径不以 / 开头会拼出坏网址；
+    # 主机重复等于白试两次。这四条都不碰网络，纯查表。
+    _dbp_n=$(printf '%s\n' "$DIRECT_BASELINE_POOL" | grep -c .)
+    _selftest_assert_eq "基线池：三条" "3" "$_dbp_n"
+    _dbp_bad=$(printf '%s\n' "$DIRECT_BASELINE_POOL" | awk -F'|' 'NF<2 || $1=="" || substr($2,1,1)!="/" {c++} END {print c+0}')
+    _selftest_assert_eq "基线池：每条都有主机与以 / 开头的路径" "0" "$_dbp_bad"
+    _dbp_dup=$(printf '%s\n' "$DIRECT_BASELINE_POOL" | cut -d'|' -f1 | sort -u | grep -c .)
+    _selftest_assert_eq "基线池：主机不重复" "3" "$_dbp_dup"
+    _selftest_assert_eq "基线池：单条超时短于端点直连超时" "1" \
+        "$(awk -v a="$DIRECT_BASELINE_TIMEOUT" -v b="$ENDPOINT_DIRECT_TIMEOUT" 'BEGIN { print (a < b) ? 1 : 0 }')"
 
     # 端点合格证：三态。只有"确定被墙"算证据。
     #
@@ -1858,6 +1897,8 @@ EOF
     _ue_check "status" 1 "yes" ""; _selftest_assert_eq "用法判定：--yes 跟着别的命令要拒" "1" "$?"
     _ue_check "status" 1 "" "--foo"; _selftest_assert_eq "用法判定：不认识的参数要拒" "1" "$?"
     _ue_check "install" 2 "" ""; _selftest_assert_eq "用法判定：一次给两个命令要拒" "1" "$?"
+    _ue_check "status" 1 "json" ""; _selftest_assert_eq "用法判定：--json 配 status 放行" "0" "$?"
+    _ue_check "install" 1 "json" ""; _selftest_assert_eq "用法判定：--json 跟着别的命令要拒" "1" "$?"
     # 光秃秃的横线：入口用 sed 剥前缀，`-`/`--`/`---` 都会归一化成空串，
     # 而命令个数仍是 1。不拒的话它会落到分派的 "" 分支——那是监控模式，
     # 于是"敲错一个横线"变成"在后台起了个常驻进程"，屏幕上还没有任何报错。
@@ -1917,6 +1958,9 @@ EOF
     _eg_case switch-without-command 2 --yes
     _eg_case unknown-switch 2 status --foo
     _eg_case two-commands 2 install uninstall
+    # --json 只描述"怎么输出"：跟着 status 才有意义，跟别的命令一律是用法错误。
+    # 它与 Windows 侧的 -Json 同一套判据（门禁 10 拿这行退出码互比）。
+    _eg_case json-misuse 2 install --json
 
     # --------------------------------------------------------------------------
     # 接线（源码级）：这些地方"删掉一行就静默失效"
@@ -2061,7 +2105,11 @@ _ver_row=$(all_lib_source | grep -c '_status_row "\$STATUS_LABEL_VERSION"')
     _selftest_assert_eq "接线：版本行两处都走分段渲染" "2" "$_ver_row"
     _ver_bad=$(all_lib_source | grep -cE 'style_out .*"版本 : ' 2>/dev/null)
     _selftest_assert_eq "接线：版本行没有整行套色写法" "0" "$_ver_bad"
-
+    # ---- --json 必须真的接到 JSON 渲染上 ----
+    # 分发里写错（比如永远走 show_status_live）在 Git Bash 上看不出来：
+    # mac 入口在非 macOS 上会被平台守卫拦住，status 根本到不了那一步。
+    _json_wire=$(_wiring_count "$SCRIPT_DIR/envproxy.sh" show_status_json)
+    _selftest_assert_eq "接线：--json 接到 JSON 渲染上" "1" "$_json_wire"
     # ---- 子命令表必须与入口分派一致 ----
     # is_monitor_args 用来复核 pid 文件里的进程是不是监控。它的子命令清单
     # 与入口分派是两份手写清单，漂移后会把"带子命令的进程"认成监控。
@@ -2310,7 +2358,8 @@ EOF
     _selftest_assert_eq "cli 判据：空值等于没设" "$FINDING_KIND_CLEAN" "$(cli_proxy_verdict '' dead 0)"
     _selftest_assert_eq "cli 判据：有 include 就不动" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'http://127.0.0.1:7890' dead 1)"
     _selftest_assert_eq "cli 判据：认不出的值不动" "$FINDING_KIND_FOREIGN" "$(cli_proxy_verdict 'not-a-url' dead 0)"
-    # 行解析：三种写法都要认，注释必须不认。
+
+    # 行解析：三种写法都要认（= / : / 空格），注释必须不认，行尾注释必须剥掉。
     _cli_config_line_parse 'proxy = http://127.0.0.1:7890'
     _selftest_assert_eq "cli 行解析：键值" "proxy" "$_cfl_key"
     _selftest_assert_eq "cli 行解析：值" "http://127.0.0.1:7890" "$_cfl_val"
@@ -2328,22 +2377,259 @@ EOF
     _selftest_assert_eq "cli 行解析：; 注释不是设置" "1" "$?"
     _cli_config_line_parse '[http]'
     _selftest_assert_eq "cli 行解析：段头不是设置" "1" "$?"
+    # 行尾注释必须剥掉：`proxy = 127.0.0.1:7890 # clash` 是最常见的写法之一，
+    # 不剥的话地址解析失败、判成「值认不出来」，那个死端口永远查不出来（静默漏检）。
+    _cli_config_line_parse 'proxy = 127.0.0.1:7890 # clash'
+    _selftest_assert_eq "cli 行解析：行尾 # 注释被剥掉" "127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse 'proxy = 127.0.0.1:7890 ; old'
+    _selftest_assert_eq "cli 行解析：行尾 ; 注释被剥掉" "127.0.0.1:7890" "$_cfl_val"
+    _cli_config_line_parse 'proxy = "127.0.0.1:7890" # 旧代理'
+    _selftest_assert_eq "cli 行解析：引号 + 行尾注释" "127.0.0.1:7890" "$_cfl_val"
+    # YAML 的冒号写法与 yarnrc 的空格写法。
+    _cli_config_line_parse 'httpProxy: "http://127.0.0.1:7890"' colon
+    _selftest_assert_eq "cli 行解析：YAML 冒号写法" "httpProxy|http://127.0.0.1:7890" "$_cfl_key|$_cfl_val"
+    _cli_config_line_parse 'proxy "http://127.0.0.1:7890"' space
+    _selftest_assert_eq "cli 行解析：yarnrc 空格写法" "proxy|http://127.0.0.1:7890" "$_cfl_key|$_cfl_val"
+
     # 读文件：段名要拼进键名，include 要能被认出来，注释行不许命中。
+    # 条目记录是十列（TAB）：Line Lines Key Value Host Port FixLine PortOnly Inc Raw。
     _cli_dir="$_sandbox/cli_proxy"
     mkdir -p "$_cli_dir" 2>/dev/null || true
-    # 两个段各一条代理：只找到一条就说明"段名拼进键名"那条逻辑没生效。
+    _cli_row_git='git|Git 自己的代理|kv||http.proxy https.proxy||drop|home:.gitconfig'
     printf '[user]\n    name = someone\n[http]\n    proxy = http://127.0.0.1:10809\n[https]\n    proxy = http://127.0.0.1:10809\n[include]\n    path = ../other\n' > "$_cli_dir/gitconfig"
-    _cli_rows=$(read_cli_proxy_file "$_cli_dir/gitconfig" 'http.proxy https.proxy')
+    _cli_rows=$(read_cli_proxy_file "$_cli_dir/gitconfig" "$_cli_row_git")
     _selftest_assert_eq "cli 读文件：找到两条代理项" "2" "$(printf '%s\n' "$_cli_rows" | grep -c .)"
-    _selftest_assert_eq "cli 读文件：键带段名" "http.proxy" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f2)"
-    _selftest_assert_eq "cli 读文件：认出了 include" "1" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f4)"
-    printf '# proxy=http://127.0.0.1:9999\nregistry=https://r/\nproxy=http://127.0.0.1:7890\n' > "$_cli_dir/.npmrc"
-    _cli_rows2=$(read_cli_proxy_file "$_cli_dir/.npmrc" 'proxy https-proxy')
-    _selftest_assert_eq "cli 读文件：注释掉的 proxy 不算" "1" "$(printf '%s\n' "$_cli_rows2" | grep -c .)"
-    _selftest_assert_eq "cli 读文件：活着的那条被读到" "http://127.0.0.1:7890" "$(printf '%s\n' "$_cli_rows2" | head -n 1 | cut -f3)"
-    # 文件不存在 = 读成功、零条目（「这一层不存在」不是「读不出来」）。
-    _selftest_assert_eq "cli 读文件：不存在的文件产出零行" "0" "$(read_cli_proxy_file "$_cli_dir/no-such" 'proxy' | grep -c .)"
+    _selftest_assert_eq "cli 读文件：键带段名" "http.proxy" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f3)"
+    _selftest_assert_eq "cli 读文件：认出了 include" "1" "$(printf '%s\n' "$_cli_rows" | head -n 1 | cut -f9)"
 
+    _cli_row_npm='npm|npm 自己的代理|kv||proxy https-proxy||drop|home:.npmrc'
+    printf '# proxy=http://127.0.0.1:9999\nregistry=https://r/\nproxy=127.0.0.1:7890 # clash\n' > "$_cli_dir/.npmrc"
+    _cli_rows2=$(read_cli_proxy_file "$_cli_dir/.npmrc" "$_cli_row_npm")
+    _selftest_assert_eq "cli 读文件：注释掉的 proxy 不算" "1" "$(printf '%s\n' "$_cli_rows2" | grep -c .)"
+    _selftest_assert_eq "cli 读文件：行尾注释不污染值" "127.0.0.1:7890" "$(printf '%s\n' "$_cli_rows2" | head -n 1 | cut -f4)"
+    _selftest_assert_eq "cli 读文件：主机与端口拆出来了" "127.0.0.1|7890" "$(printf '%s\n' "$_cli_rows2" | head -n 1 | cut -f5,6 | tr '\t' '|')"
+
+    # Cargo：TOML 的 [http] 段，值是带引号的；别的段里叫 proxy 的不算。
+    _cli_row_cargo='cargo|Cargo 自己的代理|kv|http|proxy||drop|home:.cargo/config.toml'
+    printf '[net]\nretry = 2\n[http]\nproxy = "http://127.0.0.1:7890"\n' > "$_cli_dir/config.toml"
+    _selftest_assert_eq "cli 读文件：cargo 读到 [http] 的 proxy" "http://127.0.0.1:7890" "$(read_cli_proxy_file "$_cli_dir/config.toml" "$_cli_row_cargo" | head -n 1 | cut -f4)"
+    printf '[net]\nproxy = "http://127.0.0.1:7890"\n' > "$_cli_dir/config2.toml"
+    _selftest_assert_eq "cli 读文件：别的段里的 proxy 不算" "0" "$(read_cli_proxy_file "$_cli_dir/config2.toml" "$_cli_row_cargo" | grep -c .)"
+
+    # Gradle：主机与端口分两行写，必须凑齐才算一项；只写主机 = 半截配置，不产结论。
+    _cli_row_gradle='gradle|Gradle 自己的代理|kv|||systemProp.http.proxyHost=systemProp.http.proxyPort|port|home:.gradle/gradle.properties'
+    printf 'org.gradle.jvmargs=-Xmx2g\nsystemProp.http.proxyHost=127.0.0.1\nsystemProp.http.proxyPort=7890\n' > "$_cli_dir/gradle.properties"
+    _cli_rows3=$(read_cli_proxy_file "$_cli_dir/gradle.properties" "$_cli_row_gradle")
+    _selftest_assert_eq "cli 读文件：gradle 成对键合成一项" "1" "$(printf '%s\n' "$_cli_rows3" | grep -c .)"
+    _selftest_assert_eq "cli 读文件：gradle 带出端口" "7890" "$(printf '%s\n' "$_cli_rows3" | head -n 1 | cut -f6)"
+    _selftest_assert_eq "cli 读文件：gradle 是端口行" "1" "$(printf '%s\n' "$_cli_rows3" | head -n 1 | cut -f8)"
+    _selftest_assert_eq "cli 读文件：gradle 要删两行" "2" "$(printf '%s\n' "$_cli_rows3" | head -n 1 | cut -f2 | tr ',' '\n' | grep -c .)"
+    printf 'systemProp.http.proxyHost=127.0.0.1\n' > "$_cli_dir/gradle-half.properties"
+    _selftest_assert_eq "cli 读文件：gradle 没有端口就不产结论" "0" "$(read_cli_proxy_file "$_cli_dir/gradle-half.properties" "$_cli_row_gradle" | grep -c .)"
+
+    # Conda：嵌套 YAML，父键下面挂 http / https。
+    _cli_row_conda='conda|Conda 自己的代理|yaml-nested|proxy_servers|http https||port-only|home:.condarc'
+    printf 'proxy_servers:\n  http: http://127.0.0.1:7890\n  https: http://127.0.0.1:7890\nchannels:\n  - defaults\n' > "$_cli_dir/.condarc"
+    _selftest_assert_eq "cli 读文件：conda 找到两条" "2" "$(read_cli_proxy_file "$_cli_dir/.condarc" "$_cli_row_conda" | grep -c .)"
+
+    # Maven：<proxy> 块，<active>false</active> 的那一块不算。
+    _cli_row_maven='maven|Maven 自己的代理|xml||||port-only|home:.m2/settings.xml'
+    printf '<settings>\n  <proxies>\n    <proxy>\n      <active>true</active>\n      <host>127.0.0.1</host>\n      <port>7890</port>\n    </proxy>\n    <proxy>\n      <active>false</active>\n      <host>127.0.0.1</host>\n      <port>7891</port>\n    </proxy>\n  </proxies>\n</settings>\n' > "$_cli_dir/settings.xml"
+    _cli_rows4=$(read_cli_proxy_file "$_cli_dir/settings.xml" "$_cli_row_maven")
+    _selftest_assert_eq "cli 读文件：maven 跳过没启用的那块" "1" "$(printf '%s\n' "$_cli_rows4" | grep -c .)"
+    _selftest_assert_eq "cli 读文件：maven 读出端口" "7890" "$(printf '%s\n' "$_cli_rows4" | head -n 1 | cut -f6)"
+
+    # NuGet：<add key="http_proxy" value="..." />
+    _cli_row_nuget='nuget|NuGet 自己的代理|xml||||port-only|home:.nuget/NuGet/NuGet.Config'
+    printf '<configuration><config><add key="http_proxy" value="http://127.0.0.1:7890" /></config></configuration>\n' > "$_cli_dir/NuGet.Config"
+    _selftest_assert_eq "cli 读文件：nuget 读到 http_proxy" "7890" "$(read_cli_proxy_file "$_cli_dir/NuGet.Config" "$_cli_row_nuget" | head -n 1 | cut -f6)"
+
+    # SSH：只认本机回环 + 端口；域名别名不是本机代理。
+    _cli_row_ssh='ssh|SSH 自己的代理|ssh||||port|home:.ssh/config'
+    printf 'Host github.com\n  ProxyCommand nc -X connect -x 127.0.0.1:7890 %%h %%p\nHost *\n  ProxyJump bastion\n' > "$_cli_dir/ssh_config"
+    _selftest_assert_eq "cli 读文件：ssh 找到本机代理" "7890" "$(read_cli_proxy_file "$_cli_dir/ssh_config" "$_cli_row_ssh" | head -n 1 | cut -f6)"
+    printf 'Host *\n  ProxyJump bastion\n' > "$_cli_dir/ssh_config2"
+    _selftest_assert_eq "cli 读文件：跳板机别名不算本机代理" "0" "$(read_cli_proxy_file "$_cli_dir/ssh_config2" "$_cli_row_ssh" | grep -c .)"
+
+    # 文件不存在 = 读成功、零条目（「这一层不存在」不是「读不出来」）。
+    _selftest_assert_eq "cli 读文件：不存在的文件产出零行" "0" "$(read_cli_proxy_file "$_cli_dir/no-such" "$_cli_row_npm" | grep -c .)"
+
+    # 修法三档：删行 / 改端口 / 只报告（同一层里，能不能动由文件形态决定）。
+    _selftest_assert_eq "cli 修法：drop 永远删" "drop" "$(cli_proxy_entry_mode drop 0)"
+    _selftest_assert_eq "cli 修法：port 无活代理退回删行" "drop" "$(cli_proxy_entry_mode port 0)"
+    _selftest_assert_eq "cli 修法：port 有活代理改端口" "port" "$(cli_proxy_entry_mode port 1)"
+    _selftest_assert_eq "cli 修法：port-only 无活代理只报告" "none" "$(cli_proxy_entry_mode port-only 0)"
+    _selftest_assert_eq "cli 修法：port-only 有活代理改端口" "port" "$(cli_proxy_entry_mode port-only 1)"
+    # 可修判据的第三维：同一条记录自己说「这股形态能不能安全改」。
+    if finding_repairable "$FINDING_KIND_BLOCKING" 'cli-proxy.npm' '1'; then _cli_rep=1; else _cli_rep=0; fi
+    _selftest_assert_eq "cli 可修：声明可改的能修" "1" "$_cli_rep"
+    if finding_repairable "$FINDING_KIND_BLOCKING" 'cli-proxy.maven' '0'; then _cli_rep=0; else _cli_rep=1; fi
+    _selftest_assert_eq "cli 可修：声明只报告的不进要修的" "1" "$_cli_rep"
+
+    # 改端口那一行只替换地址：账号密码、标记都一个字不许动。
+    _selftest_assert_eq "cli 改端口：只换地址" 'proxy = http://127.0.0.1:9999' \
+        "$(_cli_repoint_line 'proxy = http://127.0.0.1:7890' '127.0.0.1' 7890 '127.0.0.1' 9999 0)"
+    _selftest_assert_eq "cli 改端口：保留账号密码" 'proxy = http://u:p@127.0.0.1:9999' \
+        "$(_cli_repoint_line 'proxy = http://u:p@127.0.0.1:7890' '127.0.0.1' 7890 '127.0.0.1' 9999 0)"
+    _selftest_assert_eq "cli 改端口：端口行保留标记" '  <port>9999</port>' \
+        "$(_cli_repoint_line '  <port>7890</port>' '' 7890 '127.0.0.1' 9999 1)"
+    _selftest_assert_eq "cli 改端口：IPv6 保留方括号" 'proxy=http://[::1]:9999' \
+        "$(_cli_repoint_line 'proxy=http://[::1]:7890' '::1' 7890 '::1' 9999 0)"
+    _selftest_assert_eq "cli 改端口：找不到地址就不改" '' \
+        "$(_cli_repoint_line 'proxy=nothing' '127.0.0.1' 7890 '127.0.0.1' 9999 0)"
+
+    # 真跑一遍：把死行删掉 / 把端口改过去，别的一行都不许动。
+    printf 'registry=https://r/\nproxy=http://127.0.0.1:65001\n' > "$_cli_dir/repair.npmrc"
+    _cli_plan="drop$(printf '\t')2$(printf '\t')2$(printf '\t')127.0.0.1$(printf '\t')65001$(printf '\t')0
+"
+    _cli_apply_plan "$_cli_dir/repair.npmrc" "$_cli_plan" 0 '' ''
+    _selftest_assert_eq "cli 修复：死的那一行被删掉" "registry=https://r/" "$(cat "$_cli_dir/repair.npmrc" 2>/dev/null)"
+    printf 'org.gradle.jvmargs=-Xmx2g\nsystemProp.http.proxyHost=127.0.0.1\nsystemProp.http.proxyPort=65001\n' > "$_cli_dir/repair.gradle"
+    _cli_plan2="port$(printf '\t')2,3$(printf '\t')3$(printf '\t')127.0.0.1$(printf '\t')65001$(printf '\t')1
+"
+    _cli_apply_plan "$_cli_dir/repair.gradle" "$_cli_plan2" 1 '127.0.0.1' '17001'
+    _selftest_assert_eq "cli 修复：端口行改到当前端口" "17001" "$(sed -n '3p' "$_cli_dir/repair.gradle" | sed 's/.*=//')"
+    _selftest_assert_eq "cli 修复：主机行原样留着" "1" "$(grep -c 'proxyHost=127.0.0.1' "$_cli_dir/repair.gradle")"
+    _selftest_assert_eq "cli 修复：无关的行原样留着" "1" "$(grep -c 'jvmargs=-Xmx2g' "$_cli_dir/repair.gradle")"
+    echo "[14e] 网址解析与只认 SOCKS 的端口（dns / socks）"
+    # DNS 地址分类：与 Windows 侧 Get-DnsAddressClass 同判据。
+    # 198.18.0.0/15 是翻墙软件的虚拟 IP 池；真实互联网与公司内网不会拿它当服务器地址。
+    _selftest_assert_eq "dns 分类：127.0.0.1 是回环" "loopback" "$(dns_address_class 127.0.0.1)"
+    _selftest_assert_eq "dns 分类：127 段整段都算回环" "loopback" "$(dns_address_class 127.1.2.3)"
+    _selftest_assert_eq "dns 分类：::1 是回环" "loopback" "$(dns_address_class ::1)"
+    _selftest_assert_eq "dns 分类：方括号也认" "loopback" "$(dns_address_class '[::1]')"
+    _selftest_assert_eq "dns 分类：198.18 是虚拟段" "fakeip" "$(dns_address_class 198.18.0.2)"
+    _selftest_assert_eq "dns 分类：198.19 也是虚拟段" "fakeip" "$(dns_address_class 198.19.255.254)"
+    _selftest_assert_eq "dns 分类：198.20 不是虚拟段" "other" "$(dns_address_class 198.20.0.1)"
+    _selftest_assert_eq "dns 分类：198.17 不是虚拟段" "other" "$(dns_address_class 198.17.0.1)"
+    _selftest_assert_eq "dns 分类：公共 DNS 归 other" "other" "$(dns_address_class 223.5.5.5)"
+    _selftest_assert_eq "dns 分类：空值归 other" "other" "$(dns_address_class '')"
+
+    # 读服务与判活都装桩：真机上这两件事都读真实系统，断言会随人随机红。
+    _dns_saved_state=$(declare -f dns53_state 2>/dev/null || true)
+    _dns_saved_ns=$(declare -f networksetup 2>/dev/null || true)
+    unset -f networksetup 2>/dev/null || true
+    networksetup() {
+        case "$1" in
+            -listallnetworkservices)
+                printf 'An asterisk (*) denotes that a network service is disabled.\nWi-Fi\nThunderbolt Ethernet\n' ;;
+            -getdnsservers)
+                case "${2:-}" in
+                    'Wi-Fi') printf '127.0.0.1\n' ;;
+                    *) printf "There aren't any DNS Servers set on %s.\n" "${2:-}" ;;
+                esac ;;
+            *) return 0 ;;
+        esac
+    }
+    dns53_state() { printf 'free'; }
+    _selftest_assert_eq "dns：本机地址 + 没人在听 -> 挡住网络" "1" \
+        "$(get_dns_findings | grep -c "$FINDING_KIND_BLOCKING")"
+    dns53_state() { printf 'bound'; }
+    _selftest_assert_eq "dns：本机地址 + 有程序在听 -> 只是提醒" "1" \
+        "$(get_dns_findings | grep -c "$FINDING_KIND_ALIVE")"
+    # 判活拿不到结果时**不下结论**：把"没看见"说成"没人听"会让人去改一个正常设置。
+    dns53_state() { printf 'unknown'; }
+    _selftest_assert_eq "dns：判活拿不到就不下结论" "0" "$(get_dns_findings | grep -c .)"
+    dns53_state() { printf 'free'; }
+    # 公共 DNS 不产结论：用户自己设的 223.5.5.5 是正常配置，不是故障。
+    unset -f networksetup 2>/dev/null || true
+    networksetup() {
+        case "$1" in
+            -listallnetworkservices) printf 'Wi-Fi\n' ;;
+            -getdnsservers) printf '223.5.5.5\n' ;;
+            *) return 0 ;;
+        esac
+    }
+    _selftest_assert_eq "dns：公共 DNS 不产结论" "0" "$(get_dns_findings | grep -c .)"
+    # 一个服务都没设 DNS（全回那句人话）也不产结论：那是默认，不是问题。
+    networksetup() {
+        case "$1" in
+            -listallnetworkservices) printf 'Wi-Fi\n' ;;
+            -getdnsservers) printf "There aren't any DNS Servers set on Wi-Fi.\n" ;;
+            *) return 0 ;;
+        esac
+    }
+    _selftest_assert_eq "dns：没设 DNS 不产结论" "0" "$(get_dns_findings | grep -c .)"
+    unset -f networksetup 2>/dev/null || true
+    if [ -n "$_dns_saved_ns" ]; then eval "$_dns_saved_ns"; fi
+    if [ -n "$_dns_saved_state" ]; then eval "$_dns_saved_state"; fi
+
+    # 只认 SOCKS 的端口：关着的端口不算；回 05 00 的才是。
+    if test_socks5_port 65002; then _s5=1; else _s5=0; fi
+    _selftest_assert_eq "socks 判据：关着的端口不算" "0" "$_s5"
+    if test_socks5_port ''; then _s5=1; else _s5=0; fi
+    _selftest_assert_eq "socks 判据：空端口不算" "0" "$_s5"
+    # 真起一个只回 05 00 的端口（与假代理同一手法：perl 监听、真连接）。
+    # 不测正路就等于"判据恒假也全绿"——那是最难查的一种。
+    _s5_port=""
+    for _s5_try in 19200 19201 19202 19203; do
+        if ! { exec 9<>/dev/tcp/127.0.0.1/$_s5_try; } 2>/dev/null; then
+            _s5_port=$_s5_try; break
+        fi
+        exec 9<&- 2>/dev/null || true
+    done
+    if [ -n "$_s5_port" ] && command -v perl >/dev/null 2>&1; then
+        perl -e '
+          use IO::Socket::INET;
+          my $port = shift @ARGV;
+          my $srv = IO::Socket::INET->new(LocalAddr=>"127.0.0.1", LocalPort=>$port,
+                                          Listen=>8, ReuseAddr=>1) or exit 1;
+          my $n = 0;
+          while ($n++ < 6) {
+            my $c = $srv->accept() or next;
+            my $buf = "";
+            read($c, $buf, 3);
+            print $c pack("C2", 5, 0);
+            close $c;
+          }
+        ' "$_s5_port" &
+        _s5_pid=$!
+        _s5_wait=0
+        while [ "$_s5_wait" -lt 50 ]; do
+            if { exec 9<>/dev/tcp/127.0.0.1/"$_s5_port"; } 2>/dev/null; then
+                exec 9<&- 2>/dev/null || true
+                break
+            fi
+            _s5_wait=$((_s5_wait + 1))
+            sleep 0.1
+        done
+        if test_socks5_port "$_s5_port"; then _s5=1; else _s5=0; fi
+        _selftest_assert_eq "socks 判据：回 05 00 的端口被认出来" "1" "$_s5"
+        kill "$_s5_pid" 2>/dev/null || true
+        wait "$_s5_pid" 2>/dev/null || true
+    else
+        echo "  SKIP socks 正路（没有 perl 或挑不到空闲端口）"
+    fi
+    echo "[14f] 状态 JSON（机器可读输出）"
+    # 给脚本、状态栏、批量部署读的：一行、纯 ASCII、字段名与取值是契约
+    # （与 Windows 侧 Format-StatusJson 逐字段同形，门禁 6 核对）。
+    _jm_saved_port="${_port:-}"; _jm_saved_unknown="${_port_unknown:-0}"
+    _m=""; _port="7078"; _port_unknown=0; _never_installed=0; _pn=0
+    SNAP_NODE_HANDSHAKE="proxy-ok"; SNAP_VARS_MATCH="yes"
+    _json=$(format_status_json)
+    _selftest_assert_eq "json：只有一行" "1" "$(printf '%s\n' "$_json" | grep -c .)"
+    _selftest_assert_eq "json：schema" "1" "$(printf '%s' "$_json" | sed -n 's/.*"schema":\([0-9][0-9]*\).*/\1/p')"
+    _selftest_assert_eq "json：state on" "on" "$(printf '%s' "$_json" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+    _selftest_assert_eq "json：port 是数字" "7078" "$(printf '%s' "$_json" | sed -n 's/.*"port":\([0-9][0-9]*\).*/\1/p')"
+    _selftest_assert_eq "json：relayPort 字段在（mac 侧恒为 null）" "null" "$(printf '%s' "$_json" | sed -n 's/.*"relayPort":\([a-z]*\).*/\1/p')"
+    _selftest_assert_eq "json：issues 是数字" "1" "$(printf '%s' "$_json" | grep -c '"issues":[0-9]')"
+    # 纯 ASCII：中文文案不进 JSON（脚本那边读到的该是字段，不是话）。
+    _json_ascii=1
+    case "$_json" in *[!\ -~]*) _json_ascii=0 ;; esac
+    _selftest_assert_eq "json：纯 ASCII" "1" "$_json_ascii"
+    # 三态不许塌缩：枚举失败是「不知道」，不是「没有代理」。
+    _port=""; _port_unknown=1
+    _json=$(format_status_json)
+    _selftest_assert_eq "json：unknown 不塌缩成 off" "unknown" "$(printf '%s' "$_json" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+    _selftest_assert_eq "json：unknown 时 port 是 null" "1" "$(printf '%s' "$_json" | grep -c '"port":null')"
+    _port=""; _port_unknown=0
+    _json=$(format_status_json)
+    _selftest_assert_eq "json：没有代理时是 off" "off" "$(printf '%s' "$_json" | sed -n 's/.*"state":"\([a-z]*\)".*/\1/p')"
+    # 引号与反斜杠必须转义：一个裸引号就会让整行 JSON 变成解析不了的垃圾。
+    _json=$(SNAP_VARS_MATCH='a"b\c'; format_status_json)
+    _selftest_assert_eq "json：引号与反斜杠被转义" "1" "$(printf '%s' "$_json" | grep -c 'a\\"b\\\\c')"
+    _port="${_jm_saved_port}"; _port_unknown="${_jm_saved_unknown}"
+    _selftest_assert_eq "json：入口接受 status --json（用法层）" "0" "$(USAGE_COMMAND=status; USAGE_COMMAND_COUNT=1; USAGE_SWITCHES='json'; USAGE_EXTRA=''; usage_error; echo $?)"
     echo "[15] PAC 端口解析、裸 IPv6、地址形态"
     # 三条都对应"永远修不好"或"误判"的真实缺陷。
     # ① PAC 的端口必须从 URL 里解析出来，否则 port=0 → unknown → foreign，

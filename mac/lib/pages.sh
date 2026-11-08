@@ -371,17 +371,17 @@ EOF
     return 0
 }
 
-show_status() {
-    style_out title "======== EnvProxy 状态 ========"
-    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
-    # 读完 8 行再自己合成判断，是这屏原来最大的问题；正常项与异常项也不再同构平铺。
-    get_status_snapshot
-
-    # ---- 结论行 ----
+# 组装"要注意的"清单。**判据只有这一份**：状态页与 `status --json` 都调它。
+# 两处各写一遍必然分叉，而分叉的表现是「屏幕说 0 项、脚本读到 3 项」——
+# 谁都不会怀疑的那一类错。产出三个全局：
+#   _pb                 换行分隔的问题清单
+#   _pn                 条数
+#   _never_installed    这台机器上装过没有（结论行与 JSON 都要读它）
+# 依赖 get_status_snapshot 已经设好的那些全局。
+status_problem_lines() {
     # 这台机器上到底装过没装过。判据是安装时写下的路径记录——它只在安装时写、卸载时删。
     # 用途是避免把"从没装过"说成"崩溃/被强制退出"：后者是故障语气，
     # 而首次打开的人看到的应该是"还没装，按 1 就好"，不是"你的东西坏了"。
-    # 必须算在结论行**之前**：结论行要用它。
     # 与安装侧同一个判据（base 层 has_install_record）：内联一份就是第二个真相。
     if has_install_record; then _never_installed=0; else _never_installed=1; fi
     _pb=""
@@ -427,12 +427,62 @@ show_status() {
     # 计数与列表必须来自同一批条目：先切成数组，再数个数、再逐条打印。
     # 早先两边各算一遍，于是出现了"有 1 项要注意"下面一条都不显示的分叉。
     # 计数与列表同源：_pb 从一开始就是**换行分隔**，数个数与逐条打印读同一份。
-    # 早先两边各算一遍（而且分隔符用的是全角分号、切分器认的是半角），
-    # 于是出现过"有 1 项要注意"下面把三件事挤成一行的情况。
     _pn=0
     if [ -n "$_pb" ]; then
         _pn=$(printf '%s' "$_pb" | grep -c . || true)
     fi
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# 机器可读输出：一行 JSON（`status --json`）
+# ------------------------------------------------------------------------------
+# 给脚本、状态栏、批量部署读的，**不是给人读的**：
+#   · 只有一行，不含任何控制字符（实时刷新那一层会写光标码，所以它绕开那一层）；
+#   · 全部值都是 ASCII（中文问题描述不进 JSON：脚本那边读到的该是字段，不是文案）。
+#   · 字段名与取值是**契约**（README 与两侧自检都钉着它），改一处要两侧一起改。
+# 状态三态，**不许塌缩**：端口枚举失败时是 unknown，不是 off——
+# 塌缩会让脚本以为"现在该直连"，而事实是"这一轮没读到端口"。
+_std_json_str() {
+    printf '%s' "${1:-}" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+# 只负责拼那一行：快照的采集与问题清单分别由 get_status_snapshot / status_problem_lines
+# 完成。拆开是为了自检能喂一组固定的全局变量，不必真的去读这台机器的状态
+# （真读会让"JSON 字段写错了"这类断言随人随机红）。
+format_status_json() {
+    _j_state="off"
+    if [ -n "${_port:-}" ]; then _j_state="on"
+    elif [ "$_port_unknown" = "1" ]; then _j_state="unknown"; fi
+    _j_installed="false"; [ "$_never_installed" = "0" ] && _j_installed="true"
+    _j_monitor="false"; [ -n "${_m:-}" ] && _j_monitor="true"
+    _j_port="null"; [ -n "${_port:-}" ] && _j_port="$_port"
+    _j_ver=$(get_local_version 2>/dev/null || true)
+    _j_proxy=$(get_current_proxy_port 2>/dev/null || true)
+    _j_proxy="$(_std_json_str "$_j_proxy")"
+    _j_nh="$(_std_json_str "${SNAP_NODE_HANDSHAKE:-}")"
+    _j_vm="$(_std_json_str "${SNAP_VARS_MATCH:-}")"
+    # 固定入口（17099）只有 Windows 有；mac 侧没有这一层，输出 null，
+    # 字段保留——脚本不用分平台判断字段在不在。
+    printf '{"schema":1,"version":"%s","installed":%s,"monitor":%s,"state":"%s","port":%s,"proxy":"%s","nodeHandshake":"%s","varsMatch":"%s","relayPort":null,"issues":%s}\n' \
+        "$(_std_json_str "$_j_ver")" "$_j_installed" "$_j_monitor" "$_j_state" "$_j_port" \
+        "$_j_proxy" "$_j_nh" "$_j_vm" "$_pn"
+    return 0
+}
+
+show_status_json() {
+    get_status_snapshot
+    status_problem_lines
+    format_status_json
+    return 0
+}
+
+show_status() {
+    style_out title "======== EnvProxy 状态 ========"
+    # ---- 先把结论算出来：这一屏只回答一个问题"我现在正常吗" ----
+    # 读完 8 行再自己合成判断，是这屏原来最大的问题；正常项与异常项也不再同构平铺。
+    get_status_snapshot
+    status_problem_lines
     # 标题下空一行：标题在给下面的内容起头，结论立刻顶着标题读起来很闷。
     # 与帮助页同一套规矩（标题上下各空一行），与 Windows 侧状态页同形。
     echo ""

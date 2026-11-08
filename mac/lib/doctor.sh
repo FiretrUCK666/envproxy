@@ -59,14 +59,17 @@ finding_fixable() {
 #
 # 输出是**一行一条、TAB 分列**（与 sysproxy_layers 的既有形状一致：Mac 侧
 # 一直靠管道 + read 传结构，引入数组会撞 bash 3.2 的坑）：
-#   Id <TAB> Kind <TAB> Subject <TAB> Where <TAB> Value <TAB> Reason <TAB> Advice <TAB> Fix
+#   Id <TAB> Kind <TAB> Subject <TAB> Where <TAB> Value <TAB> Reason <TAB> Advice <TAB> Repairable
 # 字段里不许出现 TAB（值都是地址、路径、短句；万一有，写入前由 finding_new 替换成空格）。
 finding_new() {
     _fn_id="${1:-}"; _fn_kind="${2:-}"; _fn_subject="${3:-}"; _fn_where="${4:-}"
     _fn_value="${5:-}"; _fn_reason="${6:-}"; _fn_advice="${7:-}"
-    # 第 8 列曾放"这一层由谁修"，**已废弃、恒为空串**，但列保留：
-    # 界面按 TAB 切字段，少一列会让所有读取点错位（而错位不报错，只是读到别人的值）。
-    # 可修性由「Id 前缀 → 检查器表 → 该层有没有 Fix」推出来，存一份在这里就是第二个真相。
+    # 第 8 列：这一条记录自己说「这股形态能不能安全改」。1 = 能 / 0 = 只报告 / 空 = 没声明。
+    # **它不是「用哪个函数修」**（那由检查器表的 Fix 列回答，存一份就是第二个真相）。
+    # 它回答的是另一件事：同一条 cli-proxy 层里，`.npmrc` 删一行是安全的，
+    # `settings.xml` 的 <proxy> 块删一半会留下坏配置——只有看得见文件格式的那一层
+    # 能回答这件事。界面通过 finding_repairable 的第 3 个参数读它；
+    # 与 Windows 侧的 Finding.Data.Repairable 同义。
     _fn_fix="${8:-}"
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$(printf '%s' "$_fn_id" | tr '\t' ' ')" \

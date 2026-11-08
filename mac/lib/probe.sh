@@ -165,8 +165,28 @@ DIRECT_BASELINE_TTL_SEC=60
 NETWORK_FP_TTL_SEC=30
 # 兜底阶段给合格证判定的总预算（秒）。命中一个就返回，通常用不满。
 ENDPOINT_PROOF_SWEEP_BUDGET_SEC=8
-# 直连基线的对照站点：只用来回答"直连还能不能上网"，不参与端点表。
-DIRECT_BASELINE_HOST="www.baidu.com"
+# 直连基线的对照站点池：只用来回答"直连还能不能上网"，不参与端点表。
+#
+# **为什么是一个池而不是一个域名**：这台机器在不在线的判据，不能押在某一家身上。
+# 海外分支、海外云主机、严格管控的企业内网都可能让某一个站点超时或根本不放行；
+# 一旦唯一裁判不回话，"本机直连不通"就会被当成事实，合格证全变成 unknown，
+# 于是一个好好的节点被判死、变量被删掉——用户以为工具坏了，其实只是裁判掉线了。
+#
+# 判据宽松且方向正确：**任一条拿到任何 HTTP 应答就算在线**。
+# 这里问的只是"路通不通"，不问哪个站点通；三个站点分属不同骨干/不同用途，
+# 单点被墙、被门户劫持、DNS 抽风都不会同时灭掉三个。
+#
+# 顺序固定、逐个试，第一个应答就返回。单条上限比端点取证短（2 秒），
+# 最坏 3×2 秒仍在兜底总预算之内。
+# 两侧必须逐条相同（门禁 6 核对）：同一个网络在 Windows 上判"在线"、
+# 在 Mac 上判"离线"，会让同一个代理被两台机器判成相反结论。
+# 格式：主机|路径，一行一条，顺序即尝试顺序。
+DIRECT_BASELINE_POOL='www.baidu.com|/
+detectportal.firefox.com|/success.txt
+www.qq.com|/'
+# 单条基线的上限（秒）。与 ENDPOINT_DIRECT_TIMEOUT 分开：那个是"判一个端点被没被墙"，
+# 这个是"判这台机器还能不能上网"，后者三条串行，单条必须更短。
+DIRECT_BASELINE_TIMEOUT=2
 # 直连基线 / 网络指纹的进程内缓存
 DIRECT_BASELINE_STATE=""     # "活/死|单调秒|指纹"
 NETWORK_FP_VALUE=""
@@ -220,13 +240,19 @@ direct_baseline_alive() {
     fi
     # --noproxy '*'：这一侧问的是"直连还能不能出去"，走了代理就答非所问。
     # 拿到任何 HTTP 应答就够——状态码是什么无所谓，这里问的是"路通不通"。
-    _db_out=$(curl_direct --disable -s -D - -o /dev/null --head \
-        --noproxy '*' --connect-timeout 2 --max-time "$ENDPOINT_DIRECT_TIMEOUT" \
-        "http://$DIRECT_BASELINE_HOST/" 2>/dev/null | head -n 1)
-    case "$_db_out" in
-        HTTP/*) _db_alive=1 ;;
-        *)      _db_alive=0 ;;
-    esac
+    # **任一条通即返回**：通常只付一次往返；三条都不通才付满 3×2 秒。
+    _db_alive=0
+    while IFS='|' read -r _db_host _db_path; do
+        [ -n "$_db_host" ] || continue
+        _db_out=$(curl_direct --disable -s -D - -o /dev/null --head \
+            --noproxy '*' --connect-timeout 2 --max-time "$DIRECT_BASELINE_TIMEOUT" \
+            "http://$_db_host$_db_path" 2>/dev/null | head -n 1)
+        case "$_db_out" in
+            HTTP/*) _db_alive=1; break ;;
+        esac
+    done <<EOF
+$DIRECT_BASELINE_POOL
+EOF
     DIRECT_BASELINE_STATE="$_db_alive|$_db_now|$_db_fp"
     [ "$_db_alive" = "1" ] && return 0 || return 1
 }
@@ -1397,4 +1423,72 @@ _port_alive() {
     # 与 port_alive_bounded 同一实现：同一件事只许有一处判据，
     # 否则"状态页说活着、另一处说死了"这种分叉迟早出现。
     port_alive_bounded "$1" "$2"
+}
+
+# ------------------------------------------------------------------------------
+# 只认 SOCKS 的端口（体检页用；不进主循环）
+# ------------------------------------------------------------------------------
+# 解决的是最气人的一种"不管用"：客户端只开了 SOCKS 口（Surge 的 socks-port、
+# mihomo 的 socks-port、ssh -D），本工具的三层判据里第二层（CONNECT 握手）
+# 必然不过，于是状态页说"没检测到代理"，而终端里也确实没被设成代理。
+# 用户看不出这是"端口协议不对"，只会觉得工具坏了。
+#
+# 这里做的是**解释**，不是判决：只回答"本机是不是有一个只认 SOCKS 的端口"。
+# 判决照旧走三层，绝不因为"发现了 SOCKS 口"就把它当代理注入——
+# 那会让 ALL_PROXY 指向一个只认 HTTP 的工具不认的端口。
+#
+# 候选集只取客户端目录里的默认端口：全端口扫一遍再逐个握手会把体检页拖到几十秒，
+# 而"用户自己改到表外端口的纯 SOCKS 口"本来就不是这个检查器能负责的事。
+#
+# 这条与 Windows 侧 Test-Socks5Port 判据同形：3 字节问候（05 01 00），
+# 只看回包的**版本字节**（0x05）。方法字节不看——00「无需认证」与 FF「没有可接受的方法」
+# 都说明"这里是 SOCKS5 服务端"。
+test_socks5_port() {
+    _ts5_port="${1:-}"
+    case "$_ts5_port" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$_ts5_port" -gt 0 ] 2>/dev/null || return 1
+    # 花括号分组 + 组上重定向：exec 自己的 2>/dev/null 不会生效（重定向按序处理，
+    # 打开 /dev/tcp 失败时它还没轮到），而分组不是子 shell，fd 3 留在当前 shell 里。
+    if ! { exec 3<>"/dev/tcp/127.0.0.1/$_ts5_port"; } 2>/dev/null; then
+        return 1
+    fi
+    printf '\005\001\000' >&3 2>/dev/null || { exec 3<&- 2>/dev/null; return 1; }
+    _ts5_r=''
+    IFS= read -r -n 1 -t 1 _ts5_r <&3 2>/dev/null || true
+    exec 3<&- 2>/dev/null || true
+    [ "$_ts5_r" = "$(printf '\005')" ] && return 0
+    return 1
+}
+
+# 找出「在监听、但只认 SOCKS5」的端口。输出 "端口|客户端名" 一行一个。
+# 混合端口（HTTP 与 SOCKS5 都应答）不算：它们能正常注入，没有可抱怨的地方。
+socks_only_ports() {
+    _sop_map=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' '
+        NF >= 3 {
+            n = split($3, p, " ")
+            for (i = 1; i <= n; i++) {
+                if (p[i] == "" || (p[i] in seen)) continue
+                seen[p[i]] = 1
+                print p[i] "|" $2
+            }
+        }')
+    # **先问"在不在听"，再动手**：一次监听枚举约几十毫秒，而逐个端口做握手，
+    # 每个不开的端口都要白等到超时（Windows 侧实测四十个候选串行握手花了 25 秒）。
+    # 顺序也是性能决定：先发 3 字节 SOCKS 问候（最坏 1 秒），只有它应话了才做
+    # CONNECT 握手去排除混合端口——混合端口两种协议都应答，属于"能用"，不报。
+    _sop_listen=" $(get_listening_ports 2>/dev/null | tr '\n' ' ') "
+    while IFS='|' read -r _sop_port _sop_name; do
+        [ -n "$_sop_port" ] || continue
+        case "$_sop_listen" in *" $_sop_port "*) : ;; *) continue ;; esac
+        test_socks5_port "$_sop_port" || continue
+        _sop_kind=$(handshake_kind_at 127.0.0.1 "$_sop_port")
+        case "$_sop_kind" in
+            silent|not-http) : ;;
+            *) continue ;;
+        esac
+        printf '%s|%s\n' "$_sop_port" "$_sop_name"
+    done <<EOF
+$_sop_map
+EOF
+    return 0
 }

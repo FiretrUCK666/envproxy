@@ -337,13 +337,21 @@ $PrimaryProxyVarName = $ProxyAddrVarNames[0]
 # 就会出现"终端里是 1、快捷方式里是 true"这种只有某一种启动方式才失效的分叉。
 $NodeUseEnvProxyValue = '1'
 
-# 本机地址直连的默认例外集，写法遵循 NO_PROXY 的通行规范：IPv6 地址**裸写**。
-# 裸写是各家的共同要求——httpx 的规范示例就是 `NO_PROXY=example.com,::1,localhost,...`，
-# 而且它会自己给 IPv6 补上方括号去构造内部模式（见其 _utils.is_ipv6_hostname 分支）；
-# 预先写成 `[::1]` 会被当成普通域名，生成非法模式，反而让每一次请求都抛
-# `InvalidURL: Invalid port: ':1]'`。也就是说方括号属于 URL 字面量的写法，
-# 在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
-$DefaultNoProxy = "localhost,127.0.0.1,::1"
+# 直连的默认例外集。分三类，每一类都是"送进隧道一定错"的地址：
+#   本机回环    localhost / 127.0.0.1 / ::1 —— 送进代理等于让代理去访问它自己
+#   内网专用后缀 .local（mDNS / Bonjour）、.lan、.internal —— 这三个 TLD 永远不是公网域名
+#   云元数据    169.254.169.254 —— 各家的实例元数据服务，经代理访问既不通、也不该外传
+#
+# **不写 CIDR**（如 10.0.0.0/8）：各工具解析 NO_PROXY 的规则并不统一，
+# curl 只做域名后缀/精确匹配、Node 只认 `*`、Python 做子串匹配——写了也不生效，
+# 还会让人以为"内网已经全覆盖了"。公司内网请按自己的域名后缀手工加（帮助第 3 节有说法）。
+#
+# IPv6 地址**裸写**。裸写是各家的共同要求——httpx 的规范示例就是
+# `NO_PROXY=example.com,::1,localhost,...`，而且它会自己给 IPv6 补上方括号去构造
+# 内部模式（见其 _utils.is_ipv6_hostname 分支）；预先写成 `[::1]` 会被当成普通域名、
+# 生成非法模式，反而让每一次请求都抛 `InvalidURL: Invalid port: ':1]'`。
+# 也就是说方括号属于 URL 字面量的写法，在 NO_PROXY 里是写错了位置，不是"另一种合法写法"。
+$DefaultNoProxy = "localhost,127.0.0.1,::1,.local,.lan,.internal,169.254.169.254"
 
 # 帮助每一屏的行数上限。超过这个数，终端会把底部的「怎么退出」切掉——
 # 用户会以为帮助卡死，其实只是没画出来。
@@ -848,6 +856,12 @@ function Get-UsageError {
     # 没有这个开关，脚本和 CI 就永远卸不掉（而"问不到人就默默执行"更糟，实测过）。
     if ("yes" -in $Switches -and $Command -notin @("update", "uninstall")) {
         return "-Yes 只在检查更新或卸载时才有意义：它表示跳过确认。请用 -Update -Yes 或 -Uninstall -Yes。"
+    }
+    # -Json 只描述"怎么输出"，不描述"做什么"，所以它必须跟着 status。
+    # 单独给会一路落到监控模式（参数位被占掉，命令却是空的）——用户以为在导出状态，
+    # 工具却在后台常驻起来，而屏幕上没有任何输出。
+    if ("json" -in $Switches -and $Command -ne "status") {
+        return "-Json 只在查看状态时才有意义：它输出一行机器可读的 JSON。请用 -Status -Json。"
     }
     return $null
 }

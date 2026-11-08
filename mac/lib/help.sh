@@ -22,11 +22,12 @@ HELP_TOPICS=(
     '1|用处|这是干什么用的'
     '2|装完|装完之后要我做什么'
     '3|窗口|这个窗口不要翻墙 / 用公司的代理'
-    '4|命令行|某条命令不想翻墙'
+    '4|命令|某条命令不想翻墙'
     '5|软件|某个程序还是翻不了墙'
-    '6|不翻墙|反过来：不想让某个程序翻墙'
+    '6|直连|反过来：不想让某个程序翻墙'
     '7|出问题|出问题了：怎么查、怎么报'
-    '8|上不了网|上不了网（关了翻墙软件之后）'
+    '8|断网|上不了网（关了翻墙软件之后）'
+    '9|工具|工具自己的代理设置'
 )
 
 # 从 HELP_TOPICS 取第 N 段（$1=字段号，$2=主题编号）。
@@ -66,17 +67,29 @@ unset _htk_rec
 # 为什么需要它：用户在主题里只看到「输编号看别的」，却不知道别的编号是几号——
 # 那句话等于白说。列出来既回答了"编号是什么"，也顺手回答了"还有哪几条"。
 # 编号与短名都从 HELP_TOPIC_KEYS 取，加一条主题时这里自动跟上。
+# **要折行**：主题加到九条之后一行放不下（80 列的窗口会把它折成两行、
+# 第二行顶到最左边，与上面的正文糊在一起）。按预算贪心折行，输出可能是多行。
 format_help_nav_line() {
     _hnl_cur="$1"
     _hnl_out="  "
     for _hnl_k in "${HELP_TOPIC_KEYS[@]}"; do
         if [ "$_hnl_k" = "$_hnl_cur" ]; then
-            _hnl_out="$_hnl_out[$_hnl_k]$(_help_topic_short "$_hnl_k")  "
+            _hnl_lab="[$_hnl_k]$(_help_topic_short "$_hnl_k")"
         else
-            _hnl_out="$_hnl_out$_hnl_k $(_help_topic_short "$_hnl_k")  "
+            _hnl_lab="$_hnl_k $(_help_topic_short "$_hnl_k")"
+        fi
+        if [ "$_hnl_out" = "  " ]; then
+            _hnl_out="  $_hnl_lab"
+            continue
+        fi
+        if [ $(( $(_display_width "$_hnl_out") + 1 + $(_display_width "$_hnl_lab") )) -gt 78 ]; then
+            printf '%s\n' "$_hnl_out"
+            _hnl_out="  $_hnl_lab"
+        else
+            _hnl_out="$_hnl_out $_hnl_lab"
         fi
     done
-    printf "%s\n" "${_hnl_out%  }"
+    printf "%s\n" "$_hnl_out"
 }
 
 # 可用的编号范围，从表里算：加一条主题就自动变成 "有 1-7"，不会留下写死的旧范围。
@@ -416,6 +429,7 @@ t 菜单选 7（一键恢复）。会问你要不要留日志。
 h 不开菜单也能用（写脚本、远程连过来的时候）
 r 开关|install status stop uninstall update help report
 r 补充|--yes 跳过确认   --purge 连日志删   repair-profile 摘标记
+r 给脚本|status --json 输出一行机器可读的 JSON
 c bash envproxy.sh status
 t self-test 是 mac 独有（Windows 那份由开发侧跑）。
 t 不碰 ~/.zshrc 和环境变量，只报告结果。
@@ -434,7 +448,8 @@ t 那条设置还在，浏览器和工具就照旧去找一个
 t 已经不存在的程序，于是国内网站也打不开。
 h 怎么自己修
 t 进主菜单的高级功能，再选网络与代理修复。
-t 它一次看三个地方：系统的代理、工具自己的配置、网址解析。
+t 它一次看四个地方：系统的代理、工具自己的配置、网址解析，
+t 以及「只认 SOCKS 的端口」——那种端口本工具用不了，但你会想知道它在。
 t 能修的问你一句才动手，改之前先留还原点。
 t 要修就输 y 回车；直接回车是不修、退出去。
 t 修完把浏览器和那个工具都关掉重开一次再看。
@@ -446,6 +461,34 @@ h 修错了想改回去
 t 再进那一屏，按 r 回车就能还原最近修的那一次。
 t 还不行就用主菜单的「问题反馈」生成报告贴到项目页面，
 t 报告里已经有网络体检的结论，不用你另外描述。
+TOPIC
+    ;;
+    9) cat <<'TOPIC'
+h 多数工具不用管
+t git、npm、curl、pip、cargo、wget、Bun、Go、Deno 这些只认环境变量，
+t 本工具设好了它们就跟着变，你不需要改任何配置文件。
+h 少数工具只认自己的设置
+t 它们读的不是环境变量，而是自己的配置文件——变量设了也没用：
+r Maven|settings.xml 里的 <proxies>
+r Gradle|gradle.properties 里的 systemProp.http(s).proxyHost/Port
+r Docker|Docker Desktop 自己的设置（不看 daemon.json 里的代理）
+r SSH|~/.ssh/config 里的 ProxyCommand
+w 这些文件里一旦写死过一个旧端口，翻墙软件一换端口它们就连不上，
+w 而报错里没有本工具的名字——所以你会去查网络。
+h 写死了旧端口怎么办
+t 进主菜单的高级功能，再选网络与代理修复。
+t 它会读这些文件，指出哪一行指着一个已经不存在的本机端口。
+t 能改的会问一句才动手（删掉，或改成当前端口），并先留还原点。
+t XML 与嵌套的 YAML 它只报告、不替你改，按屏幕上那句话手动改即可。
+h git@github.com 这种地址用不了代理
+t OpenSSH 不认 HTTP_PROXY / HTTPS_PROXY，只认它自己的配置。
+t 办法一，让 git 把它换成等价的 https 地址：
+c git config --global url.https://github.com/.insteadOf git@github.com:
+t 换出来的 https 地址就会跟着环境变量里的代理走。要撤回：
+c git config --global --unset url.https://github.com/.insteadOf
+t 办法二，在 ~/.ssh/config 里给那个站点写一行 ProxyCommand，
+t 指向本机代理端口。mac 上没有固定入口，所以这里写的是当前端口：
+t 菜单选 2（查看状态）那一屏写着代理地址，翻墙软件换了端口就跟着改一次。
 TOPIC
     ;;
     esac
@@ -908,6 +951,7 @@ ADVANCED_ITEMS=(
     '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
     '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页或终端工具连不上网时，先来这里查'
+    '5|ToolGuides|show_tool_guide_page|guide|read|只认固定地址的程序|Maven、Gradle、Docker、SSH 这类怎么填'
 )
 
 # 取一行里第 N 段，结果写进 _adv_out。段不存在时返回 1。
@@ -968,6 +1012,7 @@ _assert_advanced_table() {
 ADVANCED_MODULES=(
     'icon|给某个程序定规矩'
     'rescue|上不了网的时候'
+    'guide|本工具管不到的地方'
 )
 
 # 某个模块的"为什么需要它"。与上面的表分开维护：
@@ -988,6 +1033,10 @@ _advanced_module_why() {
             '翻墙软件被强行关掉（关机、断电、直接点叉）时，它写进系统和自己配置里的设置' \
             '可能没来得及撤掉。浏览器和终端照旧把请求发给一个已经不存在的程序，' \
             '于是连国内网站都打不开——线没断，是路指错了。' ;;
+        guide) printf '%s\n' \
+            '浏览器和桌面应用看的是系统代理，不是这里的设置——那一层由你的翻墙软件管。' \
+            'Maven、Gradle、Docker、SSH 各自有一套自己的设置，读的不是这里的变量。' \
+            '这一项只讲怎么改，不会替你动任何配置。' ;;
     esac
 }
 
@@ -1001,7 +1050,65 @@ _advanced_module_note() {
         rescue) printf '%s\n' \
             '只修「指向本机、但那个程序已经不在」的那一种。' \
             '公司/学校给你的代理，它一个字节都不碰。' ;;
+        guide) printf '%s\n' \
+            '这一项按回车只会看到说明，不会改你的设置。' ;;
     esac
+}
+
+# 「只认固定地址的程序」那一屏：只讲解，不动手。
+#
+# 为什么单独一屏：这四个程序的设置位置分散在四份文件/界面里，而"填哪个地址"
+# 是同一件事。放在一起，用户按自己的工具挑一段抄，不用去别处找。
+# mac 上没有固定入口（Windows 有 17099），所以这里写的是**当前端口**：
+# 换端口之后要回来改一次，或者让救援页把它改过去。
+show_tool_guide_page() {
+    _tg_port=$(get_current_proxy_port 2>/dev/null || true)
+    [ -n "$_tg_port" ] || _tg_port='端口号'
+    clear_screen_safe
+    style_out title "======== 只认固定地址的程序 ========"
+    echo ""
+    style_out text "  有些程序把代理地址记在自己的设置里，之后一直用那个。"
+    style_out text "  翻墙软件一换端口，它们就连不上，而报错里没有本工具的名字。"
+    echo ""
+    style_out heading "  一、Maven"
+    echo ""
+    style_out text "  在 ~/.m2/settings.xml 的 <proxies> 里加一段："
+    style_out cmd  "    <proxy><id>local</id><active>true</active>"
+    style_out cmd  "      <protocol>http</protocol>"
+    style_out cmd  "      <host>127.0.0.1</host><port>$_tg_port</port></proxy>"
+    echo ""
+    style_out heading "  二、Gradle（含 Android Studio 的构建）"
+    echo ""
+    style_out text "  在 ~/.gradle/gradle.properties 里加四行（端口换成当前那个）："
+    style_out cmd  "    systemProp.http.proxyHost=127.0.0.1"
+    style_out cmd  "    systemProp.http.proxyPort=$_tg_port"
+    style_out cmd  "    systemProp.https.proxyHost=127.0.0.1"
+    style_out cmd  "    systemProp.https.proxyPort=$_tg_port"
+    echo ""
+    style_out heading "  三、Docker Desktop"
+    echo ""
+    style_out text "  Settings → Resources → Proxies，地址填 127.0.0.1:$_tg_port"
+    echo ""
+    style_out heading "  四、SSH（git@github.com 那种地址）"
+    echo ""
+    style_out text "  在 ~/.ssh/config 里加两行："
+    style_out cmd  "    Host github.com"
+    style_out cmd  "      ProxyCommand nc -X connect -x 127.0.0.1:$_tg_port %h %p"
+    echo ""
+    style_out heading "  mac 上没有固定入口"
+    echo ""
+    style_out text "  Windows 版有一个永不变的地址（17099），填一次就不用再改。"
+    style_out text "  mac 版没有这一层：上面填的都是当前端口，翻墙软件换了端口要改一次。"
+    style_out text "  改的时候不用自己找：高级功能里的「网络与代理修复」会读这些文件，"
+    style_out text "  把写死了旧端口的那一行指出来，能改的替你改成当前端口。"
+    echo ""
+    style_out dim  "  当前端口：$(menu_ref status) 那一屏里有；上面写的 $_tg_port 就是它。"
+    echo ""
+    style_out dim  "  这一屏只讲解，没有改你的任何设置。"
+    echo ""
+    style_out key  "  按回车返回"
+    _page_wait_enter
+    return 0
 }
 
 # 高级功能二级菜单。编号、名字、说明全部从 ADVANCED_ITEMS 取，不手写。

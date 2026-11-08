@@ -387,7 +387,9 @@ function Get-MonitorGoneText($st) {
 }
 function Get-TermSyncText([string]$State, $Sync) {
     switch ($State) {
-        'ok'       { return @{ Text = '已生效（已开着的窗口敲回车即跟上）'; Hint = ''; Bad = $false } }
+        # DIVERGE(Win): 只有 Windows 有 cmd，而 cmd 没有提示符钩子、只能重开窗口。
+        # 这句必须写进那一行里：只在帮助里写，用户看状态页时永远想不到这一条。
+        'ok'       { return @{ Text = '已生效（敲回车跟上，cmd 窗口只能重开）'; Hint = ''; Bad = $false } }
         'blocked'  {
             $detail = ''
             try { $detail = [string]$Sync.Detail } catch { $detail = '' }
@@ -504,6 +506,78 @@ function Show-Status {
     # 这一层也是 --json 之类机器可读输出的前提（先有对象，才有第二种渲染方式）。
     $st = Get-StatusSnapshot
     Show-StatusSnapshot $st
+}
+
+# ------------------------------------------------------------------------------
+# 机器可读输出：一行 JSON（`-Status -Json`）
+# ------------------------------------------------------------------------------
+# 这是给脚本、状态栏、批量部署读的，**不是给人读的**：
+#   · 只有一行，不含任何控制字符（实时刷新那一层会写光标码，所以它绕开那一层）；
+#   · 全部值都是 ASCII。中文问题描述不进 JSON——Windows PowerShell 5.1 把中文重定向到
+#     文件/管道时按控制台代码页编码，脚本那边会读到乱码；而机器读的东西本来也不该靠文案。
+#   · 字段名与取值是**契约**（README 与两侧自检都钉着它），改一处要两侧一起改。
+#
+# 为什么手写序列化而不用 ConvertTo-Json：它是模块命令，而本项目的契约是
+# "不依赖 PowerShell 模块里的命令"——PSModulePath 排着别的版本时它会静默缺失，
+# 症状是整条输出变成空白，而退出码仍然是 0。
+function Format-JsonString([string]$Text) {
+    if ($null -eq $Text) { return '""' }
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append('"')
+    foreach ($ch in $Text.ToCharArray()) {
+        $code = [int]$ch
+        if ($ch -eq '\') { [void]$sb.Append('\\') }
+        elseif ($ch -eq '"') { [void]$sb.Append('\"') }
+        elseif ($code -lt 0x20) { [void]$sb.Append(('\u{0:x4}' -f $code)) }
+        else { [void]$sb.Append($ch) }
+    }
+    [void]$sb.Append('"')
+    return $sb.ToString()
+}
+
+function Format-StatusJson($st) {
+    # 状态三态，**不许塌缩**：端口枚举失败时是"不知道"，不是"没有代理"。
+    # 塌缩成 off 会让脚本以为"现在该直连"，而事实是"这一轮没读到端口"。
+    $state = 'off'
+    if ($st.Port) { $state = 'on' }
+    elseif ($st.PortUnknown) { $state = 'unknown' }
+    $installed = if ($st.NeverInstalled) { 'false' } else { 'true' }
+    $monitor = if ($st.Monitor) { 'true' } else { 'false' }
+    $port = if ($st.Port) { [string][int]$st.Port } else { 'null' }
+    # 中继端口只在 Windows 有；mac 侧没有这一层，输出 null（字段保留，脚本不用分平台判断）。
+    $relayPort = 'null'
+    try {
+        $rp = Get-RelayPort
+        if ($rp) { $relayPort = [string][int]$rp }
+    } catch {}
+    $issues = @(Get-StatusProblems $st).Count
+    $parts = @(
+        '"schema":1'
+        ('"version":' + (Format-JsonString ([string]$st.LocalVersion)))
+        ('"installed":' + $installed)
+        ('"monitor":' + $monitor)
+        ('"state":' + (Format-JsonString $state))
+        ('"port":' + $port)
+        ('"proxy":' + (Format-JsonString ([string]$st.ProxyValue)))
+        ('"nodeHandshake":' + (Format-JsonString ([string]$st.NodeHandshake)))
+        ('"varsMatch":' + (Format-JsonString ([string]$st.VarsMatch)))
+        ('"relayPort":' + $relayPort)
+        ('"issues":' + [string]$issues)
+    )
+    return ('{' + ($parts -join ',') + '}')
+}
+
+# 打印一行 JSON。**只打印，不画屏**：没有标题、没有颜色、没有光标控制字符。
+function Write-StatusJson {
+    $st = Get-StatusSnapshot
+    $line = Format-StatusJson $st
+    try {
+        [Console]::Out.Write($line + "`n")
+        [Console]::Out.Flush()
+    } catch {
+        # 控制台句柄失效（极少见）时退回管道输出，保证调用方仍拿得到那一行。
+        Write-Output $line
+    }
 }
 
 # 生成一份可以直接发给别人看的问题报告。
@@ -780,7 +854,9 @@ function Show-StatusSnapshot($st) {
     if ($st.TermSync) {
         # 话术从 Get-TermSyncText 取：与实时状态页同一张表，两边说的话逐字相同。
         $tt = Get-TermSyncText $st.TermSync.State $st.TermSync
-        if ($tt.Text -ne '已生效（已开着的窗口敲回车即跟上）') {
+        # 判 Bad 而不是比字符串：比字面量的话，改一次措辞就会让这一行在静态页上
+        # 永远显示（或永远不显示），而屏幕上看不出来是哪一边错了。
+        if ($tt.Bad) {
             Write-StatusRow $StatusLabels.TermSync $tt.Text 'warn'
             if ($tt.Hint) {
                 foreach ($h in @($tt.Hint -split "`n")) {
@@ -845,7 +921,10 @@ function Show-StatusSnapshot($st) {
     }
     if ($st.TermSync -and $st.TermSync.State -eq 'ok') {
         Write-Host ''
-        Write-StatusRow $StatusLabels.TermSync '已生效（已开着的窗口敲回车即跟上）' 'ok'
+        # 话术从 Get-TermSyncText 取，不在这里另抄一句：抄一句就会有一天两份不一致，
+        # 而症状是"按回车看一句、等两秒刷新看另一句"。
+        $ttOk = Get-TermSyncText $st.TermSync.State $st.TermSync
+        Write-StatusRow $StatusLabels.TermSync $ttOk.Text 'ok'
     }
     # ---- 固定入口（只在真的建过走代理的图标时才出现）----
     # 措辞与实时帧逐字相同：两版是同一屏的两种刷新方式，改一处必须改另一处。

@@ -44,6 +44,7 @@ DOCTOR_INSPECTORS=(
     'dns|网址解析|0|get_dns_findings||'
     'sysproxy|浏览器代理|1|get_sysproxy_findings|sysproxy_repair|restore_sysproxy_snapshot'
     'cli-proxy|终端工具里的代理|0|get_cli_proxy_findings|repair_cli_proxy_config|restore_cli_proxy_snapshot'
+    'socks|只认 SOCKS 的端口|0|get_socks_findings||'
 )
 
 # 取一行里第 N 段，结果写进 _insp_out。段不存在时返回 1。
@@ -126,14 +127,19 @@ assert_doctor_inspectors() {
 # 这条 Finding 我们被授权去修吗？
 #
 # **这是「可修」的唯一判据，界面只许查它，不许自己按 Kind 猜。**
-# 两件事缺一不可：Kind 说「这是什么性质的问题」，
-# Fix 列说「我们被授权动这一层吗」。
+# 三件事缺一不可：Kind 说「这是什么性质的问题」，Fix 列说「我们被授权动这一层吗」，
+# 这一条记录自己说「这股形态能不能安全改」（Finding 第 8 列；空 = 没声明，按允许处理）。
 # 只看 Kind 会让「DNS 指向本机死端口」（Blocking、但那一层 Fix 为空）进「要修的」，
 # 用户按 y 什么都不修，屏幕还说"它自己消失了"。
-# 参数：$1 = Kind，$2 = 检查器 Id
+# 第三维是随工具配置一起长出来的：同一个 cli-proxy 层里，`.npmrc` 删一行是安全的，
+# `settings.xml` 的 <proxy> 块删一半会留下坏配置——所以「能不能动」只能由
+# **看得见文件格式的那一层**回答，不能由 Kind 或表猜。与 Windows 侧的
+# Finding.Data.Repairable 同义（那边用结构化字段，这边用 Finding 的第 8 列）。
+# 参数：$1 = Kind，$2 = 检查器 Id，$3 = 这一条声明的可改性（1 / 0 / 空）
 finding_repairable() {
-    _fr_kind="${1:-}"; _fr_id="${2:-}"
+    _fr_kind="${1:-}"; _fr_id="${2:-}"; _fr_rep="${3:-}"
     finding_fixable "$_fr_kind" || return 1
+    [ "$_fr_rep" = "0" ] && return 1
     # 参数可以是检查器 Id（sysproxy），也可以是完整 Finding Id（sysproxy.direct）。
     # **必须两种都认**：调用点分散在界面各处，有的手里只有 Finding Id。
     # 只认一种的后果是另一侧的可修项全部被判成不可修——
@@ -288,73 +294,157 @@ get_sysproxy_advice() {
 # 「本机回环 + 端口死」= 某个本机程序写的、而且写它的程序已经不在了。
 # 同一个纯函数判，误伤率为零。
 #
-# 为什么环境变量救不了它：这些配置文件（.gitconfig、.npmrc、.curlrc）
-# 里写的代理**优先级高于环境变量**。EnvProxy 把变量管得再好，也压不过它。
+# 为什么环境变量救不了它：这些配置文件里写的代理**优先级高于环境变量**。
+# EnvProxy 把变量管得再好，也压不过它。而现实里这些文件最常出现的毛病就是
+# 「跟着某篇教程写死过一个本机端口，后来软件换了端口/卸载了」。
 #
 # 边界（比系统代理更严，因为这里动的是用户的文件，不是系统设置）：
 #   · 只认「本机回环 + 端口不通」，与系统代理同一套判据；
 #   · 非回环（公司代理）、读不出来 → 一律不动；
-#   · 文件里有 include / includeIf → 不动：代理可能来自被包含的另一个文件，
-#     只改主文件会「显示修好了、实际没修」，与「部分失败不许报成修好」是同一条原则；
-#   · 只删那一行，不重写整个文件；改前整份原文进还原点，能逐字撤回。
+#   · 文件里有 include / includeIf → 不动：代理可能来自被包含的另一个文件；
+#   · 只动命中行，不重写整个文件；改前整份原文进还原点，能逐字撤回。
 #
-# 表是唯一权威：加一个文件 = 加一行。三列：Id|显示名|文件名
-# 落点一律 $HOME 下（mac 上 git/npm/curl 都读家目录那一份）。
+# 三种修法（目标表的第 7 列，见下表）：
+#   drop       删掉那一项。给「自己认环境变量」的工具用：删掉之后它读 EnvProxy
+#              注入的值，比改成某个具体端口更耐用——端口再变它自己跟上。
+#   port       有活着的代理就改成当前端口，没有就删掉（Gradle / SSH）。
+#   port-only  只能改端口，删不了：它们的配置是嵌套结构或成对元素
+#              （YAML 的 proxy_servers、XML 的 <proxy>），删一半会留下坏配置。
+#              没有活代理时**只报告不动手**——「拿不准就不动」在这里的落点。
+#
+# 表是唯一权威：加一个工具 = 加一行，读、判、修全部从它派生。
+# 八列（用 | 分隔，空列写成相邻两个 |）：
+#   1 Id        稳定标识（进 Finding Id 与还原点）。两侧同 Id（门禁 6 核对）
+#   2 显示名    界面上那一组叫什么
+#   3 Format    kv / yaml / yaml-nested / yarnrc / xml / ssh
+#   4 Section   段名（kv 与 yaml-nested 用；空 = 顶层键或不限段）
+#   5 Keys      命中哪些键（空格分隔）
+#   6 Pair      成对键，写成"主机键=端口键"（只有 Gradle 这样写）
+#   7 Fix       修法：drop / port / port-only
+#   8 Files     候选文件，逗号分隔，形如 "根:相对路径"；根取 home / appdata / support
 CLI_PROXY_TARGETS=(
-    'git|Git 自己的代理|.gitconfig|http.proxy https.proxy'
-    'npm|npm 自己的代理|.npmrc|proxy https-proxy'
-    'curl|curl 自己的代理|.curlrc|proxy x'
+    'git|Git 自己的代理|kv||http.proxy https.proxy||drop|home:.gitconfig'
+    'npm|npm 自己的代理|kv||proxy https-proxy||drop|home:.npmrc'
+    'curl|curl 自己的代理|kv||proxy x||drop|home:.curlrc'
+    'cargo|Cargo 自己的代理|kv|http|proxy||drop|home:.cargo/config.toml,home:.cargo/config'
+    'pip|pip 自己的代理|kv|global|proxy||drop|home:.config/pip/pip.conf,support:pip/pip.conf,home:.pip/pip.conf'
+    'wget|wget 自己的代理|kv||http_proxy https_proxy||drop|home:.wgetrc'
+    'yarn|Yarn 自己的代理|yarnrc||proxy https-proxy||drop|home:.yarnrc'
+    'yarn-berry|Yarn（新版）自己的代理|yaml||httpProxy httpsProxy||drop|home:.yarnrc.yml'
+    'gradle|Gradle 自己的代理|kv|||systemProp.http.proxyHost=systemProp.http.proxyPort|port|home:.gradle/gradle.properties'
+    'conda|Conda 自己的代理|yaml-nested|proxy_servers|http https||port-only|home:.condarc'
+    'maven|Maven 自己的代理|xml||||port-only|home:.m2/settings.xml'
+    'nuget|NuGet 自己的代理|xml||||port-only|home:.nuget/NuGet/NuGet.Config'
+    'ssh|SSH 自己的代理|ssh||||port|home:.ssh/config'
 )
 
-# 这个文件的绝对路径。返回空串 = 这台机器上不适用。
-# **不写死用户名**：家目录从环境取，取不到就当作不适用。
-cli_proxy_file_path() {
-    _cpfp_file="$1"
-    if [ -n "${CLI_PROXY_HOME_OVERRIDE:-}" ]; then
-        printf '%s' "$CLI_PROXY_HOME_OVERRIDE/$_cpfp_file"
-        return 0
-    fi
-    [ -n "${HOME:-}" ] || { printf ''; return 0; }
-    printf '%s' "$HOME/$_cpfp_file"
+# 根目录。取不到返回空串 = 这个文件在这台机器上不适用。
+# **不写死用户名**：拿不到家目录还去拼一个路径，改的可能是别人的东西。
+cli_proxy_root() {
+    case "${1:-home}" in
+        support)
+            [ -n "${HOME:-}" ] || { printf ''; return 0; }
+            printf '%s/Library/Application Support' "$HOME" ;;
+        appdata)
+            # macOS 没有 %APPDATA% 这回事。列留着是为了两侧表同形（门禁 6 比 Id 集合）。
+            printf '' ;;
+        *)
+            [ -n "${HOME:-}" ] || { printf ''; return 0; }
+            printf '%s' "$HOME" ;;
+    esac
+}
+
+# 这个目标的全部候选绝对路径（一行一个，按表里的顺序）。
+# 自检用 CLI_PROXY_HOME_OVERRIDE 把家目录整体改道——绝不能碰使用者的真文件。
+cli_proxy_file_paths() {
+    _cpt_files=''
+    _insp_field "${1:-}" 8 || return 0
+    _cpt_files=$_insp_out
+    _cpt_rest="$_cpt_files"
+    while [ -n "$_cpt_rest" ]; do
+        case "$_cpt_rest" in
+            *,*) _cpt_one=${_cpt_rest%%,*}; _cpt_rest=${_cpt_rest#*,} ;;
+            *)   _cpt_one=$_cpt_rest; _cpt_rest='' ;;
+        esac
+        [ -n "$_cpt_one" ] || continue
+        case "$_cpt_one" in
+            *:*) _cpt_root=${_cpt_one%%:*}; _cpt_rel=${_cpt_one#*:} ;;
+            *)   _cpt_root='home'; _cpt_rel=$_cpt_one ;;
+        esac
+        if [ -n "${CLI_PROXY_HOME_OVERRIDE:-}" ]; then
+            printf '%s/%s\n' "$CLI_PROXY_HOME_OVERRIDE" "$_cpt_rel"
+            continue
+        fi
+        _cpt_base=$(cli_proxy_root "$_cpt_root")
+        [ -n "$_cpt_base" ] || continue
+        printf '%s/%s\n' "$_cpt_base" "$_cpt_rel"
+    done
     return 0
 }
 
+# 去掉首尾空白（纯 shell，不起子进程）。结果写进 _cpt_trim。
+_cpt_trim() {
+    _cpt_trim_v="${1:-}"
+    _cpt_trim_v="${_cpt_trim_v#"${_cpt_trim_v%%[![:space:]]*}"}"
+    _cpt_trim_v="${_cpt_trim_v%"${_cpt_trim_v##*[![:space:]]}"}"
+    _cpt_trim=$_cpt_trim_v
+}
+
 # 从一行里取「键 = 值」，结果写进 _cfl_key 与 _cfl_val。不是键值行时返回 1。
+# $2 决定认哪种写法：
+#   equals  proxy = http://...       （gitconfig / npmrc / curlrc / pip.conf / config.toml / wgetrc / gradle.properties）
+#   colon   httpProxy: "http://..."  （yarnrc.yml / condarc）
+#   space   proxy "http://..."       （yarnrc classic）
 #
-# 三种形态都要认，因为三个文件用三种写法：
-#   INI（.gitconfig）:  [http]  换行  proxy = http://127.0.0.1:7890
-#   键值（.npmrc）:      proxy=http://127.0.0.1:7890
-#   键值（.curlrc）:     proxy = "http://127.0.0.1:7890"
-# 值两侧的引号必须剥掉，否则地址会带着引号进 is_loopback_url，判成「不是回环」→ 永不修。
+# 行内注释**必须先剥掉**：`proxy = 127.0.0.1:7890 # clash` 是很常见的写法，
+# 带着注释去解析会得到「值认不出来」，于是这个死端口永远查不出来——静默漏检。
+# 剥的判据是「注释符前面有空白」：URL 里不会出现 ` #`，而人写注释总会空一格。
+# 纯 shell 实现（不起子进程）：一屏要读十几个文件，逐行 fork 会慢到没法用。
 _cfl_key=''
 _cfl_val=''
 _cli_config_line_parse() {
     _cfl_key=''; _cfl_val=''
-    _cfl_t="${1:-}"
-    # 去掉首尾空白（纯 shell，不起子进程）
-    _cfl_t="${_cfl_t#"${_cfl_t%%[![:space:]]*}"}"
-    _cfl_t="${_cfl_t%"${_cfl_t##*[![:space:]]}"}"
+    _cfl_sep="${2:-equals}"
+    _cpt_trim "${1:-}"
+    _cfl_t=$_cpt_trim
     [ -n "$_cfl_t" ] || return 1
-    # 注释行：三种文件都用 # 或 ; 开头。**必须先判**，否则注释里的 proxy=
-    # 会被当成真的设置去判、去修。
     case "$_cfl_t" in
         '#'*|';'*) return 1 ;;
-    esac
-    # 段头：[http] / [http "url"]。不是键值行，但也不是错误——由调用方处理。
-    case "$_cfl_t" in
         '['*) return 1 ;;
     esac
-    # 必须在第一个 = 处切：值里可能还有 =（例如 base64 的凭据）
+    # 行内注释：取「最早的、前面带空白的 # 或 ;」之前那一段。
+    # ${var%%pattern} 删的是**最长**匹配后缀，所以命中的是最早那个注释符。
     case "$_cfl_t" in
-        *=*) : ;;
-        *) return 1 ;;
+        *[[:space:]][#\;]*)
+            _cfl_t="${_cfl_t%%[[:space:]][#\;]*}"
+            while [ -n "$_cfl_t" ]; do
+                case "$_cfl_t" in
+                    *[[:space:]]) _cfl_t=${_cfl_t%[[:space:]]} ;;
+                    *) break ;;
+                esac
+            done ;;
     esac
-    _cfl_key="${_cfl_t%%=*}"
-    _cfl_val="${_cfl_t#*=}"
-    _cfl_key="${_cfl_key%"${_cfl_key##*[![:space:]]}"}"
-    _cfl_val="${_cfl_val#"${_cfl_val%%[![:space:]]*}"}"
-    _cfl_val="${_cfl_val%"${_cfl_val##*[![:space:]]}"}"
-    [ -n "$_cfl_key" ] || return 1
+    [ -n "$_cfl_t" ] || return 1
+    case "$_cfl_sep" in
+        colon)
+            case "$_cfl_t" in *:*) : ;; *) return 1 ;; esac
+            _cfl_key="${_cfl_t%%:*}"
+            _cfl_val="${_cfl_t#*:}" ;;
+        space)
+            case "$_cfl_t" in *[[:space:]]*) : ;; *) return 1 ;; esac
+            _cfl_key="${_cfl_t%%[[:space:]]*}"
+            _cfl_val="${_cfl_t#*[[:space:]]}" ;;
+        *)
+            case "$_cfl_t" in *=*) : ;; *) return 1 ;; esac
+            _cfl_key="${_cfl_t%%=*}"
+            _cfl_val="${_cfl_t#*=}" ;;
+    esac
+    _cpt_trim "$_cfl_key"; _cfl_key=$_cpt_trim
+    # 键名：字母开头，只含字母数字与 _ . -
+    case "$_cfl_key" in
+        ''|[!A-Za-z]*|*[!A-Za-z0-9_.-]*) return 1 ;;
+    esac
+    _cpt_trim "$_cfl_val"; _cfl_val=$_cpt_trim
     # 剥引号：只在成对时剥，避免把值尾部的合法字符当引号删掉。
     case "$_cfl_val" in
         \"*\") _cfl_val="${_cfl_val#\"}"; _cfl_val="${_cfl_val%\"}" ;;
@@ -363,85 +453,304 @@ _cli_config_line_parse() {
     return 0
 }
 
-# 读一个文件里的全部代理项。输出每行 5 个 TAB 字段：
-#   LineNumber <TAB> FullKey <TAB> Value <TAB> HasInclude <TAB> ReadOk
-# ReadOk=0 表示读不出来（那时前面几列为空）。文件不存在视为读成功、零条目。
-read_cli_proxy_file() {
-    _rcpf_path="$1"; _rcpf_keys="$2"
-    [ -n "$_rcpf_path" ] || { printf '0\t\t\t0\t0\n'; return 0; }
-    if [ ! -f "$_rcpf_path" ]; then
-        return 0    # 没有这个文件：这一层不存在，不产结论
-    fi
-    if [ ! -r "$_rcpf_path" ]; then
-        printf '0\t\t\t0\t0\n'
-        return 0
-    fi
-    # **两遍读**。第一遍只为回答「这个文件里有没有 include」，
-    # 第二遍才逐行判命中。
-    #
-    # 为什么必须两遍：`[include]` 段可能出现在文件任何位置——实测最常见的写法是
-    # 把它放在最后（`git config --global include.path ...` 就是追加到末尾）。
-    # 一遍扫的话，前面那些 proxy 行在被打印时还不知道后面有 include，
-    # 于是「有 include 就不动」这条护栏在最需要它的文件上失效——
-    # 而这个失效是静默的：屏幕上显示"可修"，删掉之后代理仍然从别处生效。
-    _rcpf_hasinc=0
-    while IFS= read -r _rcpf_scan || [ -n "$_rcpf_scan" ]; do
-        _rcpf_st="$_rcpf_scan"
-        _rcpf_st="${_rcpf_st#"${_rcpf_st%%[![:space:]]*}"}"
-        case "$_rcpf_st" in
-            '['*)
-                _rcpf_si="${_rcpf_st#\[}"
-                _rcpf_si="${_rcpf_si%%\]*}"
-                _rcpf_si="${_rcpf_si%%[[:space:]]*}"
-                _rcpf_si=$(printf '%s' "$_rcpf_si" | tr 'A-Z' 'a-z')
-                case "$_rcpf_si" in
-                    include|includeif) _rcpf_hasinc=1 ;;
-                esac ;;
-        esac
-    done < "$_rcpf_path"
-    _rcpf_section=''
-    _rcpf_n=0
-    while IFS= read -r _rcpf_line || [ -n "$_rcpf_line" ]; do
-        _rcpf_n=$((_rcpf_n + 1))
-        _rcpf_t="$_rcpf_line"
-        _rcpf_t="${_rcpf_t#"${_rcpf_t%%[![:space:]]*}"}"
-        # 段头：只取方括号里第一段词，引号里的东西不是段名的一部分。
-        case "$_rcpf_t" in
-            '['*)
-                _rcpf_inner="${_rcpf_t#\[}"
-                _rcpf_inner="${_rcpf_inner%%\]*}"
-                _rcpf_section="${_rcpf_inner%%[[:space:]]*}"
-                _rcpf_section=$(printf '%s' "$_rcpf_section" | tr 'A-Z' 'a-z')
-                continue ;;
-        esac
-        _cli_config_line_parse "$_rcpf_line" || continue
-        _rcpf_leaf=$(printf '%s' "$_cfl_key" | tr 'A-Z' 'a-z')
-        if [ -n "$_rcpf_section" ]; then
-            _rcpf_full="${_rcpf_section}.${_rcpf_leaf}"
-        else
-            _rcpf_full="$_rcpf_leaf"
-        fi
-        _rcpf_hit=0
-        for _rcpf_want in $_rcpf_keys; do
-            _rcpf_wantl=$(printf '%s' "$_rcpf_want" | tr 'A-Z' 'a-z')
-            # 两种写法都算命中：完整键（http.proxy）与裸键（proxy，在 [http] 段里）。
-            if [ "$_rcpf_full" = "$_rcpf_wantl" ] || [ "$_rcpf_leaf" = "$_rcpf_wantl" ]; then
-                _rcpf_hit=1
-                break
-            fi
-        done
-        [ "$_rcpf_hit" = "1" ] || continue
-        printf '%s\t%s\t%s\t%s\t1\n' "$_rcpf_n" "$_rcpf_full" "$_cfl_val" "$_rcpf_hasinc"
-    done < "$_rcpf_path"
+# 从代理值里取裸主机与端口，结果写进 _csv_host / _csv_port。取不到返回 1。
+# 必须认三种写法：`127.0.0.1:7890`、`http://[::1]:7890`、`socks5://host:7890`。
+_cli_split_value() {
+    _csv_host=''; _csv_port=''
+    _csv_v="${1:-}"
+    case "$_csv_v" in
+        *'://'*) _csv_v="${_csv_v#*://}" ;;
+    esac
+    _csv_v="${_csv_v%%/*}"
+    case "$_csv_v" in *@*) _csv_v="${_csv_v##*@}" ;; esac
+    case "$_csv_v" in
+        '['*']'*)
+            _csv_host="${_csv_v#[}"
+            _csv_host="${_csv_host%%]*}"
+            _csv_port="${_csv_v##*]:}" ;;
+        *:*)
+            _csv_host="${_csv_v%:*}"
+            _csv_port="${_csv_v##*:}" ;;
+        *) return 1 ;;
+    esac
+    case "$_csv_port" in ''|*[!0-9]*) _csv_host=''; _csv_port=''; return 1 ;; esac
+    [ "$_csv_port" -gt 0 ] 2>/dev/null || { _csv_host=''; _csv_port=''; return 1; }
     return 0
 }
 
-# 纯判据：给定一个配置文件里的代理值，说出结论。**不碰文件、不碰网络**，便于回归。
+# 输出一条命中项。十列，TAB 分隔：
+#   Line <TAB> Lines <TAB> Key <TAB> Value <TAB> Host <TAB> Port <TAB> FixLine <TAB> PortOnly <TAB> Inc <TAB> Raw
+# Lines 是「要删掉的话删哪几行」（成对键是两行，逗号分隔）。
+# Inc 是「这个文件里有 include」（1/0）：有 include 的代理可能来自别处，改这一行没用。
+_cli_entry_emit() {
+    _cee_tab="$(printf '\t')"
+    _cee_raw="$(printf '%s' "${10:-}" | tr '\t' ' ')"
+    printf '%s\n' "${1}${_cee_tab}${2}${_cee_tab}${3}${_cee_tab}${4}${_cee_tab}${5}${_cee_tab}${6}${_cee_tab}${7}${_cee_tab}${8}${_cee_tab}${9:-0}${_cee_tab}${_cee_raw}"
+}
+
+# 读一个文件里的全部代理项。输出条目行；读不出来时输出一行以 ! 开头的原因。
+# 文件不存在 = 读成功、零条目（「这一层不存在」不是「读不出来」）。
+read_cli_proxy_file() {
+    _rcpf_path="${1:-}"; _rcpf_row="${2:-}"
+    [ -n "$_rcpf_path" ] || { printf '%s\n' '!找不到这个文件所在的目录'; return 0; }
+    [ -f "$_rcpf_path" ] || return 0
+    [ -r "$_rcpf_path" ] || { printf '%s\n' '!没有读权限'; return 0; }
+    _insp_field "$_rcpf_row" 3; _rcpf_fmt=$_insp_out
+    case "$_rcpf_fmt" in
+        xml)         _cli_read_xml "$_rcpf_path" "$_rcpf_row" ;;
+        ssh)         _cli_read_ssh "$_rcpf_path" "$_rcpf_row" ;;
+        yaml)        _cli_read_kv "$_rcpf_path" "$_rcpf_row" colon '' ;;
+        yarnrc)      _cli_read_kv "$_rcpf_path" "$_rcpf_row" space '' ;;
+        yaml-nested) _cli_read_kv "$_rcpf_path" "$_rcpf_row" colon nested ;;
+        *)           _cli_read_kv "$_rcpf_path" "$_rcpf_row" equals '' ;;
+    esac
+    return 0
+}
+
+# 输出这个文件里有没有 include / includeIf（1 / 0）。
+_cli_file_has_include() {
+    _fhi_hit=0
+    while IFS= read -r _fhi_scan || [ -n "$_fhi_scan" ]; do
+        _fhi_st="$_fhi_scan"
+        _fhi_st="${_fhi_st#"${_fhi_st%%[![:space:]]*}"}"
+        case "$_fhi_st" in
+            '['*)
+                _fhi_si="${_fhi_st#\[}"
+                _fhi_si="${_fhi_si%%\]*}"
+                _fhi_si="${_fhi_si%%[[:space:]]*}"
+                _fhi_si=$(printf '%s' "$_fhi_si" | tr 'A-Z' 'a-z')
+                case "$_fhi_si" in
+                    include|includeif) _fhi_hit=1 ;;
+                esac ;;
+        esac
+    done < "$1"
+    printf '%s' "$_fhi_hit"
+}
+
+# 「一行一项」的三种写法共用这一份读法：差别只在分隔符、段头、父键。
 #
-# 与 sysproxy_verdict 同源同形，只是少了两维：
-# 配置文件里没有「被描述文件管着」这一说，也没有 PAC 那种「慢但能上」的形态。
-# 少掉不是简化，是那两件事在这个场景里真的不存在——不做成通用参数再处处判断。
+# 两遍读。第一遍只为回答「这个文件里有没有 include」，第二遍才逐行判命中。
+# 为什么必须两遍：`[include]` 段可能出现在文件任何位置——实测最常见的写法是
+# 把它放在最后。一遍扫的话，前面那些 proxy 行在被收集时还不知道后面有 include，
+# 于是「有 include 就不动」这条护栏在最需要它的文件上失效——而这个失效是静默的。
+_cli_read_kv() {
+    _rk_path="$1"; _rk_row="$2"; _rk_sep="$3"; _rk_nested="$4"
+    _rk_tab="$(printf '\t')"
+    _rk_inc=$(_cli_file_has_include "$_rk_path")
+    _insp_field "$_rk_row" 4 || true; _rk_section_want=$_insp_out
+    _insp_field "$_rk_row" 5 || true; _rk_keys=$_insp_out
+    _insp_field "$_rk_row" 6 || true; _rk_pair=$_insp_out
+    _rk_want=' '
+    for _rk_k in $_rk_keys; do
+        _rk_l=$(printf '%s' "$_rk_k" | tr 'A-Z' 'a-z')
+        _rk_want="$_rk_want$_rk_l "
+    done
+    for _rk_p in $_rk_pair; do
+        case "$_rk_p" in
+            *=*)
+                _rk_ph=$(printf '%s' "${_rk_p%%=*}" | tr 'A-Z' 'a-z')
+                _rk_pp=$(printf '%s' "${_rk_p#*=}" | tr 'A-Z' 'a-z')
+                _rk_want="$_rk_want$_rk_ph $_rk_pp " ;;
+        esac
+    done
+    _rk_sec=''; _rk_parent=''; _rk_n=0
+    _rk_hits=''
+    while IFS= read -r _rk_raw || [ -n "$_rk_raw" ]; do
+        _rk_n=$((_rk_n + 1))
+        _cpt_trim "$_rk_raw"; _rk_t=$_cpt_trim
+        [ -n "$_rk_t" ] || continue
+        case "$_rk_t" in
+            '['*)
+                _rk_inner="${_rk_t#\[}"
+                _rk_inner="${_rk_inner%%\]*}"
+                _rk_sec="${_rk_inner%%[[:space:]]*}"
+                _rk_sec=$(printf '%s' "$_rk_sec" | tr 'A-Z' 'a-z')
+                _rk_parent=''
+                continue ;;
+        esac
+        case "$_rk_t" in '#'*|';'*) continue ;; esac
+        _rk_indented=0
+        case "$_rk_raw" in [[:space:]]*) _rk_indented=1 ;; esac
+        _cli_config_line_parse "$_rk_raw" "$_rk_sep" || continue
+        _rk_leaf=$(printf '%s' "$_cfl_key" | tr 'A-Z' 'a-z')
+        _rk_full="$_rk_leaf"
+        if [ "$_rk_nested" = "nested" ]; then
+            if [ "$_rk_indented" = "0" ]; then
+                _rk_parent="$_rk_leaf"
+                continue
+            fi
+            [ -n "$_rk_parent" ] || continue
+            _rk_full="$_rk_parent.$_rk_leaf"
+            if [ -n "$_rk_section_want" ]; then
+                _rk_sw=$(printf '%s' "$_rk_section_want" | tr 'A-Z' 'a-z')
+                [ "$_rk_parent" = "$_rk_sw" ] || continue
+            fi
+        elif [ -n "$_rk_section_want" ]; then
+            _rk_sw=$(printf '%s' "$_rk_section_want" | tr 'A-Z' 'a-z')
+            [ "$_rk_sec" = "$_rk_sw" ] || continue
+        elif [ -n "$_rk_sec" ]; then
+            _rk_full="$_rk_sec.$_rk_leaf"
+        fi
+        _rk_hit=0
+        case "$_rk_want" in
+            *" $_rk_full "*) _rk_hit=1 ;;
+            *" $_rk_leaf "*) _rk_hit=1 ;;
+        esac
+        [ "$_rk_hit" = "1" ] || continue
+        _rk_hits="$_rk_hits$_rk_n${_rk_tab}$_rk_leaf${_rk_tab}$_rk_full${_rk_tab}$_cfl_val${_rk_tab}$_rk_raw
+"
+    done < "$_rk_path"
+
+    # ---- 成对键（Gradle）：主机与端口分两行写，必须凑齐才算一项 ----
+    if [ -n "$_rk_pair" ]; then
+        for _rk_p in $_rk_pair; do
+            case "$_rk_p" in *=*) : ;; *) continue ;; esac
+            _rk_ph=$(printf '%s' "${_rk_p%%=*}" | tr 'A-Z' 'a-z')
+            _rk_pp=$(printf '%s' "${_rk_p#*=}" | tr 'A-Z' 'a-z')
+            _rk_hline=''; _rk_hval=''; _rk_pl=''; _rk_pval=''
+            while IFS="$_rk_tab" read -r _rk_l _rk_k _rk_f _rk_v _rk_r; do
+                [ -n "$_rk_l" ] || continue
+                if [ -z "$_rk_hline" ] && [ "$_rk_k" = "$_rk_ph" ]; then _rk_hline="$_rk_l"; _rk_hval="$_rk_v"; fi
+                if [ -z "$_rk_pl" ] && [ "$_rk_k" = "$_rk_pp" ]; then _rk_pl="$_rk_l"; _rk_pval="$_rk_v"; fi
+            done <<EOF
+$_rk_hits
+EOF
+            # 只写了一行的是半截配置：那一行不生效，判死会让用户以为这里挡住了网络。
+            [ -n "$_rk_hline" ] && [ -n "$_rk_pl" ] || continue
+            case "$_rk_pval" in ''|*[!0-9]*) continue ;; esac
+            [ "$_rk_pval" -gt 0 ] 2>/dev/null || continue
+            _cli_split_value "$_rk_hval:$_rk_pval" || continue
+            _cli_entry_emit "$_rk_pl" "$_rk_hline,$_rk_pl" "$_rk_ph" \
+                "http://$_csv_host:$_csv_port" "$_csv_host" "$_csv_port" "$_rk_pl" "1" "$_rk_inc" "$_rk_hval:$_rk_pval"
+        done
+        return 0
+    fi
+
+    while IFS="$_rk_tab" read -r _rk_l _rk_k _rk_f _rk_v _rk_r; do
+        [ -n "$_rk_l" ] || continue
+        [ -n "$_rk_v" ] || continue
+        _cli_split_value "$_rk_v" || true
+        _cli_entry_emit "$_rk_l" "$_rk_l" "$_rk_f" "$_rk_v" "$_csv_host" "$_csv_port" "$_rk_l" "0" "$_rk_inc" "$_rk_r"
+    done <<EOF
+$_rk_hits
+EOF
+}
+
+# Maven 的 settings.xml：<proxy> 块里 <host> 与 <port> 各是一个元素，
+# 还能有 <active>false</active>（那一块根本不生效）与 <protocol>。
+# NuGet 的 NuGet.Config：<add key="http_proxy" value="..." />。
+#
+# 只认能完整读出的块：缺 host、缺 port、<active>false</active>、块没闭合——
+# 一律不产结论。那种情况下我们连"它在挡哪条路"都说不清，说成故障就是编的。
+_cli_read_xml() {
+    _x_path="$1"
+    _x_in=0; _x_start=0; _x_host=''; _x_port=''; _x_active='true'; _x_proto=''
+    _x_hostline=0; _x_portline=0; _x_n=0
+    while IFS= read -r _x_raw || [ -n "$_x_raw" ]; do
+        _x_n=$((_x_n + 1))
+        _cpt_trim "$_x_raw"; _x_t=$_cpt_trim
+        [ -n "$_x_t" ] || continue
+        case "$_x_t" in '<!--'*) continue ;; esac
+        if [ "$_x_in" = "0" ]; then
+            case "$_x_t" in
+                *'<proxy'*)
+                    _x_in=1; _x_start=$_x_n
+                    _x_host=''; _x_port=''; _x_active='true'; _x_proto=''
+                    _x_hostline=0; _x_portline=0 ;;
+                *'<add'*)
+                    _cli_xml_add_line "$_x_t" "$_x_n" ;;
+                *) continue ;;
+            esac
+        fi
+        case "$_x_t" in
+            *'<host>'*) _x_v="${_x_t#*<host>}"; _x_host="${_x_v%%</host>*}"; _x_hostline=$_x_n ;;
+        esac
+        case "$_x_t" in
+            *'<port>'*) _x_v="${_x_t#*<port>}"; _x_port="${_x_v%%</port>*}"; _x_portline=$_x_n ;;
+        esac
+        case "$_x_t" in
+            *'<active>'*) _x_v="${_x_t#*<active>}"; _x_active="${_x_v%%</active>*}" ;;
+        esac
+        case "$_x_t" in
+            *'<protocol>'*) _x_v="${_x_t#*<protocol>}"; _x_proto="${_x_v%%</protocol>*}" ;;
+        esac
+        case "$_x_t" in
+            *'</proxy>'*)
+                case "$_x_port" in ''|*[!0-9]*) _x_port='' ;; esac
+                if [ -n "$_x_host" ] && [ -n "$_x_port" ] && [ "$_x_portline" -gt 0 ] 2>/dev/null; then
+                    _x_act=$(printf '%s' "$_x_active" | tr 'A-Z' 'a-z')
+                    if [ "$_x_act" != "false" ]; then
+                        _x_pt=$(printf '%s' "$_x_proto" | tr 'A-Z' 'a-z')
+                        _x_val="http://$_x_host:$_x_port"
+                        case "$_x_pt" in
+                            socks5|socks) _x_val="socks5://$_x_host:$_x_port" ;;
+                        esac
+                        _cli_split_value "$_x_val" || true
+                        _cli_entry_emit "$_x_portline" "$_x_portline" "proxy" \
+                            "$_x_val" "$_csv_host" "$_csv_port" "$_x_portline" "1" "0" "$_x_host:$_x_port"
+                    fi
+                fi
+                _x_in=0 ;;
+        esac
+    done < "$_x_path"
+}
+
+# NuGet 的那一行：<add key="http_proxy" value="http://127.0.0.1:7890" />
+# 属性顺序、引号种类都可能不同，逐个形态认；认不出就当没有（宁漏不误）。
+_cli_xml_add_line() {
+    _xa_line="$1"; _xa_n="$2"
+    _xa_lc=$(printf '%s' "$_xa_line" | tr 'A-Z' 'a-z')
+    case "$_xa_lc" in
+        *'key="http_proxy"'*) ;;
+        *"key='http_proxy'"*) ;;
+        *) return 0 ;;
+    esac
+    _xa_val=''
+    case "$_xa_line" in
+        *'value="'*) _xa_v="${_xa_line#*value=\"}"; _xa_val="${_xa_v%%\"*}" ;;
+        *"value='"*) _xa_v="${_xa_line#*value=\'}"; _xa_val="${_xa_v%%\'*}" ;;
+    esac
+    [ -n "$_xa_val" ] || return 0
+    _cli_split_value "$_xa_val" || return 0
+    _cli_entry_emit "$_xa_n" "$_xa_n" "http_proxy" "$_xa_val" "$_csv_host" "$_csv_port" "$_xa_n" "0" "0" "$_xa_line"
+    return 0
+}
+
+# SSH 的 ~/.ssh/config：OpenSSH 完全不看 HTTP_PROXY，只认 ProxyCommand / ProxyJump。
+# 这里只找「本机回环地址 + 端口」那一种形态（常见写法是
+# `ProxyCommand nc -X connect -x 127.0.0.1:7890 %h %p` 或 `connect -H 127.0.0.1:7890`）。
+# 目标写成域名别名的（ProxyJump bastion）不是本机代理，不产结论。
+_cli_read_ssh() {
+    _s_path="$1"
+    _s_n=0
+    while IFS= read -r _s_raw || [ -n "$_s_raw" ]; do
+        _s_n=$((_s_n + 1))
+        _cpt_trim "$_s_raw"; _s_t=$_cpt_trim
+        [ -n "$_s_t" ] || continue
+        case "$_s_t" in '#'*) continue ;; esac
+        case "$_s_t" in
+            [Pp]roxy[Cc]ommand[[:space:]]*|[Pp]roxy[Jj]ump[[:space:]]*) ;;
+            *) continue ;;
+        esac
+        _s_rest="${_s_t#*[[:space:]]}"
+        _s_host=''; _s_port=''
+        case "$_s_rest" in
+            *'127.0.0.1:'*) _s_host='127.0.0.1'; _s_v="${_s_rest#*127.0.0.1:}" ;;
+            *'localhost:'*)  _s_host='localhost';  _s_v="${_s_rest#*localhost:}" ;;
+            *'[::1]:'*)      _s_host='::1';        _s_v="${_s_rest#*\[::1\]:}" ;;
+            *) continue ;;
+        esac
+        _s_port="${_s_v%%[!0-9]*}"
+        case "$_s_port" in ''|*[!0-9]*) continue ;; esac
+        [ "$_s_port" -gt 0 ] 2>/dev/null || continue
+        _cli_entry_emit "$_s_n" "$_s_n" "ProxyCommand" \
+            "http://$_s_host:$_s_port" "$_s_host" "$_s_port" "$_s_n" "0" "0" "$_s_t"
+    done < "$_s_path"
+}
+
+# 纯判据（与 Windows 侧 Get-CliProxyVerdict 逐条同形）：
 #   $1 值   $2 死活（alive / dead / unknown）   $3 文件里有 include：1 / 0
+# 归 foreign 而不是可修——「修了也没用」等于没修，报成修好就是谎报。
 cli_proxy_verdict() {
     _cpv_val="${1:-}"; _cpv_alive="${2:-unknown}"; _cpv_inc="${3:-0}"
     [ -n "$_cpv_val" ] || { printf '%s' "$FINDING_KIND_CLEAN"; return 0; }
@@ -451,7 +760,6 @@ cli_proxy_verdict() {
     [ -n "$_cpv_url" ] || { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
     is_loopback_url "$_cpv_val" || { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
     # 文件里有 include：代理可能来自别处，改这一行解决不了问题。
-    # 归 foreign 而不是可修——「修了也没用」等于没修，报成修好就是谎报。
     [ "$_cpv_inc" = "1" ] && { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
     # 说不清死活时不动：判成可修然后删掉一个其实在用的代理，代价是用户唯一的上网路径没了。
     [ "$_cpv_alive" = "unknown" ] && { printf '%s' "$FINDING_KIND_FOREIGN"; return 0; }
@@ -460,164 +768,290 @@ cli_proxy_verdict() {
     return 0
 }
 
+# 这一项该怎么修（与目标表的 Fix 列不同：这里还看「现在有没有活着的代理」）。
+#   $1 = 表里的 Fix 列   $2 = 现在有没有活代理（1/0）
+#   drop 删掉那一项 / port 改成当前端口 / none 本工具不动手，只报告
+cli_proxy_entry_mode() {
+    case "${1:-drop}" in
+        port-only) if [ "${2:-0}" = "1" ]; then printf 'port'; else printf 'none'; fi ;;
+        port)      if [ "${2:-0}" = "1" ]; then printf 'port'; else printf 'drop'; fi ;;
+        *)         printf 'drop' ;;
+    esac
+    return 0
+}
+
+# 当前真正在用的本机代理端点，写进 CLI_LIVE_HOST / CLI_LIVE_PORT。
+#
+# 判据只用**我们自己注入的那个值**（proxy.env 里的 HTTP_PROXY）：它是 EnvProxy
+# 此刻认定的端口，而且必须是活的。不在这里重新全端口扫描——救援页已经够慢，
+# 而且"我们的值指向一个活端口"就是使用者此刻真正在用的那个（与状态页同源）。
+CLI_LIVE_HOST=''
+CLI_LIVE_PORT=''
+cli_live_proxy_endpoint() {
+    CLI_LIVE_HOST=''; CLI_LIVE_PORT=''
+    [ -n "${PROXY_ENV:-}" ] || return 1
+    [ -f "$PROXY_ENV" ] || return 1
+    _clep_line=$(grep -E '^export HTTP_PROXY=' "$PROXY_ENV" 2>/dev/null | head -n 1)
+    [ -n "$_clep_line" ] || return 1
+    _clep_url="${_clep_line#*export HTTP_PROXY=}"
+    _clep_url=$(printf '%s' "$_clep_url" | tr -d "\"'")
+    _cli_split_value "$_clep_url" || return 1
+    port_alive_bounded "$_csv_host" "$_csv_port" || return 1
+    CLI_LIVE_HOST="$_csv_host"; CLI_LIVE_PORT="$_csv_port"
+    return 0
+}
+
+# 给一条结论配一句人说。$1 Kind $2 工具名 $3 值 $4 Mode $5 有没有活代理端口 $6 文件里有 include
+_cli_proxy_reason() {
+    _cpr_kind="${1:-}"; _cpr_tool="$2"; _cpr_val="$3"; _cpr_mode="$4"; _cpr_inc="${6:-0}"
+    case "$_cpr_kind" in
+        "$FINDING_KIND_ALIVE")
+            printf '这里写的是本机地址，程序还开着，连得上。' ;;
+        "$FINDING_KIND_BLOCKING"|"$FINDING_KIND_SLOWING")
+            _cpr_s="这个文件里写着让 $_cpr_tool 走本机的一个代理，但那个程序已经不在了。"
+            case "$_cpr_mode" in
+                port) _cpr_s="$_cpr_s可以把它改到你现在在用的端口 $CLI_LIVE_PORT。" ;;
+                none) _cpr_s="$_cpr_s这种文件本工具不替你改。" ;;
+            esac
+            printf '%s' "$_cpr_s" ;;
+        "$FINDING_KIND_FOREIGN")
+            if [ "$_cpr_inc" = "1" ]; then
+                printf '这个文件的代理设置可能是从别处读进来的，本工具不知道该改哪一个，所以不动。'
+            elif [ -z "$(_url_host "$_cpr_val" 2>/dev/null)" ]; then
+                printf '这一项的值认不出来，所以不动它。'
+            else
+                printf '这个代理不是这台电脑自己的，多半是公司或学校给的，本工具不碰。'
+            fi ;;
+        *) printf '' ;;
+    esac
+    return 0
+}
+
+# $1 Kind $2 Mode
+_cli_proxy_advice() {
+    finding_fixable "${1:-}" || { printf '保持原样即可。'; return 0; }
+    case "${2:-drop}" in
+        port) printf '可以让本工具把它改成你现在在用的端口（会先备份，能还原）。' ;;
+        drop) printf '可以让本工具删掉那一行（会先备份，能还原）；删掉之后它会改用系统里的代理设置。' ;;
+        none) printf '这种格式本工具不替你改：把那一项删掉，或把端口改成你现在在用的那个。' ;;
+        *)    printf '保持原样即可。' ;;
+    esac
+    return 0
+}
+
 # 读全部 CLI 配置文件，输出 Finding 行。
+#
+# 第 8 列（曾经留空的那一列）现在放 Repairable：1 = 这一条能安全地改 / 0 = 只报告。
+# 那一列本来就是为「这一条归谁修」留的，正是这个意思；界面按 finding_repairable
+# 的第 3 个参数读它，与 Windows 侧的 Finding.Data.Repairable 同义。
 get_cli_proxy_findings() {
-    for _gcp_row in ${CLI_PROXY_TARGETS[@]+"${CLI_PROXY_TARGETS[@]}"}; do
-        _insp_field "$_gcp_row" 1; _gcp_id=$_insp_out
-        _insp_field "$_gcp_row" 2; _gcp_name=$_insp_out
-        _insp_field "$_gcp_row" 3; _gcp_file=$_insp_out
-        _insp_field "$_gcp_row" 4; _gcp_keys=$_insp_out
-        _gcp_path=$(cli_proxy_file_path "$_gcp_file")
-        [ -n "$_gcp_path" ] || continue
-        [ -f "$_gcp_path" ] || continue
-        _gcp_rows=$(read_cli_proxy_file "$_gcp_path" "$_gcp_keys")
-        # 读不出来（最后两列是 0）要单独说，不许静默消失。
-        _gcp_bad=0
-        if [ -n "$_gcp_rows" ]; then
-            _gcp_bad=$(printf '%s\n' "$_gcp_rows" | awk -F"\t" '$5 == "0" {c++} END {print c+0}')
-        fi
-        if [ "$_gcp_bad" -gt 0 ]; then
-            finding_new "cli-proxy.$_gcp_id" "$FINDING_KIND_UNREADABLE" "$_gcp_name" "$_gcp_path" \
-                '' '这个文件没读出来。' '读不出来不代表没问题，但本工具不会去改它。' ''
-            continue
-        fi
-        [ -n "$_gcp_rows" ] || continue
-        while IFS="$(printf '\t')" read -r _gcp_ln _gcp_key _gcp_val _gcp_inc _gcp_ok; do
-            [ -n "$_gcp_ln" ] || continue
-            [ "$_gcp_ok" = "1" ] || continue
-            _gcp_alive='unknown'
-            _gcp_addr=$(sysproxy_split_url "$_gcp_val")
-            _gcp_addr=$(printf '%s' "$_gcp_addr" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
-            _gcp_port=$(printf '%s' "$_gcp_addr" | sed -E 's/^.*://')
-            case "$_gcp_val" in
-                *:*) _gcp_port="${_gcp_val##*:}" ;;
-                *)   _gcp_port='' ;;
+    _cpf_live=0
+    cli_live_proxy_endpoint && _cpf_live=1
+    for _cpf_row in ${CLI_PROXY_TARGETS[@]+"${CLI_PROXY_TARGETS[@]}"}; do
+        _insp_field "$_cpf_row" 1; _cpf_id=$_insp_out
+        _insp_field "$_cpf_row" 2; _cpf_name=$_insp_out
+        _insp_field "$_cpf_row" 7; _cpf_fixmode=$_insp_out
+        _cpf_paths=$(cli_proxy_file_paths "$_cpf_row")
+        while IFS= read -r _cpf_path; do
+            [ -n "$_cpf_path" ] || continue
+            [ -f "$_cpf_path" ] || continue
+            _cpf_rows=$(read_cli_proxy_file "$_cpf_path" "$_cpf_row")
+            case "$_cpf_rows" in
+                '!'*)
+                    # 读不出来要单独说，不许静默消失。
+                    _cpf_why=${_cpf_rows#!}
+                    finding_new "cli-proxy.$_cpf_id" "$FINDING_KIND_UNREADABLE" "$_cpf_name" "$_cpf_path" \
+                        '' "这个文件没读出来：$_cpf_why" '读不出来不代表没问题，但本工具不会去改它。' ''
+                    continue ;;
             esac
-            case "$_gcp_port" in ''|*[!0-9]*) _gcp_port='' ;; esac
-            if [ -n "$_gcp_port" ] && [ "$_gcp_port" -gt 0 ] 2>/dev/null; then
-                if port_alive_bounded "$_gcp_addr" "$_gcp_port"; then
-                    _gcp_alive='alive'
-                else
-                    _gcp_alive='dead'
+            [ -n "$_cpf_rows" ] || continue
+            while IFS="$(printf '\t')" read -r _cpf_ln _cpf_lines _cpf_key _cpf_val _cpf_host _cpf_port _cpf_fl _cpf_po _cpf_inc _cpf_raw; do
+                [ -n "$_cpf_ln" ] || continue
+                _cpf_alive='unknown'
+                if [ -n "$_cpf_host" ] && [ -n "$_cpf_port" ]; then
+                    if port_alive_bounded "$_cpf_host" "$_cpf_port"; then _cpf_alive='alive'; else _cpf_alive='dead'; fi
                 fi
-            fi
-            _gcp_kind=$(cli_proxy_verdict "$_gcp_val" "$_gcp_alive" "$_gcp_inc")
-            case "$_gcp_kind" in
-                "$FINDING_KIND_CLEAN") continue ;;
-            esac
-            _gcp_reason=''
-            _gcp_advice='保持原样即可。'
-            case "$_gcp_kind" in
-                "$FINDING_KIND_ALIVE")
-                    _gcp_reason='这里写的是本机地址，程序还开着，连得上。' ;;
-                "$FINDING_KIND_BLOCKING")
-                    _gcp_reason="这个文件里写着让 $_gcp_file 走本机的一个代理，但那个程序已经不在了。"
-                    _gcp_advice='可以让本工具删掉那一行（会先备份，能还原）。' ;;
-                "$FINDING_KIND_FOREIGN")
-                    if [ "$_gcp_inc" = "1" ]; then
-                        _gcp_reason='这个文件的代理设置可能是从别处读进来的，本工具不知道该改哪一个，所以不动。'
-                    else
-                        _gcp_reason='这个代理不是这台电脑自己的，多半是公司或学校给的，本工具不碰。'
-                    fi ;;
-            esac
-            finding_new "cli-proxy.$_gcp_id" "$_gcp_kind" "$_gcp_name" "$_gcp_path" \
-                "$_gcp_val" "$_gcp_reason" "$_gcp_advice" ''
+                _cpf_k=$(cli_proxy_verdict "$_cpf_val" "$_cpf_alive" "$_cpf_inc")
+                case "$_cpf_k" in "$FINDING_KIND_CLEAN") continue ;; esac
+                _cpf_mode=$(cli_proxy_entry_mode "$_cpf_fixmode" "$_cpf_live")
+                _cpf_rep=0
+                if [ "$_cpf_mode" != "none" ] && finding_fixable "$_cpf_k"; then _cpf_rep=1; fi
+                _cpf_reason=$(_cli_proxy_reason "$_cpf_k" "$_cpf_name" "$_cpf_val" "$_cpf_mode" "$_cpf_live" "$_cpf_inc")
+                _cpf_advice=$(_cli_proxy_advice "$_cpf_k" "$_cpf_mode")
+                finding_new "cli-proxy.$_cpf_id" "$_cpf_k" "$_cpf_name" "$_cpf_path" \
+                    "$_cpf_val" "$_cpf_reason" "$_cpf_advice" "$_cpf_rep"
+            done <<EOF
+$_cpf_rows
+EOF
         done <<EOF
-$_gcp_rows
+$_cpf_paths
 EOF
     done
     return 0
 }
 
-# 修：删掉那几个判为死的行。输出三态结论词：fixed / none / failed / partial / nobackup
+# 把一行里的旧端点换成新端点。能换就打印新行；换不了返回 1（调用方据此不写文件）。
 #
-# **逐行删，不重写整个文件**：配置文件是用户的，里面有他别的东西。
-# 删之前把整份原文写进还原点；还原时整份写回去。
+# **只替换 host:port 那一段**：账号密码、协议、后面的路径一个字都不碰。
+# 公司代理常写成 http://user:pass@host:port，整行重写会把密码抹掉——那是数据损坏。
+_cli_repoint_line() {
+    _rl_line="$1"; _rl_oh="$2"; _rl_op="$3"; _rl_nh="$4"; _rl_np="$5"; _rl_po="$6"
+    [ -n "$_rl_np" ] || return 1
+    [ -n "$_rl_op" ] || return 1
+    if [ "$_rl_po" = "1" ]; then
+        # 那一行上只有一个端口数字（Gradle 的 port 行、XML 的 <port> 元素）。
+        case "$_rl_line" in
+            *"$_rl_op"*) printf '%s' "${_rl_line/"$_rl_op"/"$_rl_np"}"; return 0 ;;
+        esac
+        return 1
+    fi
+    case "$_rl_nh" in
+        *:*) _rl_new="[$_rl_nh]:$_rl_np" ;;
+        *)   _rl_new="$_rl_nh:$_rl_np" ;;
+    esac
+    _rl_c1="[$_rl_oh]:$_rl_op"
+    _rl_c2="$_rl_oh:$_rl_op"
+    if [ "${_rl_line#*"$_rl_c1"}" != "$_rl_line" ]; then
+        printf '%s' "${_rl_line/"$_rl_c1"/"$_rl_new"}"
+        return 0
+    fi
+    if [ "${_rl_line#*"$_rl_c2"}" != "$_rl_line" ]; then
+        printf '%s' "${_rl_line/"$_rl_c2"/"$_rl_new"}"
+        return 0
+    fi
+    return 1
+}
+
+# 按计划改一个文件。计划每行六列（TAB）：Mode <TAB> Lines <TAB> FixLine <TAB> OldHost <TAB> OldPort <TAB> PortOnly
+# Mode=drop 删掉 Lines 里的行；Mode=port 改写 FixLine 那一行。
+# 整份重写到同目录临时文件再 mv：就地改写到一半失败，用户就得到半截配置。
+_cli_apply_plan() {
+    _ap_path="$1"; _ap_plan="$2"; _ap_live="$3"; _ap_nh="$4"; _ap_np="$5"
+    _ap_tab="$(printf '\t')"
+    _ap_tmp="$_ap_path.tmp.$$"
+    : > "$_ap_tmp" 2>/dev/null || return 1
+    _ap_n=0
+    while IFS= read -r _ap_line || [ -n "$_ap_line" ]; do
+        _ap_n=$((_ap_n + 1))
+        _ap_action='keep'; _ap_text=''
+        while IFS= read -r _ap_pl; do
+            [ -n "$_ap_pl" ] || continue
+            _ap_mode=${_ap_pl%%"$_ap_tab"*}; _ap_rest=${_ap_pl#*"$_ap_tab"}
+            _ap_lines=${_ap_rest%%"$_ap_tab"*}; _ap_rest=${_ap_rest#*"$_ap_tab"}
+            _ap_fl=${_ap_rest%%"$_ap_tab"*}; _ap_rest=${_ap_rest#*"$_ap_tab"}
+            _ap_oh=${_ap_rest%%"$_ap_tab"*}; _ap_rest=${_ap_rest#*"$_ap_tab"}
+            _ap_op=${_ap_rest%%"$_ap_tab"*}; _ap_po=${_ap_rest#*"$_ap_tab"}
+            if [ "$_ap_mode" = "port" ] && [ "$_ap_fl" = "$_ap_n" ]; then
+                _ap_text=$(_cli_repoint_line "$_ap_line" "$_ap_oh" "$_ap_op" "$_ap_nh" "$_ap_np" "$_ap_po") || _ap_text=''
+                if [ -z "$_ap_text" ]; then _ap_action='fail'; break; fi
+                _ap_action='replace'
+                continue
+            fi
+            if [ "$_ap_mode" = "drop" ] && [ -n "$_ap_lines" ]; then
+                case ",$_ap_lines," in
+                    *",$_ap_n,"*) _ap_action='drop'; break ;;
+                esac
+            fi
+        done <<EOF
+$_ap_plan
+EOF
+        if [ "$_ap_action" = "fail" ]; then
+            rm -f "$_ap_tmp" 2>/dev/null
+            return 1
+        fi
+        [ "$_ap_action" = "drop" ] && continue
+        if [ "$_ap_action" = "replace" ]; then
+            printf '%s\n' "$_ap_text" >> "$_ap_tmp" 2>/dev/null || { rm -f "$_ap_tmp" 2>/dev/null; return 1; }
+        else
+            printf '%s\n' "$_ap_line" >> "$_ap_tmp" 2>/dev/null || { rm -f "$_ap_tmp" 2>/dev/null; return 1; }
+        fi
+    done < "$_ap_path"
+    mv -f "$_ap_tmp" "$_ap_path" 2>/dev/null || { rm -f "$_ap_tmp" 2>/dev/null; return 1; }
+    return 0
+}
+
+# 修：删掉判为死的行，或把它们改成当前端口。输出三态结论词：fixed / none / failed / partial / nobackup
 #
-# 为什么还原点存全份而不是「被删的那几行」：用户可能在修完之后又改了文件，
-# 按行号插回去会插错位置。存全份则还原的判据变成「内容逐字回到原样」，
-# 那正是用户对「还原」的全部期待——对不上就如实报，不假装成功。
+# **逐行改，不重写整个文件**：配置文件是用户的，里面有他别的东西。
+# 改之前把整份原文写进还原点；还原时整份写回去。
 repair_cli_proxy_config() {
     _rcpc_any=0
     _rcpc_ok=0
     _rcpc_fail=0
+    _rcpc_tab="$(printf '\t')"
+    _rcpc_live=0
+    cli_live_proxy_endpoint && _rcpc_live=1
     for _rcpc_row in ${CLI_PROXY_TARGETS[@]+"${CLI_PROXY_TARGETS[@]}"}; do
         _insp_field "$_rcpc_row" 1; _rcpc_id=$_insp_out
-        _insp_field "$_rcpc_row" 3; _rcpc_file=$_insp_out
-        _insp_field "$_rcpc_row" 4; _rcpc_keys=$_insp_out
-        _rcpc_path=$(cli_proxy_file_path "$_rcpc_file")
-        [ -n "$_rcpc_path" ] || continue
-        [ -f "$_rcpc_path" ] || continue
-        _rcpc_rows=$(read_cli_proxy_file "$_rcpc_path" "$_rcpc_keys")
-        [ -n "$_rcpc_rows" ] || continue
-        # 挑出判为死的行号。
-        _rcpc_dead=''
-        while IFS="$(printf '\t')" read -r _rcpc_ln _rcpc_key _rcpc_val _rcpc_inc _rcpc_okr; do
-            [ -n "$_rcpc_ln" ] || continue
-            [ "$_rcpc_okr" = "1" ] || continue
-            _rcpc_alive='unknown'
-            _rcpc_port=''
-            case "$_rcpc_val" in
-                *:*) _rcpc_port="${_rcpc_val##*:}" ;;
-            esac
-            case "$_rcpc_port" in ''|*[!0-9]*) _rcpc_port='' ;; esac
-            _rcpc_addr=$(sysproxy_split_url "$_rcpc_val")
-            _rcpc_addr=$(printf '%s' "$_rcpc_addr" | sed -E 's/^\[([^]]*)\]:[0-9]+$/\1/; t; s/:[0-9]+$//')
-            if [ -n "$_rcpc_port" ] && [ "$_rcpc_port" -gt 0 ] 2>/dev/null; then
-                if port_alive_bounded "$_rcpc_addr" "$_rcpc_port"; then _rcpc_alive='alive'; else _rcpc_alive='dead'; fi
-            fi
-            _rcpc_k=$(cli_proxy_verdict "$_rcpc_val" "$_rcpc_alive" "$_rcpc_inc")
-            case "$_rcpc_k" in
-                "$FINDING_KIND_BLOCKING"|"$FINDING_KIND_SLOWING") _rcpc_dead="$_rcpc_dead $_rcpc_ln" ;;
-            esac
-        done <<EOF
+        _insp_field "$_rcpc_row" 7; _rcpc_fixmode=$_insp_out
+        _rcpc_paths=$(cli_proxy_file_paths "$_rcpc_row")
+        while IFS= read -r _rcpc_path; do
+            [ -n "$_rcpc_path" ] || continue
+            [ -f "$_rcpc_path" ] || continue
+            _rcpc_rows=$(read_cli_proxy_file "$_rcpc_path" "$_rcpc_row")
+            case "$_rcpc_rows" in '!'*) continue ;; esac
+            [ -n "$_rcpc_rows" ] || continue
+            # 挑出要动的项，排成计划（每行六列）。
+            _rcpc_plan=''
+            _rcpc_touched=' '
+            while IFS="$_rcpc_tab" read -r _rcpc_ln _rcpc_lines _rcpc_key _rcpc_val _rcpc_host _rcpc_port _rcpc_fl _rcpc_po _rcpc_inc _rcpc_raw; do
+                [ -n "$_rcpc_ln" ] || continue
+                _rcpc_alive='unknown'
+                if [ -n "$_rcpc_host" ] && [ -n "$_rcpc_port" ]; then
+                    if port_alive_bounded "$_rcpc_host" "$_rcpc_port"; then _rcpc_alive='alive'; else _rcpc_alive='dead'; fi
+                fi
+                _rcpc_k=$(cli_proxy_verdict "$_rcpc_val" "$_rcpc_alive" "$_rcpc_inc")
+                finding_fixable "$_rcpc_k" || continue
+                _rcpc_mode=$(cli_proxy_entry_mode "$_rcpc_fixmode" "$_rcpc_live")
+                [ "$_rcpc_mode" = "none" ] && continue
+                _rcpc_plan="${_rcpc_plan}${_rcpc_mode}${_rcpc_tab}${_rcpc_lines}${_rcpc_tab}${_rcpc_fl}${_rcpc_tab}${_rcpc_host}${_rcpc_tab}${_rcpc_port}${_rcpc_tab}${_rcpc_po}
+"
+                _rcpc_touched="${_rcpc_touched}${_rcpc_host}|${_rcpc_port} "
+            done <<EOF
 $_rcpc_rows
 EOF
-        [ -n "$_rcpc_dead" ] || continue
-        _rcpc_any=1
-        # 还原点：存整份原文。
-        _rcpc_orig=$(cat "$_rcpc_path" 2>/dev/null) || { _rcpc_fail=$((_rcpc_fail + 1)); continue; }
-        if ! add_doctor_journal_entry 'cli-proxy' \
-                "inspector=cli-proxy" \
-                "target=$_rcpc_id" \
-                "path=$(_bak_enc "$_rcpc_path")" \
-                "content=$(_bak_enc "$_rcpc_orig")"; then
-            printf 'nobackup'
-            return 0
-        fi
-        # 只删判为死的那几行。awk 一行搞定，且保留其余行的原样（含行尾空白）。
-        _rcpc_tmp="$_rcpc_path.tmp.$$"
-        if ! awk -v dead="$_rcpc_dead" '
-            BEGIN { n = split(dead, a, " "); for (i = 1; i <= n; i++) if (a[i] != "") skip[a[i]] = 1 }
-            { if (!(FNR in skip)) print }
-        ' "$_rcpc_path" > "$_rcpc_tmp" 2>/dev/null; then
-            rm -f "$_rcpc_tmp" 2>/dev/null
-            _rcpc_fail=$((_rcpc_fail + 1))
-            continue
-        fi
-        # 原子替换：就地截断中途失败，用户就得到半截的配置。
-        if ! mv -f "$_rcpc_tmp" "$_rcpc_path" 2>/dev/null; then
-            rm -f "$_rcpc_tmp" 2>/dev/null
-            _rcpc_fail=$((_rcpc_fail + 1))
-            continue
-        fi
-        # 回读确认：那几项真的没了才算修好。不确认就报成功，
-        # 就是屏幕上说修好了、git 还是连不上。
-        _rcpc_after=$(read_cli_proxy_file "$_rcpc_path" "$_rcpc_keys")
-        _rcpc_left=0
-        if [ -n "$_rcpc_after" ]; then
-            while IFS="$(printf '\t')" read -r _rcpc_l2 _rcpc_k2 _rcpc_v2 _rcpc_i2 _rcpc_o2; do
-                [ -n "$_rcpc_l2" ] || continue
-                [ "$_rcpc_o2" = "1" ] || continue
-                _rcpc_k2v=$(cli_proxy_verdict "$_rcpc_v2" 'dead' "$_rcpc_i2")
-                case "$_rcpc_k2v" in
-                    "$FINDING_KIND_BLOCKING"|"$FINDING_KIND_SLOWING") _rcpc_left=$((_rcpc_left + 1)) ;;
-                esac
-            done <<EOF
+            [ -n "$_rcpc_plan" ] || continue
+            _rcpc_any=1
+            # 还原点：存整份原文。写不下来就不动手——没有退路的修改不该发生。
+            _rcpc_orig=$(cat "$_rcpc_path" 2>/dev/null) || { _rcpc_fail=$((_rcpc_fail + 1)); continue; }
+            if ! add_doctor_journal_entry 'cli-proxy' \
+                    "inspector=cli-proxy" \
+                    "target=$_rcpc_id" \
+                    "path=$(_bak_enc "$_rcpc_path")" \
+                    "content=$(_bak_enc "$_rcpc_orig")"; then
+                printf 'nobackup'
+                return 0
+            fi
+            if ! _cli_apply_plan "$_rcpc_path" "$_rcpc_plan" "$_rcpc_live" "$CLI_LIVE_HOST" "$CLI_LIVE_PORT"; then
+                _rcpc_fail=$((_rcpc_fail + 1))
+                continue
+            fi
+            # 回读确认：**我们动过的那几项**真的不在了才算修好。
+            # 只看"文件里还有没有别的可修项"会误报：同一文件里可能还留着一条
+            # 本工具不该动的项（比如没有活端口时的 port-only 项），那不是这次修复的失败。
+            _rcpc_after=$(read_cli_proxy_file "$_rcpc_path" "$_rcpc_row")
+            _rcpc_left=0
+            if [ -n "$_rcpc_after" ]; then
+                while IFS="$_rcpc_tab" read -r _rcpc_l2 _rcpc_ls2 _rcpc_k2 _rcpc_v2 _rcpc_h2 _rcpc_p2 _rcpc_f2 _rcpc_o2 _rcpc_i2 _rcpc_r2; do
+                    [ -n "$_rcpc_l2" ] || continue
+                    case "$_rcpc_touched" in
+                        *" ${_rcpc_h2}|${_rcpc_p2} "*) : ;;
+                        *) continue ;;
+                    esac
+                    _rcpc_alive2='unknown'
+                    if [ -n "$_rcpc_h2" ] && [ -n "$_rcpc_p2" ]; then
+                        if port_alive_bounded "$_rcpc_h2" "$_rcpc_p2"; then _rcpc_alive2='alive'; else _rcpc_alive2='dead'; fi
+                    fi
+                    _rcpc_k2v=$(cli_proxy_verdict "$_rcpc_v2" "$_rcpc_alive2" "$_rcpc_i2")
+                    finding_fixable "$_rcpc_k2v" && _rcpc_left=$((_rcpc_left + 1))
+                done <<EOF
 $_rcpc_after
 EOF
-        fi
-        if [ "$_rcpc_left" -eq 0 ]; then _rcpc_ok=$((_rcpc_ok + 1)); else _rcpc_fail=$((_rcpc_fail + 1)); fi
+            fi
+            if [ "$_rcpc_left" -eq 0 ]; then _rcpc_ok=$((_rcpc_ok + 1)); else _rcpc_fail=$((_rcpc_fail + 1)); fi
+        done <<EOF
+$_rcpc_paths
+EOF
     done
     if [ "$_rcpc_any" -eq 0 ]; then printf 'none'; return 0; fi
     if [ "$_rcpc_fail" -eq 0 ] && [ "$_rcpc_ok" -gt 0 ]; then printf 'fixed'; return 0; fi
@@ -648,20 +1082,155 @@ restore_cli_proxy_snapshot() {
     [ "$_rcps_after" = "$_rcps_content" ] && printf 'ok' || printf 'failed'
     return 0
 }
+# ------------------------------------------------------------------------------
+# 4b. 只认 SOCKS 的端口（socks 检查器）——只解释，不动手
+# ------------------------------------------------------------------------------
+# 它回答的问题只有一句：「本机有个代理端口在跑，为什么这个工具说没有？」
+# 答案通常是"那个端口只认 SOCKS5，而我们（以及多数终端工具）只认 HTTP 代理"。
+#
+# 结论词用 alive：端口活着、程序也在，只是它说的协议不是我们用的那一种——
+# 与系统代理里"回环活着"是同一档含义（东西在那儿、不归我们碰）。
+# **绝不因为发现了 SOCKS 口就把它当代理注入**：ALL_PROXY 指向纯 SOCKS 口会让
+# 只认 HTTP 的工具全挂，比"没有代理"更糟。
+get_socks_findings() {
+    _gsf_rows=$(socks_only_ports)
+    [ -n "$_gsf_rows" ] || return 0
+    while IFS='|' read -r _gsf_port _gsf_who; do
+        [ -n "$_gsf_port" ] || continue
+        [ -n "$_gsf_who" ] || _gsf_who='本机的一个程序'
+        finding_new "socks.$_gsf_port" "$FINDING_KIND_ALIVE" '只认 SOCKS 的端口' \
+            "$_gsf_who 的 $_gsf_port" \
+            "socks5://127.0.0.1:$_gsf_port" \
+            '这个端口只认 SOCKS5，不认 HTTP 代理——所以本工具用不上它，只认环境变量的工具（git、npm、curl 这些）也走不了它。' \
+            '想让它给终端工具用：在客户端的设置里把 HTTP 代理或混合端口打开；或者把它填进那些只认 SOCKS 的程序里。' \
+            ''
+    done <<EOF
+$_gsf_rows
+EOF
+    return 0
+}
 
 # ------------------------------------------------------------------------------
-# 5. 网址解析（dns 检查器）—— macOS 侧只做「能证伪」的那一条
+# 5. 网址解析（dns 检查器）—— macOS 侧
 # ------------------------------------------------------------------------------
-# DIVERGE(Mac): Windows 侧能做两条（网卡级与「所有网络」两处设置打架、生效 DNS
-#   指向本机且 53 无人应答）。macOS 没有第一件事——那边没有「所有 WLAN 网络的 DNS」
-#   这个设置，网络服务的 DNS 只有一份，不存在两处打架。第二件事在 mac 上也不是
-#   「读注册表」而是 `scutil --dns` 的解析器快照，判据完全不同，混在一层里会让
-#   两侧的结论词含义分叉。所以这一层在 mac 上如实返回空。
+# 与 Windows 侧同一套结论词、同一个口径：DNS 被指到本机（或翻墙软件的虚拟网段），
+# 而那里没有任何程序在应答 = 网页打不开，而聊天软件可能还是好的。
+# 「回环 + 没人应答」两条客观事实叠加，与系统代理那一层同构。
 #
-# 为什么允许一个检查器在本侧产出空：表是两侧同形的（门禁 6 核对），
-# 但**能力**不必同形。返回空 ≠ 读不出来——读不出来要产 unreadable，
-# 那才是「有一层没看见」。这里是真的没有这一层可看。
+# DIVERGE(Mac): 读法与 Windows 不同，两处，都有原因：
+#   1) DNS 是按**网络服务**存的（Wi-Fi、雷雳以太网、公司 VPN 各一份），
+#      必须遍历全部服务（复用 sysproxy_list_services），不能只看当前那个：
+#      真实案例是「公司 VPN 上残留了本机 DNS、Wi-Fi 上是好的」。
+#      macOS 也没有 Windows 那种「所有 WLAN 网络的 DNS」单值形态，所以不存在
+#      "两处设置打架"那一条——少一条不是能力缩水，是那边真的没有这件事。
+#   2) 判活**不看 TCP 53**：mac 上的 DNS 主要走 UDP，只连 TCP 53 会把"只开了 UDP
+#      的本地解析器"误判成死掉，然后告诉用户"那里没有程序在听"——那是假话。
+#      改用 lsof 被动看谁在监听 53（TCP 或 UDP 都算），取不到 lsof 再退回 TCP 连接，
+#      两条都不成立时**不下结论**（读不出来不等于没问题，也不等于有问题）。
+#
+# 不给 Fix：改 DNS 得先知道"重置成自动之后路由器会下发什么"，而那个答案在系统里
+# 根本读不到。猜错会把用户手设的 223.5.5.5 换成更糟的地址，症状比故障还难查。
+
+# DNS 地址属于哪一类：loopback / fakeip / other。与 Windows 侧 Get-DnsAddressClass
+# 同判据（198.18.0.0/15 是翻墙软件的虚拟 IP 池，真实互联网与公司内网不会用它）。
+dns_address_class() {
+    _dac_a=$(printf '%s' "${1:-}" | tr -d '[]' | tr -d ' ')
+    [ -n "$_dac_a" ] || { printf 'other'; return 0; }
+    case "$_dac_a" in
+        127.*|localhost|::1|0:0:0:0:0:0:0:1) printf 'loopback'; return 0 ;;
+        198.18.*|198.19.*) printf 'fakeip'; return 0 ;;
+    esac
+    printf 'other'
+    return 0
+}
+
+# 本机有没有程序在听 53 端口。输出 bound / free / unknown。
+#
+# **被动看**，不去连：UDP 的 DNS 解析器只绑 UDP，TCP 连接必然失败——
+# 用 TCP 判活会把它们全判成死掉，然后误导用户去改一个其实正常的设置。
+dns53_state() {
+    if command -v lsof >/dev/null 2>&1; then
+        _d5s_hit=$(lsof -nP -i:53 2>/dev/null | awk 'NR > 1 { if ($0 ~ /\(LISTEN\)/ || $0 ~ /\(UDP\)/) { print "y"; exit } }')
+        if [ -n "$_d5s_hit" ]; then printf 'bound'; return 0; fi
+        # lsof 跑起来了、什么都没看到：可以确定没人在听。
+        printf 'free'
+        return 0
+    fi
+    if port_alive_bounded 127.0.0.1 53; then
+        printf 'bound'; return 0
+    fi
+    printf 'unknown'
+    return 0
+}
+
+# 读全部网络服务的 DNS。输出 "服务<TAB>地址" 一行一条；读不出来返回 1。
+# networksetup 对"没设 DNS"的服务回一句"There aren't any DNS Servers set on X."，
+# 那不是错误，是"这一层不存在"。
+_dns_read_services() {
+    _drs_seen=' '
+    _drs_any=0
+    _drs_services=$(sysproxy_list_services 2>/dev/null || true)
+    [ -n "$_drs_services" ] || return 1
+    while IFS= read -r _drs_svc; do
+        [ -n "$_drs_svc" ] || continue
+        _drs_any=1
+        _drs_out=$(networksetup -getdnsservers "$_drs_svc" 2>/dev/null || true)
+        # 没设 DNS 的那句人话：认它的开头，别去猜系统语言。
+        case "$_drs_out" in
+            *"aren't any"*|*"There aren"*|*'没有'*) continue ;;
+        esac
+        _drs_rest="$_drs_out"
+        while IFS= read -r _drs_one; do
+            _drs_one=$(printf '%s' "$_drs_one" | tr -d ' ')
+            [ -n "$_drs_one" ] || continue
+            case "$_drs_one" in
+                *[!0-9a-fA-F:.]*) continue ;;   # 不是地址（本地化文案、空行）
+            esac
+            case "$_drs_seen" in *" $_drs_one "*) continue ;; esac
+            _drs_seen="$_drs_seen$_drs_one "
+            printf '%s\t%s\n' "$_drs_svc" "$_drs_one"
+        done <<EOF
+$_drs_out
+EOF
+    done <<EOF
+$_drs_services
+EOF
+    [ "$_drs_any" = "1" ] || return 1
+    return 0
+}
+
 get_dns_findings() {
+    _gd_rows=$(_dns_read_services)
+    if [ $? -ne 0 ]; then
+        finding_new 'dns.state' "$FINDING_KIND_UNREADABLE" '网址解析' '网络服务的 DNS 设置' \
+            '' '这一项没读出来：网络服务列表不可用。' '读不出来不代表没问题，但本工具不会去改它。' ''
+        return 0
+    fi
+    # 没配 DNS 的服务不产结论：那不是问题，是默认（用路由器下发的）。
+    [ -n "$_gd_rows" ] || return 0
+    _gd_state=$(dns53_state)
+    _gd_emitted=0
+    while IFS="$(printf '\t')" read -r _gd_svc _gd_addr; do
+        [ -n "$_gd_addr" ] || continue
+        _gd_cls=$(dns_address_class "$_gd_addr")
+        case "$_gd_cls" in loopback|fakeip) : ;; *) continue ;; esac
+        if [ "$_gd_state" = "bound" ]; then
+            finding_new 'dns.loopback' "$FINDING_KIND_ALIVE" '网址解析' "$_gd_svc 的 DNS 设置" \
+                "$_gd_addr" 'DNS 指向本机，本机确实有个程序在处理。' '不需要做什么。' ''
+        elif [ "$_gd_state" = "free" ]; then
+            _gd_emitted=$((_gd_emitted + 1))
+            [ "$_gd_emitted" -le 3 ] || continue
+            finding_new 'dns.loopback' "$FINDING_KIND_BLOCKING" '网址解析' "$_gd_svc 的 DNS 设置" \
+                "$_gd_addr" \
+                "网址解析被指到本机的 $_gd_addr，但那里没有程序在听——网页会打不开，而聊天软件可能还是好的。" \
+                '这一项本工具不自动改：改错了会把你的网络换成路由器的设置。到系统设置的网络里，把 DNS 改回「自动」即可。' \
+                ''
+        fi
+        # unknown：两条判活都拿不到结果。**不下结论**——把"没看见"说成"没人听"
+        # 会让用户去改一个可能完全正常的设置。
+    done <<EOF
+$_gd_rows
+EOF
     return 0
 }
 
@@ -746,7 +1315,8 @@ show_rescue_page() {
     echo ""
     # 第一句就说清它管到哪儿。名字里带「网络」，但用户到这里时心里想的是
     # 「我整个网都不行」——不说清，他会以为这一屏能修所有上网问题。
-    style_out dim "  查浏览器、终端工具、网址解析这几处设置是不是指错了地方。"
+    style_out dim "  查浏览器、终端工具、网址解析这几处设置是不是指错了地方，"
+style_out dim "  顺带看看本机有没有只认 SOCKS 的端口（那种端口本工具用不了）。"
     style_out dim "  只修「指向本机、但那个程序已经不在」的残留。"
 
     if ! assert_doctor_inspectors; then
@@ -784,9 +1354,9 @@ show_rescue_page() {
                 # 只在"真能修"时计数：下面那句「发现 N 处挡住了网络」承诺的是
                 # "按 y 能修好"，把不可修的算进来就会说了却做不到。与 Windows 侧同形。
                 "$FINDING_KIND_BLOCKING")
-                    finding_repairable "$_rs_kind" "$_rs_id" && _rs_blocking=$((_rs_blocking + 1)) ;;
+                    finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_blocking=$((_rs_blocking + 1)) ;;
                 "$FINDING_KIND_SLOWING")
-                    finding_repairable "$_rs_kind" "$_rs_id" && _rs_slowing=$((_rs_slowing + 1)) ;;
+                    finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_slowing=$((_rs_slowing + 1)) ;;
                 "$FINDING_KIND_ALIVE")
                     _rs_alive=$((_rs_alive + 1))
                     # 这一档的判据由 get_sysproxy_findings 在产 Finding 时定（看握手结果），
@@ -806,7 +1376,7 @@ show_rescue_page() {
                     fi ;;
                 "$FINDING_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
             esac
-            finding_repairable "$_rs_kind" "$_rs_id" && _rs_fixable=$((_rs_fixable + 1))
+            finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_fixable=$((_rs_fixable + 1))
         done <<EOF
 $_rs_all
 EOF
@@ -843,7 +1413,7 @@ EOF
         style_out warn "  要修的是："
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
-            finding_repairable "$_rs_kind" "$_rs_id" || continue
+            finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" || continue
             style_out text "    [$_rs_subj]  ${_rs_val:-（读不出地址）}"
             [ -n "$_rs_reason" ] && style_out dim "      $_rs_reason"
             # Advice 是「使用者能做什么」。写了就得显示。
@@ -865,7 +1435,7 @@ EOF
             fi
             # 问题真实存在、但这一层没有 Fix 的（DNS 指向本机死端口就是）。
             # 它既不该进「要修的」，也不该进「不归我碰的」——漏了就会从三区里全部消失。
-            if finding_fixable "$_rs_kind" && ! finding_repairable "$_rs_kind" "$_rs_id"; then
+            if finding_fixable "$_rs_kind" && ! finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix"; then
                 _rs_show=1
             fi
             [ "$_rs_show" -eq 1 ] || continue

@@ -40,6 +40,7 @@ param(
     [switch]$Uninstall,
     [switch]$Stop,
     [switch]$Status,
+    [switch]$Json,
     [switch]$Update,
     [switch]$Menu,
     [switch]$Help,
@@ -222,6 +223,7 @@ if ($RepairProfile) { $usageCommands += "repair-profile" }
 $usageSwitches = @()
 if ($Purge) { $usageSwitches += "purge" }
 if ($Yes)   { $usageSwitches += "yes" }
+if ($Json)  { $usageSwitches += "json" }
 # 前缀缩写护栏：PowerShell 的参数绑定**接受唯一前缀**，于是
 #   -Un      -> -Uninstall   少打几个字母就真的卸载
 #   -Instal  -> -Install     少打一个字母就真的安装
@@ -286,7 +288,7 @@ $usageError = Get-UsageError -Command $usageCommand -CommandCount $usageCommands
                             -Switches $usageSwitches -Extra @($args)
 if ($usageError) {
     Write-Styled 'warn' $usageError
-    Write-Styled 'warn' "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help|-Advanced|-Report|-RepairProfile} [-Yes] [-Purge]"
+    Write-Styled 'warn' "用法：powershell -ExecutionPolicy Bypass -File envproxy.ps1 {-Install|-Uninstall|-Stop|-Status|-Update|-Menu|-Help|-Advanced|-Report|-RepairProfile} [-Yes] [-Purge] [-Json]"
     exit 2
 }
 if ($Update) {
@@ -350,7 +352,10 @@ if ($Status) {
     # 交互终端里走实时刷新（自己动、不用按键）；
     # 输出被重定向 / 无控制台 / 窗口太小时 Show-StatusLive 会自动降级成
     # 今天那份一次性静态输出（逐字节相同，零控制字符），所以两种情况都能走这里。
-    Show-StatusLive
+    #
+    # -Json：给脚本、状态栏、批量部署读的那种输出。**不画屏、不刷新、不提问**，
+    # 只有一行 JSON，所以它绕开实时刷新那一层（那一层会写光标控制字符）。
+    if ($Json) { Write-StatusJson } else { Show-StatusLive }
     return
 }
 if ($Menu) {

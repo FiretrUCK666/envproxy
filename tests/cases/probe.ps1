@@ -51,6 +51,16 @@ Assert-Eq 'tri-state: the three kinds are distinct' $true (
     ($script:EndpointProofKinds.Reachable -ne $script:EndpointProofKinds.Unknown) -and
     ($script:EndpointProofKinds.Blocked -ne $script:EndpointProofKinds.Unknown))
 
+# 直连基线的池：形状本身就是契约。
+# 少于两条就等于回到"押在某一家身上"的单点依赖（评审里说的企业内网/海外分支场景）；
+# 路径不以 / 开头会拼出坏网址；主机重复等于白试两次。四条都不碰网络，纯查表。
+Write-Host '[3c] direct baseline pool'
+Assert-Eq 'baseline pool: three probes' 3 (@($DirectBaselinePool).Count)
+Assert-Eq 'baseline pool: every entry has a host and a rooted path' 0 (@($DirectBaselinePool | Where-Object {
+    -not $_.Host -or -not ([string]$_.Path).StartsWith('/') }).Count)
+Assert-Eq 'baseline pool: hosts are unique' 3 (@($DirectBaselinePool | ForEach-Object { $_.Host } | Sort-Object -Unique).Count)
+Assert-Eq 'baseline pool: per-probe timeout is shorter' $true ($DirectBaselineTimeoutMs -lt $EndpointDirectTimeoutMs)
+
 # 取值的桩：直接给三态之一，绕开真网络。
 function Set-EndpointDirectKind([string]$Kind) {
     ${function:Test-EndpointDirect} = { param([string]$h, [string]$p, [string]$e = '204') return $Kind }.GetNewClosure()
