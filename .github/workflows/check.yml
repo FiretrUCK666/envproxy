@@ -2280,6 +2280,35 @@ jobs:
           } else {
             Write-Host ("临时目录一律走 GetTempPath：{0} 个 ps1 文件里没有直接读环境变量的" -f $psFiles.Count)
           }
+          # ---- 直连基线的池：两侧逐条相同（含顺序）----
+          # 它是"这台机器还在不在线"的裁判。一侧换了主机而另一侧没换，会让同一个网络
+          # 在两台机器上判出相反结论（一边"直连正常"、一边"整机离线"），
+          # 而症状是"同一个代理在两台机器上一个能用一个被判死"。
+          $winPoolBlock = [regex]::Match($ps, '(?s)\$DirectBaselinePool\s*=\s*@\((.*?)\n\)').Groups[1].Value
+          $macPoolBlock = [regex]::Match($sh, "(?m)^DIRECT_BASELINE_POOL='([^']*)'").Groups[1].Value
+          if (-not $winPoolBlock) { Write-Host '找不到 Win 侧直连基线池 $DirectBaselinePool'; $fail = 1 }
+          if (-not $macPoolBlock) { Write-Host '找不到 Mac 侧直连基线池 DIRECT_BASELINE_POOL'; $fail = 1 }
+          $winPool = @([regex]::Matches($winPoolBlock, 'Host\s*=\s*"([^"]+)"\s*;\s*Path\s*=\s*"([^"]*)"') | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value })
+          $macPool = @($macPoolBlock -split "`n" | Where-Object { $_ -match '\|' } | ForEach-Object { $p2 = $_ -split '\|'; $p2[0].Trim() + $p2[1].Trim() })
+          if ($winPool.Count -lt 2) { Write-Host ("直连基线池少于两条（{0}）：单点依赖会让企业内网/海外网络误判整机离线" -f $winPool.Count); $fail = 1 }
+          if (($winPool -join ',') -ne ($macPool -join ',')) {
+            Write-Host ("直连基线池两侧不一致：Win [{0}] / Mac [{1}]" -f ($winPool -join ','), ($macPool -join ','))
+            $fail = 1
+          } else { Write-Host ("直连基线池两侧一致：{0} 条" -f $winPool.Count) }
+          # ---- 终端工具配置的目标表：两侧同一批工具（顺序也相同）----
+          # 同一个工具在两个平台上必须叫同一个 Id，否则"报告里说 macOS 上还有一条
+          # 残留"这类跨平台对照全错，而界面上完全看不出来。
+          $winTargetsBlock = [regex]::Match($ps, '(?s)\$CliProxyTargets\s*=\s*@\((.*?)\n\)').Groups[1].Value
+          $macTargetsBlock = [regex]::Match($sh, '(?s)CLI_PROXY_TARGETS=\((.*?)\n\)').Groups[1].Value
+          if (-not $winTargetsBlock) { Write-Host '找不到 Win 侧 cli-proxy 目标表'; $fail = 1 }
+          if (-not $macTargetsBlock) { Write-Host '找不到 Mac 侧 cli-proxy 目标表'; $fail = 1 }
+          $winTargets = @([regex]::Matches($winTargetsBlock, "Id\s*=\s*'([^']+)'") | ForEach-Object { $_.Groups[1].Value })
+          $macTargets = @([regex]::Matches($macTargetsBlock, "(?m)^\s*'([a-z0-9\-]+)\|") | ForEach-Object { $_.Groups[1].Value })
+          if ($winTargets.Count -lt 5) { Write-Host ("cli-proxy 目标表条目太少（{0}）" -f $winTargets.Count); $fail = 1 }
+          if (($winTargets -join ',') -ne ($macTargets -join ',')) {
+            Write-Host ("cli-proxy 目标表两侧不一致：Win [{0}] / Mac [{1}]" -f ($winTargets -join ','), ($macTargets -join ','))
+            $fail = 1
+          } else { Write-Host ("cli-proxy 目标表两侧一致：{0} 个工具" -f $winTargets.Count) }
           # 这一段单独判一次：它跑在上一个 exit 之后。
           if ($fail) { exit 1 }
           Write-Host '契约常量与变量集通过'
