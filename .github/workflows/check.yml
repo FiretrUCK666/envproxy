@@ -24,10 +24,16 @@ jobs:
       - name: 门禁 1：sh 语法检查
         run: |
           fail=0
+          # 数一下真的扫了几个文件。一个都没扫到必须判失败：
+          # 目录被改名、glob 没展开、路径写错，都会让下面的循环体一次都不跑，
+          # 而那时 exit $fail 仍是 0——门禁看起来通过，实际什么都没验。
+          # （门禁 2 对同一件事有对应的断言，这里补齐。）
+          checked=0
           # 目录级通配：mac/ 根与 lib/ 下的脚本一起查，新增文件自动纳入，不需要改这里。
-          # win/ 根下若再出现 .sh 也要过语法（目前没有：Git Bash 的脚本已内嵌，见下方模板检查）。
+          # win/ 根下不许有 .sh（Git Bash 的脚本走内嵌模板，见下面的禁令检查）。
           for f in mac/*.sh mac/lib/*.sh win/*.sh; do
             [ -f "$f" ] || continue
+            checked=$((checked + 1))
             # 逐文件报出文件名再解析：CI 上出错时日志要能直接指向是哪个文件，
             # 否则只看到一行 "bash: syntax error" 分不清来源。
             if ! err=$(bash -n "$f" 2>&1); then
@@ -282,6 +288,10 @@ jobs:
               fail=1
             fi
           done
+          if [ "$checked" -eq 0 ]; then
+            echo "门禁 1：一个 shell 脚本都没扫到，无法验证语法（路径或通配有问题）"
+            exit 1
+          fi
           exit $fail
 
       - name: 门禁 2：ps1 语法检查
@@ -541,13 +551,10 @@ jobs:
             if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
             if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
           }
-          # win 根下的 .sh（prompt-sync.sh）是给 Git Bash source 的，同样必须 LF、无 BOM：
-          # BOM 会变成脚本的第一个字符、顶掉 shebang；CRLF 会让行尾的续行符断掉。
-          foreach ($f in @(Get-ChildItem win/*.sh -ErrorAction SilentlyContinue)) {
-            $b = [System.IO.File]::ReadAllBytes($f.FullName)
-            if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { Write-Host ("{0} 带了 BOM" -f $f.Name); $fail = 1 }
-            if ([System.Text.Encoding]::UTF8.GetString($b).Contains([string][char]13 + [string][char]10)) { Write-Host ("{0} 含 CRLF" -f $f.Name); $fail = 1 }
-          }
+          # win 根下不该有 .sh：Git Bash 的同步脚本走 shell 层的内嵌模板，不随包发。
+          # 门禁 1 已明令禁止（那里判失败），所以这里不再按"会有"来检查——
+          # 一条永远扫不到文件的循环等于没有这条检查，留着只会让后来的读者以为有。
+          # 内嵌模板本身由门禁 1 单独做语法检查（它不落盘成文件，别的门禁都看不见它）。
           # win 全部 .cmd 纯 ASCII（.cmd 按 OEM 代码页读取，非 ASCII 会乱码）
           foreach ($f in Get-ChildItem win/*.cmd) {
             $b = [System.IO.File]::ReadAllBytes($f.FullName)
@@ -1916,8 +1923,13 @@ jobs:
             @('Show-Status',         '(?s)function Show-Status\s*[\{\(](.*?)(?=\nfunction )')
           )
           $statusLayersMac = @(
-            @('get_status_snapshot', '(?s)get_status_snapshot\(\) \{(.*?)\n\}'),
-            @('show_status',         '(?s)show_status\(\) \{(.*?)\n\}')
+            @('get_status_snapshot',   '(?s)get_status_snapshot\(\) \{(.*?)\n\}'),
+            @('format_status_lines',   '(?s)format_status_lines\(\) \{(.*?)\n\}'),
+            @('show_status_live',      '(?s)show_status_live\(\) \{(.*?)\n\}'),
+            @('status_problem_lines',  '(?s)status_problem_lines\(\) \{(.*?)\n\}'),
+            @('format_status_json',    '(?s)format_status_json\(\) \{(.*?)\n\}'),
+            @('show_status_json',      '(?s)show_status_json\(\) \{(.*?)\n\}'),
+            @('show_status',           '(?s)show_status\(\) \{(.*?)\n\}')
           )
           # 名单必须是**真实在用的联网入口**。曾经写的是 Get-UpdateInfo / Get-ReleaseAssets /
           # Invoke-WebRequest / Invoke-RestMethod——四个都随重构消失了，名单却没人跟着改：
@@ -2182,7 +2194,8 @@ jobs:
           # 这类"假承诺"比没有保证更糟：下一个改动的人会相信已经有人看着了。
           #
           # 这里核对三件事，都是两端各写一套、最容易各走各的：
-          #   ① 结论词表（六种）逐字一致；
+          #   ① 结论词表逐字一致（条数以 $kindNames 为准，散文里不写数量——
+          #      写死数字的后果是加一个词就要来改注释，忘了就成了一句假话）；
           #   ② "哪些结论可修"一致——判错就会关掉用户正在用的代理；
           #   ③ 判活的语义一致：只连 TCP 端口，不建隧道、不访问目标。
           $winDoc = Get-CodeOnly 'win/lib/doctor.ps1'
@@ -2357,12 +2370,9 @@ jobs:
               if ($line -match '@explain') { continue }
               # 取出这一行里所有带引号的字面量；只要其中一个含中文，才当作用户可见文案检查。
               # 不含中文的引号内容（路径、正则、变量名）一律跳过。
-              $lits = @()
-              if ($s[1] -eq 'win') {
-                $lits = @([regex]::Matches($line, "'([^']*)'|""([^""]*)""") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value })
-              } else {
-                $lits = @([regex]::Matches($line, "'([^']*)'|""([^""]*)""") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value })
-              }
+              # 两侧取法相同：PowerShell 与 bash 的字符串引号写法（'…' 与 "…"）在
+              # "字面量边界在哪"这一点上足够一致，不需要按平台分岔。
+              $lits = @([regex]::Matches($line, "'([^']*)'|""([^""]*)""") | ForEach-Object { $_.Groups[1].Value + $_.Groups[2].Value })
               $hasCjk = $false
               foreach ($l in $lits) { if ($l -match '[\u4e00-\u9fff]') { $hasCjk = $true; break } }
               if (-not $hasCjk) { continue }

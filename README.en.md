@@ -323,7 +323,7 @@ The symptom: `git` works fine in the terminal while some GUI program cannot conn
 
 **The fix: give it an icon.**
 
-Open the menu, pick `5 Advanced`, then `1 One program, one rule`. Choose the program (or type its path), choose where to put the icon, confirm.
+Open the menu, pick `5 Advanced`, then `1 Give a program a proxy shortcut`. Choose the program (or type its path), choose where to put the icon, confirm.
 
 It creates a new icon whose name ends in "proxy". Launch the program from that icon from then on.
 
@@ -364,7 +364,7 @@ Some programs break when they go through a proxy. Banking, government sites and 
 
 **The fix: give it an always-direct icon.**
 
-Open the menu, pick `5 Advanced`, then `1 One program, one rule`, and choose the "always direct" rule. It creates a new icon whose name ends in "direct". Launching from that icon never uses a proxy.
+Open the menu, pick `5 Advanced`, then `2 Give a program a direct-connection shortcut`. Choose the program (or type its path), choose where to put the icon, confirm. It creates a new icon whose name ends in "direct". Launching from that icon never uses a proxy.
 
 **One program can have both** — one icon ending in "proxy" and one ending in "direct", independent of each other, with your original program untouched.
 
@@ -477,7 +477,7 @@ The setting remains, so the browser and the tools keep knocking on a program tha
 
 **How to fix it yourself.**
 
-Open the menu, pick `5 Advanced`, then `2 Network and proxy repair`. It looks at three places: the system proxy settings, the config files of terminal tools (`git config`, `~/.npmrc` and the like), and name resolution.
+Open the menu, pick `5 Advanced`, then `Network and proxy repair` (item 5 on Windows, item 4 on Mac). It looks at four places: the system proxy settings, the config files of terminal tools (`git config`, `~/.npmrc` and the like), name resolution, and whether this machine has a SOCKS-only port.
 
 Anything fixable is confirmed with you first, and the original is saved before it changes. Afterwards, close and reopen both the browser and the failing tool.
 
@@ -526,7 +526,7 @@ Those two pages are complete and ready to copy (including how to write `~/.docke
 
 That tool can never connect, and the error does not mention this tool — so you go looking at the network.
 
-Menu `5 Advanced` → `5 Network and proxy repair` reads all of those places and fixes what it can (an undo point is recorded first; `r` on that screen restores it). For the exact rules it follows, see [4.2](#42-network-and-proxy-repair).
+Menu `5 Advanced` → `Network and proxy repair` (item 5 on Windows, item 4 on Mac) reads all of those places and fixes what it can (an undo point is recorded first; `r` on that screen restores it). For the exact rules it follows, see [4.2](#42-network-and-proxy-repair).
 
 </details>
 ## 4. What is inside Advanced (three modules)
