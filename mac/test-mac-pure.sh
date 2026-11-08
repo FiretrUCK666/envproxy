@@ -2614,8 +2614,10 @@ EOF
     _selftest_assert_eq "json：relayPort 字段在（mac 侧恒为 null）" "null" "$(printf '%s' "$_json" | sed -n 's/.*"relayPort":\([a-z]*\).*/\1/p')"
     _selftest_assert_eq "json：issues 是数字" "1" "$(printf '%s' "$_json" | grep -c '"issues":[0-9]')"
     # 纯 ASCII：中文文案不进 JSON（脚本那边读到的该是字段，不是话）。
+    # 判据用 grep 而不是 case 的 `[!\ -~]`：方括号里的反斜杠在 bash 3.2 与 5 上
+    # 解释不同（3.2 把它当普通字符），同一行在这里绿、在 macOS 上红——实测踩过。
     _json_ascii=1
-    case "$_json" in *[!\ -~]*) _json_ascii=0 ;; esac
+    if printf '%s' "$_json" | LC_ALL=C grep -q '[^ -~]'; then _json_ascii=0; fi
     _selftest_assert_eq "json：纯 ASCII" "1" "$_json_ascii"
     # 三态不许塌缩：枚举失败是「不知道」，不是「没有代理」。
     _port=""; _port_unknown=1
