@@ -502,58 +502,32 @@ The full description is in [4.2](#42-network-and-proxy-repair).
 ### 3.9 A tool's own proxy settings
 
 <details>
-<summary>Which tools need filling in, what a stale port does, and why git@github.com fails</summary>
+<summary>Which four tools need filling in, where the wording is, and what a stale port does</summary>
 
 **Most tools need nothing.**
 
 `git`, `npm`, `curl`, `pip`, `cargo`, `wget`, `Bun`, `Go` and `Deno` read the environment variables only. Once this tool sets them, those tools follow; you do not edit any config file.
 
-**These four need filling in.**
+**These four need filling in, and the wording lives in Advanced.**
 
-They ignore the variables and read the line in their own config, so setting the variables changes nothing:
+They ignore the variables and read the copy inside their own settings:
 
-| Tool | Where to fill it in |
+| Tool | Where the ready-made wording is |
 |---|---|
-| Maven | `<proxies>` in `~/.m2/settings.xml` |
-| Gradle | the four `systemProp...` lines in `~/.gradle/gradle.properties` |
-| SSH | `ProxyCommand` in `~/.ssh/config` |
-| Docker | Docker Desktop's own settings (it ignores `daemon.json`) |
+| Maven | menu `5` → "Maven / Gradle / SSH" |
+| Gradle | same page |
+| SSH | same page (the fix when `git@github.com` cannot connect) |
+| Docker | menu `5` → "Docker behind a proxy" |
 
-Ready-made versions live in Advanced: menu `5` → `7` is Docker, `5` → `8` is Maven / Gradle / SSH. Copy them.
+Those two pages are complete and ready to copy (including how to write `~/.docker/config.json`), so this section does not repeat them — the same thing written in two places will disagree sooner or later.
 
 **What a stale port does.**
 
 That tool can never connect, and the error does not mention this tool — so you go looking at the network.
 
-Menu `5 Advanced` → `5 Network and proxy repair` reads all of them: tools that read the variables (git, npm, curl, pip, cargo, wget, Yarn) get **that line deleted**; Gradle and SSH are **repointed at the current port** when a proxy is running, deleted when not; Conda, Maven and NuGet cannot lose half an entry, so **only the port changes**, and with no proxy running they are only reported. Every edit records an undo point first; `r` on that screen restores the most recent one.
-
-**`git@github.com:xxx/yyy.git` cannot connect? That is SSH, which ignores the proxy variables.**
-
-OpenSSH never reads `HTTP_PROXY` / `HTTPS_PROXY`; it reads only its own config. Two ways out.
-
-First, have git rewrite it to the equivalent https address:
-
-```
-git config --global url.https://github.com/.insteadOf git@github.com:
-```
-
-After that, `git clone git@github.com:...` goes through the proxy from the variables. To undo:
-
-```
-git config --global --unset url.https://github.com/.insteadOf
-```
-
-Second, add two lines to `~/.ssh/config` (Windows uses the fixed entry, Mac the current port):
-
-```
-Host github.com
-  ProxyCommand connect -H 127.0.0.1:17099 %h %p
-```
-
-On a Mac, replace the second line with `ProxyCommand nc -X connect -x 127.0.0.1:port %h %p` — `connect` ships only with Git for Windows. `17099` is this machine's fixed entry, so it survives a proxy port change; menu `5` → `4 View the relay` says whether it is running.
+Menu `5 Advanced` → `5 Network and proxy repair` reads all of those places and fixes what it can (an undo point is recorded first; `r` on that screen restores it). For the exact rules it follows, see [4.2](#42-network-and-proxy-repair).
 
 </details>
-
 ## 4. What is inside Advanced (three modules)
 
 Menu `5` is where these live. It holds three unrelated things, each solving one concrete annoyance.
@@ -701,7 +675,7 @@ Maven, Gradle and SSH are not rooms — they are locked cabinets. They copy the 
 | Things inside Docker | Docker's own settings |
 | Maven / Gradle / SSH | The line inside their own config |
 
-**One: WSL (menu `5` → `6`, Windows only)**
+**One: WSL (menu `5` → "WSL behind a proxy", Windows only)**
 
 The right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer):
 
@@ -715,15 +689,28 @@ Save it, run `wsl --shutdown` once in PowerShell, and WSL follows the Windows pr
 
 **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
 
-**Two: Docker (menu `5` → `7`, both platforms)**
+**Two: Docker (menu `5` → "Docker behind a proxy", both platforms)**
 
 Slow pulls need Docker Desktop's own settings: `Settings → Resources → Proxies`, filled with the local proxy port (Windows: the fixed entry `127.0.0.1:17099`; Mac: the current port).
 
-A program inside a container needs it passed in separately — host variables do not go in by themselves: `docker run -e HTTP_PROXY=http://host.docker.internal:17099 image`. To set it once and forget it, write the `proxies` field in `~/.docker/config.json`; that covers containers and builds but not `docker pull`.
+A program inside a container needs it passed in separately — host variables do not go in by themselves: `docker run -e HTTP_PROXY=http://host.docker.internal:17099 image`.
+
+To set it once and forget it, edit `~/.docker/config.json` (create it if missing) and add this block:
+
+```json
+{
+  "proxies": { "default": {
+      "httpProxy": "http://host.docker.internal:17099",
+      "httpsProxy": "http://host.docker.internal:17099",
+      "noProxy": "localhost,127.0.0.1" } }
+}
+```
+
+If the file already holds something else (login details, for instance), add only the `proxies` block rather than replacing the file. It covers containers and builds but not `docker pull` — that is the first layer above.
 
 Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
 
-**Three: Maven / Gradle / SSH (menu `5` → `8`, both platforms)**
+**Three: Maven / Gradle / SSH (menu `5` → "Maven / Gradle / SSH", both platforms)**
 
 These three ignore the variables and read the address in their own config file. The menu has all three ready to copy:
 
@@ -731,7 +718,30 @@ These three ignore the variables and read the address in their own config file. 
 |---|---|
 | Maven | `127.0.0.1:17099` inside `<proxy>` in `~/.m2/settings.xml` |
 | Gradle | `systemProp...Port=17099` in `~/.gradle/gradle.properties` |
-| SSH | `ProxyCommand connect -H 127.0.0.1:17099 %h %p` in `~/.ssh/config` |
+| SSH | `ProxyCommand` in `~/.ssh/config`, one of the two ways below |
+
+**That SSH case (`git@github.com:xxx/yyy.git` cannot connect) has two fixes; pick one.**
+
+First, have git rewrite it to the equivalent https address — one command, undoable any time:
+
+```
+git config --global url.https://github.com/.insteadOf git@github.com:
+```
+
+To undo:
+
+```
+git config --global --unset url.https://github.com/.insteadOf
+```
+
+Second, let SSH hand it to the proxy. Add these two lines to `~/.ssh/config`:
+
+```
+Host github.com
+  ProxyCommand connect -H 127.0.0.1:17099 %h %p
+```
+
+On a Mac, replace the second line with `ProxyCommand nc -X connect -x 127.0.0.1:port %h %p` — `connect` ships only with Git for Windows, while `nc` comes with the system.
 
 On Windows, `17099` is this machine's fixed entry: the address never changes and follows the proxy app in the background, so you fill it in once. Menu `5` → `4 View the relay` says whether it is running.
 

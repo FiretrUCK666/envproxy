@@ -466,27 +466,17 @@ TOPIC
     9) cat <<'TOPIC'
 h 大多数工具不用管
 t git、npm、curl、pip、cargo、wget、Bun、Go、Deno 只认环境变量，本工具设好就行。
-h 只有这四个要自己填
-r Maven|<proxies> 一段，文件 ~/.m2/settings.xml
-r Gradle|systemProp 四行，文件 ~/.gradle/gradle.properties
-r SSH|ProxyCommand 两行，文件 ~/.ssh/config
-r Docker|Docker Desktop 自己的设置，它不看环境变量
-t 每一份都有现成的写法：菜单「高级功能」里挑对应那一项，照着抄。
+h 这四个要自己填
+t 它们不读环境变量，只认自己设置里的那一份：
+r Maven / Gradle / SSH|高级功能 →「Maven / Gradle / SSH 怎么填」
+r Docker|高级功能 →「Docker 里也想翻墙」
+t 那两页都是能照着抄的完整写法，这里不复述。
 h 写死了旧端口会怎样
 t 那个工具就永远连不上，而报错里没有本工具的名字——你会去查网络。
-t 菜单「高级功能」里「网络与代理修复」会把这几处读一遍：
-t2 认环境变量的（git、npm、curl 这些）→ 删掉那一行；
-t2 Gradle、SSH → 有代理在跑就改端口，没有就删；
-t2 Conda、Maven、NuGet → 只改端口，不动结构。
-h git@github.com 连不上：SSH 不认代理变量
-i 办法一：让 git 自己换成 https 地址
-c git config --global url.https://github.com/.insteadOf git@github.com:
-t2 撤回：同一条命令，把 insteadOf 换成 --unset 再跑一次。
-i 办法二：让 SSH 自己交给代理
-t2 在 ~/.ssh/config 里加这两行（没有这个文件就新建）：
-t2     Host github.com
-t2       ProxyCommand nc -X connect -x 127.0.0.1:端口号 %h %p
-t2 端口号用 2（查看状态）那一屏里的；mac 上没有固定入口，换了端口要改一次。
+t 高级功能里的「网络与代理修复」会把这几处读一遍，能改的替你改，改前留还原点。
+h git@github.com 连不上？那是 SSH，不认代理变量
+t 想让它也翻墙，去看「Maven / Gradle / SSH 怎么填」那一页。
+t 那页有两套完整写法，照抄即可。
 TOPIC
     ;;
     esac
@@ -1081,7 +1071,15 @@ show_docker_guide_page() {
     style_out text "  启动容器时显式传进去（宿主机的变量不会自动进去）："
     style_out cmd  "    docker run -e HTTP_PROXY=http://host.docker.internal:$_dg_port 镜像名"
     echo ""
-    style_out text "  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。"
+    style_out text "  想一次配好、以后都不用传：编辑 ~/.docker/config.json（没有就新建），"
+    style_out text "  加上 proxies 这一段（下面端口是当前那个）："
+    style_out cmd  "    {"
+    style_out cmd  "      \"proxies\": { \"default\": {"
+    style_out cmd  "          \"httpProxy\": \"http://host.docker.internal:$_dg_port\","
+    style_out cmd  "          \"httpsProxy\": \"http://host.docker.internal:$_dg_port\","
+    style_out cmd  "          \"noProxy\": \"localhost,127.0.0.1\" } }"
+    style_out cmd  "    }"
+    style_out dim  "  文件里已经有别的内容（比如登录信息）就只加 proxies 这一段，别整个替换。"
     style_out dim  "  它管容器和构建，但管不了 docker pull —— 那是第一层的事。"
     echo ""
     style_out dim  "  这一屏只讲解，没有改你的任何设置。"
@@ -1123,9 +1121,14 @@ show_tool_guide_page() {
     style_out cmd  "    systemProp.https.proxyHost=127.0.0.1"
     style_out cmd  "    systemProp.https.proxyPort=$_tg_port"
     echo ""
-    style_out heading "  三、SSH —— 文件 ~/.ssh/config"
+    style_out heading "  三、SSH（git@github.com 这种地址）—— 两个办法挑一个"
     echo ""
-    style_out text "  加这两行（git@github.com 这种地址就靠它）："
+    style_out text "  办法一：让 git 自动换成 https 地址（一条命令，随时能撤）"
+    style_out cmd  "    git config --global url.https://github.com/.insteadOf git@github.com:"
+    style_out text "  撤回："
+    style_out cmd  "    git config --global --unset url.https://github.com/.insteadOf"
+    echo ""
+    style_out text "  办法二：让 SSH 自己交给代理。文件 ~/.ssh/config，加这两行："
     style_out cmd  "    Host github.com"
     style_out cmd  "      ProxyCommand nc -X connect -x 127.0.0.1:$_tg_port %h %p"
     echo ""

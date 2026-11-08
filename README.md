@@ -497,55 +497,30 @@ bash envproxy.sh status
 ### 3.9 工具自己的代理设置
 
 <details>
-<summary>哪些工具要自己填、写死了旧端口怎么办、git@github.com 为什么连不上</summary>
+<summary>哪四个工具要自己填、写法在哪、写死了旧端口会怎样</summary>
 
 **大多数工具不用管。**
 
 `git`、`npm`、`curl`、`pip`、`cargo`、`wget`、`Bun`、`Go`、`Deno` 这些只认环境变量。本工具把变量设好，它们就跟着变，你不需要改任何配置文件。
 
-**这四个要自己填。**
+**这四个要自己填，写法在高级功能里。**
 
-它们读的不是环境变量，而是自己配置文件里的那一行——变量设了也没用：
+它们读的不是环境变量，而是自己设置里的那一份：
 
-| 工具 | 填在哪儿 |
+| 工具 | 现成的写法在哪儿 |
 |---|---|
-| Maven | `~/.m2/settings.xml` 的 `<proxies>` |
-| Gradle | `~/.gradle/gradle.properties` 的 `systemProp...` 四行 |
-| SSH | `~/.ssh/config` 的 `ProxyCommand` |
-| Docker | Docker Desktop 自己的设置（它不看 `daemon.json`） |
+| Maven | 菜单 `5` →「Maven / Gradle / SSH 怎么填」|
+| Gradle | 同上 |
+| SSH | 同上（`git@github.com` 连不上就看这一页） |
+| Docker | 菜单 `5` →「Docker 里也想翻墙」|
 
-现成的写法在高级功能里：菜单 `5` → `7` 是 Docker，`5` → `8` 是 Maven / Gradle / SSH，照着抄。
+那两页是能照着抄的完整写法（包括 `~/.docker/config.json` 怎么写），这里不复述——同一件事在两个地方各写一遍，迟早有一个会过时。
 
 **写死了旧端口会怎样。**
 
 那个工具就永远连不上，而报错里没有本工具的名字——你会去查网络。
 
-菜单 `5 高级功能` → `5 网络与代理修复` 会把这几处读一遍：认环境变量的（`git`、`npm`、`curl`、`pip`、`cargo`、`wget`、Yarn）**删掉那一行**；Gradle、SSH 有代理在跑就**改成当前端口**、没有就删掉；Conda、Maven、NuGet 结构不允许删一半，**只改端口**、没有代理在跑时只报告。改之前都会留还原点，那一屏按 `r` 能撤回最近一次。
-
-**`git@github.com:xxx/yyy.git` 连不上？那是 SSH，不认代理变量。**
-
-OpenSSH 完全不看 `HTTP_PROXY` / `HTTPS_PROXY`，只认它自己的配置。两个办法。
-
-办法一，让 git 自动换成等价的 https 地址：
-
-```
-git config --global url.https://github.com/.insteadOf git@github.com:
-```
-
-之后 `git clone git@github.com:...` 就会按环境变量里的代理走。要撤回：
-
-```
-git config --global --unset url.https://github.com/.insteadOf
-```
-
-办法二，在 `~/.ssh/config` 里加两行（Windows 填固定入口，Mac 填当前端口）：
-
-```
-Host github.com
-  ProxyCommand connect -H 127.0.0.1:17099 %h %p
-```
-
-Mac 上把第二行换成 `ProxyCommand nc -X connect -x 127.0.0.1:端口 %h %p`——`connect` 只有 Git for Windows 自带。`17099` 是本机的固定入口，翻墙软件换端口也不用改；它在不在，菜单 `5` → `4 查看中继` 会说。
+菜单 `5 高级功能` → `5 网络与代理修复` 会把这几处读一遍，能改的替你改（改前留还原点，那一屏按 `r` 能撤回）。想细看它按什么规则动哪一处，[4.2](#42-网络与代理修复) 里有完整说明。
 
 </details>
 ## 4. 高级功能里有什么（三个模块）
@@ -695,7 +670,7 @@ Maven、Gradle、SSH 不是"房间"，是"自己带锁的柜子"——它们把�
 | Docker 里的东西 | Docker 自己的设置 |
 | Maven / Gradle / SSH | 它们配置文件里的那一行 |
 
-**一、WSL（菜单 `5` → `6`，只有 Windows 版有）**
+**一、WSL（菜单 `5` →「WSL 里也想翻墙」，只有 Windows 版有这一项）**
 
 正路是让它直接看 Windows 的公告栏——在 `C:\Users\你的用户名\.wslconfig` 里写两行（Windows 11 22H2 以上才支持）：
 
@@ -709,15 +684,28 @@ autoProxy=true
 
 **歪路是把纸条抄过去**：纸条上写的是「我那间的地址」，隔壁照着找会找到自己家，绕成死循环。这是网上教程最常犯的错。
 
-**二、Docker（菜单 `5` → `7`，两个平台都有）**
+**二、Docker（菜单 `5` →「Docker 里也想翻墙」，两个平台都有）**
 
 拉镜像慢改 Docker Desktop 自己的设置：`Settings → Resources → Proxies`，地址填本机代理端口（Windows 填固定入口 `127.0.0.1:17099`，Mac 填当前端口）。
 
-容器里面的程序要另外传：宿主机的变量不会自动进去，启动时写 `docker run -e HTTP_PROXY=http://host.docker.internal:17099 镜像名`。想一次配好、以后都不用传，写进 `~/.docker/config.json` 的 `proxies` 字段——它管容器和构建，但管不了 `docker pull`。
+容器里面的程序要另外传：宿主机的变量不会自动进去，启动时写 `docker run -e HTTP_PROXY=http://host.docker.internal:17099 镜像名`。
+
+想一次配好、以后都不用传，编辑 `~/.docker/config.json`（没有就新建），加上这一段：
+
+```json
+{
+  "proxies": { "default": {
+      "httpProxy": "http://host.docker.internal:17099",
+      "httpsProxy": "http://host.docker.internal:17099",
+      "noProxy": "localhost,127.0.0.1" } }
+}
+```
+
+文件里已经有别的内容（比如登录信息）就只加 `proxies` 这一段，别整个替换。它管容器和构建，但管不了 `docker pull`——那是上面第一种。
 
 注意：改 `daemon.json` 在 Docker Desktop 上没用，它不读那个文件。
 
-**三、Maven / Gradle / SSH（菜单 `5` → `8`，两个平台都有）**
+**三、Maven / Gradle / SSH（菜单 `5` →「Maven / Gradle / SSH 怎么填」，两个平台都有）**
 
 这三个工具不读环境变量，只认自己配置文件里的地址。菜单里是现成的三份，照着抄：
 
@@ -725,7 +713,30 @@ autoProxy=true
 |---|---|
 | Maven | `~/.m2/settings.xml` 的 `<proxy>` 里 `127.0.0.1:17099` |
 | Gradle | `~/.gradle/gradle.properties` 的 `systemProp...Port=17099` |
-| SSH | `~/.ssh/config` 的 `ProxyCommand connect -H 127.0.0.1:17099 %h %p` |
+| SSH | `~/.ssh/config` 的 `ProxyCommand`，见下面两套写法 |
+
+**SSH 那一种（`git@github.com:xxx/yyy.git` 连不上）有两个办法，挑一个。**
+
+办法一，让 git 自动换成等价的 https 地址——一条命令，随时能撤：
+
+```
+git config --global url.https://github.com/.insteadOf git@github.com:
+```
+
+撤回：
+
+```
+git config --global --unset url.https://github.com/.insteadOf
+```
+
+办法二，让 SSH 自己交给代理。在 `~/.ssh/config` 里加这两行：
+
+```
+Host github.com
+  ProxyCommand connect -H 127.0.0.1:17099 %h %p
+```
+
+Mac 上把第二行换成 `ProxyCommand nc -X connect -x 127.0.0.1:端口 %h %p`——`connect` 只有 Git for Windows 自带，`nc` 是系统自带的。
 
 Windows 上这个 `17099` 是本机的固定入口：地址永远不变，背后自己跟着翻墙软件换端口，所以填一次就不用再改。它现在在不在，菜单 `5` → `4 查看中继` 那一屏会说。
 

@@ -2074,8 +2074,16 @@ function Show-DockerGuidePage {
         @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去）：' }
         @{ Role='cmd';  Text='    docker run -e HTTP_PROXY=http://host.docker.internal:17099 镜像名' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。' }
-        @{ Role='dim'; Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
+        @{ Role='text'; Text='  想一次配好、以后都不用传：编辑 ~/.docker/config.json（没有就新建），' }
+        @{ Role='text'; Text='  加上 proxies 这一段（下面端口是固定入口 17099）：' }
+        @{ Role='cmd';  Text='    {' }
+        @{ Role='cmd';  Text='      "proxies": { "default": {' }
+        @{ Role='cmd';  Text='          "httpProxy": "http://host.docker.internal:17099",' }
+        @{ Role='cmd';  Text='          "httpsProxy": "http://host.docker.internal:17099",' }
+        @{ Role='cmd';  Text='          "noProxy": "localhost,127.0.0.1" } }' }
+        @{ Role='cmd';  Text='    }' }
+        @{ Role='dim';  Text='  文件里已经有别的内容（比如登录信息）就只加 proxies 这一段，别整个替换。' }
+        @{ Role='dim';  Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
     )
     Show-GuidePage 'Docker 里也想翻墙' $blocks '这一页只讲解，没有改你的任何设置。'
 }
@@ -2103,9 +2111,14 @@ function Show-ToolGuidePage {
         @{ Role='cmd';  Text='    systemProp.https.proxyHost=127.0.0.1' }
         @{ Role='cmd';  Text='    systemProp.https.proxyPort=17099' }
         @{ Role='blank'; Text='' }
-        @{ Role='heading'; Text='  三、SSH —— 文件 ~/.ssh/config' }
+        @{ Role='heading'; Text='  三、SSH（git@github.com 这种地址）—— 两个办法挑一个' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  加这两行（git@github.com 这种地址就靠它）：' }
+        @{ Role='text'; Text='  办法一：让 git 自动换成 https 地址（一条命令，随时能撤）' }
+        @{ Role='cmd';  Text='    git config --global url.https://github.com/.insteadOf git@github.com:' }
+        @{ Role='text'; Text='  撤回：' }
+        @{ Role='cmd';  Text='    git config --global --unset url.https://github.com/.insteadOf' }
+        @{ Role='blank'; Text='' }
+        @{ Role='text'; Text='  办法二：让 SSH 自己交给代理。文件 ~/.ssh/config，加这两行：' }
         @{ Role='cmd';  Text='    Host github.com' }
         @{ Role='cmd';  Text='      ProxyCommand connect -H 127.0.0.1:17099 %h %p' }
         @{ Role='blank'; Text='' }
