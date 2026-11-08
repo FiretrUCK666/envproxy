@@ -497,38 +497,34 @@ bash envproxy.sh status
 ### 3.9 工具自己的代理设置
 
 <details>
-<summary>哪些工具认环境变量、哪些要自己配、git@github.com 为什么连不上</summary>
+<summary>哪些工具要自己填、写死了旧端口怎么办、git@github.com 为什么连不上</summary>
 
-**多数工具不用管。**
+**大多数工具不用管。**
 
 `git`、`npm`、`curl`、`pip`、`cargo`、`wget`、`Bun`、`Go`、`Deno` 这些只认环境变量。本工具把变量设好，它们就跟着变，你不需要改任何配置文件。
 
-**少数工具只认自己的设置。**
+**这四个要自己填。**
 
-它们读的不是环境变量，而是自己的配置文件——变量设了也没用：
+它们读的不是环境变量，而是自己配置文件里的那一行——变量设了也没用：
 
-| 工具 | 在哪儿设 | 本工具会怎么做 |
-|---|---|---|
-| Maven | `~/.m2/settings.xml` 的 `<proxies>` | 会查出来；只改 `<port>` 那一行，不删整段 |
-| Gradle | `~/.gradle/gradle.properties` 的 `systemProp...` 四行 | 会查出来，能改成当前端口 |
-| Docker Desktop | 它自己的设置（不看 `daemon.json` 里的代理） | 只提醒，不碰 |
-| SSH | `~/.ssh/config` 的 `ProxyCommand` | 会查出来，能改端口或删掉那一行 |
+| 工具 | 填在哪儿 |
+|---|---|
+| Maven | `~/.m2/settings.xml` 的 `<proxies>` |
+| Gradle | `~/.gradle/gradle.properties` 的 `systemProp...` 四行 |
+| SSH | `~/.ssh/config` 的 `ProxyCommand` |
+| Docker | Docker Desktop 自己的设置（它不看 `daemon.json`） |
 
-**为什么这些文件最容易出问题。**
+现成的写法在高级功能里：菜单 `5` → `7` 是 Docker，`5` → `8` 是 Maven / Gradle / SSH，照着抄。
 
-它们写死的端口比环境变量**优先**。一旦里面留着一个已经关掉的程序的旧端口，那个工具就永远连不上——而报错里没有 EnvProxy 的名字，你会去查网络。
+**写死了旧端口会怎样。**
 
-菜单 `5 高级功能` → `2 网络与代理修复` 会把这些文件全读一遍，指出哪一行指着一个不存在的本机端口：
+那个工具就永远连不上，而报错里没有本工具的名字——你会去查网络。
 
-- `git`、`npm`、`curl`、`pip`、`cargo`、`wget`、Yarn 这些自己认环境变量 → **删掉那一行**，让它回到读环境变量的路上。
-- Gradle、SSH → 有代理在跑就**改成当前端口**，没有就删掉。
-- Conda、Maven、NuGet → 结构不允许删一半，所以**只改端口那一行**；没有代理在跑时只报告、不动手。
+菜单 `5 高级功能` → `5 网络与代理修复` 会把这几处读一遍：认环境变量的（`git`、`npm`、`curl`、`pip`、`cargo`、`wget`、Yarn）**删掉那一行**；Gradle、SSH 有代理在跑就**改成当前端口**、没有就删掉；Conda、Maven、NuGet 结构不允许删一半，**只改端口**、没有代理在跑时只报告。改之前都会留还原点，那一屏按 `r` 能撤回最近一次。
 
-改之前都会先留还原点，那一屏按 `r` 能撤回最近一次。
+**`git@github.com:xxx/yyy.git` 连不上？那是 SSH，不认代理变量。**
 
-**`git@github.com:xxx/yyy.git` 这种地址为什么连不上。**
-
-那是 SSH 协议，OpenSSH 完全不看 `HTTP_PROXY` / `HTTPS_PROXY`，只认它自己的配置。两个办法。
+OpenSSH 完全不看 `HTTP_PROXY` / `HTTPS_PROXY`，只认它自己的配置。两个办法。
 
 办法一，让 git 自动换成等价的 https 地址：
 
@@ -542,10 +538,16 @@ git config --global url.https://github.com/.insteadOf git@github.com:
 git config --global --unset url.https://github.com/.insteadOf
 ```
 
-办法二，在 `~/.ssh/config` 里给那个站点写一行 `ProxyCommand`，指向本机代理端口。Windows 上推荐指向固定入口 `127.0.0.1:17099`（菜单 `5` → `4 查看中继` 能看到它在不在；[4.3](#43-本工具管不到的地方) 有现成的配置）。macOS 没有固定入口，写当前端口（菜单 `2` 那一屏里写着）。
+办法二，在 `~/.ssh/config` 里加两行（Windows 填固定入口，Mac 填当前端口）：
+
+```
+Host github.com
+  ProxyCommand connect -H 127.0.0.1:17099 %h %p
+```
+
+Mac 上把第二行换成 `ProxyCommand nc -X connect -x 127.0.0.1:端口 %h %p`——`connect` 只有 Git for Windows 自带。`17099` 是本机的固定入口，翻墙软件换端口也不用改；它在不在，菜单 `5` → `4 查看中继` 会说。
 
 </details>
-
 ## 4. 高级功能里有什么（三个模块）
 
 菜单选 `5` 进的就是这里。它装了三件互不相干的事，各自解决一个具体麻烦。
@@ -558,7 +560,7 @@ git config --global --unset url.https://github.com/.insteadOf
 |---|---|
 | 想让某个程序单独走代理，或者单独不走 | [4.1](#41-给某个程序定规矩) |
 | 网页或终端工具打不开、连不上 | [4.2](#42-网络与代理修复) |
-| 想让 WSL 或 Docker 里也能翻墙 | [4.3](#43-本工具管不到的地方) |
+| 想让 WSL / Docker 里也能翻墙，或配 Maven / Gradle / SSH | [4.3](#43-本工具管不到的地方) |
 
 ### 4.1 给某个程序定规矩
 
@@ -665,13 +667,13 @@ Windows 造的是一般的快捷方式，Mac 造的是一个独立的小程序�
 ### 4.3 本工具管不到的地方
 
 <details>
-<summary>WSL、Docker、以及只认自己配置的工具（只讲解，不动你的设置）</summary>
+<summary>WSL、Docker、Maven / Gradle / SSH：三处各管各的，这里给现成的写法</summary>
 
 **这一项只讲解，不会改你的任何设置。**
 
-它讲的是 WSL、Docker，以及「只认自己配置文件」的那几个工具——这些地方各有一套自己的网络设置，本工具碰不到，也不该碰（改错了它们会起不来，而本工具没能力验证改得对不对）。
+它讲三处地方：另一个系统（WSL）、容器（Docker）、以及把地址抄进自己配置文件的程序（Maven / Gradle / SSH）。这三处读的都不是本工具设的变量，改错了它们会起不来，本工具也没能力验证改得对不对，所以只给写法、不动手。
 
-**怎么回事，用一句话说：** 你的电脑里有三个独立的房间。
+**怎么回事，用一句话说：** 你的电脑里不止一间房。
 
 ```
 你的 Windows      你自己那间，本工具管这里
@@ -679,44 +681,55 @@ WSL              隔壁一间，能跑真 Linux
 Docker           再隔壁一间，Docker Desktop 住在里面
 ```
 
-三个房间**各管各的网络设置**。你在自己门口贴的纸条（环境变量），隔壁看不见。
+每间房**各管各的网络设置**。你在自己门口贴的纸条（环境变量），隔壁看不见。
+
+Maven、Gradle、SSH 不是"房间"，是"自己带锁的柜子"——它们把地址抄在柜子里，从此只认那一份。
 
 **所以谁说了算：**
 
 | 谁 | 走不走代理，谁说了算 |
 |---|---|
 | `git` / `npm` / `curl` | 本工具（它们看你门口那张纸条） |
-| 浏览器 / 桌面应用 | 你的翻墙软件（它们只看「房间总公告栏」，也就是系统代理） |
+| 浏览器 / 桌面应用 | 你的翻墙软件（它们只看系统代理） |
 | WSL 里的东西 | WSL 自己的设置 |
 | Docker 里的东西 | Docker 自己的设置 |
-| Maven / Gradle / SSH | 它们自己的配置文件（见下面最后一节） |
+| Maven / Gradle / SSH | 它们配置文件里的那一行 |
 
-**想让 WSL 也翻墙。**
+**一、WSL（菜单 `5` → `6`，只有 Windows 版有）**
 
-正路是让它直接看 Windows 的公告栏——在 `C:\Users\你的用户名\.wslconfig` 里写两行（Windows 11 22H2 以上才支持）。**歪路是把纸条抄过去**：纸条上写的是「我那间的地址」，隔壁照着找会找到自己家，绕成死循环。这是网上教程最常犯的错。
+正路是让它直接看 Windows 的公告栏——在 `C:\Users\你的用户名\.wslconfig` 里写两行（Windows 11 22H2 以上才支持）：
 
-**想让 Docker 也翻墙。**
+```
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+```
 
-拉镜像慢要改 Docker Desktop 自己的设置（Settings → Resources → Proxies）；容器里面的程序要翻墙，得在启动容器时显式把地址传进去（`docker run -e HTTP_PROXY=...`）。注意：改 `daemon.json` 在 Docker Desktop 上没用，它不读那个文件。
+存盘后在 PowerShell 里执行一次 `wsl --shutdown`，之后 WSL 就跟着 Windows 的代理走。
 
-**具体命令在哪儿抄。**
+**歪路是把纸条抄过去**：纸条上写的是「我那间的地址」，隔壁照着找会找到自己家，绕成死循环。这是网上教程最常犯的错。
 
-Windows 上菜单选 `5` 再选 `6` / `7` 能看到，那里可以照着抄。**WSL 那一页只有 Windows 版有**——WSL 本身就是 Windows 上的东西；Mac 上的 Docker 配法与此相同，只是没有单独的讲解页。
+**二、Docker（菜单 `5` → `7`，两个平台都有）**
 
-**只认固定地址的程序：Maven、Gradle、Docker、SSH。**
+拉镜像慢改 Docker Desktop 自己的设置：`Settings → Resources → Proxies`，地址填本机代理端口（Windows 填固定入口 `127.0.0.1:17099`，Mac 填当前端口）。
 
-这几个工具不读环境变量，只认自己设置里写死的地址。Windows 版在本机开了一个**固定入口**（`127.0.0.1:17099`）：地址永远不变，背后自己跟着翻墙软件换端口，所以这些文件填一次就不用再改；它现在在不在，菜单 `5` → `4 查看中继` 那一屏会说。
+容器里面的程序要另外传：宿主机的变量不会自动进去，启动时写 `docker run -e HTTP_PROXY=http://host.docker.internal:17099 镜像名`。想一次配好、以后都不用传，写进 `~/.docker/config.json` 的 `proxies` 字段——它管容器和构建，但管不了 `docker pull`。
 
-菜单 `5` → `8 只认固定地址的程序` 里是现成的四份配置：
+注意：改 `daemon.json` 在 Docker Desktop 上没用，它不读那个文件。
 
-| 程序 | 填哪儿 |
+**三、Maven / Gradle / SSH（菜单 `5` → `8`，两个平台都有）**
+
+这三个工具不读环境变量，只认自己配置文件里的地址。菜单里是现成的三份，照着抄：
+
+| 程序 | 填在哪儿 |
 |---|---|
 | Maven | `~/.m2/settings.xml` 的 `<proxy>` 里 `127.0.0.1:17099` |
 | Gradle | `~/.gradle/gradle.properties` 的 `systemProp...Port=17099` |
-| Docker Desktop | Settings → Resources → Proxies |
-| SSH | `~/.ssh/config` 的 `ProxyCommand ... 127.0.0.1:17099` |
+| SSH | `~/.ssh/config` 的 `ProxyCommand connect -H 127.0.0.1:17099 %h %p` |
 
-macOS 版没有这一层（原因见 [13.1](#131-与-windows-版的区别)）：上面填的都是当前端口，翻墙软件换了端口要改一次。改的时候不用自己找——`4.2 网络与代理修复` 会把写死了旧端口的那一行指出来，能改的替你改成当前端口。
+Windows 上这个 `17099` 是本机的固定入口：地址永远不变，背后自己跟着翻墙软件换端口，所以填一次就不用再改。它现在在不在，菜单 `5` → `4 查看中继` 那一屏会说。
+
+Mac 上没有这一层（原因见 [13.1](#131-与-windows-版的区别)）：上面填的都是当前端口，翻墙软件换了端口要改一次；写 `ProxyCommand` 时用 `nc -X connect -x 127.0.0.1:端口 %h %p`。改的时候不用自己找——`4.2 网络与代理修复` 会把写死了旧端口的那一行指出来，能改的替你改成当前端口。
 
 </details>
 
@@ -1013,14 +1026,14 @@ Windows 写注册表并广播通知，Mac 写 `~/.envproxy/proxy.env` 并调用 
 
 菜单行为、影响范围与 Windows 一致，编号也一一对应（`0` 到 `8` 两台机器同号）。直接按回车等于查看状态。
 
-**`5 高级功能` 里 Mac 是 5 项，Windows 是 8 项。** 前 3 项两端同名（建走代理的图标、建固定直连的
+**`5 高级功能` 里 Mac 是 6 项，Windows 是 8 项。** 前 3 项两端同名（建走代理的图标、建固定直连的
 图标、管理已建的）。**从 4 号起两边含义就不同了**——Windows 的 4 号是「查看中继」（只看不改），
 Mac 的 4 号是「网络与代理修复」（会改系统设置）。所以照编号在两端对照是错的，请按名字找。
 
-Mac 没有这 3 项：**查看中继**（Windows 用固定入口解决代理端口会变的问题，Mac 用另一套办法，
-见第 4 节）、**WSL 里也想翻墙**、**Docker 里也想翻墙**（后两项讲的是 Windows 上的东西，
-Mac 上不存在这两个概念）。两端都有的是最后一项 **只认固定地址的程序**：那一页只讲怎么填
-Maven、Gradle、Docker、SSH 的配置，不改你的设置；Windows 写固定入口 17099，Mac 写当前端口。
+Mac 没有这 2 项：**查看中继**（Windows 用固定入口解决代理端口会变的问题，Mac 用另一套办法，
+见第 4 节）、**WSL 里也想翻墙**（WSL 本身是 Windows 上的东西）。两端都有的是 **Docker 里也想翻墙**
+与 **Maven / Gradle / SSH 怎么填**：这两页只讲怎么填，不改你的设置；Windows 填固定入口 17099，
+Mac 填当前端口。
 
 </details>
 

@@ -1070,7 +1070,7 @@ $AdvancedItems = @(
        Name='Docker 里也想翻墙';        Hint='要改 Docker 自己的设置，这里只讲怎么改'
        Handler='Show-DockerGuidePage' }
     @{ Key='8'; Action='ToolGuides';    Module='guide';  Kind='read'
-       Name='只认固定地址的程序';       Hint='Maven、Gradle、Docker、SSH 这类怎么填'
+       Name='Maven / Gradle / SSH 怎么填'; Hint='只认自己配置文件里的地址，这里给现成写法'
        Handler='Show-ToolGuidePage' }
 )
 
@@ -1152,10 +1152,10 @@ $AdvancedModules = @(
        Note=@('只修「指向本机、但那个程序已经不在」的那一种。',
               '公司/学校给你的代理，它一个字节都不碰。') }
     @{ Id='guide';  Title='本工具管不到的地方'
-       Why=@('浏览器和桌面应用看的是「系统代理」，不是这里的设置——那一层由你的翻墙软件管。',
-             'WSL、Docker 和 Maven 这类各自有一套自己的设置，读的不是这里的变量。',
-             '下面三项只讲怎么改，不会替你动任何配置。')
-       Note=@('这三项按回车只会看到说明，不会改你的设置。') }
+       Why=@('浏览器和桌面应用看的是「系统代理」——那一层由你的翻墙软件管，本工具不碰。',
+             'WSL 和 Docker 各自是一套独立的系统；Maven、Gradle、SSH 把地址写在自己的配置文件里。',
+             '这两类地方读的都不是本工具的变量，只能你自己填——下面三项给现成的写法。')
+       Note=@('这三项按回车只讲怎么改，不会动你的设置。') }
 )
 
 # 按模块取项。打印用，分派不用（分派只按编号查）。
@@ -2057,22 +2057,22 @@ function Show-WslGuidePage {
 
 function Show-DockerGuidePage {
     $blocks = @(
-        @{ Role='text'; Text='  Docker 的代理分三层，各有各的设置位置。' }
-        @{ Role='text'; Text='  这里只讲最常用的两种，都不受本工具影响。' }
+        @{ Role='text'; Text='  Docker 的代理分两层，各填各的。' }
+        @{ Role='text'; Text='  这里只讲怎么改，都不会动你现在的设置。' }
         @{ Role='blank'; Text='' }
         @{ Role='heading'; Text='  一、拉镜像慢或拉不下来（docker pull）' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  改 Docker Desktop 自己的设置：' }
         @{ Role='cmd';  Text='    Settings → Resources → Proxies' }
-        @{ Role='text'; Text=('  地址填 http://127.0.0.1:端口号。端口号看菜单' + (Get-MenuRef 'Status') + '。') }
+        @{ Role='text'; Text='  地址填 http://127.0.0.1:17099 —— 17099 是本工具的固定入口，' }
+        @{ Role='text'; Text='  翻墙软件换端口也不用改（它只在后台程序跑着的时候在）。' }
         @{ Role='blank'; Text='' }
         @{ Role='dim'; Text='  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。' }
         @{ Role='blank'; Text='' }
         @{ Role='heading'; Text='  二、容器里面的程序要翻墙' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去），' }
-        @{ Role='text'; Text='  把下面的端口号换成菜单 2 显示的那个：' }
-        @{ Role='cmd';  Text='    docker run -e HTTP_PROXY=http://host.docker.internal:端口号 镜像名' }
+        @{ Role='text'; Text='  启动容器时显式传进去（宿主的变量不会自动进去）：' }
+        @{ Role='cmd';  Text='    docker run -e HTTP_PROXY=http://host.docker.internal:17099 镜像名' }
         @{ Role='blank'; Text='' }
         @{ Role='text'; Text='  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。' }
         @{ Role='dim'; Text='  它管容器和构建，但管不了 docker pull —— 那是第一层的事。' }
@@ -2080,43 +2080,40 @@ function Show-DockerGuidePage {
     Show-GuidePage 'Docker 里也想翻墙' $blocks '这一页只讲解，没有改你的任何设置。'
 }
 function Show-ToolGuidePage {
-    # 为什么单独一页：这几个程序的设置位置分散在四份不同的文件/界面里，
-    # 而「填哪个地址」是同一件事——填固定入口就不用再改。
-    # 把它们放在一屏，用户按自己的工具挑一段抄，不用去别处找。
+    # 这一页只放「地址要写进程序自己的配置文件」的那三个工具。
+    # Docker 不在这里：拉镜像与容器是另一码事，它有单独一页——
+    # 同一个程序在两个页面各讲一半，用户会以为漏了。
     $blocks = @(
-        @{ Role='text'; Text='  有些程序把代理地址记在自己的设置里，之后一直用那个。' }
+        @{ Role='text'; Text='  有些程序把代理地址写进自己的配置文件，之后一直用它。' }
         @{ Role='text'; Text='  翻墙软件一换端口，它们就连不上，而报错里没有本工具的名字。' }
+        @{ Role='text'; Text='  下面三份照抄即可；文件不存在就新建一个。' }
         @{ Role='blank'; Text='' }
-        @{ Role='heading'; Text='  一、Maven' }
+        @{ Role='heading'; Text='  一、Maven —— 文件 ~/.m2/settings.xml' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  在 ~/.m2/settings.xml 的 <proxies> 里加一段：' }
-        @{ Role='cmd';  Text='    <proxy><id>local</id><active>true</active>' }
+        @{ Role='text'; Text='  在 <proxies> 里加这一段（没有 <proxies> 就把父级的也补上）：' }
+        @{ Role='cmd';  Text='    <proxy><id>envproxy</id><active>true</active>' }
         @{ Role='cmd';  Text='      <protocol>http</protocol>' }
         @{ Role='cmd';  Text='      <host>127.0.0.1</host><port>17099</port></proxy>' }
         @{ Role='blank'; Text='' }
-        @{ Role='heading'; Text='  二、Gradle（含 Android Studio 的构建）' }
+        @{ Role='heading'; Text='  二、Gradle —— 文件 ~/.gradle/gradle.properties' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  在 ~/.gradle/gradle.properties 里加四行：' }
+        @{ Role='text'; Text='  加这四行（Android Studio 的构建也读它）：' }
         @{ Role='cmd';  Text='    systemProp.http.proxyHost=127.0.0.1' }
         @{ Role='cmd';  Text='    systemProp.http.proxyPort=17099' }
         @{ Role='cmd';  Text='    systemProp.https.proxyHost=127.0.0.1' }
         @{ Role='cmd';  Text='    systemProp.https.proxyPort=17099' }
         @{ Role='blank'; Text='' }
-        @{ Role='heading'; Text='  三、Docker Desktop' }
+        @{ Role='heading'; Text='  三、SSH —— 文件 ~/.ssh/config' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  Settings → Resources → Proxies，地址填 127.0.0.1:17099' }
-        @{ Role='blank'; Text='' }
-        @{ Role='heading'; Text='  四、SSH（git@github.com 那种地址）' }
-        @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  在 ~/.ssh/config 里加两行（connect 是 Git 自带的）：' }
+        @{ Role='text'; Text='  加这两行（git@github.com 这种地址就靠它）：' }
         @{ Role='cmd';  Text='    Host github.com' }
         @{ Role='cmd';  Text='      ProxyCommand connect -H 127.0.0.1:17099 %h %p' }
         @{ Role='blank'; Text='' }
         @{ Role='heading'; Text='  为什么都填 17099' }
         @{ Role='blank'; Text='' }
-        @{ Role='text'; Text='  它是本工具的固定入口：自己跟着翻墙软件换端口，地址永远不变。' }
-        @{ Role='text'; Text='  所以这些文件填一次就不用再改。' }
-        @{ Role='text'; Text=('  它现在在不在、转发到哪个端口，看' + (Get-AdvancedRef 'ViewRelay' 20) + '那一屏。') }
+        @{ Role='text'; Text='  它是本工具的固定入口：地址永远不变，背后跟着翻墙软件换端口。' }
+        @{ Role='text'; Text='  所以这些文件填一次就不用再改。它只在后台程序跑着的时候在。' }
+        @{ Role='text'; Text=('  想知道它现在在不在、转发到哪：' + (Get-AdvancedRef 'ViewRelay' 20) + '。') }
     )
-    Show-GuidePage '只认固定地址的程序' $blocks '这一页只讲解，没有改你的任何设置。'
+    Show-GuidePage 'Maven / Gradle / SSH 怎么填' $blocks '这一页只讲解，没有改你的任何设置。'
 }

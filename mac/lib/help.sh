@@ -464,31 +464,29 @@ t 报告里已经有网络体检的结论，不用你另外描述。
 TOPIC
     ;;
     9) cat <<'TOPIC'
-h 多数工具不用管
-t git、npm、curl、pip、cargo、wget、Bun、Go、Deno 这些只认环境变量，
-t 本工具设好了它们就跟着变，你不需要改任何配置文件。
-h 少数工具只认自己的设置
-t 它们读的不是环境变量，而是自己的配置文件——变量设了也没用：
-r Maven|settings.xml 里的 <proxies>
-r Gradle|gradle.properties 里的 systemProp.http(s).proxyHost/Port
-r Docker|Docker Desktop 自己的设置（不看 daemon.json 里的代理）
-r SSH|~/.ssh/config 里的 ProxyCommand
-w 这些文件里一旦写死过一个旧端口，翻墙软件一换端口它们就连不上，
-w 而报错里没有本工具的名字——所以你会去查网络。
-h 写死了旧端口怎么办
-t 进主菜单的高级功能，再选网络与代理修复。
-t 它会读这些文件，指出哪一行指着一个已经不存在的本机端口。
-t 能改的会问一句才动手（删掉，或改成当前端口），并先留还原点。
-t XML 与嵌套的 YAML 它只报告、不替你改，按屏幕上那句话手动改即可。
-h git@github.com 这种地址用不了代理
-t OpenSSH 不认 HTTP_PROXY / HTTPS_PROXY，只认它自己的配置。
-t 办法一，让 git 把它换成等价的 https 地址：
+h 大多数工具不用管
+t git、npm、curl、pip、cargo、wget、Bun、Go、Deno 只认环境变量，本工具设好就行。
+h 只有这四个要自己填
+r Maven|<proxies> 一段，文件 ~/.m2/settings.xml
+r Gradle|systemProp 四行，文件 ~/.gradle/gradle.properties
+r SSH|ProxyCommand 两行，文件 ~/.ssh/config
+r Docker|Docker Desktop 自己的设置，它不看环境变量
+t 每一份都有现成的写法：菜单「高级功能」里挑对应那一项，照着抄。
+h 写死了旧端口会怎样
+t 那个工具就永远连不上，而报错里没有本工具的名字——你会去查网络。
+t 菜单「高级功能」里「网络与代理修复」会把这几处读一遍：
+t2 认环境变量的（git、npm、curl 这些）→ 删掉那一行；
+t2 Gradle、SSH → 有代理在跑就改端口，没有就删；
+t2 Conda、Maven、NuGet → 只改端口，不动结构。
+h git@github.com 连不上：SSH 不认代理变量
+i 办法一：让 git 自己换成 https 地址
 c git config --global url.https://github.com/.insteadOf git@github.com:
-t 换出来的 https 地址就会跟着环境变量里的代理走。要撤回：
-c git config --global --unset url.https://github.com/.insteadOf
-t 办法二，在 ~/.ssh/config 里给那个站点写一行 ProxyCommand，
-t 指向本机代理端口。mac 上没有固定入口，所以这里写的是当前端口：
-t 菜单选 2（查看状态）那一屏写着代理地址，翻墙软件换了端口就跟着改一次。
+t2 撤回：同一条命令，把 insteadOf 换成 --unset 再跑一次。
+i 办法二：让 SSH 自己交给代理
+t2 在 ~/.ssh/config 里加这两行（没有这个文件就新建）：
+t2     Host github.com
+t2       ProxyCommand nc -X connect -x 127.0.0.1:端口号 %h %p
+t2 端口号用 2（查看状态）那一屏里的；mac 上没有固定入口，换了端口要改一次。
 TOPIC
     ;;
     esac
@@ -951,7 +949,8 @@ ADVANCED_ITEMS=(
     '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
     '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页或终端工具连不上网时，先来这里查'
-    '5|ToolGuides|show_tool_guide_page|guide|read|只认固定地址的程序|Maven、Gradle、Docker、SSH 这类怎么填'
+    '5|DockerGuide|show_docker_guide_page|guide|read|Docker 里也想翻墙|要改 Docker 自己的设置，这里只讲怎么改'
+    '6|ToolGuides|show_tool_guide_page|guide|read|Maven / Gradle / SSH 怎么填|只认自己配置文件里的地址，这里给现成写法'
 )
 
 # 取一行里第 N 段，结果写进 _adv_out。段不存在时返回 1。
@@ -1034,9 +1033,9 @@ _advanced_module_why() {
             '可能没来得及撤掉。浏览器和终端照旧把请求发给一个已经不存在的程序，' \
             '于是连国内网站都打不开——线没断，是路指错了。' ;;
         guide) printf '%s\n' \
-            '浏览器和桌面应用看的是系统代理，不是这里的设置——那一层由你的翻墙软件管。' \
-            'Maven、Gradle、Docker、SSH 各自有一套自己的设置，读的不是这里的变量。' \
-            '这一项只讲怎么改，不会替你动任何配置。' ;;
+            '浏览器和桌面应用看的是系统代理——那一层由你的翻墙软件管，本工具不碰。' \
+            'Docker 是一套独立的系统；Maven、Gradle、SSH 把地址写在自己的配置文件里。' \
+            '这两类地方读的都不是本工具的变量，只能你自己填——下面两项给现成的写法。' ;;
     esac
 }
 
@@ -1051,56 +1050,91 @@ _advanced_module_note() {
             '只修「指向本机、但那个程序已经不在」的那一种。' \
             '公司/学校给你的代理，它一个字节都不碰。' ;;
         guide) printf '%s\n' \
-            '这一项按回车只会看到说明，不会改你的设置。' ;;
+            '这两项按回车只讲怎么改，不会动你的设置。' ;;
     esac
 }
 
-# 「只认固定地址的程序」那一屏：只讲解，不动手。
+# Docker 那一屏：只讲解，不改任何设置。
 #
-# 为什么单独一屏：这四个程序的设置位置分散在四份文件/界面里，而"填哪个地址"
+# 为什么单独一屏：拉镜像（Docker 自己的设置）与容器里的程序（启动时传进去）
+# 是两件不同的事，各自有各自的填法；混在别的页里说一句，用户照做会漏一半。
+show_docker_guide_page() {
+    _dg_port=$(get_current_proxy_port 2>/dev/null || true)
+    [ -n "$_dg_port" ] || _dg_port='端口号'
+    clear_screen_safe
+    style_out title "======== Docker 里也想翻墙 ========"
+    echo ""
+    style_out text "  Docker 的代理分两层，各填各的。"
+    style_out text "  这里只讲怎么改，都不会动你现在的设置。"
+    echo ""
+    style_out heading "  一、拉镜像慢或拉不下来（docker pull）"
+    echo ""
+    style_out text "  改 Docker Desktop 自己的设置："
+    style_out cmd  "    Settings → Resources → Proxies"
+    style_out text "  地址填 http://127.0.0.1:$_dg_port（当前端口）。"
+    style_out text "  mac 版没有固定入口，翻墙软件换了端口这里要改一次。"
+    echo ""
+    style_out dim  "  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。"
+    echo ""
+    style_out heading "  二、容器里面的程序要翻墙"
+    echo ""
+    style_out text "  启动容器时显式传进去（宿主机的变量不会自动进去）："
+    style_out cmd  "    docker run -e HTTP_PROXY=http://host.docker.internal:$_dg_port 镜像名"
+    echo ""
+    style_out text "  想一次配好、以后都不用传，写进 ~/.docker/config.json 的 proxies 字段。"
+    style_out dim  "  它管容器和构建，但管不了 docker pull —— 那是第一层的事。"
+    echo ""
+    style_out dim  "  这一屏只讲解，没有改你的任何设置。"
+    echo ""
+    style_out key  "  按回车返回"
+    _page_wait_enter
+    return 0
+}
+
+# 「Maven / Gradle / SSH 怎么填」那一屏：只讲解，不动手。
+#
+# 为什么单独一屏：这几个程序的设置位置分散在三份文件里，而"填哪个地址"
 # 是同一件事。放在一起，用户按自己的工具挑一段抄，不用去别处找。
+# Docker 不在这里——它有自己的那一屏（拉镜像与容器是另一码事）。
 # mac 上没有固定入口（Windows 有 17099），所以这里写的是**当前端口**：
 # 换端口之后要回来改一次，或者让救援页把它改过去。
 show_tool_guide_page() {
     _tg_port=$(get_current_proxy_port 2>/dev/null || true)
     [ -n "$_tg_port" ] || _tg_port='端口号'
     clear_screen_safe
-    style_out title "======== 只认固定地址的程序 ========"
+    style_out title "======== Maven / Gradle / SSH 怎么填 ========"
     echo ""
-    style_out text "  有些程序把代理地址记在自己的设置里，之后一直用那个。"
+    style_out text "  有些程序把代理地址写进自己的配置文件，之后一直用它。"
     style_out text "  翻墙软件一换端口，它们就连不上，而报错里没有本工具的名字。"
+    style_out text "  下面三份照抄即可；文件不存在就新建一个。"
     echo ""
-    style_out heading "  一、Maven"
+    style_out heading "  一、Maven —— 文件 ~/.m2/settings.xml"
     echo ""
-    style_out text "  在 ~/.m2/settings.xml 的 <proxies> 里加一段："
-    style_out cmd  "    <proxy><id>local</id><active>true</active>"
+    style_out text "  在 <proxies> 里加这一段（没有 <proxies> 就把父级的也补上）："
+    style_out cmd  "    <proxy><id>envproxy</id><active>true</active>"
     style_out cmd  "      <protocol>http</protocol>"
     style_out cmd  "      <host>127.0.0.1</host><port>$_tg_port</port></proxy>"
     echo ""
-    style_out heading "  二、Gradle（含 Android Studio 的构建）"
+    style_out heading "  二、Gradle —— 文件 ~/.gradle/gradle.properties"
     echo ""
-    style_out text "  在 ~/.gradle/gradle.properties 里加四行（端口换成当前那个）："
+    style_out text "  加这四行（Android Studio 的构建也读它）："
     style_out cmd  "    systemProp.http.proxyHost=127.0.0.1"
     style_out cmd  "    systemProp.http.proxyPort=$_tg_port"
     style_out cmd  "    systemProp.https.proxyHost=127.0.0.1"
     style_out cmd  "    systemProp.https.proxyPort=$_tg_port"
     echo ""
-    style_out heading "  三、Docker Desktop"
+    style_out heading "  三、SSH —— 文件 ~/.ssh/config"
     echo ""
-    style_out text "  Settings → Resources → Proxies，地址填 127.0.0.1:$_tg_port"
-    echo ""
-    style_out heading "  四、SSH（git@github.com 那种地址）"
-    echo ""
-    style_out text "  在 ~/.ssh/config 里加两行："
+    style_out text "  加这两行（git@github.com 这种地址就靠它）："
     style_out cmd  "    Host github.com"
     style_out cmd  "      ProxyCommand nc -X connect -x 127.0.0.1:$_tg_port %h %p"
     echo ""
-    style_out heading "  mac 上没有固定入口"
+    style_out heading "  为什么填这个端口"
     echo ""
-    style_out text "  Windows 版有一个永不变的地址（17099），填一次就不用再改。"
-    style_out text "  mac 版没有这一层：上面填的都是当前端口，翻墙软件换了端口要改一次。"
-    style_out text "  改的时候不用自己找：高级功能里的「网络与代理修复」会读这些文件，"
-    style_out text "  把写死了旧端口的那一行指出来，能改的替你改成当前端口。"
+    style_out text "  mac 版没有固定入口，上面填的就是当前端口。"
+    style_out text "  翻墙软件换了端口要改一次；改的时候不用自己找——"
+    style_out text "  高级功能里的「网络与代理修复」会把写死了旧端口的那一行指出来，"
+    style_out text "  能改的替你改成当前端口。"
     echo ""
     style_out dim  "  当前端口：$(menu_ref status) 那一屏里有；上面写的 $_tg_port 就是它。"
     echo ""

@@ -502,38 +502,34 @@ The full description is in [4.2](#42-network-and-proxy-repair).
 ### 3.9 A tool's own proxy settings
 
 <details>
-<summary>Which tools read the variables, which need their own config, and why git@github.com fails</summary>
+<summary>Which tools need filling in, what a stale port does, and why git@github.com fails</summary>
 
 **Most tools need nothing.**
 
 `git`, `npm`, `curl`, `pip`, `cargo`, `wget`, `Bun`, `Go` and `Deno` read the environment variables only. Once this tool sets them, those tools follow; you do not edit any config file.
 
-**A few read only their own settings.**
+**These four need filling in.**
 
-They ignore the variables and read their own config, so setting the variables changes nothing:
+They ignore the variables and read the line in their own config, so setting the variables changes nothing:
 
-| Tool | Where to set it | What this tool does |
-|---|---|---|
-| Maven | `<proxies>` in `settings.xml` | Finds it; rewrites the `<port>` line only |
-| Gradle | `gradle.properties` `systemProp...` lines | Finds it; repoints the port |
-| Docker Desktop | its own settings (it ignores the proxy in `daemon.json`) | Mentions it, never touches it |
-| SSH | `ProxyCommand` in `~/.ssh/config` | Finds it; repoints or deletes that line |
+| Tool | Where to fill it in |
+|---|---|
+| Maven | `<proxies>` in `~/.m2/settings.xml` |
+| Gradle | the four `systemProp...` lines in `~/.gradle/gradle.properties` |
+| SSH | `ProxyCommand` in `~/.ssh/config` |
+| Docker | Docker Desktop's own settings (it ignores `daemon.json`) |
 
-**Why these files cause the worst failures.**
+Ready-made versions live in Advanced: menu `5` → `7` is Docker, `5` → `8` is Maven / Gradle / SSH. Copy them.
 
-A port written into them **outranks** the environment variables. Once an old port from a program that is no longer running sits there, that tool can never connect — and the error message does not mention EnvProxy, so you go looking at the network.
+**What a stale port does.**
 
-Menu `5 Advanced` → `2 Network and proxy repair` reads all of these files and points out the line that names a local port nothing is listening on:
+That tool can never connect, and the error does not mention this tool — so you go looking at the network.
 
-- `git`, `npm`, `curl`, `pip`, `cargo`, `wget` and Yarn read the variables themselves → it **deletes that line**, so the tool falls back to the variables.
-- Gradle and SSH → if a proxy is running it **repoints the port**; otherwise it deletes the line.
-- Conda, Maven and NuGet → their format cannot lose half an entry, so it **rewrites the port only**; with no proxy running it reports and leaves them alone.
+Menu `5 Advanced` → `5 Network and proxy repair` reads all of them: tools that read the variables (git, npm, curl, pip, cargo, wget, Yarn) get **that line deleted**; Gradle and SSH are **repointed at the current port** when a proxy is running, deleted when not; Conda, Maven and NuGet cannot lose half an entry, so **only the port changes**, and with no proxy running they are only reported. Every edit records an undo point first; `r` on that screen restores the most recent one.
 
-Every edit records an undo point first; `r` on that screen restores the most recent one.
+**`git@github.com:xxx/yyy.git` cannot connect? That is SSH, which ignores the proxy variables.**
 
-**Why `git@github.com:xxx/yyy.git` cannot connect.**
-
-That is SSH. OpenSSH never reads `HTTP_PROXY` / `HTTPS_PROXY`; it reads only its own config. Two ways out.
+OpenSSH never reads `HTTP_PROXY` / `HTTPS_PROXY`; it reads only its own config. Two ways out.
 
 First, have git rewrite it to the equivalent https address:
 
@@ -547,7 +543,14 @@ After that, `git clone git@github.com:...` goes through the proxy from the varia
 git config --global --unset url.https://github.com/.insteadOf
 ```
 
-Second, add a `ProxyCommand` line for that host in `~/.ssh/config`, pointing at the local proxy port. On Windows, point it at the fixed entry `127.0.0.1:17099` (menu `5` → `4 View the relay` shows whether it is up; [4.3](#43-places-this-tool-cannot-reach) has ready-made settings). On macOS there is no fixed entry, so use the current port (the `2` screen shows it).
+Second, add two lines to `~/.ssh/config` (Windows uses the fixed entry, Mac the current port):
+
+```
+Host github.com
+  ProxyCommand connect -H 127.0.0.1:17099 %h %p
+```
+
+On a Mac, replace the second line with `ProxyCommand nc -X connect -x 127.0.0.1:port %h %p` — `connect` ships only with Git for Windows. `17099` is this machine's fixed entry, so it survives a proxy port change; menu `5` → `4 View the relay` says whether it is running.
 
 </details>
 
@@ -563,7 +566,7 @@ Each subsection stands on its own; there is no need to read them in order.
 |---|---|
 | One program should use the proxy, or not | [4.1](#41-give-one-program-its-own-rule) |
 | Pages or terminal tools fail | [4.2](#42-network-and-proxy-repair) |
-| You want WSL or Docker to use it too | [4.3](#43-places-this-tool-cannot-reach) |
+| Want WSL / Docker too, or Maven / Gradle / SSH | [4.3](#43-places-this-tool-cannot-reach) |
 
 ### 4.1 Give one program its own rule
 
@@ -670,13 +673,13 @@ If the network still fails, the cause may be elsewhere: a virtual adapter (TUN),
 ### 4.3 Places this tool cannot reach
 
 <details>
-<summary>WSL, Docker, and tools that only read their own config (explained only, nothing is changed)</summary>
+<summary>WSL, Docker and Maven / Gradle / SSH: three places with their own settings, with ready-made versions</summary>
 
 **This item only explains; it changes nothing of yours.**
 
-It covers WSL, Docker, and the few tools that only read their own config file — each with its own network settings that this tool cannot touch, and should not: getting them wrong stops them from starting, and this tool has no way to verify a fix.
+It covers three places: another system (WSL), containers (Docker), and programs that copy the address into their own config (Maven / Gradle / SSH). None of them read the variables this tool sets, and getting them wrong stops them from starting — so this tool gives you the wording and keeps its hands off.
 
-**The short version:** your computer has three separate rooms.
+**The short version:** your computer has more than one room.
 
 ```
 Your Windows      your own room, the one this tool manages
@@ -686,42 +689,53 @@ Docker            one more room, where Docker Desktop lives
 
 Each room **manages its own network settings**. The note you stick on your own door (environment variables) is invisible to the next room.
 
+Maven, Gradle and SSH are not rooms — they are locked cabinets. They copy the address inside and only ever read that copy.
+
 **So who decides:**
 
 | Who | Who decides whether it uses the proxy |
 |---|---|
 | `git` / `npm` / `curl` | This tool (they read the note on your door) |
-| Browsers / desktop apps | Your proxy app (they only read the system-wide notice board) |
+| Browsers / desktop apps | Your proxy app (they only read the system proxy) |
 | Things inside WSL | WSL's own settings |
 | Things inside Docker | Docker's own settings |
-| Maven / Gradle / SSH | Their own config files (last part of this section) |
+| Maven / Gradle / SSH | The line inside their own config |
 
-**To make WSL use the proxy.**
+**One: WSL (menu `5` → `6`, Windows only)**
 
-The right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer). **The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
+The right way is to let it read Windows' notice board directly — two lines in `C:\Users\<you>\.wslconfig` (Windows 11 22H2 or newer):
 
-**To make Docker use the proxy.**
+```
+[wsl2]
+networkingMode=mirrored
+autoProxy=true
+```
 
-Slow image pulls need Docker Desktop's own settings (Settings → Resources → Proxies); a program inside a container needs the address passed in explicitly when the container starts (`docker run -e HTTP_PROXY=...`). Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+Save it, run `wsl --shutdown` once in PowerShell, and WSL follows the Windows proxy from then on.
 
-**Where to copy the exact commands.**
+**The wrong way is copying the note across**: it says "the address in my room", so the next room looks it up and finds itself, looping forever. That is the mistake most online guides make.
 
-On Windows they are on screen under menu `5` then `6` / `7`, ready to copy. **The WSL page is Windows-only** — WSL is a Windows thing; the Docker setup is the same on a Mac, it simply has no dedicated page there.
+**Two: Docker (menu `5` → `7`, both platforms)**
 
-**Programs that only accept a fixed address: Maven, Gradle, Docker, SSH.**
+Slow pulls need Docker Desktop's own settings: `Settings → Resources → Proxies`, filled with the local proxy port (Windows: the fixed entry `127.0.0.1:17099`; Mac: the current port).
 
-These four ignore the environment variables and only use the address written in their own settings. The Windows version opens a **fixed entry** (`127.0.0.1:17099`) on this machine: the address never changes, and it follows the proxy app in the background, so you write it once and never touch these files again. Menu `5` → `4 View the relay` says whether it is running.
+A program inside a container needs it passed in separately — host variables do not go in by themselves: `docker run -e HTTP_PROXY=http://host.docker.internal:17099 image`. To set it once and forget it, write the `proxies` field in `~/.docker/config.json`; that covers containers and builds but not `docker pull`.
 
-Menu `5` → `8 Programs that only accept a fixed address` holds the four settings to copy:
+Note that editing `daemon.json` does nothing on Docker Desktop — it does not read that file.
+
+**Three: Maven / Gradle / SSH (menu `5` → `8`, both platforms)**
+
+These three ignore the variables and read the address in their own config file. The menu has all three ready to copy:
 
 | Program | What to fill in |
 |---|---|
 | Maven | `127.0.0.1:17099` inside `<proxy>` in `~/.m2/settings.xml` |
 | Gradle | `systemProp...Port=17099` in `~/.gradle/gradle.properties` |
-| Docker Desktop | Settings → Resources → Proxies |
-| SSH | `ProxyCommand ... 127.0.0.1:17099` in `~/.ssh/config` |
+| SSH | `ProxyCommand connect -H 127.0.0.1:17099 %h %p` in `~/.ssh/config` |
 
-The macOS version has no such layer (see [13.1](#131-difference-from-the-windows-version)): you fill in the current port, and change it once when the proxy port moves. You do not have to hunt for it — `4.2 Network and proxy repair` points at the line with the stale port and repoints it for you.
+On Windows, `17099` is this machine's fixed entry: the address never changes and follows the proxy app in the background, so you fill it in once. Menu `5` → `4 View the relay` says whether it is running.
+
+The Mac version has no such layer (see [13.1](#131-difference-from-the-windows-version)): everything above uses the current port and changes once when the proxy port moves; for `ProxyCommand` use `nc -X connect -x 127.0.0.1:port %h %p`. You do not have to hunt for it — `4.2 Network and proxy repair` points at the line with the stale port and repoints it for you.
 
 </details>
 
@@ -1015,16 +1029,15 @@ No Homebrew, Python or Node is needed, no `sudo`, and the `zsh` that ships with 
 
 The behaviour and what each item affects are the same as Windows, and so are the numbers (`0` through `8` are the same on both machines). Pressing Enter directly means show status.
 
-**`5 Advanced` has 5 items on Mac and 8 on Windows.** The first 3 share the same name on both (make a proxied
+**`5 Advanced` has 6 items on Mac and 8 on Windows.** The first 3 share the same name on both (make a proxied
 icon, make a direct icon, manage what you made). **From item 4 onward the meanings diverge** — Windows item 4 is
 "view relay" (read only, changes nothing) while Mac item 4 is "network and proxy repair" (it changes system settings).
 So do not match items across platforms by number; match by name.
 
-Mac lacks these 3: **view relay** (Windows uses a fixed entry to survive a changing proxy port; Mac solves that
-differently, see section 4), **WSL behind a proxy**, and **Docker behind a proxy** (the last two are about Windows
-things that do not exist on a Mac). Both sides do have the last item, **programs that only accept a fixed address**:
-that page explains how to fill in Maven, Gradle, Docker and SSH and changes nothing; Windows uses the fixed entry
-17099 there, Mac uses the current port.
+Mac lacks these 2: **view relay** (Windows uses a fixed entry to survive a changing proxy port; Mac solves that
+differently, see section 4) and **WSL behind a proxy** (WSL is a Windows thing). Both sides do have **Docker behind
+a proxy** and **Maven / Gradle / SSH to fill in**: those two pages only explain and change nothing; Windows fills in
+the fixed entry 17099 there, Mac the current port.
 
 </details>
 
