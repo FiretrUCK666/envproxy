@@ -436,7 +436,7 @@ add_doctor_journal_entry() {
     [ -s "$_aje_path" ]
 }
 
-# 日志里有几段 ation。没有文件时输出 0。
+# 日志里有几段还原点。没有文件时输出 0。
 doctor_journal_count() {
     _djc_path=$(doctor_journal_path)
     [ -f "$_djc_path" ] || { printf '0'; return 0; }
@@ -483,8 +483,7 @@ doctor_journal_ops() {
 #
 # 注意读取循环用的是 `IFS= read -r x || [ -n "$x" ]`：字段串的最后一段没有换行，
 # 光靠 `while read` 会把最后一行丢掉——而「最后一个字段」恰好是最常被问的那个
-# （content 永远排在最后）。这个写法和 base 层的 Ensure-MonitorPaths 之外
-# 各处读文件的惯例一致。
+# （content 永远排在最后）。这个写法与别处读多行内容的循环一致。
 doctor_journal_last_field() {
     _djf_want="$1"
     _djf_last=$(doctor_journal_ops | tail -n 1)
@@ -576,7 +575,6 @@ $_spr_scan
 EOF
     if ! add_doctor_journal_entry 'sysproxy' \
             "inspector=sysproxy" \
-            "legacy=" \
             "services=$(_bak_enc "$_spr_snap")"; then
         printf 'nobackup'; return 0
     fi
@@ -606,12 +604,92 @@ EOF
     return 0
 }
 
+# 从快照里的地址取出**该写进 networksetup 的主机名**。
+#
+# 快照第 4 列有两种形状，两种都要认：
+#   · 手动代理层：sysproxy_layers 的第 4 列是整条 URL（http://127.0.0.1:7078）；
+#   · 旧单槽位备份（doctor.bak）：第 4 列是裸主机（127.0.0.1）。
+# networksetup 要的是**裸主机**。喂它整条 URL，它会把 "http://127.0.0.1:7078"
+# 原样当成服务器名写进系统设置，浏览器随后拿着一个坏地址去连——
+# 而屏幕上报的是「已经改回上一次修复之前的样子」。实测过：这条命令本身就返回 0，
+# 只看退出码永远发现不了。
+_sysproxy_restore_host() {
+    case "${1:-}" in
+        *://*) _srh_h=$(_url_host "$1") ;;
+        *)     _srh_h=${1:-} ;;
+    esac
+    printf '%s' "$_srh_h"
+}
+
+# 一条还原命令。$1 服务  $2 勾选框  $3 快照里的地址  $4 快照里的端口
+# 输出一行命令；这一条没法还原（地址空、端口不是数字）时返回 1，
+# 由调用方计入「没还原」——静默跳过会让"撤了但没撤干净"看起来像成功。
+_sysproxy_restore_cmd() {
+    _src_svc="$1"; _src_box="$2"; _src_val="${3:-}"; _src_port="${4:-}"
+    # 每次进来先清空：这个函数有多条 return 1 的早退路径，而 _src_cmd 是全局变量
+    # （mac 的 bash 3.2 里没有 local，项目统一用前缀区分作用域）。
+    # 不清空的话，一条坏记录早退后调用方会读到**上一条留下的命令**并再执行一遍——
+    # 屏幕上一切正常，而那条设置被写了两遍。
+    _src_cmd=""
+    [ -n "$_src_val" ] || return 1
+    _src_q=$(printf '%s' "$_src_svc" | sed "s/'/'\\\\''/g")
+    case "$_src_box" in
+        web|secureweb|socksfirewall)
+            _src_host=$(_sysproxy_restore_host "$_src_val")
+            [ -n "$_src_host" ] || return 1
+            case "$_src_port" in ''|*[!0-9]*) return 1 ;; esac
+            [ "$_src_port" -gt 0 ] 2>/dev/null || return 1
+            case "$_src_box" in
+                web)           _src_cmd="networksetup -setwebproxy '$_src_q' '$_src_host' '$_src_port' on" ;;
+                secureweb)     _src_cmd="networksetup -setsecurewebproxy '$_src_q' '$_src_host' '$_src_port' on" ;;
+                socksfirewall) _src_cmd="networksetup -setsocksfirewallproxy '$_src_q' '$_src_host' '$_src_port' on" ;;
+            esac
+            ;;
+        autoproxy)
+            # `-setautoproxyurl` 只收 <服务名> <url> 两个参数（多给一个 on 会被判为无效，
+            # 整串 set -e 就此中断）；地址与状态是两条命令，**状态那一条不能省**：
+            # 修复时是用 -setautoproxystate off 关掉的，只写回地址而不打开，
+            # 用户的 PAC 就永远停在"关着"——屏幕上却说改回去了。
+            _src_cmd="networksetup -setautoproxyurl '$_src_q' '$_src_val'; networksetup -setautoproxystate '$_src_q' on"
+            ;;
+        *) return 1 ;;
+    esac
+    printf '%s' "$_src_cmd"
+    return 0
+}
+
+# 回读确认：这条记录是不是已经回到快照里记的样子。$1 服务  $2 勾选框  $3 地址  $4 端口
+#
+# **判据是"与快照一致"，不是"现在还有没有可修项"。** 撤销干的正是把当初被关掉的
+# 死端口代理重新打开，所以撤完之后 sysproxy_layers 必然又报 residue-blocking——
+# 拿 finding_fixable 当判据，这个函数就永远返回 failed，屏幕上恒报「[未完成] 没能改回去」。
+_sysproxy_restored_ok() {
+    _sro2_svc="$1"; _sro2_box="$2"; _sro2_val="${3:-}"; _sro2_want_port="${4:-}"
+    _sro2_raw=$(_sysproxy_read_one "$_sro2_svc" "$_sro2_box" 2>/dev/null) || return 1
+    _sro2_en=$(printf '%s\n' "$_sro2_raw" | sed -n '1p')
+    _sro2_host=$(printf '%s\n' "$_sro2_raw" | sed -n '2p')
+    _sro2_port=$(printf '%s\n' "$_sro2_raw" | sed -n '3p')
+    [ "$_sro2_en" = "Yes" ] || return 1
+    case "$_sro2_box" in
+        autoproxy)
+            # PAC 存的就是整条 URL，逐字比。
+            [ "$_sro2_host" = "$_sro2_val" ] || return 1
+            ;;
+        *)
+            [ "$_sro2_host" = "$(_sysproxy_restore_host "$_sro2_val")" ] || return 1
+            [ "$_sro2_port" = "$_sro2_want_port" ] || return 1
+            ;;
+    esac
+    return 0
+}
+
 # 撤销一次系统代理修复。返回 ok / failed / skip。
 #
 # 两种还原点都要认：
-#   · 新的（content 里有 services）：按记录把每个服务的四个勾选框恢复到当时的样子
-#   · 旧的（doctor.bak 转来的 legacy=1）：那是一张「服务|勾选框|启用|地址|端口」的表
-# 语义都是「推进去的命令返回 0 且回读确认没了」，不许只看了 osascript 的退出码就报成功。
+#   · 日志里的（字段 services）：按记录把每个服务的勾选框恢复到当时的样子；
+#   · 旧单槽位备份 doctor.bak：那是一张「服务|勾选框|启用|地址|端口」的表，逐列同形，
+#     由 restore_legacy_sysproxy_snapshot 把内容直接交给本函数（不借道日志）。
+# 语义都是「推进去的命令返回 0 **且回读与快照一致**」，不许只看了 osascript 的退出码就报成功。
 restore_sysproxy_snapshot() {
     # $1 可选：直接给一张 services 表就从它还原，不给才去读日志最后一段。
     #
@@ -620,38 +698,35 @@ restore_sysproxy_snapshot() {
     # 把用户**另一条真实还原点挤掉**（日志只留最近 5 段，挤掉的回不来）。
     # 借道日志还要求写回是原子的，中途失败会留下半截日志、所有还原点报废。
     # 直接传内容就绕开这两件事。
-    if [ $# -ge 1 ] && [ -n "${1:-}" ]; then
-        _rss_legacy=1
-        _rss_services=$1
-    else
-        _rss_legacy=$(doctor_journal_last_field 'legacy')
-        _rss_services=$(doctor_journal_last_field 'services')
-    fi
+    # 用 `${1:-}` 取：调用点有的写成 `restore_sysproxy_snapshot "$x"`，$x 可能是空串。
+    _rss_services="${1:-}"
+    [ -n "$_rss_services" ] || _rss_services=$(doctor_journal_last_field 'services')
     [ -n "$_rss_services" ] || { printf 'skip'; return 0; }
 
     _rss_cmds=""
     _rss_count=0
-    while IFS="$(printf '\t')" read -r _rss_svc _rss_box _rss_en _rss_host _rss_port; do
+    _rss_bad=0
+    while IFS="$(printf '\t')" read -r _rss_svc _rss_box _rss_en _rss_val _rss_port; do
         [ -n "$_rss_svc" ] || continue
         [ "$_rss_en" = "Yes" ] || continue
-        _rss_q=$(printf '%s' "$_rss_svc" | sed "s/'/'\\\\''/g")
-        # 还原用 -set*proxy <svc> <host> <port> on：整串里的 on 会把状态一并打开
-        # （这正是还原想要的）。
-        # **但注意 `-setwebproxy` 有副作用：它会顺带打开状态。**
-        # 所以"修"那边绝不能走"先清地址再关状态"——那会把代理重新打开、指向一个死端口。
-        # 修复侧现在的做法（只 -set*proxystate off，不动地址）是对的，别改。
-        case "$_rss_box" in
-            web)           _rss_cmds="$_rss_cmds networksetup -setwebproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
-            secureweb)     _rss_cmds="$_rss_cmds networksetup -setsecurewebproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
-            socksfirewall) _rss_cmds="$_rss_cmds networksetup -setsocksfirewallproxy '$_rss_q' '$_rss_host' '$_rss_port' on;" ;;
-            # -setautoproxyurl 只收 <服务名> <url> 两个参数；多给一个 on 会被判为无效，整串 set -e 就此中断。
-            autoproxy)     _rss_cmds="$_rss_cmds networksetup -setautoproxyurl '$_rss_q' '$_rss_host';" ;;
-        esac
+        _rss_one=$(_sysproxy_restore_cmd "$_rss_svc" "$_rss_box" "$_rss_val" "$_rss_port") || {
+            # 记着、但不放弃：其余各项照样要还原。一条坏记录不该让整次撤销白做。
+            _rss_bad=$((_rss_bad + 1))
+            continue
+        }
+        _rss_cmds="$_rss_cmds $_rss_one;"
         _rss_count=$((_rss_count + 1))
     done <<EOF
 $_rss_services
 EOF
-    [ "$_rss_count" -gt 0 ] || { printf 'skip'; return 0; }
+    [ "$_rss_count" -gt 0 ] || {
+        # 一条命令都拼不出来，有两种完全不同的原因，不能混成一句：
+        #   · 快照里本来就没有任何被启用的项 -> 撤销是空操作，**算成功**（否则这条还原点
+        #     永远消费不掉，"输 r 撤销"这个选项一直挂着，按下去还是它）；
+        #   · 快照里有项、但都还原不了（地址或端口坏了）-> 如实报失败，别把坏记录说成"没事"。
+        [ "$_rss_bad" -eq 0 ] && printf 'ok' || printf 'failed'
+        return 0
+    }
     _rss_script="set -e;$_rss_cmds"
     _rss_msg=$(osascript -e "do shell script \"$(printf '%s' "$_rss_script" | sed 's/"/\\\\"/g')\" with prompt \"EnvProxy 要把浏览器代理设置改回原样，需要你的开机密码\" with administrator privileges" 2>&1)
     if [ $? -ne 0 ]; then
@@ -664,14 +739,16 @@ EOF
     # 回读确认：osascript 返回 0 只代表"那串命令都返回 0"，不代表设置真的生效——
     # 描述文件（MDM）会在下一瞬间把它覆盖回去。与 sysproxy_repair 同一条道理：
     # 不确认就报成功，就是屏幕上说改回去了、实际没改。
-    _rss_after=$(sysproxy_layers)
-    _rss_left=0
-    # 同样要读全 7 列（理由见 sysproxy_repair 里那段注释）。
-    while IFS="$(printf '\t')" read -r _rss_l2 _rss_s2 _rss_k2 _rss_u2 _rss_p2 _rss_b2 _rss_h2; do
-        [ -n "$_rss_s2" ] || continue
-        finding_fixable "$_rss_k2" && _rss_left=$((_rss_left + 1))
+    #
+    # 判据是**与快照逐项一致**（启用、地址、端口），不是"现在还有没有可修项"：
+    # 撤销本来就是把当初关掉的死端口代理重新打开，撤完之后必然又出现可修项。
+    _rss_left=$_rss_bad
+    while IFS="$(printf '\t')" read -r _rss_svc2 _rss_box2 _rss_en2 _rss_val2 _rss_port2; do
+        [ -n "$_rss_svc2" ] || continue
+        [ "$_rss_en2" = "Yes" ] || continue
+        _sysproxy_restored_ok "$_rss_svc2" "$_rss_box2" "$_rss_val2" "$_rss_port2" || _rss_left=$((_rss_left + 1))
     done <<EOF
-$_rss_after
+$_rss_services
 EOF
     [ "$_rss_left" -eq 0 ] && printf 'ok' || printf 'failed'
     return 0

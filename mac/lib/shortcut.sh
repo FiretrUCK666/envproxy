@@ -20,7 +20,8 @@
 #     Contents/Info.plist          声明它是个 app、叫什么、图标借谁的
 #     Contents/MacOS/launcher      一个 shell 脚本，setenv 之后 exec 真程序
 #
-# 它与 Windows 侧共用同一张模式表（PROXY_MODES / PROXY_MODE_* 在 base.sh），
+# 它与 Windows 侧共用同一套模式定义（mac 是 base.sh 的 PROXY_MODES 与
+# proxy_mode_suffix / proxy_mode_label / proxy_mode_action；win 是 $ShortcutModes），
 # 所以两边"有哪几种规矩、每种叫什么"永远一致。
 # ==============================================================================
 
@@ -150,7 +151,7 @@ _shortcut_launcher_body() {
             # 把它和地址类变量一视同仁地赋成 URL，Node 会读到一个非法开关值。
             for _slb_v in $PROXY_VAR_NAMES; do
                 case "$_slb_v" in
-                    NO_PROXY|no_proxy|NODE_USE_ENV_PROXY|node_use_env_proxy) continue ;;
+                    NO_PROXY|no_proxy|NODE_USE_ENV_PROXY) continue ;;
                 esac
                 printf '    %s="$_ep"; export %s\n' "$_slb_v" "$_slb_v"
             done
@@ -234,6 +235,10 @@ _shortcut_build_app() {
     [ -e "$_sba_target" ] || return 1
     _sba_suffix=$(proxy_mode_suffix "$_sba_mode" 2>/dev/null) || return 1
     [ -n "$_sba_suffix" ] || return 1
+    # 桌面那个名字的基名：`Foo.app` 与 `bar.sh` 都只取 `Foo` / `bar`。
+    # 用 `basename 路径 后缀` 直接剥，不先判断扩展名——`.app` 是目录，
+    # 而 `basename` 对两种情况同样正确（它只做字符串尾部处理）。
+    _sba_base=$(basename "$_sba_target" .app)
 
     # 身份哈希 = 目标路径 + 模式。它只用在**内部**暂存目录名上（_sba_work），
     # 不进桌面那个给人看的名字。
@@ -413,14 +418,9 @@ $_sr_extra"; fi
 # 建一个壳子，返回 Ok / Path / Reason / Mode 四段（用 | 分隔）。
 # 与 Windows 侧的 New-ProxyShortcut 返回同样的事实，让两边的界面能说同样的话。
 _shortcut_new() {
-    _sn_target=$1
-    _sn_mode=$2
-    _sn_dest=${3:-}
-
-    case "$_sn_target" in
-        *.app) _sn_real="$_sn_target/Contents/MacOS" ;;
-        *)     _sn_real=$_sn_target ;;
-    esac
+    _sn_target="$1"
+    _sn_mode="$2"
+    _sn_dest="${3:-}"
 
     if [ ! -e "$_sn_target" ]; then
         printf 'fail|%s|找不到这个程序\n' ""
@@ -432,7 +432,7 @@ _shortcut_new() {
     fi
 
     # 同一程序已有别的模式的壳子时，先记下来，让界面能提一句。
-    _sn_app=$(_shortcut_build_app "$_sn_target" "$_sn_mode" $_sn_dest 2>/dev/null)
+    _sn_app=$(_shortcut_build_app "$_sn_target" "$_sn_mode" "$_sn_dest" 2>/dev/null)
     if [ -z "$_sn_app" ]; then
         printf 'fail|%s|建不出来（目标文件夹不可写？）\n' ""
         return 0
@@ -497,10 +497,10 @@ _shortcut_manage_page() {
         echo ""
         _sm_recs=$(_shortcut_records)
         if [ -z "$_sm_recs" ]; then
-            # 这里说「上面前两项」而不是取编号：本层不持有高级功能表，
-            # 调 help.sh 的 advanced_ref 会形成 help->shortcut->help 环
+            # 这里说「带「翻墙」或「直连」的那两项」而不是取编号：本层不持有高级功能表，
+            # 调 help.sh 的 _adv_field 会形成 help->shortcut->help 环
             # （门禁 1 的依赖检查会当场拦住）。上一页只有这两项是建，
-            # 措辞上按位置说，重排也不影响读者找到它们。
+            # 措辞上按名字说，重排也不影响读者找到它们。
             style_out dim "  还没有建过。先回上一页，选带「翻墙」或「直连」的那两项之一建一个。"
             echo ""
             _sm_x=""

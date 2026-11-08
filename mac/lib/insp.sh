@@ -25,17 +25,15 @@
 # ------------------------------------------------------------------------------
 # 1. 检查器注册表：唯一权威，也是唯一分派点
 # ------------------------------------------------------------------------------
-# 七列，管道分隔（与 ADVANCED_ITEMS / MENU_ITEMS 同一种「机器列在前」的形状，
-# 解析只读前几段，加人读列不影响取字段）：
+# 六列，管道分隔（与 Windows 侧同一组字段，便于门禁逐项比对）：
 #   1 Id       稳定标识，写进还原点的 inspector 字段
 #   2 Title    界面上那一组叫什么（用户看得懂的说法，不是内部名）
 #   3 Quick    状态页（每 2–3 秒）要不要跑它：1 = 要，0 = 只在全量档跑
 #   4 Detect   输出 Finding 行的函数名
 #   5 Fix      修它的函数名；空 = 只诊断不修
 #   6 Restore  撤销函数名（门禁核对「声明了可修就得有撤销的路」）
-#   7 _        预留，留空（与 Windows 侧保持同样的列数，便于两侧逐项比对）
 #
-# **顺序就是界面上的顺序**：从下往上（网址解析 → 浏览器 → 终端工具），
+# **顺序就是界面上的顺序**：按网络分层从低到高（网址解析 → 浏览器 → 终端工具），
 # 与人排查故障的方向一致——先看是不是连名字都解析不了，再看浏览器，最后看工具。
 #
 # 贵的一律 Quick=0：状态页刷新的代价以毫秒计，跑一次要读文件或连端口的
@@ -927,8 +925,9 @@ _cli_repoint_line() {
 # 按计划改一个文件。计划每行六列（TAB）：Mode <TAB> Lines <TAB> FixLine <TAB> OldHost <TAB> OldPort <TAB> PortOnly
 # Mode=drop 删掉 Lines 里的行；Mode=port 改写 FixLine 那一行。
 # 整份重写到同目录临时文件再 mv：就地改写到一半失败，用户就得到半截配置。
+# 参数：$1 文件路径  $2 计划  $3 目标主机  $4 目标端口
 _cli_apply_plan() {
-    _ap_path="$1"; _ap_plan="$2"; _ap_live="$3"; _ap_nh="$4"; _ap_np="$5"
+    _ap_path="$1"; _ap_plan="$2"; _ap_nh="$3"; _ap_np="$4"
     _ap_tab="$(printf '\t')"
     _ap_tmp="$_ap_path.tmp.$$"
     : > "$_ap_tmp" 2>/dev/null || return 1
@@ -1024,7 +1023,7 @@ EOF
                 printf 'nobackup'
                 return 0
             fi
-            if ! _cli_apply_plan "$_rcpc_path" "$_rcpc_plan" "$_rcpc_live" "$CLI_LIVE_HOST" "$CLI_LIVE_PORT"; then
+            if ! _cli_apply_plan "$_rcpc_path" "$_rcpc_plan" "$CLI_LIVE_HOST" "$CLI_LIVE_PORT"; then
                 _rcpc_fail=$((_rcpc_fail + 1))
                 continue
             fi
@@ -1181,7 +1180,6 @@ _dns_read_services() {
         case "$_drs_out" in
             *"aren't any"*|*"There aren"*|*'没有'*) continue ;;
         esac
-        _drs_rest="$_drs_out"
         while IFS= read -r _drs_one; do
             _drs_one=$(printf '%s' "$_drs_one" | tr -d ' ')
             [ -n "$_drs_one" ] || continue
@@ -1311,6 +1309,37 @@ restore_doctor_journal() {
 #
 # **它不认识任何检查器名字**：三个区（要修的 / 不归我碰的 / 只是提醒的）
 # 全部按 Kind 分组算出来。加一层检查器，这一屏一个字都不用改。
+#
+# 「一条记录该进哪一区」抽成 rescue_bucket 一个纯函数。
+# 抽出来的理由不是整洁：这段判定原来散在 `case` 里，于是「毛病真实、但这一层
+# 没有 Fix」的那一类（DNS 指向本机死端口就是）三个计数一个都进不去——
+# 屏幕上第一句是绿字「没发现问题」，紧接着的提醒区却在说网页会打不开。
+# 一处判定只能有一份实现，才谈得上被测试钉住。
+rescue_bucket() {
+    _rb_kind="${1:-}"; _rb_rep="${2:-0}"; _rb_fix="${3:-0}"; _rb_hintid="${4:-0}"; _rb_upstream="${5:-0}"
+    case "$_rb_kind" in
+        "$FINDING_KIND_BLOCKING")  [ "$_rb_rep" = "1" ] && printf 'blocking' || printf 'unfixable' ;;
+        "$FINDING_KIND_SLOWING")   [ "$_rb_rep" = "1" ] && printf 'slowing'  || printf 'unfixable' ;;
+        "$FINDING_KIND_ALIVE")     [ "$_rb_upstream" = "1" ] && printf 'alivebroken' || printf 'alive' ;;
+        "$FINDING_KIND_FOREIGN")   [ "$_rb_hintid" = "1" ] && printf 'hint' || printf 'foreign' ;;
+        "$FINDING_KIND_MANAGED")   printf 'managed' ;;
+        # 读不出来、认不出的结论：不参与任何判断，也不显示。
+        # 把"没看见"说成"没问题"或"有问题"都是错的方向。
+        *)                         printf 'clean' ;;
+    esac
+    return 0
+}
+
+# 这一类记录该不该出现在「只是提醒」那一区。判据集中在上面那个函数里：
+#   ① 不归我们碰、但有话要说的（地址冲突那种，Id 后缀 .overlay）；
+#   ② 毛病真实存在、但这一层没有 Fix、或这条记录自己声明不可修。
+rescue_in_hint() {
+    _rih_kind="${1:-}"; _rih_rep="${2:-0}"; _rih_fx="${3:-0}"; _rih_hintid="${4:-0}"
+    [ "$_rih_hintid" = "1" ] && return 0
+    [ "$_rih_fx" = "1" ] && [ "$_rih_rep" != "1" ] && return 0
+    return 1
+}
+
 show_rescue_page() {
     clear_screen_safe
     style_out title "======== 网络与代理修复 ========"
@@ -1342,7 +1371,10 @@ style_out dim "  顺带看看本机有没有只认 SOCKS 的端口（那种端�
     _rs_foreign=0
     _rs_managed=0
     _rs_hint=0
-    _rs_alive=0
+    # 毛病真实存在、但本工具不动手的那一类（DNS 指向本机死端口就是）。
+    # 与 Windows 侧的 $realButUnfixable 同义：它既不该说成「挡住了网络」
+    # （按 y 修不了，承诺了就做不到），也不该说成「没问题」。
+    _rs_unfixable=0
     # 「端口活着、但握手说它连不上外面」——只有拿到握手证据时才认这一档。
     # 拿不到握手（quick 档或权限不足）时**不算**，绝不凭猜给用户指方向。
     #
@@ -1352,33 +1384,31 @@ style_out dim "  顺带看看本机有没有只认 SOCKS 的端口（那种端�
     if [ -n "$_rs_all" ]; then
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
-            case "$_rs_kind" in
-                # 只在"真能修"时计数：下面那句「发现 N 处挡住了网络」承诺的是
-                # "按 y 能修好"，把不可修的算进来就会说了却做不到。与 Windows 侧同形。
-                "$FINDING_KIND_BLOCKING")
-                    finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_blocking=$((_rs_blocking + 1)) ;;
-                "$FINDING_KIND_SLOWING")
-                    finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_slowing=$((_rs_slowing + 1)) ;;
-                "$FINDING_KIND_ALIVE")
-                    _rs_alive=$((_rs_alive + 1))
-                    # 这一档的判据由 get_sysproxy_findings 在产 Finding 时定（看握手结果），
-                    # 这里不再从 Reason 里反推中文。用 Id 后缀认那一档：
-                    # 文案会改，判据不该跟着改——改一次措辞就静默少报一档，不报错也不失败。
-                    finding_is_upstream_fail "$_rs_id" && _rs_alivebroken=$((_rs_alivebroken + 1)) ;;
-                "$FINDING_KIND_FOREIGN")
-                    # 判**Id**，不判中文文案。
-                    # 原来这里是 `case $_rs_reason in *'不会生效'*)`：改一次措辞
-                    # （「不会生效」写成「不生效」）这条就静默换区，不报错也不失败。
-                    # 而且 mac 的 get_dns_findings 是空实现，那个匹配从来没有命中过——
-                    # 一条永远不成立的条件比没有条件更坏：它让人以为这里处理过。
-                    if finding_is_hint "$_rs_id"; then
-                        _rs_hint=$((_rs_hint + 1))
-                    else
-                        _rs_foreign=$((_rs_foreign + 1))
-                    fi ;;
-                "$FINDING_KIND_MANAGED")  _rs_managed=$((_rs_managed + 1)) ;;
+            # 这一条能不能修，只问该问的那一处（与「要修的是」那一区同一个判据）。
+            _rs_rep=0
+            finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_rep=1
+            _rs_fx=0
+            finding_fixable "$_rs_kind" && _rs_fx=1
+            # 这一档的判据由 get_sysproxy_findings 在产 Finding 时定（看握手结果），
+            # 这里不再从 Reason 里反推中文。用 Id 后缀认那一档：
+            # 文案会改，判据不该跟着改——改一次措辞就静默少报一档，不报错也不失败。
+            _rs_up=0
+            finding_is_upstream_fail "$_rs_id" && _rs_up=1
+            # 判**Id**，不判中文文案：原来这里匹配过 Reason 里的「不会生效」，
+            # 改一次措辞就静默换区，不报错也不失败。
+            _rs_hid=0
+            finding_is_hint "$_rs_id" && _rs_hid=1
+            case "$(rescue_bucket "$_rs_kind" "$_rs_rep" "$_rs_fx" "$_rs_hid" "$_rs_up")" in
+                blocking)    _rs_blocking=$((_rs_blocking + 1)) ;;
+                slowing)     _rs_slowing=$((_rs_slowing + 1)) ;;
+                unfixable)   _rs_unfixable=$((_rs_unfixable + 1)) ;;
+                alivebroken) _rs_alivebroken=$((_rs_alivebroken + 1)) ;;
+                alive)       : ;;
+                hint)        _rs_hint=$((_rs_hint + 1)) ;;
+                foreign)     _rs_foreign=$((_rs_foreign + 1)) ;;
+                managed)     _rs_managed=$((_rs_managed + 1)) ;;
             esac
-            finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_fixable=$((_rs_fixable + 1))
+            [ "$_rs_rep" = "1" ] && _rs_fixable=$((_rs_fixable + 1))
         done <<EOF
 $_rs_all
 EOF
@@ -1401,7 +1431,9 @@ EOF
         # **必须先于「没发现问题」判**：上面三个计数只统计可修项，
         # 这类记录不会进任何一个——落进 else 就成了"屏幕第一句说你没问题"，
         # 紧接着的提醒区却在说网页会打不开。误报平安比不说更坏。
-        if [ "$_rs_hint" -gt 0 ]; then
+        if [ "$_rs_unfixable" -gt 0 ]; then
+            style_out warn "  查完了：发现 $_rs_unfixable 处问题，但本工具不自动改（见下面的提醒）。"
+        elif [ "$_rs_hint" -gt 0 ]; then
             style_out warn "  查完了：发现 $_rs_hint 处问题，但本工具不自动改（见下面的提醒）。"
         else
             style_out ok "  查完了：这几处设置都没发现问题（共查了 ${_rs_checked} 处）。"
@@ -1426,21 +1458,19 @@ EOF
     fi
 
     # ---- 只是提醒的那些（不归我碰，但用户该知道） ----
-    if [ "$_rs_hint" -gt 0 ]; then
+    if [ "$_rs_hint" -gt 0 ] || [ "$_rs_unfixable" -gt 0 ]; then
         echo ""
         style_out dim "  发现的网络状况（只是提醒，本工具不改）："
         while IFS="$(printf '\t')" read -r _rs_id _rs_kind _rs_subj _rs_where _rs_val _rs_reason _rs_advice _rs_fix; do
             [ -n "$_rs_id" ] || continue
-            _rs_show=0
-            if [ "$_rs_kind" = "$FINDING_KIND_FOREIGN" ] && finding_is_hint "$_rs_id"; then
-                _rs_show=1
-            fi
-            # 问题真实存在、但这一层没有 Fix 的（DNS 指向本机死端口就是）。
-            # 它既不该进「要修的」，也不该进「不归我碰的」——漏了就会从三区里全部消失。
-            if finding_fixable "$_rs_kind" && ! finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix"; then
-                _rs_show=1
-            fi
-            [ "$_rs_show" -eq 1 ] || continue
+            _rs_rep=0
+            finding_repairable "$_rs_kind" "$_rs_id" "$_rs_fix" && _rs_rep=1
+            _rs_fx=0
+            finding_fixable "$_rs_kind" && _rs_fx=1
+            _rs_hid=0
+            finding_is_hint "$_rs_id" && _rs_hid=1
+            # 与上面那个计数用**同一个判据**：两处各写一套条件，收进来与列出来就会对不上。
+            rescue_in_hint "$_rs_kind" "$_rs_rep" "$_rs_fx" "$_rs_hid" || continue
             style_out text "    [$_rs_subj]  $_rs_reason"
             [ -n "$_rs_advice" ] && style_out dim "      $_rs_advice"
         done <<EOF
@@ -1544,8 +1574,12 @@ EOF
         [ -n "$_rs_ifix" ] || continue
         declare -F "$_rs_ifix" >/dev/null 2>&1 || continue
         # 这一层有没有可修项？
+        # **第 8 列（Repairable）必须一起判**：只看 Kind 会把「同一层里本工具不该动的那一条」
+        # （没有活代理时的 port-only、结构删不得的 xml 块）也算进来，
+        # 于是这一层的修复函数被叫起来、却一条都改不动，屏幕上落进
+        # 「查的时候还在，动手的时候已经没了」——把判据错误赖给用户。
         _rs_mine=$(printf '%s\n' "$_rs_all" | awk -F"\t" -v pre="$_rs_iid." '
-            index($1, pre) == 1 && ($2 == "residue-blocking" || $2 == "residue-slowing") { c++ }
+            index($1, pre) == 1 && ($2 == "residue-blocking" || $2 == "residue-slowing") && $8 != "0" { c++ }
             END { print c+0 }')
         [ "${_rs_mine:-0}" -gt 0 ] || continue
         _rs_res=$("$_rs_ifix" 2>/dev/null) || _rs_res='failed'
