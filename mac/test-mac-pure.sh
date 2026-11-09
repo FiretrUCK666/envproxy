@@ -20,6 +20,8 @@ _selftest_fails=0
 
 _selftest_assert_eq() {
     _name="$1"; _want="$2"; _have="$3"
+    # 记下"最后一次开始的断言"：trap 中途报错时靠它定位（$LINENO 在 trap 里不管用）。
+    _selftest_last="$_name"
     if [ "$_want" = "$_have" ]; then
         echo "  PASS $_name"
     else
@@ -74,12 +76,18 @@ self_test() {
     # 在生产里 100% 失败（入口开着 -u，直接 unbound variable），而自检里它静默展开成
     # 空串、生成的壳子叫「（翻墙）.app」，断言照样通过——自检全绿、功能全坏。
     # 所以这里显式 set -u，把生产那种"拼写错误当场炸"的约束带进回归。
-    # 兜底 trap：真有人再让 shell 中途退出，也要在日志里点出是哪一行。
+    # 兜底 trap：真有人再让 shell 中途退出，要在日志里点出**停在哪一步**。
+    #
+    # 别用 $LINENO：在 EXIT trap 里它取的是 trap 自身的行号，不是中止处
+    # （bash 3.2 与 5.x 都是这个语义，实测过）。日志里那句"第 294 行"于是永远
+    # 指向 trap 定义附近，帮不上任何忙——CI 上排查时被这句话带偏过一次。
+    # 改成记"最后一次开始的断言"，它才真的指向出问题的那一项。
     set +e
     set -u
     _selftest_done=0
+    _selftest_last=""
     # shellcheck disable=SC2064
-    trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检在第 ${LINENO} 行意外中止（退出码 $?）"; fi' EXIT
+    trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检意外中止（退出码 $?），停在：${_selftest_last:-（还没有开始任何断言）}"; fi' EXIT
     _selftest_fails=0
     # 把 mac/lib 下所有库的源码合并成一段文本。
 #
