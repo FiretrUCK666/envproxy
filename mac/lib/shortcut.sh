@@ -21,7 +21,7 @@
 #     Contents/MacOS/launcher      一个 shell 脚本，setenv 之后 exec 真程序
 #
 # 它与 Windows 侧共用同一套模式定义（mac 是 base.sh 的 PROXY_MODES 与
-# proxy_mode_suffix / proxy_mode_label / proxy_mode_action；win 是 $ShortcutModes），
+# proxy_mode_suffix / proxy_mode_label / proxy_mode_action；win 是 ${ShortcutModes}），
 # 所以两边"有哪几种规矩、每种叫什么"永远一致。
 # ==============================================================================
 
@@ -543,7 +543,7 @@ _shortcut_manage_page() {
             *[!0-9]*) style_out warn "  没有这个编号：$_sm_ans"; sleep 1; continue ;;
         esac
         if [ "$_sm_ans" -lt 1 ] || [ "$_sm_ans" -gt "$_sm_idx" ]; then
-            style_out warn "  没有这个编号：$_sm_ans（可用的有 1-$_sm_idx）"
+            style_out warn "  没有这个编号：${_sm_ans}（可用的有 1-${_sm_idx}）"
             sleep 1
             continue
         fi
@@ -619,7 +619,7 @@ _shortcut_new_flow_filtered() {
     _snff_filter=$2
     _snff_apps=$(_shortcut_pick_program "$_snff_filter")
     if [ -z "$_snff_apps" ]; then
-        style_out warn "  没有名字含「$_snff_filter」的程序。"
+        style_out warn "  没有名字含「${_snff_filter}」的程序。"
         sleep 1
         return 0
     fi

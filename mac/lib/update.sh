@@ -79,7 +79,7 @@ clean_source_files() {
 _update_headers_new() {
     # 前缀必须与清扫那一侧一致（envproxy_update.）：创建用什么、清扫认什么，
     # 两边一旦分叉，被强杀留下的响应头文件就永远不会被 24 小时清扫捡走。
-    # ${X:-默认} 而不是 $X：这个函数定义在前面、基址变量在后面才赋值，
+    # ${X:-默认} 而不是 ${X}：这个函数定义在前面、基址变量在后面才赋值，
     # 不兜底就变成"加载顺序一改就炸"的隐式依赖。
     mktemp "${UPDATE_TMP_BASE:-${TMPDIR:-/tmp}}/envproxy_update.XXXXXX" 2>/dev/null || printf ''
 }
@@ -951,7 +951,7 @@ update_envproxy() {
         style_out warn "$(format_version_check_failure "${REMOTE_FAILURE_KIND:-network}")"
         return 1
     fi
-    style_out ok "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
+    style_out ok "最新版本 : ${REMOTE_TAG}（来源：${REMOTE_SOURCE_NAME}）"
     _clean_source=0
     if is_dev_copy; then
         style_out dim "这是开发副本（安装根有 .git）：更新入口不改动任何文件。"
@@ -999,7 +999,7 @@ update_envproxy() {
         # 判据走 _can_ask_human 一处：它已经是"能不能打开控制台"的唯一实现
         # （只看 -r /dev/tty 不够——文件在却打不开时会漏过去，于是先下载再发现问不到人）。
         if ! _can_ask_human; then
-            style_out warn "发现新版本 $REMOTE_TAG，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
+            style_out warn "发现新版本 ${REMOTE_TAG}，但当前环境没法提问（没有可交互的控制台），未做任何改动。"
             style_out warn "要更新请在能交互的终端里运行，或加 --yes 跳过确认。"
             return 1
         fi
@@ -1152,7 +1152,7 @@ _ENVPROXY_PKG_
         rm -f "$_rnd"* 2>/dev/null || true
         return 1
     fi
-    style_out ok "最新版本 : $REMOTE_TAG（来源：$REMOTE_SOURCE_NAME）"
+    style_out ok "最新版本 : ${REMOTE_TAG}（来源：${REMOTE_SOURCE_NAME}）"
     # 先把这一版改了什么给用户看，再问要不要装
     show_release_notes "$_exdir" "$REMOTE_TAG"
     if [ "$_yes" != "1" ]; then

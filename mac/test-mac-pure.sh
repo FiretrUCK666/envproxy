@@ -25,7 +25,7 @@ _selftest_assert_eq() {
     if [ "$_want" = "$_have" ]; then
         echo "  PASS $_name"
     else
-        echo "  FAIL $_name（期望 [$_want]，实际 [$_have]）"
+        echo "  FAIL ${_name}（期望 [$_want]，实际 [$_have]）"
         _selftest_fails=$((_selftest_fails + 1))
     fi
 }
@@ -36,7 +36,7 @@ _selftest_assert_file_eq() {
     if [ "$_want" = "$_have" ]; then
         echo "  PASS $_name"
     else
-        echo "  FAIL $_name（文件内容不符，实际：）"
+        echo "  FAIL ${_name}（文件内容不符，实际：）"
         printf '%s\n' "$_have" | sed 's/^/    |/'
         _selftest_fails=$((_selftest_fails + 1))
     fi
@@ -51,7 +51,7 @@ _selftest_assert_contains() {
             echo "  PASS $_name"
             ;;
         *)
-            echo "  FAIL $_name（应包含 [$_needle]，实际：）"
+            echo "  FAIL ${_name}（应包含 [$_needle]，实际：）"
             printf '%s\n' "$_hay" | sed 's/^/    |/'
             _selftest_fails=$((_selftest_fails + 1))
             ;;
@@ -78,7 +78,7 @@ self_test() {
     # 所以这里显式 set -u，把生产那种"拼写错误当场炸"的约束带进回归。
     # 兜底 trap：真有人再让 shell 中途退出，要在日志里点出**停在哪一步**。
     #
-    # 别用 $LINENO：在 EXIT trap 里它取的是 trap 自身的行号，不是中止处
+    # 别用 ${LINENO}：在 EXIT trap 里它取的是 trap 自身的行号，不是中止处
     # （bash 3.2 与 5.x 都是这个语义，实测过）。日志里那句"第 294 行"于是永远
     # 指向 trap 定义附近，帮不上任何忙——CI 上排查时被这句话带偏过一次。
     # 改成记"最后一次开始的断言"，它才真的指向出问题的那一项。
@@ -1052,7 +1052,7 @@ EOF_MC
     _rlock_err=$(acquire_op_lock "$_rlock" 2>&1 >/dev/null); _r8=$?
     _selftest_assert_eq "持锁者还在时第二个拿不到" "1" "$_r8"
     if [ -n "$_rlock_err" ]; then
-        echo "    （第二次拿锁的 stderr：$_rlock_err）"
+        echo "    （第二次拿锁的 stderr：${_rlock_err}）"
     fi
     # 陈旧锁（持有者已经不在）必须能被接管——否则一次崩溃就把用户锁死在门外。
     rm -f "$_rlock" 2>/dev/null || true
@@ -2985,7 +2985,7 @@ EOF
     # 后建的覆盖先建的，两个图标行为相同而画面上一切正常。
     #
     # **必须放在沙箱清理之前**：这一段里的 _shortcut_extra_dirs / _shortcut_records
-    # 读写的都是 $ENVPROXY_HOME（在沙箱里）。沙箱先删掉的话，那些断言会在
+    # 读写的都是 ${ENVPROXY_HOME}（在沙箱里）。沙箱先删掉的话，那些断言会在
     # "往一个已经不存在的目录写"的状态下运行——今天恰好看不出异常，
     # 明天改动一下路径就会变成静默空转。收尾统一放到文件最末。
     # --------------------------------------------------------------------------

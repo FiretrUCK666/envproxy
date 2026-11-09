@@ -109,7 +109,7 @@ _VPKG_
 }
 
 # 包内根文件（VERSION/README/LICENSE…）：不写死名单，包里有谁算谁。
-# 读调用方的 $_plist（备份前已生成，不含 backup/）。
+# 读调用方的 ${_plist}（备份前已生成，不含 backup/）。
 _pkg_root_files() {
     grep -v '/' "$_plist" 2>/dev/null | grep -v '^$' || true
 }

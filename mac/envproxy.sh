@@ -244,7 +244,7 @@ case "$_CMD_NORM" in
           if [ "$_stop_vars_ok" = "0" ]; then
               echo "代理变量已清除，当前恢复直连。"
           else
-              echo "[未完成] 代理变量没能清除干净：写不进 $ENVPROXY_HOME（权限或磁盘空间）。" >&2
+              echo "[未完成] 代理变量没能清除干净：写不进 ${ENVPROXY_HOME}（权限或磁盘空间）。" >&2
               echo "已开着的窗口每次回到提示符，仍会把旧代理地址重新设上——它们看起来还连着一个已经不存在的端口。" >&2
               echo "先解决那个目录的权限/空间，再重跑一次 stop；或者直接点一键恢复。" >&2
           fi
@@ -293,7 +293,7 @@ case "$_CMD_NORM" in
             . "$_st"
             self_test
         else
-            echo "自检脚本缺失：$_st（安装包不完整，请到 Releases 页面重新下载覆盖）" >&2
+            echo "自检脚本缺失：${_st}（安装包不完整，请到 Releases 页面重新下载覆盖）" >&2
             exit 1
         fi;;
     "") run_monitor_loop;;

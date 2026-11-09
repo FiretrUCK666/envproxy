@@ -150,7 +150,7 @@ ENDPOINT_PROOF_UNKNOWN="unknown"
 ENDPOINT_PROOF_CACHE=""
 # 直连那一侧的单次上限（秒）。比经代理的 6 秒短：被墙的地址多半是"连上没人应"
 # 或直接被 RST，两秒半够用；这条路径只在首次遇到某个端点时走，不参与稳态探测。
-# 取值必须与 Windows 侧一致（$EndpointDirectTimeoutMs）：这个数是"直连算不算通"的
+# 取值必须与 Windows 侧一致（${EndpointDirectTimeoutMs}）：这个数是"直连算不算通"的
 # 分界线，两侧不同就会出现"同一个网站在 Mac 上算被墙、在 Windows 上算直连可达"，
 # 同一个代理被两台机器判成相反结论。门禁 6 逐值核对。
 # curl 的秒级粒度里表示 2.5 秒只能用小数；--connect-timeout 与 --max-time 都接受小数。
@@ -465,10 +465,10 @@ mono_tick() {
     return 0
 }
 
-# 取"现在"，结果放进 $MONO_NOW。
+# 取"现在"，结果放进 ${MONO_NOW}。
 #
 # **不 printf 输出**，因为任何 `x=$(monotonic_now)` 都会开子 shell：
-# 子 shell 读不到父 shell 的 $_MONO_LAST，于是每次都真去 fork 一个 perl。
+# 子 shell 读不到父 shell 的 ${_MONO_LAST}，于是每次都真去 fork 一个 perl。
 # 实测那样写 100 次取用要 1583ms（等于没缓存）；改成"直接调 + 读 $MONO_NOW"
 # 之后是 24ms，快 66 倍。调用方一律写成：
 #     monotonic_now; _t=$MONO_NOW
@@ -515,7 +515,7 @@ NODE_IDLE_RESET_SEC=30
 #   结论已经稳定（失败已达阈值、或一切正常） -> 稳定间隔（省流量）
 # 第三条是关键：只按"有没有失败"决定间隔的话，节点一直死时失败计数会无界增长、
 # 间隔永远钉在快速档——实测 3600 秒探测次数是承诺值的 2.5 倍。
-# 结果进 $NODE_PROBE_INTERVAL（本侧 bash 3.2 无 $(...) 之外的方便返回手段，统一走全局）。
+# 结果进 ${NODE_PROBE_INTERVAL}（本侧 bash 3.2 无 $(...) 之外的方便返回手段，统一走全局）。
 node_probe_interval() {
     local _np_fail
     _np_fail="$1"; _np_thr="$2"; _np_until="$3"; _np_now="$4"; _np_steady="$5"; _np_fast="$6"
@@ -526,7 +526,7 @@ node_probe_interval() {
 
 # 这一轮能不能判"断"（纯函数）：次数与时长两个条件都满足才算。
 # 用"首次失败时刻"算时长而不是累加间隔——间隔会随上面那个函数变化，累加会漂。
-# 结论进 $NODE_VERDICT（0 = 还不算断，1 = 可以判断）。
+# 结论进 ${NODE_VERDICT}（0 = 还不算断，1 = 可以判断）。
 node_verdict() {
     local _nv_fail
     _nv_fail="$1"; _nv_span="$2"; _nv_thr="$3"; _nv_dwell="$4"
@@ -677,7 +677,7 @@ handshake_kind_at() {
     handshake_kind_text "$_hkres"
 }
 # 单端口 CONNECT 握手：按序试两个回环地址，任一成功即算这个端口是代理。
-# 不发 $PROXY_URL_HIT：这条只回答"是不是代理"，命中地址由 proxy_url_for_port 现场取。
+# 不发 ${PROXY_URL_HIT}：这条只回答"是不是代理"，命中地址由 proxy_url_for_port 现场取。
 test_http_proxy() {
     for _tp_addr in $LOOPBACK_PROBES; do
         if _handshake_at "$_tp_addr" "$1"; then
@@ -690,7 +690,7 @@ test_http_proxy() {
 # 这个端口该按哪个地址注入？现场探测，取第一个连得上的。
 # 不能固定写 127.0.0.1：只绑 ::1 的代理在 IPv4 上连不上，用户会拿到一个用不了的地址，
 # 终端里每条命令 ECONNREFUSED，而状态页显示"已注入、正常"——比检测不到更糟。
-# 结果放进 $PROXY_URL_HIT（不 printf：$( ) 是子 shell，全局赋值出不来）。
+# 结果放进 ${PROXY_URL_HIT}（不 printf：$( ) 是子 shell，全局赋值出不来）。
 proxy_url_for_port() {
     local _pufp_addr
     _pufp_addr=""
@@ -1174,11 +1174,11 @@ test_node_alive() {
     fi
 }
 
-# 有序试活：按候选顺序逐个验证，首个真活的进 $CONFIRM_HIT，否则空（只读，不写状态）。
+# 有序试活：按候选顺序逐个验证，首个真活的进 ${CONFIRM_HIT}，否则空（只读，不写状态）。
 # 规则只有两条：
 #   1) $2（上次验活过、仍在集合里）先用缓存结论试（节流窗口内零新增探测）；
 #   2) 其余一律当场验（force=1）。集合抖动但首选仍活时，不烧探测、不改状态。
-# 有状态：直接调用，结果进 $CONFIRM_HIT，禁止 $(...) 包裹。
+# 有状态：直接调用，结果进 ${CONFIRM_HIT}，禁止 $(...) 包裹。
 CONFIRM_HIT=""
 
 confirm_candidate_port() {
@@ -1199,7 +1199,7 @@ confirm_candidate_port() {
     return 0
 }
 
-# 当前真实状态（有状态：直接调用，结果进 $CURRENT_STATE，禁止 $(...) 包裹）
+# 当前真实状态（有状态：直接调用，结果进 ${CURRENT_STATE}，禁止 $(...) 包裹）
 get_current_state() {
     local _cands _just_lost _rc _sig_changed
     ROUND=$((ROUND + 1))

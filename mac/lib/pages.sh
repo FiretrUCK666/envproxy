@@ -181,13 +181,13 @@ new_problem_report() {
             echo "  写入轮次：$SNAP_ROUND    进程号：$SNAP_PID"
             echo "  距今：$SNAP_AGE 秒前"
             if [ -n "$SNAP_PORT_REASON" ]; then
-                echo "  端口扫描：$SNAP_PORT_ENUMERATION（$SNAP_PORT_REASON）"
+                echo "  端口扫描：${SNAP_PORT_ENUMERATION}（${SNAP_PORT_REASON}）"
             else
                 echo "  端口扫描：$SNAP_PORT_ENUMERATION"
             fi
             _npr_live=$(get_monitor_pid 2>/dev/null || echo "")
             if [ -n "$_npr_live" ] && [ "$_npr_live" != "$SNAP_PID" ]; then
-                echo "  注意：快照是旧进程 $SNAP_PID 写的，现在跑的是 $_npr_live。$(menu_ref install)可重启后台程序。"
+                echo "  注意：快照是旧进程 $SNAP_PID 写的，现在跑的是 ${_npr_live}。$(menu_ref install)可重启后台程序。"
             fi
         elif [ "$SNAP_STATUS" = "none" ]; then
             echo "  （没有快照文件：后台程序可能从没跑过）"
@@ -390,35 +390,35 @@ status_problem_lines() {
     if has_install_record; then _never_installed=0; else _never_installed=1; fi
     _pb=""
     if [ -z "$_m" ]; then
-        if [ -f "$STOP_INTENT" ]; then _pb="$_pb监控按你的选择停着
-"; elif [ "$_never_installed" = "1" ]; then _pb="$_pb还没安装
-"; else _pb="$_pb监控进程不在了（可能被强制退出或崩溃）
+        if [ -f "$STOP_INTENT" ]; then _pb="${_pb}监控按你的选择停着
+"; elif [ "$_never_installed" = "1" ]; then _pb="${_pb}还没安装
+"; else _pb="${_pb}监控进程不在了（可能被强制退出或崩溃）
 "; fi
     fi
-    [ "$_autorun_ok" = "0" ] && _pb="$_pb开机自启没生效
+    [ "$_autorun_ok" = "0" ] && _pb="${_pb}开机自启没生效
 "
-    [ "$_port_unknown" = "1" ] && _pb="$_pb这一轮没读到本机端口，无法判断代理
+    [ "$_port_unknown" = "1" ] && _pb="${_pb}这一轮没读到本机端口，无法判断代理
 "
-    if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then _pb="$_pb代理变量里不是合法地址
+    if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then _pb="${_pb}代理变量里不是合法地址
 "
-    elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="$_pb代理变量指向的端口已经不在
+    elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then _pb="${_pb}代理变量指向的端口已经不在
 "; fi
-    case "$_ts_state" in ok) : ;; *) _pb="$_pb终端同步没生效
+    case "$_ts_state" in ok) : ;; *) _pb="${_pb}终端同步没生效
 ";; esac
-    [ "$_sp_bad" = "1" ] && _pb="$_pb系统代理可能残留（不是本工具写的）
+    [ "$_sp_bad" = "1" ] && _pb="${_pb}系统代理可能残留（不是本工具写的）
 "
     # 监控每轮都算"变量与状态对不对得上""写进去了没有"，但这里从来没读过它。
     # 结果是：变量被别的程序改坏、或写入失败时，状态页仍然说"一切正常"，
     # 而终端其实连不上。与 Windows 侧同一套判据、同一句措辞。
     # 空串（老版本写的快照没有这两个字段）按"不报"处理，不许当成"有问题"。
     if [ "$_snap_ok" = "1" ]; then
-        [ "$SNAP_VARS_MATCH" = "no" ] && _pb="$_pb代理变量和当前状态对不上（可能被别的程序改了）
+        [ "$SNAP_VARS_MATCH" = "no" ] && _pb="${_pb}代理变量和当前状态对不上（可能被别的程序改了）
 "
-        [ "$SNAP_APPLY_RESULT" = "failed" ] && _pb="$_pb代理变量写不进去（下一轮还会再试）
+        [ "$SNAP_APPLY_RESULT" = "failed" ] && _pb="${_pb}代理变量写不进去（下一轮还会再试）
 "
 # 代理在跑、端口也活着，但它连不出去——多半是节点问题，不是设置坏了。
 # 只在**拿到握手证据**时才说（空 = 不知道），否则就是凭猜给用户指方向。
-[ "${SNAP_NODE_HANDSHAKE:-}" = "upstream-fail" ] && _pb="$_pb代理在跑，但它连不上外面（多半是节点问题，换个节点试试）
+[ "${SNAP_NODE_HANDSHAKE:-}" = "upstream-fail" ] && _pb="${_pb}代理在跑，但它连不上外面（多半是节点问题，换个节点试试）
 "
     fi
     # 上次更新是否中途死了：这个标记只有断电/被杀才会留下。
@@ -426,7 +426,7 @@ status_problem_lines() {
     # 表现为某些功能静默失效——所以必须主动说出来。
     _upd_prog=0
     [ -f "$MONITOR_DIR/update.inprogress" ] && _upd_prog=1
-    [ "$_upd_prog" = "1" ] && _pb="$_pb上次更新没有完成，程序文件可能新旧混合
+    [ "$_upd_prog" = "1" ] && _pb="${_pb}上次更新没有完成，程序文件可能新旧混合
 "
     # 计数与列表必须来自同一批条目：先切成数组，再数个数、再逐条打印。
     # 早先两边各算一遍，于是出现了"有 1 项要注意"下面一条都不显示的分叉。
@@ -544,10 +544,10 @@ show_status() {
         fi
     fi
     if [ -n "$_cur" ] && [ -z "$_cur_alive" ]; then
-        _status_row "$STATUS_LABEL_VARS" "值不是合法地址（$_cur）" warn
+        _status_row "$STATUS_LABEL_VARS" "值不是合法地址（${_cur}）" warn
         style_out dim "  多半是别的工具改写成了半个地址。$(menu_ref install)会按当前代理重写一遍。"
     elif [ -n "$_cur" ] && [ "$_cur_alive" = "0" ]; then
-        _status_row "$STATUS_LABEL_VARS" "指向的端口已不在（$_cur）" warn
+        _status_row "$STATUS_LABEL_VARS" "指向的端口已不在（${_cur}）" warn
         style_out warn "  终端里联网会报 ECONNREFUSED，错误里没有本工具的名字，所以你会去查网络。"
         # 这一屏最容易被读成"工具坏了"：翻墙代理明明是开着的，代理变量却说端口不在。
         # 实情是**它俩指向的不是同一个端口**——换了端口、变量还停在旧的那个上。
@@ -555,7 +555,7 @@ show_status() {
         # 两个都摆出来，用户一眼看懂差在哪；只讲道理他还要自己比。
         if [ -n "$_cur_port" ] && [ -n "$_port" ] && [ "$_cur_port" != "$_port" ]; then
             # 代理在别的端口上活着：跟着它走就对了
-            style_out dim "  变量里是旧端口 $_cur_port，翻墙代理现在在 $_port。"
+            style_out dim "  变量里是旧端口 ${_cur_port}，翻墙代理现在在 ${_port}。"
             style_out dim "  监控在跑的话几秒内会自己跟过去；想立刻跟上就$(menu_ref install)。"
         elif [ -z "$_port" ]; then
             # 代理根本没在跑：没有可跟的目标，那就是该清掉
@@ -567,7 +567,7 @@ show_status() {
             style_out dim "  监控在跑的话几秒内会自己跟上；想立刻跟上就$(menu_ref install)。"
         fi
     elif [ -n "$_cur" ] && [ -z "$_m" ]; then
-        _status_row "$STATUS_LABEL_VARS" "已注入（$_cur），但没人维护" warn
+        _status_row "$STATUS_LABEL_VARS" "已注入（${_cur}），但没人维护" warn
         style_out dim "  翻墙软件断开后不会自动清掉，终端会连不上。"
         style_out dim "  打开$(menu_ref install)恢复监控；或$(menu_ref uninstall)，把这批变量一并清掉。"
     elif [ -z "$_cur" ] && [ -n "$_port" ] && [ -z "$_m" ]; then
@@ -600,7 +600,7 @@ show_status() {
             # 上面的问题清单会说"终端同步没生效"，而往下整屏找不到"终端同步"
             # 四个字——用户被指向一个不存在的提示。Windows 侧真发生过一次
             # （State 叫 nohost、switch 处理的是 unknown，恰好错位）。
-            _status_row "$STATUS_LABEL_TERMSYNC" "状态未知（$_ts_state）" warn
+            _status_row "$STATUS_LABEL_TERMSYNC" "状态未知（${_ts_state}）" warn
             style_out dim "  打开菜单$(menu_ref install)重写一次。" ;;
     esac
     if [ "$_upd_prog" = "1" ]; then
@@ -699,7 +699,7 @@ show_status() {
     fi
     if [ -z "$_vc" ]; then
         # 还没有缓存：不联网、不猜，说清为什么 + 去哪儿主动查。
-        _status_row "$STATUS_LABEL_VERSION" "$_local_text（还没查过最新版；监控每 30 轮查一次，也可以$(menu_ref update)立刻查）" dim
+        _status_row "$STATUS_LABEL_VERSION" "${_local_text}（还没查过最新版；监控每 30 轮查一次，也可以$(menu_ref update)立刻查）" dim
     else
         REMOTE_VERSION="$_vc"
         REMOTE_TAG="v$_vc"
@@ -726,7 +726,7 @@ show_status() {
             else
                 _older=$(compare_versions "$REMOTE_VERSION" "$_local_ver" || true)
                 if [ "$_older" -gt 0 ] 2>/dev/null; then
-                    _state="发现新版 $REMOTE_TAG，$(menu_ref update)即可升级"; _role="warn"
+                    _state="发现新版 ${REMOTE_TAG}，$(menu_ref update)即可升级"; _role="warn"
                 else
                     _state="已是最新"; _role="dim"
                 fi
@@ -734,7 +734,7 @@ show_status() {
         fi
         # 与同屏其余 7 行同一结构：标签固定 key 色、只有内容按状态变色。
         # 整行套一个角色色会让「版本」这个标签也跟着变色——那正是 _status_row 要解决的毛病。
-        _status_row "$STATUS_LABEL_VERSION" "$_local_text（$_state）$_age_text" "$_role"
+        _status_row "$STATUS_LABEL_VERSION" "${_local_text}（${_state}）$_age_text" "$_role"
     fi
 
     # $1 = compact：省略「最近日志」区。实时刷新在窗口放不下整帧时用它——

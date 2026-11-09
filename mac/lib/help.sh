@@ -708,7 +708,7 @@ show_help() {
         esac
         # 先查表、有效才清屏：输错时把当前这屏留在屏幕上，用户还能照着挑。
         if ! _help_key_valid "$_hs_sel"; then
-            echo "没有这一条：$_hs_sel（$(format_help_key_range)）"
+            echo "没有这一条：${_hs_sel}（$(format_help_key_range)）"
             continue
         fi
         clear_screen_safe
@@ -868,7 +868,7 @@ show_menu() {
         if [ "$_msub_ok" = "1" ]; then
             # 输错只补一行，菜单本身留在原位：重画一遍会让屏幕不停往下滚，
             # 连错几次就再也找不到自己在哪了（ADHD 用户尤其受不了）。
-            echo "没有这个编号：$_choice（可用的有 $(get_menu_key_range)）"
+            echo "没有这个编号：${_choice}（可用的有 $(get_menu_key_range)）"
             _mode="none"
             continue
         fi
@@ -1061,7 +1061,7 @@ show_docker_guide_page() {
     echo ""
     style_out text "  改 Docker Desktop 自己的设置："
     style_out cmd  "    Settings → Resources → Proxies"
-    style_out text "  地址填 http://127.0.0.1:$_dg_port（当前端口）。"
+    style_out text "  地址填 http://127.0.0.1:${_dg_port}（当前端口）。"
     style_out text "  mac 版没有固定入口，翻墙软件换了端口这里要改一次。"
     echo ""
     style_out dim  "  注意：改 daemon.json 在 Docker Desktop 上没用，它不读那个文件。"
@@ -1242,7 +1242,7 @@ show_advanced_menu() {
                 _adv_field "$_adm_i" 1
                 _adm_keys="$_adm_keys $_adv_out"
             done
-            style_out warn "  没有这个编号：$_adm_ans（可用的有$_adm_keys，0 = 返回）"
+            style_out warn "  没有这个编号：${_adm_ans}（可用的有${_adm_keys}，0 = 返回）"
         fi
     done
 }

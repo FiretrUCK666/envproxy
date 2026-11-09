@@ -21,7 +21,7 @@ VERSION_CACHE="$MONITOR_DIR/version.cache"
 SNAPSHOT_FILE="$MONITOR_DIR/state.snapshot"
 SNAPSHOT_KEYS="written round pid state prev_state pending_state pending_count port_enumeration port_reason vars_match apply_result log_tail"
 # 三档阈值，与 Windows 侧同值同语义（那边是 $SnapshotFreshSec / $SnapshotUsableSec /
-# $SnapshotStaleSec，门禁 15 核对新鲜与过旧两档的数值一致）：
+# ${SnapshotStaleSec}，门禁 15 核对新鲜与过旧两档的数值一致）：
 #   <= 10 秒：新鲜，当作当前状态直接说；
 #   <= 60 秒：过了新鲜线，屏幕上要补一句"（N 秒前的判断）"；
 #   <= 240 秒：仍然是最近的判断，但要明说"可能已不是现在的情况"；
@@ -438,7 +438,7 @@ repair_hook_markers() {
                 _rhm_failed=$((_rhm_failed + 1))
             else
                 _rhm_fixed=$((_rhm_fixed + 1))
-                echo "  已摘掉孤立标记：$_rc（原文件已备份为 *.envproxy.bak）"
+                echo "  已摘掉孤立标记：${_rc}（原文件已备份为 *.envproxy.bak）"
             fi
         else
             _rhm_failed=$((_rhm_failed + 1))
@@ -812,7 +812,7 @@ start_monitor() {
     if [ -n "$_other" ]; then
         _oargs=$(ps -p "$_other" -o args= 2>/dev/null || echo "")
         _opath=$(printf '%s' "$_oargs" | sed 's/^[^ ]*[ ]*//')
-        echo "监控进程未能确认运行：另一个副本的监控正占着单实例锁（$_opath）。" >&2
+        echo "监控进程未能确认运行：另一个副本的监控正占着单实例锁（${_opath}）。" >&2
         echo "      还用那份就继续用它；不用了，进上面那个文件夹打开菜单选 一键恢复，再回到这里选 安装。" >&2
     else
         echo "监控进程未能确认运行：这次没看到别的副本，多半是启动被拦或启动过程出错。" >&2
@@ -985,7 +985,7 @@ acquire_op_lock() {
     rm -f "$_aol_tmp" 2>/dev/null || true
     _aol_pid=$(cat "$_aol_lock" 2>/dev/null || echo 0)
     if [ -n "$_aol_pid" ] && [ "$_aol_pid" != "0" ] && kill -0 "$_aol_pid" 2>/dev/null; then
-        echo "另一个安装/更新正在进行（PID $_aol_pid），请等它结束再试（没有做任何改动）。"
+        echo "另一个安装/更新正在进行（PID ${_aol_pid}），请等它结束再试（没有做任何改动）。"
         return 1
     fi
     # 陈旧锁（持有者已经不在）：接管。删掉再 ln——ln 是原子的，
@@ -1014,7 +1014,7 @@ run_monitor_loop() {
         [ -n "$_e" ] && return 0
         rmdir "$_lockdir" 2>/dev/null || true
         if ! mkdir "$_lockdir" 2>/dev/null; then
-            echo "监控启动失败：运行时目录不可写（$MONITOR_DIR）。" >&2
+            echo "监控启动失败：运行时目录不可写（${MONITOR_DIR}）。" >&2
             return 1
         fi
     fi
