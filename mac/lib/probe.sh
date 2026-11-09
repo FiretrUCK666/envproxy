@@ -1411,7 +1411,7 @@ port_alive_bounded() {
         *)   _pab_host="$_pab_addr" ;;
     esac
     if (exec 3<>"/dev/tcp/${_pab_host}/${_pab_port}") 2>/dev/null; then
-        exec 3<&- 2>/dev/null || true
+        { exec 3<&-; } 2>/dev/null || true
         return 0
     fi
     return 1
@@ -1447,7 +1447,7 @@ test_socks5_port() {
     printf '\005\001\000' >&3 2>/dev/null || { exec 3<&- 2>/dev/null; return 1; }
     _ts5_r=''
     IFS= read -r -n 1 -t 1 _ts5_r <&3 2>/dev/null || true
-    exec 3<&- 2>/dev/null || true
+    { exec 3<&-; } 2>/dev/null || true
     [ "$_ts5_r" = "$(printf '\005')" ] && return 0
     return 1
 }

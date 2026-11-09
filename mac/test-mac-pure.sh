@@ -577,7 +577,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         if ! (exec 9<>/dev/tcp/127.0.0.1/$_fp_try) 2>/dev/null; then
             _fp_port=$_fp_try; break
         fi
-        exec 9<&- 2>/dev/null || true
+        { exec 9<&-; } 2>/dev/null || true
     done
     if [ -n "$_fp_port" ] && command -v perl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
         _fp_respond() {
@@ -601,7 +601,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
             _fp_wait=0
             while [ $_fp_wait -lt 50 ]; do
                 if (exec 9<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null; then
-                    exec 9<&- 2>/dev/null || true
+                    { exec 9<&-; } 2>/dev/null || true
                     return 0
                 fi
                 _fp_wait=$((_fp_wait + 1))
@@ -2749,7 +2749,7 @@ EOF
         if ! { exec 9<>/dev/tcp/127.0.0.1/$_s5_try; } 2>/dev/null; then
             _s5_port=$_s5_try; break
         fi
-        exec 9<&- 2>/dev/null || true
+        { exec 9<&-; } 2>/dev/null || true
     done
     if [ -n "$_s5_port" ] && command -v perl >/dev/null 2>&1; then
         perl -e '
@@ -2770,7 +2770,7 @@ EOF
         _s5_wait=0
         while [ "$_s5_wait" -lt 50 ]; do
             if { exec 9<>/dev/tcp/127.0.0.1/"$_s5_port"; } 2>/dev/null; then
-                exec 9<&- 2>/dev/null || true
+                { exec 9<&-; } 2>/dev/null || true
                 break
             fi
             _s5_wait=$((_s5_wait + 1))
