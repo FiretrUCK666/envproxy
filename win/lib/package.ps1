@@ -216,9 +216,9 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
     # 安装文件夹改名带上 [ ] 也不影响。
     $pkg = @{}
     foreach ($f in (Get-ChildItem -LiteralPath $SrcRoot -Recurse -File -Force -ErrorAction Stop)) {
-        $rel = $f.FullName.Substring($SrcRoot.Length).TrimStart('\')
+        $rel = ConvertTo-RelKey $f.FullName.Substring($SrcRoot.Length)
         # Stage 复用 SrcRoot 时，备份目录就在包目录里：枚举必须跳过它，否则备份会被当成包内文件。
-        if ($rel -like 'backup\*') { continue }
+        if ($rel -like 'backup/*') { continue }
         $pkg[$rel.ToLower()] = $rel
     }
     # 生效作用域 = 调用方声明 ∩ 包内实际有的目录：分包本来就没有另一平台目录，
@@ -238,7 +238,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         # 根目录那几个随包文件（VERSION / README / LICENSE）也要备份：只备份程序目录的话，
         # 中途失败回滚后会留下"版本号是新的、程序目录是旧的"——比不滚还难查。
         foreach ($rel in $pkg.Values) {
-            if ($rel -match '\\') { continue }
+            if ($rel -notmatch '/') { continue }
             $src = Join-Path $ProjectRoot $rel
             if (Test-Item $src) { Copy-Item -LiteralPath $src -Destination (Join-Path $backup $rel) -Force -ErrorAction Stop }
         }
@@ -258,8 +258,8 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
             foreach ($f in (Get-ChildItem -LiteralPath $destDir -Recurse -File -Force -ErrorAction SilentlyContinue)) {
                 # 越界保护：枚举结果必须确定位于本次目标之下，否则跳过（通配符曾让这里指向过别的目录）。
                 if (-not $f.FullName.StartsWith($destDir, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
-                $rel = $f.FullName.Substring($ProjectRoot.Length).TrimStart('\')
-                if ($rel -match '^(win|mac)\\monitor\\') { continue }
+                $rel = ConvertTo-RelKey $f.FullName.Substring($ProjectRoot.Length)
+                if ($rel -match '^(win|mac)/monitor/') { continue }
                 if (-not $pkg.ContainsKey($rel.ToLower())) {
                     Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop
                     Write-Styled 'dim' ("  已移除旧版本残留：{0}" -f $rel)
@@ -269,8 +269,8 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 Sort-Object { $_.FullName.Length } -Descending |
                 ForEach-Object {
                     if (-not $_.FullName.StartsWith($destDir, [System.StringComparison]::OrdinalIgnoreCase)) { return }
-                    $drel = $_.FullName.Substring($ProjectRoot.Length).TrimStart('\')
-                    if ($drel -match '^(win|mac)\\monitor') { return }
+                    $drel = ConvertTo-RelKey $_.FullName.Substring($ProjectRoot.Length)
+                    if ($drel -match '^(win|mac)/monitor') { return }
                     if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
                 }
         }
@@ -279,9 +279,9 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
         # 认为本地比线上新而拒绝再升级，用户就被卡在坏状态里出不来。
         $rootFiles = @()
         foreach ($rel in $pkg.Values) {
-            if ($rel -notmatch '\\') { $rootFiles += $rel; continue }
+            if ($rel -notmatch '/') { $rootFiles += $rel; continue }
             # 只写作用域内的文件：包外目录即使被显式传入也不碰（与备份/删除/回滚同范围）。
-            if ($effShip -notcontains (($rel -split '\\')[0])) { continue }
+            if ($effShip -notcontains (($rel -split '/')[0])) { continue }
             $dest = Join-Path $ProjectRoot $rel
             $parent = Split-Path -Parent $dest
             if ($parent -and -not (Test-Item $parent)) { New-Item -Path $parent -ItemType Directory -Force -ErrorAction Stop | Out-Null }
@@ -341,12 +341,12 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 foreach ($f in (Get-ChildItem -LiteralPath $dst -Recurse -File -Force -ErrorAction SilentlyContinue)) {
                     if (-not $f.FullName.StartsWith($dst, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
                     $rel = $f.FullName.Substring($dst.Length).TrimStart('\')
-                    if ($rel -like 'monitor\*') { continue }
+                    if ($rel -like 'monitor/*') { continue }
                     if (-not (Test-Item (Join-Path $bak $rel))) { try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop } catch {} }
                 }
             }
             foreach ($rel in $pkg.Values) {
-                if ($rel -match '\\') { continue }
+                if ($rel -notmatch '/') { continue }
                 $bakFile = Join-Path $backup $rel
                 if (Test-Item $bakFile) { try { Copy-Item -LiteralPath $bakFile -Destination (Join-Path $ProjectRoot $rel) -Force -ErrorAction Stop } catch {} }
             }
@@ -364,8 +364,8 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 if (-not (Test-Item $bakD)) { continue }
                 foreach ($f in (Get-ChildItem -LiteralPath $bakD -Recurse -File -Force -ErrorAction SilentlyContinue)) {
                     try {
-                        $rel = $f.FullName.Substring($bakD.Length).TrimStart('\')
-                        if ($rel -like 'monitor\*') { continue }
+                        $rel = ConvertTo-RelKey $f.FullName.Substring($bakD.Length)
+                        if ($rel -like 'monitor/*') { continue }
                         $cur = Join-Path (Join-Path $ProjectRoot $d) $rel
                         if (-not (Test-Item $cur)) { $notBack += ("{0}\{1}" -f $d, $rel); continue }
                         if ((Get-Sha256Hex $f.FullName) -ne (Get-Sha256Hex $cur)) { $notBack += ("{0}\{1}" -f $d, $rel) }
@@ -376,7 +376,7 @@ function Install-Package([string]$SrcRoot, [string]$ProjectRoot, [string]$Stage,
                 }
             }
             foreach ($rel in $pkg.Values) {
-                if ($rel -match '\\') { continue }
+                if ($rel -notmatch '/') { continue }
                 $bakFile = Join-Path $backup $rel
                 if (-not (Test-Item $bakFile)) { continue }
                 try {

@@ -110,17 +110,23 @@ Write-TestFile (Join-Path $leg2 'VERSION') '1.0.0'
 Write-TestFile (Join-Path $spk2 'VERSION') '9.9.9'
 [System.IO.File]::WriteAllText((Join-Path $spk2 'win\envproxy.ps1'), '# entry NEW', $bomEnc)
 [System.IO.File]::WriteAllText((Join-Path $spk2 'win\lib\base.ps1'), '# lib NEW', $bomEnc)
-# 残留放在 monitor\ 里：那是**唯一**不参与"旧版本残留删除"的目录（运行时状态），
-# 所以它只能被清扫逻辑带走——放在别处会被正常的旧文件删除顺手删掉，测不出清扫这一段。
-Write-TestFile (Join-Path $leg2 'win\monitor\monitor.log.envproxy-new.abc123') 'half-written'
-Write-TestFile (Join-Path $leg2 'win\monitor\state.tmp4242') 'half-written'
+# 残留放在 monitor/ 里：那是**唯一**不参与"旧版本残留删除"的目录（运行时状态）。
+# 这条用例同时守两件事：
+#   ① 清扫用绝对路径（从子目录里跑也扫得到）；
+#   ② monitor/ 的"永不删除"保护真的生效——它失效时，残留会被"旧版本残留"那条路
+#      顺手删掉，看起来像是清扫成功了，其实保护早就破了。
+Write-TestFile (Join-Path $leg2 'win/monitor/monitor.log.envproxy-new.abc123') 'half-written'
+Write-TestFile (Join-Path $leg2 'win/monitor/state.tmp4242') 'half-written'
+Write-TestFile (Join-Path $leg2 'win/monitor/keep-me.txt') 'runtime state'
 $savedCwd = (Get-Location).Path
 Push-Location (Join-Path $leg2 'win')
 try { Install-Package -SrcRoot $spk2 -ProjectRoot $leg2 -Stage $stg2 -ShipDirs @('win') } finally { Pop-Location }
+# ① 从子目录里跑（cwd ≠ 安装根）也扫得到
 Assert-Eq 'cwd outside the root still sweeps leftovers' 0 `
-    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win\monitor') -File | Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -match '\.tmp\d+$' }).Count)
-Assert-Eq 'the sweep does not touch ordinary files' 0 `
-    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win\monitor') -File -ErrorAction SilentlyContinue).Count)
+    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win/monitor') -File | Where-Object { $_.Name -like '*.envproxy-new*' -or $_.Name -match '\.tmp\d+$' }).Count)
+# ② monitor/ 里的普通文件一个都不能被删（"monitor 永不删除"这条边界）
+Assert-Eq 'the monitor dir keeps its ordinary files' 1 `
+    (@(Get-ChildItem -LiteralPath (Join-Path $leg2 'win/monitor') -File | Where-Object { $_.Name -eq 'keep-me.txt' }).Count)
 foreach ($p in @($leg2, $spk2, $stg2)) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
 Set-Location $savedCwd
 

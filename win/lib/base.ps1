@@ -1182,3 +1182,18 @@ function Format-ListExitHint([string]$Action, [string]$Key = '0', [string]$Where
 function Format-PromptHint([string]$Action = '回车继续') {
     return ('  ' + $Action)
 }
+
+# 相对路径的**统一写法**：分隔符一律换成 `/`，并去掉前导分隔符。
+#
+# 为什么必须归一：包内相对路径在 Windows 上是 `win\lib\base.ps1`、在 Linux 上是
+# `win/lib/base.ps1`（PowerShell 在 CI 的 ubuntu 上跑同一套测试）。而下面这些判断
+# 全是按字面比字符串的——`'^(win|mac)\\monitor\\'`、`'backup\*'`、`_split '\'`——
+# 写死一种分隔符，另一种平台上就永远匹配不上，而且**不报错**：
+#   · monitor\ 那份"永不删除"的保护会失效，日志被当成旧版本残留删掉；
+#   · 备份目录会被当成包内文件，备份自己的内容跟着被复制；
+#   · "是不是根目录下的随包文件"判错，VERSION 被算进子目录，写入顺序失去保证。
+# 所以凡是"拿相对路径做判断"的地方，先过这个函数，再按 `/` 写规则。
+function ConvertTo-RelKey([string]$Rel) {
+    if (-not $Rel) { return '' }
+    return $Rel.TrimStart('\', '/').Replace('\', '/')
+}
