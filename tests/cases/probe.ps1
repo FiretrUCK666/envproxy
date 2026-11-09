@@ -10,8 +10,10 @@ Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
     $realProxy = Start-OneShotServer 200 @{} ''
     try {
         Assert-Eq 'a real CONNECT proxy is recognised' $true (Test-HttpProxy $realProxy.Port)
-        $batchHit = Test-HttpProxyBatch @($realProxy.Port)
-        Assert-Eq 'the batch path finds the same proxy' ([string]$realProxy.Port) ([string]$batchHit)
+        # 批量探测现在带回**全部**命中（按传入顺序），不再是"谁先应答算谁"。
+        # 单端口时是这个数组唯一的元素，所以 [0] 取法与原来的语义等价。
+        $batchHit = @(Test-HttpProxyBatch @($realProxy.Port))
+        Assert-Eq 'the batch path finds the same proxy' ([string]$realProxy.Port) ([string]$batchHit[0])
     } finally { Stop-OneShotServer $realProxy }
     $refusing = Start-OneShotServer 403 @{} 'no'
     try {
@@ -26,7 +28,7 @@ Assert-Eq 'single closed is not proxy' $false (Test-HttpProxy 9)
     Assert-Eq 'endpoint 204 rejects 302' $false (Test-EndpointStatus 302 '204')
     Assert-Eq 'endpoint 3xx accepts 301' $true (Test-EndpointStatus 301 '3xx')
     Assert-Eq 'endpoint 3xx rejects 204' $false (Test-EndpointStatus 204 '3xx')
-Assert-Eq 'batch closed finds nothing' '' (Test-HttpProxyBatch @(9, 1))
+Assert-Eq 'batch closed finds nothing' '' (@(Test-HttpProxyBatch @(9, 1)) -join ',')
 
 # ------------------------------------------------------------------------------
 # 端点合格证：一个端点的"通"只有在**直连它不通**时才证明得了代理能出去。

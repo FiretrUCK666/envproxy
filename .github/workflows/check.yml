@@ -172,17 +172,34 @@ jobs:
             # 建边表：_l -> _o 表示 _l 的代码里引用了 _o 定义的函数。
             # **两个方向都要记**：只记"后加载的库调先加载的"会把真环看漏——
             # A->B 记了、B->A 因为方向上是"正向"没记，闭环就永远判不出来。
+            #
+            # 实现上必须**一次扫完**。原来写的是"每个库 × 每个库 × 每个函数"
+            # 各起一个 grep，那是 O(库² × 函数数) 次 grep、每次都重读一遍文件：
+            # 本仓 12 个库 326 个函数，实测 **583 秒**——门禁 1 本该几秒钟的事
+            # 成了全场最慢的一条，而它的产出只有几行边表。改成一次 awk 扫完，
+            # 判据逐字不变（前后不能是标识符字符，注释行不算）。
             : > "$_tmpd/edges"
-            for _l in $_libs; do
-              for _o in $_libs; do
-                [ "$_l" = "$_o" ] && continue
-                for _fn in $(grep -oE '^[a-z_][a-z0-9_]*\(\)' "mac/lib/$_o.sh" 2>/dev/null | sed 's/()//'); do
-                  if grep -vE '^[[:space:]]*#' "mac/lib/$_l.sh" 2>/dev/null | grep -qE "(^|[^a-z_])${_fn}([^a-z_]|\$)"; then
-                    echo "$_l $_o $_fn" >> "$_tmpd/edges"
-                  fi
-                done
-              done
-            done
+            awk -v out="$_tmpd/edges" '
+              FNR == 1 { cur = FILENAME; sub(/^.*\//, "", cur); sub(/\.sh$/, "", cur) }
+              /^[[:space:]]*#/ { next }
+              match($0, /^[a-z_][a-z0-9_]*\(\)/) {
+                fn = substr($0, 1, RLENGTH - 2)
+                if (!(fn in owner)) { owner[fn] = cur; order[++nfn] = fn }
+                next
+              }
+              { body[cur] = body[cur] "\n" $0 }
+              END {
+                for (i = 1; i <= nfn; i++) {
+                  f = order[i]; o = owner[f]
+                  for (l in body) {
+                    if (l == o) continue
+                    if (("x" body[l] "x") ~ ("[^a-z0-9_]" f "[^a-z0-9_]")) {
+                      print l, o, f >> out
+                    }
+                  }
+                }
+              }
+            ' mac/lib/*.sh
             # 闭环 = 存在 A->B 且 B->A。
             # 去重：A->B 与 B->A 会各命中一次，用"排序后的库名对"（一个词，用 | 连）当键，
             # 每组只报一次。**不要用 set -- 拆词**：库名会被 shell 按空白重新切分，

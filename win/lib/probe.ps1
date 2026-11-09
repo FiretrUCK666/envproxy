@@ -569,7 +569,6 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
         if (-not $item.Async.IsCompleted) { continue }
         try { $item.Client.EndConnect($item.Async); $connected += $item } catch {}
     }
-    # 阶段 2：已连接端口同时发 CONNECT、同时读响应，统一截止 500ms
     $reads = @()
     foreach ($item in $connected) {
         try {
@@ -583,11 +582,14 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
             $reads += [PSCustomObject]@{ Item = $item; Stream = $s; Buffer = $buf; Async = $rar }
         } catch {}
     }
-    $winner = $null
+    # 阶段 2：已连接端口同时发 CONNECT、同时读响应，统一截止 500ms。
+    #
+    # 收的是**所有**通过握手的端口，不是"谁先应答算谁"。
+    $winners = @()
     $remain = @($reads)
     # 同阶段 1：单调钟，不用墙上时钟（理由见上面那段的注释）。
     $deadline = (Get-MonotonicSeconds) + 0.5
-    while ($null -eq $winner -and $remain.Count -gt 0 -and ((Get-MonotonicSeconds) -lt $deadline)) {
+    while ($remain.Count -gt 0 -and ((Get-MonotonicSeconds) -lt $deadline)) {
         $next = @()
         foreach ($r in $remain) {
             if ($r.Async.IsCompleted) {
@@ -595,31 +597,70 @@ function Test-HttpProxyBatch([int[]]$Ports, [string]$Address = "") {
                     $n = $r.Stream.EndRead($r.Async)
                     if ($n -gt 0) {
                         $resp = [System.Text.Encoding]::ASCII.GetString($r.Buffer, 0, $n)
-                        if (Test-ConnectResponse $resp) { $winner = $r.Item.Port; break }
+                        if (Test-ConnectResponse $resp) {
+                            if ($winners -notcontains $r.Item.Port) { $winners += $r.Item.Port }
+                        }
                     }
                 } catch {}
             } else {
                 $next += $r
             }
         }
-        if (($null -eq $winner) -and ($next.Count -gt 0)) { Start-Sleep -Milliseconds 20 }
+        if ($next.Count -gt 0) { Start-Sleep -Milliseconds 20 }
         $remain = $next
     }
-    if ($null -ne $winner) {
-        foreach ($item in $pending) { try { $item.Client.Close() } catch {} }
-        return $winner
+    # 按传入顺序输出：调用方给的顺序本身就是优先级（系统声明的在前、已知端口在后），
+    # 这里再排一次会把那个意图打乱。
+    $ordered = @()
+    foreach ($p in $Ports) {
+        if ($winners -contains $p) { $ordered += $p }
     }
     foreach ($item in $pending) { try { $item.Client.Close() } catch {} }
+    if ($ordered.Count -gt 0) { return , $ordered }
     return $null
 }
 
-# 候选集发现（有序去重，本机零流量）：先已知端口（按表顺序），再可疑进程端口
-# （数字排序），最后按需追加全端口批量探测的尾巴。全部过 CONNECT 握手门——
-# 握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
+# 本工具自己占用的端口（固定入口中继）。**必须被排除在候选之外。**
+#
+# 为什么：中继本身是一个合格的 HTTP 代理（CONNECT 回 200），探测层看不出它和
+# 用户的翻墙软件有什么区别。后果不是"多选了一个"，是**判反了**：
+# 用户关掉翻墙软件后，机器上只剩中继在监听，兜底全扫命中它 -> 判 on:17099 ->
+# 注入 http://127.0.0.1:17099 -> 屏幕显示"已开启"，而中继没有上游，所有终端工具超时。
+# 实测复现过：只喂 [17099] 给批量探测，返回的就是 17099。
+#
+# 读的是中继自己写下的 relay.port（运行时值），不是常量：端口被占用时它会顺延，
+# 写死 17099 会漏掉顺延后的那些。读不到（没装/没起）就返回空集，不影响其余逻辑。
+#
+# 走 base 层的 Get-InstallDir 派生路径，**不依赖 relay 层**：relay 在本层之后加载，
+# 反过来依赖它就成了环（doctor 是叶子，probe 是它下面的层，这条方向不能倒）。
+function Get-SelfOwnedPorts {
+    $out = @()
+    try {
+        $dir = Get-InstallDir
+        if (-not $dir) { return @() }
+        $f = Join-Path $dir 'relay.port'
+        if (-not (Test-Item $f)) { return @() }
+        $raw = ''
+        try { $raw = (Read-Text $f).Trim() } catch { return @() }
+        if ($raw -match '^\d{1,5}$') {
+            $p = [int]$raw
+            if ($p -gt 0) { $out += $p }
+        }
+    } catch { return @() }
+    return @($out)
+}
+
+# 候选集发现（有序去重，本机零流量）：先系统代理声明的端口，再已知端口（按表顺序），
+# 再可疑进程端口（数字排序），最后按需追加全端口批量探测的尾巴。
+# 全部过 CONNECT 握手门——握手不过的（开发服务器、纯 SOCKS 口、认证口）进不了集合。
 # 返回 [int[]]，可能为空。调用方（状态机）按集合签名判断变化并逐个试活；
 # 只要首选不要全集的调用方继续用 Get-ActiveProxyPort（取第一个）。
 function Find-CandidatePorts([bool]$FullScan = $true) {
     $ordered = @()
+    # 自己的端口先排掉：它不是"用户的翻墙软件"，任何来源都不该把它带进候选集。
+    # 在源头统一排除，而不是在每个来源各写一遍——每个来源都加一次判断，
+    # 迟早漏一处，而漏一处就是上面那个"判反"的后果。
+    $selfPorts = @(Get-SelfOwnedPorts)
     # 端口枚举失败 ≠ 本机没有端口：失败的后果是候选集为空 → 调用方两轮后判 off 并删变量。
     # 所以这里先做一次即时重试；仍失败就记下"这一轮不知道"（$script:PortEnumerationFailed），
     # 由状态机据此沿用上一状态、不动用户的环境变量。
@@ -684,16 +725,25 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         # 写在某个软件名下：**软件自己告诉系统用哪个，就用哪个。**
         #
         # 只是提到队首，不是跳过验证：它照样要过握手与节点两道门（下面的循环里做）。
-        # 读不出来（系统代理没设、是公司代理、API 不可用）就当没有这一条，不影响其余来源。
+        #
+        # 读不出来时（系统代理没设、是公司代理、或用户开了 TUN 后把系统代理关了）
+        # 就当没有这一条，退回下面两个来源。**这个降级是有意的，不是漏洞**：
+        #   · 系统代理关掉是用户自己做的选择，他知道自己在用什么；
+        #   · 想在此刻再找一条"更该用哪个"的判据，只能靠进程名匹配或端口属主——
+        #     那是项目的**贵信号**（会因权限、自研客户端、服务化部署而不定地失效），
+        #     而项目铁律写明"贵信号只许进解释，绝不许进授权"。
+        #     拿它排序等于让它参与决定用哪个端口，失效时会安静地选错。
+        #   · 宁可用"常见端口表的顺序"这种确定但可能不最优的判据，
+        #     也不用"进程名匹配"这种看起来更聪明、但会随环境失效的判据。
         foreach ($p in (Get-SystemProxyLoopbackPorts)) {
-            if (($listening -contains $p) -and ($ordered -notcontains $p)) {
+            if (($listening -contains $p) -and ($ordered -notcontains $p) -and ($selfPorts -notcontains $p)) {
                 if (Test-HttpProxy $p) { $ordered += $p }
             }
         }
 
         # 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中
         foreach ($p in $KnownProxyPorts) {
-            if (($listening -contains $p) -and ($ordered -notcontains $p)) {
+            if (($listening -contains $p) -and ($ordered -notcontains $p) -and ($selfPorts -notcontains $p)) {
                 if (Test-HttpProxy $p) { $ordered += $p }
             }
         }
@@ -737,6 +787,7 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
             }
         }
         foreach ($p in ($suspectPorts | Sort-Object -Unique)) {
+            if ($selfPorts -contains $p) { continue }
             if ($ordered -notcontains $p) {
                 if (Test-HttpProxy $p) { $ordered += $p }
             }
@@ -762,8 +813,15 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
                 # 两个回环地址各扫一遍：只绑 ::1 的代理在 IPv4 上是主动拒绝的。
                 $uniq = $restPorts | Sort-Object -Unique
                 foreach ($addr in $LoopbackProbes) {
-                    $tail = Test-HttpProxyBatch $uniq $addr
-                    if ($tail -and ($ordered -notcontains $tail)) { $ordered += $tail; break }
+                    # 兜底扫描也要排掉自己的端口：这是"判反"最容易发生的入口——
+                    # 用户关掉翻墙软件后，机器上只剩中继在监听，全扫必然命中它。
+                    $scan = @($uniq | Where-Object { $selfPorts -notcontains $_ })
+                    if ($scan.Count -eq 0) { continue }
+                    $tail = @(Test-HttpProxyBatch $scan $addr)
+                    foreach ($tp in $tail) {
+                        if ($tp -and ($selfPorts -notcontains $tp) -and ($ordered -notcontains $tp)) { $ordered += $tp }
+                    }
+                    if ($ordered.Count -gt 0) { break }
                 }
             }
         }

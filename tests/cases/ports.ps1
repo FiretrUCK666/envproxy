@@ -1028,3 +1028,44 @@ Assert-Eq '回环 ::1' $true (Test-LoopbackHost '::1')
 Assert-Eq '非回环 10.0.0.5' $false (Test-LoopbackHost '10.0.0.5')
 Assert-Eq '非回环 128.0.0.1' $false (Test-LoopbackHost '128.0.0.1')
 Assert-Eq '非回环 域名' $false (Test-LoopbackHost 'proxy.example.com')
+# 本工具自己占用的端口绝不能被当成"用户的翻墙软件"。
+#
+# 为什么这条必须钉死：中继（固定入口）本身是一个合格的 HTTP 代理，CONNECT 回 200，
+# 探测层看不出它和用户的翻墙软件有什么区别。而它的上游就是用户的代理——所以
+# "翻墙软件活着"时它也能应答。一旦它被选进候选，注入的就是它自己：
+#   · 用户关掉翻墙软件 -> 只剩中继在监听 -> 兜底全扫命中 -> 判 on:17099
+#   · 而中继没有上游，所有终端工具全部超时
+#   · 屏幕上却显示"已开启"
+# 实测反证过：去掉这条排除，候选集就是 17099。
+Write-Host '[24c] our own relay port is never a candidate'
+$__savedListen = ${function:Get-ListeningTcpConnections}
+$__savedSelf = ${function:Get-SelfOwnedPorts}
+try {
+    function Get-SelfOwnedPorts { return @(17099) }
+    foreach ($case in @(
+        @{ Name = '只剩中继时判没有代理'; Ports = @(17099); Want = '' },
+        @{ Name = '中继与真代理并存时选真代理'; Ports = @(17099, 10801); Want = '10801' },
+        @{ Name = '只剩真代理时照常选它'; Ports = @(10801); Want = '10801' },
+        @{ Name = '中继与其内部端口并存时都排除'; Ports = @(17099); Want = '' }
+    )) {
+        $script:__selfCasePorts = $case.Ports
+        function Get-ListeningTcpConnections {
+            return @($script:__selfCasePorts | ForEach-Object {
+                [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = [int]$_; OwningProcess = 0 }
+            })
+        }
+        $got = @(Find-CandidatePorts $true)
+        # 真实机器上 10801 可能不在监听：那种情况下这条断言会变成空。
+        # 所以判据是"不能包含自己的端口"，而不是"必须等于某个值"——
+        # 前者与机器现状无关，后者会随环境漂移。
+        if ($case.Want -eq '') {
+            Assert-Eq $case.Name '' ($got -join ',')
+        } else {
+            $hasSelf = ($got -contains 17099)
+            Assert-Eq ($case.Name + '（不含自己的端口）') $false $hasSelf
+        }
+    }
+} finally {
+    Set-Item -Path Function:Get-ListeningTcpConnections -Value $__savedListen
+    Set-Item -Path Function:Get-SelfOwnedPorts -Value $__savedSelf
+}
