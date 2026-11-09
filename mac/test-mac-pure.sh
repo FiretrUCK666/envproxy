@@ -1569,7 +1569,7 @@ EOF_MC
         #    当成除号，屏幕上直接打出 division by 0。文案断言全绿、形状断言也全绿，
         #    只有真的渲染一次才看得见——所以把"stderr 必须为空"钉住。
         _sr_err=$(format_help_topic "$_sk" 2>&1 >/dev/null)
-        _s0=1; [ -n "$_sr_err" ] && _s0=0
+        _s0=1; if [ -n "$_sr_err" ]; then _s0=0; printf '    渲染 %s 的 stderr: %s\n' "$_sk" "$_sr_err"; fi
         _selftest_assert_eq "主题 $_sk 渲染时没有 shell 报错" "1" "$_s0"
         _sr=$(format_help_topic "$_sk")
         # 1) 一屏放得下：超出的部分会被终端切掉，常被切掉的正是底部的"怎么退出"。
