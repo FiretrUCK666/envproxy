@@ -43,6 +43,25 @@ jobs:
             fi
           done
 
+          # `$变量` 后面不许紧跟非 ASCII 字符。
+          #
+          # 为什么：macOS 自带的是 bash 3.2，它按字节切变量名，会把紧跟的中文
+          # 全角括号/逗号一起吃进去，于是 `$_aol_pid）` 变成"一个叫 _aol_pid）的变量"。
+          # 生产入口开着 set -u，那一刻当场 unbound variable 退出——而屏幕上是空的：
+          # 该打印的提示一个字都没出来。实测在 CI 的 macOS 上把整个自检打成静默中止，
+          # 排查了三轮才找到，所以这条必须由门禁拦住，不能靠人记得写 ${...}。
+          # 判据：$变量 紧接的字节不在 空格..~（可打印 ASCII）之内即违规；TAB 不算违规。
+          _badvar=0
+          for f in mac/*.sh mac/lib/*.sh; do
+            [ -f "$f" ] || continue
+            _o=$(LC_ALL=C grep -nE '\$[A-Za-z_][A-Za-z0-9_]*[^ 	-~]' "$f" 2>/dev/null || true)
+            if [ -n "$_o" ]; then
+              printf '%s\n' "$_o" | sed "s|^|变量名后紧跟非 ASCII 字符：$f:|"
+              _badvar=1
+            fi
+          done
+          [ "$_badvar" -eq 0 ] || fail=1
+
           # Git Bash 的终端同步脚本以模板形式内嵌在 win/lib/shell.ps1 里（见 Get-PromptSyncContent），
           # 安装时生成到 ~/.envproxy/。它在字符串里，上面那轮 bash -n 看不见它——
           # 所以这里把它抽出来单独解析一遍。生成式代码必须有这道检查，否则改坏了没人知道。

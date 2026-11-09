@@ -232,15 +232,15 @@ get_sysproxy_findings() {
         _gsf_reason=$(get_sysproxy_reason "$_gsf_kind" "$_gsf_url" "${_gsf_port:-0}")
         case "${_gsf_hs:-}" in
             upstream-fail)
-                _gsf_reason="$_gsf_reason　它连不上外面（节点可能挂了）。" ;;
+                _gsf_reason="${_gsf_reason}　它连不上外面（节点可能挂了）。" ;;
             proxy-auth)
-                _gsf_reason="$_gsf_reason　它要求密码，是个正经代理。" ;;
+                _gsf_reason="${_gsf_reason}　它要求密码，是个正经代理。" ;;
             refused)
-                _gsf_reason="$_gsf_reason　它说 HTTP，但这次不答应建隧道（不是代理，或者它只服务特定地址）。" ;;
+                _gsf_reason="${_gsf_reason}　它说 HTTP，但这次不答应建隧道（不是代理，或者它只服务特定地址）。" ;;
             not-http)
-                _gsf_reason="$_gsf_reason　它不像代理，更像别的程序占着这个端口。" ;;
+                _gsf_reason="${_gsf_reason}　它不像代理，更像别的程序占着这个端口。" ;;
             silent)
-                _gsf_reason="$_gsf_reason　它连上了但不应答代理握手。" ;;
+                _gsf_reason="${_gsf_reason}　它连上了但不应答代理握手。" ;;
         esac
         # Id 后缀带上握手结论：界面上要认「端口活着但连不上外面」那一档，
         # 靠的就是它。**不能靠 Reason 里的中文反推**——文案一改，那一档就不报了，
@@ -267,7 +267,7 @@ get_sysproxy_reason() {
         "$FINDING_KIND_ALIVE")    printf '%s' "代理地址是本机，端口 $_gsr_port 上有程序在听，连得上。" ;;
         "$FINDING_KIND_BLOCKING") printf '%s' "地址是本机，但端口 $_gsr_port 上没有任何程序在听。网页请求发出去没人接，所以打不开。" ;;
         "$FINDING_KIND_SLOWING")  printf '%s' "设置脚本指向本机的 $_gsr_port 端口，那里已经没程序了。网页能开，但每次都要先等它超时。" ;;
-        "$FINDING_KIND_FOREIGN")  printf '%s' "代理地址不是这台电脑自己（$_gsr_url），多半是公司或学校给的，本工具不碰。" ;;
+        "$FINDING_KIND_FOREIGN")  printf '%s' "代理地址不是这台电脑自己（${_gsr_url}），多半是公司或学校给的，本工具不碰。" ;;
         *) printf '' ;;
     esac
     return 0
@@ -808,8 +808,8 @@ _cli_proxy_reason() {
         "$FINDING_KIND_BLOCKING"|"$FINDING_KIND_SLOWING")
             _cpr_s="这个文件里写着让 $_cpr_tool 走本机的一个代理，但那个程序已经不在了。"
             case "$_cpr_mode" in
-                port) _cpr_s="$_cpr_s可以把它改到你现在在用的端口 $CLI_LIVE_PORT。" ;;
-                none) _cpr_s="$_cpr_s这种文件本工具不替你改。" ;;
+                port) _cpr_s="${_cpr_s}可以把它改到你现在在用的端口 ${CLI_LIVE_PORT}。" ;;
+                none) _cpr_s="${_cpr_s}这种文件本工具不替你改。" ;;
             esac
             printf '%s' "$_cpr_s" ;;
         "$FINDING_KIND_FOREIGN")
@@ -1222,7 +1222,7 @@ get_dns_findings() {
             [ "$_gd_emitted" -le 3 ] || continue
             finding_new 'dns.loopback' "$FINDING_KIND_BLOCKING" '网址解析' "$_gd_svc 的 DNS 设置" \
                 "$_gd_addr" \
-                "网址解析被指到本机的 $_gd_addr，但那里没有程序在听——网页会打不开，而聊天软件可能还是好的。" \
+                "网址解析被指到本机的 ${_gd_addr}，但那里没有程序在听——网页会打不开，而聊天软件可能还是好的。" \
                 '这一项本工具不自动改：改错了会把你的网络换成路由器的设置。到系统设置的网络里，把 DNS 改回「自动」即可。' \
                 ''
         fi

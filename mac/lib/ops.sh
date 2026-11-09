@@ -278,7 +278,7 @@ EOF_SHORTCUTS
         # 卸载 = 恢复成没装过：所有运行时状态都不该活过它，唯一保留的是黑匣子日志。
         # 漏掉任何一个的后果都很具体：version.cache 会让重装后的状态页显示上一次的版本号；
         # update.inprogress 会被读成"上次更新没完成"（那是上一次安装的经历）；
-        # 监控锁住在 $LOCK_DIR（跟用户走，不跟文件夹走），卸载时由下面的锁清理处理，
+        # 监控锁住在 ${LOCK_DIR}（跟用户走，不跟文件夹走），卸载时由下面的锁清理处理，
         # 不在这里删——这里删的是 $MONITOR_DIR 里的东西，那个目录里早就没有锁了。
         # 状态快照不删的后果与 version.cache 一字不差：重装后状态页会读到上一份
         # 安装留下的结论，而那是已经不存在的状态。
@@ -297,7 +297,7 @@ EOF_SHORTCUTS
         monitor_runtime_files 2>/dev/null | while IFS= read -r _urf; do
             [ -n "$_urf" ] && rm -f "$_urf" 2>/dev/null
         done || true
-        # 监控锁不在 $MONITOR_DIR 里（它住在 $LOCK_DIR，跟用户走不跟文件夹走），
+        # 监控锁不在 $MONITOR_DIR 里（它住在 ${LOCK_DIR}，跟用户走不跟文件夹走），
         # 这里没有要清的锁。早先这里 rmdir 一个 $MONITOR_DIR/.lock——那是个不存在的路径，
         # 留着只会让读代码的人以为锁在安装目录里。
         if [ -d "$MONITOR_DIR" ] && [ -z "$(ls -A "$MONITOR_DIR" 2>/dev/null)" ]; then
@@ -314,7 +314,7 @@ EOF_SHORTCUTS
     # 数据已经丢了，处置建议却指向"再删一次"。这种情况停下来，让用户先手动处理。
     if ! restore_prev_env; then
         style_out warn "[未完成] 你原来的代理设置没能写回去（可能被安全软件或权限拦住了）。"
-        style_out warn "        备份还留着（$PREV_ENV），没有再删任何东西。"
+        style_out warn "        备份还留着（${PREV_ENV}），没有再删任何东西。"
         style_out warn "        请先手动把原来的设置加回去，再点一次菜单$(menu_ref uninstall)收尾。"
         return 1
     fi
@@ -334,12 +334,12 @@ EOF_SHORTCUTS
     # 每条残留都带上**具体路径**。只写"路径记录仍在"再加一句"手动删除上述位置"，
     # 用户看着空白不知道删什么——提示得能照着做才算提示。
     _dirty=""
-    if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then _dirty="$_dirty 开机自启动项仍在（launchctl 里的 $PLIST_LABEL）；"; fi
-    if [ -f "$PLIST_PATH" ]; then _dirty="$_dirty 自启动文件仍在（$PLIST_PATH）；"; fi
+    if launchctl list 2>/dev/null | grep -qF "$PLIST_LABEL"; then _dirty="$_dirty 开机自启动项仍在（launchctl 里的 ${PLIST_LABEL}）；"; fi
+    if [ -f "$PLIST_PATH" ]; then _dirty="$_dirty 自启动文件仍在（${PLIST_PATH}）；"; fi
     if [ -f "$ENVPROXY_HOME/prompt-sync.sh" ]; then _dirty="$_dirty 终端同步脚本仍在（$ENVPROXY_HOME/prompt-sync.sh）；"; fi
-    if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位脚本仍在（$LOCATOR_PATH）；"; fi
-    if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在（$PROXY_ENV）；"; fi
-    if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在（$PREV_ENV）；"; fi
+    if [ -f "$LOCATOR_PATH" ]; then _dirty="$_dirty 定位脚本仍在（${LOCATOR_PATH}）；"; fi
+    if [ -f "$PROXY_ENV" ]; then _dirty="$_dirty 代理变量文件仍在（${PROXY_ENV}）；"; fi
+    if [ -f "$PREV_ENV" ]; then _dirty="$_dirty 变量快照仍在（${PREV_ENV}）；"; fi
     # owned.env 上面删过，但复检原来没查它——删失败时报"已完成"，而它记着
     # "我们写下的值"，留着会让终端钩子继续认为代理是我们设的。
     # 复检项必须与删除项一一对应，删了不查等于没删。
@@ -347,12 +347,12 @@ EOF_SHORTCUTS
     # 只加一处清单、不在这里重列：重列就会再次出现"删了忘了查"。
     while IFS= read -r _rf; do
         [ -z "$_rf" ] && continue
-        if [ -f "$_rf" ]; then _dirty="$_dirty 运行时文件仍在（$_rf）；"; fi
+        if [ -f "$_rf" ]; then _dirty="$_dirty 运行时文件仍在（${_rf}）；"; fi
     done <<EOF_RUNTIME_FILES
 $(monitor_runtime_files)
 EOF_RUNTIME_FILES
-    if [ -f "$OWNED_ENV" ]; then _dirty="$_dirty 归属记录仍在（$OWNED_ENV）；"; fi
-    if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（$PATH_CONF）；"; fi
+    if [ -f "$OWNED_ENV" ]; then _dirty="$_dirty 归属记录仍在（${OWNED_ENV}）；"; fi
+    if [ -f "$PATH_CONF" ]; then _dirty="$_dirty 路径记录仍在（${PATH_CONF}）；"; fi
     # 快捷方式的两个内部产物也要查：删了不查等于没删（上面刚补上删除逻辑）。
     # 保留图标是用户的合法选择，那时桌面上的壳子当然还在，**不算脏**；
     # 脏的是内部产物——中转目录与落点记录，它们无论选保留还是删除都该消失。
@@ -364,7 +364,7 @@ EOF_RUNTIME_FILES
     # 用 here-doc 而不是管道：管道会起子 shell，里面改的 _dirty 传不回来。
     while IFS= read -r _rc; do
         [ -n "$_rc" ] || continue
-        if _hook_marker_present "$_rc" "$HOOK_START"; then _dirty="$_dirty 终端同步的配置块还在（$_rc）；"; break; fi
+        if _hook_marker_present "$_rc" "$HOOK_START"; then _dirty="$_dirty 终端同步的配置块还在（${_rc}）；"; break; fi
     done <<EOF
 $(rc_check_files)
 EOF

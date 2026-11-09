@@ -20,10 +20,12 @@ _selftest_fails=0
 
 _selftest_assert_eq() {
     _name="$1"; _want="$2"; _have="$3"
+    # 记下"最后一次开始的断言"：trap 中途报错时靠它定位（$LINENO 在 trap 里不管用）。
+    _selftest_last="$_name"
     if [ "$_want" = "$_have" ]; then
         echo "  PASS $_name"
     else
-        echo "  FAIL $_name（期望 [$_want]，实际 [$_have]）"
+        echo "  FAIL ${_name}（期望 [$_want]，实际 [$_have]）"
         _selftest_fails=$((_selftest_fails + 1))
     fi
 }
@@ -34,7 +36,7 @@ _selftest_assert_file_eq() {
     if [ "$_want" = "$_have" ]; then
         echo "  PASS $_name"
     else
-        echo "  FAIL $_name（文件内容不符，实际：）"
+        echo "  FAIL ${_name}（文件内容不符，实际：）"
         printf '%s\n' "$_have" | sed 's/^/    |/'
         _selftest_fails=$((_selftest_fails + 1))
     fi
@@ -49,7 +51,7 @@ _selftest_assert_contains() {
             echo "  PASS $_name"
             ;;
         *)
-            echo "  FAIL $_name（应包含 [$_needle]，实际：）"
+            echo "  FAIL ${_name}（应包含 [$_needle]，实际：）"
             printf '%s\n' "$_hay" | sed 's/^/    |/'
             _selftest_fails=$((_selftest_fails + 1))
             ;;
@@ -74,12 +76,18 @@ self_test() {
     # 在生产里 100% 失败（入口开着 -u，直接 unbound variable），而自检里它静默展开成
     # 空串、生成的壳子叫「（翻墙）.app」，断言照样通过——自检全绿、功能全坏。
     # 所以这里显式 set -u，把生产那种"拼写错误当场炸"的约束带进回归。
-    # 兜底 trap：真有人再让 shell 中途退出，也要在日志里点出是哪一行。
+    # 兜底 trap：真有人再让 shell 中途退出，要在日志里点出**停在哪一步**。
+    #
+    # 别用 ${LINENO}：在 EXIT trap 里它取的是 trap 自身的行号，不是中止处
+    # （bash 3.2 与 5.x 都是这个语义，实测过）。日志里那句"第 294 行"于是永远
+    # 指向 trap 定义附近，帮不上任何忙——CI 上排查时被这句话带偏过一次。
+    # 改成记"最后一次开始的断言"，它才真的指向出问题的那一项。
     set +e
     set -u
     _selftest_done=0
+    _selftest_last=""
     # shellcheck disable=SC2064
-    trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检在第 ${LINENO} 行意外中止（退出码 $?）"; fi' EXIT
+    trap 'if [ "${_selftest_done:-0}" != "1" ]; then echo "  FAIL 自检意外中止（退出码 $?），停在：${_selftest_last:-（还没有开始任何断言）}"; fi' EXIT
     _selftest_fails=0
     # 把 mac/lib 下所有库的源码合并成一段文本。
 #
@@ -569,7 +577,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
         if ! (exec 9<>/dev/tcp/127.0.0.1/$_fp_try) 2>/dev/null; then
             _fp_port=$_fp_try; break
         fi
-        exec 9<&- 2>/dev/null || true
+        { exec 9<&-; } 2>/dev/null || true
     done
     if [ -n "$_fp_port" ] && command -v perl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
         _fp_respond() {
@@ -593,7 +601,7 @@ echo "[1c] 终端同步：不碰使用者的设置，且随时能接管"
             _fp_wait=0
             while [ $_fp_wait -lt 50 ]; do
                 if (exec 9<>/dev/tcp/127.0.0.1/"$1") 2>/dev/null; then
-                    exec 9<&- 2>/dev/null || true
+                    { exec 9<&-; } 2>/dev/null || true
                     return 0
                 fi
                 _fp_wait=$((_fp_wait + 1))
@@ -1033,8 +1041,19 @@ EOF_MC
     _selftest_assert_eq "第一次拿锁成功" "1" "$_r6"
     if [ -f "$_rlock" ]; then _r7=1; else _r7=0; fi
     _selftest_assert_eq "锁文件存在" "1" "$_r7"
-    if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r8=0; else _r8=1; fi
+    # 第二次必须拿不到。这里把每一步单独跑、结果存进变量再断言——
+    # 原来写成 `if acquire_op_lock ...; then ...` 一行，CI 的 macOS 上会在这一行
+    # 静默结束整个自检（后面一条都不打印）。拆开之后，哪一步出的问题一目了然。
+    _rlock_pid=$(cat "$_rlock" 2>/dev/null || echo 0)
+    _selftest_assert_eq "锁里记着持有者的 pid" "$$" "$_rlock_pid"
+    # 第二次必须拿不到。调用方的 `>/dev/null 2>&1` 会把函数内部的报错一并吞掉
+    # （重定向作用于整个函数调用，连 xtrace 都进 /dev/null），所以这里只挡 stdout、
+    # 把 stderr 收进变量：函数若在 macOS 上异常退出，原因会留在日志里而不是消失。
+    _rlock_err=$(acquire_op_lock "$_rlock" 2>&1 >/dev/null); _r8=$?
     _selftest_assert_eq "持锁者还在时第二个拿不到" "1" "$_r8"
+    if [ -n "$_rlock_err" ]; then
+        echo "    （第二次拿锁的 stderr：${_rlock_err}）"
+    fi
     # 陈旧锁（持有者已经不在）必须能被接管——否则一次崩溃就把用户锁死在门外。
     rm -f "$_rlock" 2>/dev/null || true
     printf '999999\n' > "$_rlock" 2>/dev/null || true
@@ -1322,6 +1341,11 @@ EOF_MC
         _cl_got=$(
             _SEG_COLORED=1
             _SEG_LINE=""
+            # 生产上 _help_render_line 只在 format_help_topic 里被调用，那时 _HELP_BLOCK
+            # 已经装着当前主题的整块正文（列宽是从它算的）。这里单独调也必须给同样的
+            # 前置条件——不给的话，set -u 下算列宽那一步读到未定义变量当场中止，
+            # 症状是"渲染报错"而不是"配色不对"，排查方向会跑偏。
+            _HELP_BLOCK="$_cl_case"
             _help_render_line "$_cl_case"
         )
         # 命令色**从配色表读**，不写死 32：颜色是可调的，写死数字会让"换一个颜色"
@@ -2736,7 +2760,7 @@ EOF
         if ! { exec 9<>/dev/tcp/127.0.0.1/$_s5_try; } 2>/dev/null; then
             _s5_port=$_s5_try; break
         fi
-        exec 9<&- 2>/dev/null || true
+        { exec 9<&-; } 2>/dev/null || true
     done
     if [ -n "$_s5_port" ] && command -v perl >/dev/null 2>&1; then
         perl -e '
@@ -2757,7 +2781,7 @@ EOF
         _s5_wait=0
         while [ "$_s5_wait" -lt 50 ]; do
             if { exec 9<>/dev/tcp/127.0.0.1/"$_s5_port"; } 2>/dev/null; then
-                exec 9<&- 2>/dev/null || true
+                { exec 9<&-; } 2>/dev/null || true
                 break
             fi
             _s5_wait=$((_s5_wait + 1))
@@ -2966,7 +2990,7 @@ EOF
     # 后建的覆盖先建的，两个图标行为相同而画面上一切正常。
     #
     # **必须放在沙箱清理之前**：这一段里的 _shortcut_extra_dirs / _shortcut_records
-    # 读写的都是 $ENVPROXY_HOME（在沙箱里）。沙箱先删掉的话，那些断言会在
+    # 读写的都是 ${ENVPROXY_HOME}（在沙箱里）。沙箱先删掉的话，那些断言会在
     # "往一个已经不存在的目录写"的状态下运行——今天恰好看不出异常，
     # 明天改动一下路径就会变成静默空转。收尾统一放到文件最末。
     # --------------------------------------------------------------------------
@@ -3016,8 +3040,11 @@ EOF
         # 产物名必须是「程序基名 + 后缀」。名字里的基名来自 _sba_base；
         # 漏赋值时它静默变空，桌面上的图标于是叫「（翻墙）.app」——
         # 一路正常、没有报错，只是名字里少了程序名。
-        _selftest_assert_eq '壳子名字里带着程序基名' '1' \
-            "$(case "$(basename "$_st_p1")" in app.sh*) echo 1 ;; *) echo 0 ;; esac)"
+        # 用 if 而不是 `$(case ... esac)`：macOS 自带的 bash 3.2 对命令替换里的
+        # case 分支终止符会解析错（库代码里同一条限制有记录），换成 if 才两端都稳。
+        _st_n1=$(basename "$_st_p1")
+        if [ "${_st_n1#app.sh}" != "$_st_n1" ]; then _st_nm=1; else _st_nm=0; fi
+        _selftest_assert_eq '壳子名字里带着程序基名' '1' "$_st_nm"
         # 落点目录带空格：调用链里任何一处漏了引号，路径都会在这里被切成两段。
         # 空串碰巧不暴露（展开成空），带空格的目录才暴露。
         mkdir -p "$_st_t1/my apps" 2>/dev/null || true
