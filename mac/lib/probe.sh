@@ -3,6 +3,66 @@
 #  判决三层缺一不可；只做快筛的表不影响覆盖面。
 # ------------------------------------------------------------------------------
 
+# 这个主机名/地址是不是本机回环。
+# 判据只认回环，不看别的——写成"非本机就排除"会把局域网里合法的自建代理一起排掉，
+# 而那种确实该放过（用户自己搭的）。
+is_loopback_host() {
+    case "$1" in
+        ''|*[!A-Za-z0-9.:\[\]]*) return 1 ;;
+    esac
+    _ilh=$(printf '%s' "$1" | tr 'A-Z' 'a-z')
+    case "$_ilh" in
+        '[::1]'|'::1') return 0 ;;
+        'localhost')   return 0 ;;
+    esac
+    # 127.0.0.0/8 整段都算回环（不只是 127.0.0.1）：写法会变，语义不变。
+    case "$_ilh" in
+        127.*) return 0 ;;
+    esac
+    return 1
+}
+
+# 系统代理里登记的本机端口（不带任何软件名，只回答"系统认为对外的是哪个口"）。
+#
+# 为什么这个信号是通用的：任何翻墙软件要让浏览器走它的代理，**必须**把自己对外
+# 的那个口写进系统代理设置——这是操作系统层面的协议，与软件叫什么、谁做的、
+# 什么版本无关。反之，一个端口如果从不出现在系统代理里，它要么不是代理，
+# 要么是**内部端口**（内核/子进程之间通信用，浏览器根本不需要知道）。
+#
+# 以**第一个启用且指向回环的**服务为准：macOS 的系统代理是每个网络服务各存一份，
+# 而真正在生效的是"主服务"那一份。不按服务名写死（Wi-Fi 之类），因为用户的
+# 主服务可能叫别的名字、也可能是雷雳网桥/有线。拿不到主服务时逐个服务读，
+# 取第一个能用的——宁可多读几次也不写死名字。
+#
+# 这里**不调用 doctor 层**：doctor 是叶子层（只依赖 base+probe），
+# probe 反过来依赖它就成了环。
+get_system_proxy_loopback_ports() {
+    _gspl_out=""
+    # -listallnetworkservices 第一行是说明文字，以 * 开头的是被停用的服务。
+    _gspl_svcs=$(networksetup -listallnetworkservices 2>/dev/null | sed '1d' | grep -v '^\*' || true)
+    [ -n "$_gspl_svcs" ] || return 1
+    for _gspl_svc in $_gspl_svcs; do
+        for _gspl_kind in web secureweb; do
+            case "$_gspl_kind" in
+                web)       _gspl_raw=$(networksetup -getwebproxy "$_gspl_svc" 2>/dev/null) ;;
+                secureweb) _gspl_raw=$(networksetup -getsecurewebproxy "$_gspl_svc" 2>/dev/null) ;;
+            esac
+            [ -n "$_gspl_raw" ] || continue
+            _gspl_en=$(printf '%s\n' "$_gspl_raw" | awk -F': *' '/^Enabled/ {print $2; exit}')
+            [ "$_gspl_en" = "Yes" ] || continue
+            _gspl_host=$(printf '%s\n' "$_gspl_raw" | awk -F': *' '/^Server/ {print $2; exit}')
+            _gspl_port=$(printf '%s\n' "$_gspl_raw" | awk -F': *' '/^Port/ {print $2; exit}')
+            case "$_gspl_port" in ''|*[!0-9]*) continue ;; esac
+            [ "$_gspl_port" -gt 0 ] 2>/dev/null || continue
+            is_loopback_host "$_gspl_host" || continue
+            case " $_gspl_out " in *" $_gspl_port "*) continue ;; esac
+            _gspl_out="$_gspl_out $_gspl_port"
+        done
+    done
+    [ -n "$_gspl_out" ] || return 1
+    printf '%s' "$_gspl_out" | sed 's/^ //'
+}
+
 # 本层创建的临时物前缀。创建与清扫必须用同一套前缀——
 # 这是"临时物的创建基址与清扫基址必须同一个"那条不变量的落实处。
 PROBE_TMP_PREFIX="envproxy_probe_"
@@ -906,6 +966,29 @@ find_candidate_ports() {
     if [ $_rc -ne 0 ]; then
         return 1
     fi
+    # 来源 0（最优先）：系统代理里登记的本机端口。
+    #
+    # 为什么它排在"已知端口表"和"可疑进程"前面：它是**软件自己声明的对外端口**。
+    # 凡是能被浏览器用的翻墙软件，都必须把对外那个口写进系统代理——这是操作系统
+    # 层面的协议，与软件叫什么、谁做的、什么版本无关。而同一个软件往往还有别的口
+    # 在听（内核/子进程之间的内部通道），那些口也过得了握手、也真能出去，
+    # 只是用户在自己的界面上永远看不到它们。挑中那种口，用户就会觉得"你搞错了"。
+    #
+    # 实测过一台 MonoCloud（Windows 侧）：界面公告 10801，内核另开 51081，
+    # 两个口都能翻墙、出口 IP 都一样。原来先扫已知端口、再用进程名提速，
+    # 结果 51081 被选中并记住，此后每轮都复用。这类"同一软件多个可用口、该用哪个"
+    # 的问题与具体软件无关，所以判据也不能写在某个软件名下：
+    # **软件自己告诉系统用哪个，就用哪个。**
+    #
+    # 只是提到队首，不是跳过验证：它照样要过握手与节点两道门。
+    # 读不出来（系统代理没开、是公司代理）就当没有这一条，不影响其余来源。
+    for _dp in $(get_system_proxy_loopback_ports); do
+        if printf '%s\n' "$_ports" | grep -qx "$_dp"; then
+            if ! _in_list "$_dp" "$_cands"; then
+                if test_http_proxy "$_dp"; then _cands="$_cands $_dp"; fi
+            fi
+        fi
+    done
     # 来源 1（快路径）：已知端口按表顺序，逐个过门
     for _kp in $KNOWN_PORTS; do
         if printf '%s\n' "$_ports" | grep -qx "$_kp"; then
@@ -1227,6 +1310,40 @@ get_current_state() {
                     NEED_DEEP_SCAN=1
                     CURRENT_STATE="off"
                     return 0
+                fi
+            fi
+            # 优先权复核（约每 10 轮一次，纯本机读取、不联网）：现在用的这个端口
+            # 还是不是"软件自己声明的那个"。
+            #
+            # 为什么要有这一步：端口一旦被选中就会被记住、此后每轮优先复用，于是
+            # **先选错就永远错下去**。实测过一台 MonoCloud ——内核另开的 51081 先被
+            # 选中并记住，界面公告的 10801 一次都没被用过，尽管它一直在候选集第一位。
+            # 只把优先级排对不够，"已经记错了"这件事必须能被纠回来。
+            #
+            # 判据是通用的：软件把哪个口写进系统代理，那个口就是它认定的对外端口，
+            # 与软件名无关。读不出来 / 是公司代理 / 系统代理没开时为空，
+            # 此时**不动**——没有更好的信息就不该改变现状。
+            if [ $((ROUND % 10)) -eq 0 ]; then
+                _prp_declared=$(get_system_proxy_loopback_ports 2>/dev/null || true)
+                if [ -n "$_prp_declared" ]; then
+                    _prp_cur="$CACHED_PORT"
+                    _prp_keep=0
+                    for _prp_d in $_prp_declared; do
+                        [ "$_prp_d" = "$_prp_cur" ] && _prp_keep=1 && break
+                    done
+                    if [ "$_prp_keep" = "0" ]; then
+                        for _prp_d in $_prp_declared; do
+                            # 两道门都要过：是 HTTP 代理，且真能翻墙。少一道就会把
+                            # "另一个恰好也在监听的端口"误当成更好的选择。
+                            test_port_listening "$_prp_d" || continue
+                            test_http_proxy "$_prp_d" || continue
+                            test_node_alive "$_prp_d" 1 || continue
+                            CACHED_PORT="$_prp_d"
+                            LAST_ALIVE_PORT="$_prp_d"
+                            CURRENT_STATE="on:$_prp_d"
+                            return 0
+                        done
+                    fi
                 fi
             fi
             if test_node_alive "$CACHED_PORT" 0; then

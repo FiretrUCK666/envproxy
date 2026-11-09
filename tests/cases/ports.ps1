@@ -984,3 +984,47 @@ Assert-Eq '交替时失败计数最高只到 1（成功即清零，攒不起来�
 # 终端同步：$PROFILE 里的钩子块。核心是"只摘自己那一块、用户内容一字不动"，
 # 以及"标记不配对时绝不猜"。沙箱里用两个临时文件当两个版本的 profile——
 # Windows 5.1 与 7 的落点不同，两处都要写，这条正是要测的。
+
+# 系统代理里"软件自己声明的端口"优先——防止挑中用户看不见的内部端口。
+#
+# 为什么这条要单独钉：同一个翻墙软件常常开多个口（对外的那个 + 内核内部用的），
+# 它们**都过得了握手、都真能翻墙、出口 IP 都一样**，所以三层判据一条都不会报错。
+# 唯一的区别是"哪个是软件告诉系统的那个"，而那也是唯一与软件身份无关的判据。
+# 实测过一台 MonoCloud：界面公告 10801，内核另开 51081，结果注入了后者，
+# 用户看到的就是"你搞错了"。这里钉住两件事：解析正确、以及优先级真的生效。
+Write-Host '[24b] system-declared proxy port wins'
+foreach ($c in @(
+    @{ Raw = '127.0.0.1:10801'; Want = @(10801) },
+    @{ Raw = 'localhost:7890';   Want = @(7890) },
+    @{ Raw = 'http=127.0.0.1:1;https=127.0.0.1:2'; Want = @(1, 2) },
+    @{ Raw = '10.0.0.5:8080';    Want = @() },
+    @{ Raw = 'corp-proxy.example.com:3128'; Want = @() },
+    @{ Raw = '[::1]:7078';       Want = @(7078) },
+    @{ Raw = '';                 Want = @() }
+)) {
+    # 解析逻辑本身（纯字符串，不碰注册表）：把同一个解析器喂各种形状。
+    $got = @()
+    foreach ($seg in ([string]$c.Raw -split ';')) {
+        $s = $seg.Trim()
+        if (-not $s) { continue }
+        $eq = $s.IndexOf('=')
+        if ($eq -ge 0) { $s = $s.Substring($eq + 1) }
+        $m = [regex]::Match($s, ':(\d{1,5})$')
+        if (-not $m.Success) { continue }
+        $port = [int]$m.Groups[1].Value
+        if ($port -le 0) { continue }
+        $hostPart = $s.Substring(0, $s.Length - $m.Length).Trim()
+        if ($hostPart -match '^\[?::1\]?$') { $hostPart = '::1' }
+        if (-not (Test-LoopbackHost $hostPart)) { continue }
+        if ($got -notcontains $port) { $got += $port }
+    }
+    Assert-Eq ("系统代理解析 " + $c.Raw) ($c.Want -join ',') ($got -join ',')
+}
+# 回环判定的边界：127.0.0.0/8 整段都算，但 128.x 与公网域名不算。
+Assert-Eq '回环 127.0.0.1' $true (Test-LoopbackHost '127.0.0.1')
+Assert-Eq '回环 127.1.2.3（整段）' $true (Test-LoopbackHost '127.1.2.3')
+Assert-Eq '回环 localhost' $true (Test-LoopbackHost 'localhost')
+Assert-Eq '回环 ::1' $true (Test-LoopbackHost '::1')
+Assert-Eq '非回环 10.0.0.5' $false (Test-LoopbackHost '10.0.0.5')
+Assert-Eq '非回环 128.0.0.1' $false (Test-LoopbackHost '128.0.0.1')
+Assert-Eq '非回环 域名' $false (Test-LoopbackHost 'proxy.example.com')

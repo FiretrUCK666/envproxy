@@ -363,6 +363,65 @@ function Get-PortOwner([int]$Port) {
         return $null
     }
 }
+
+# 系统代理里登记的本机端口（不带任何软件名，只回答"操作系统认为对外的是哪个口"）。
+#
+# 为什么这个信号是通用的：任何翻墙软件要让浏览器走它的代理，**必须**把自己对外
+# 的那个口写进系统代理设置——这是操作系统层面的协议，与软件叫什么、谁做的、
+# 什么版本无关。反之，一个端口如果从不出现在系统代理里，它要么不是代理，
+# 要么是**内部端口**（内核/子进程之间通信用，浏览器根本不需要知道）。
+#
+# 只认回环地址：公司/校园网代理写的是 10.x 或域名，那不是本机端口，拿来做候选
+# 会把"别人的代理"当成本机翻墙软件（与 doctor 层"非回环一律不动"的边界一致）。
+#
+# 这里直接读注册表的值，**不调用 doctor 层**：doctor 是叶子层（只依赖 base+probe），
+# probe 反过来依赖它就成了环。读 ProxyServer 这个字符串够用——它记的正是
+# "浏览器该往哪个口送"。二进制 Connections 子键那种逐连接设置是 doctor 为了
+# **改**它才需要的精度，这里只需要"软件公告过哪个口"，两种形状下都写在同一个
+# 字符串里（实测 WinINET 会把它同步到 ProxyServer）。
+# 返回 int[]（可能空）：这是**提示**，不是授权——候选仍要过握手与节点两道门。
+function Get-SystemProxyLoopbackPorts {
+    $out = @()
+    try {
+        $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
+        if (-not (Test-RegKey $key)) { return @() }
+        $v = Get-ItemProperty -LiteralPath $key -ErrorAction Stop
+        # ProxyEnable = 0 时软件自己都关着代理，那个地址不构成"它现在对外用哪个口"。
+        try { if ([int]$v.ProxyEnable -ne 1) { return @() } } catch { return @() }
+        # ProxyServer 可能是 "host:port" 或 "proto=host:port;proto2=..." 两种形状。
+        $raw = [string]$v.ProxyServer
+        if (-not $raw) { return @() }
+        foreach ($seg in ($raw -split ';')) {
+            $s = $seg.Trim()
+            if (-not $s) { continue }
+            $eq = $s.IndexOf('=')
+            if ($eq -ge 0) { $s = $s.Substring($eq + 1) }
+            # 只取最后一段冒号后面的端口：IPv6 字面量是 [::1]:port，这个形状也成立。
+            $m = [regex]::Match($s, ':(\d{1,5})$')
+            if (-not $m.Success) { continue }
+            $port = [int]$m.Groups[1].Value
+            if ($port -le 0) { continue }
+            # 主机部分必须是回环：本机软件才会用 127.0.0.1 / localhost / [::1]。
+            $hostPart = $s.Substring(0, $s.Length - $m.Length).Trim()
+            if ($hostPart -match '^\[?::1\]?$') { $hostPart = '::1' }
+            if (-not (Test-LoopbackHost $hostPart)) { continue }
+            if ($out -notcontains $port) { $out += $port }
+        }
+    } catch { return @() }
+    return @($out)
+}
+
+# 这个主机名/地址是不是本机回环。判据只认回环，不看别的——写成"非本机就排除"
+# 会把局域网里合法的自建代理一起排掉，而那种确实该放过（用户自己搭的）。
+function Test-LoopbackHost([string]$HostName) {
+    if (-not $HostName) { return $false }
+    $h = $HostName.Trim().ToLowerInvariant()
+    if ($h -eq 'localhost') { return $true }
+    if ($h -eq '::1') { return $true }
+    if ($h -match '^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $true }
+    return $false
+}
+
 # 这是区分"代理端口"与"其他服务端口"的终极判定，不依赖进程名/端口号猜测。
 function Test-HttpProxy([int]$Port) {
     $client = $null
@@ -609,6 +668,28 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
     $discoveryDone = $false
     try {
         $listening = @($listeners.LocalPort | Sort-Object -Unique)
+
+        # 来源 0（最优先）：系统代理里登记的本机端口。
+        #
+        # 为什么它排在"常见端口表"和"进程名"前面：它是**软件自己声明的对外端口**。
+        # 凡是能被浏览器用的翻墙软件，都必须把对外那个口写进系统代理——这是操作系统
+        # 层面的协议，与软件叫什么、谁做的、什么版本无关。而同一个软件往往还有别的口
+        # 在听（内核/子进程之间的内部通道），那些口也过得了握手、也真能出去，
+        # 只是用户在自己的界面上永远看不到它们。挑中那种口，用户就会觉得"你搞错了"。
+        #
+        # 实测过一台 MonoCloud：界面上写 10801（系统代理里也是 10801），而内核另开了
+        # 51081，两个口都能翻墙、出口 IP 都一样。原来先扫常见端口、再用进程名提速，
+        # 结果 51081 被选中并记住，此后每轮都复用——界面上的 10801 反倒一次都没用过。
+        # 这类"同一软件多个可用口、该用哪个"的问题与具体软件无关，所以判据也不能
+        # 写在某个软件名下：**软件自己告诉系统用哪个，就用哪个。**
+        #
+        # 只是提到队首，不是跳过验证：它照样要过握手与节点两道门（下面的循环里做）。
+        # 读不出来（系统代理没设、是公司代理、API 不可用）就当没有这一条，不影响其余来源。
+        foreach ($p in (Get-SystemProxyLoopbackPorts)) {
+            if (($listening -contains $p) -and ($ordered -notcontains $p)) {
+                if (Test-HttpProxy $p) { $ordered += $p }
+            }
+        }
 
         # 来源 1（快路径）：常见端口扫描——绝大多数翻墙软件的默认端口，秒级命中
         foreach ($p in $KnownProxyPorts) {
@@ -1611,6 +1692,36 @@ function Get-CurrentState {
                 # 否则要等第 10 轮全扫，而用户此刻多半已经换到表外的端口上了。
                 $script:NeedDeepScan = $true
                 return "off"
+            }
+            # 优先权复核（约每 10 轮一次，纯本机读取、不联网）：现在用的这个端口
+            # 还是不是"软件自己声明的那个"。
+            #
+            # 为什么要有这一步：端口一旦被选中就会被记住、此后每轮优先复用，于是
+            # **先选错就永远错下去**。实测过一台 MonoCloud——内核另开的 51081 先被
+            # 选中并记住，界面公告的 10801 一次都没被用过，尽管它一直在候选集第一位。
+            # 只把优先级排对不够，"已经记错了"这件事必须能被纠回来。
+            #
+            # 判据是通用的：软件把哪个口写进系统代理，那个口就是它认定的对外端口。
+            # 与软件名无关。读不出来 / 是公司代理 / 系统代理没开时读回空集，
+            # 此时**不动**——没有更好的信息就不该改变现状。
+            if (($script:Round % 10) -eq 0) {
+                $declared = @(Get-SystemProxyLoopbackPorts)
+                if (($declared.Count -gt 0) -and ($declared -notcontains $port)) {
+                    foreach ($p2 in $declared) {
+                        if ($p2 -eq $port) { continue }
+                        # 三态比较，不是布尔：Test-PortListening 回的是
+                        # "listening"/"absent"/"unknown" 三个字符串，直接 -not 它
+                        # 恒为假（非空字符串都是 $true），那样这段纠错永远不会生效。
+                        if ((Test-PortListening $p2) -ne "listening") { continue }
+                        # 两道门都要过：是 HTTP 代理，且真能翻墙。少一道就会把
+                        # "另一个恰好也在监听的端口"误当成更好的选择。
+                        if (-not (Test-HttpProxy $p2)) { continue }
+                        if (-not (Test-NodeAlive $p2 -Force $true)) { continue }
+                        $script:CachedPort = $p2
+                        $script:LastAlivePort = $p2
+                        return "on:$p2"
+                    }
+                }
             }
             # 端口仍在监听：节点验证（15 秒节流，断开连接后内核仍活着时在此识别）
             if (Test-NodeAlive $port) { return "on:$port" }

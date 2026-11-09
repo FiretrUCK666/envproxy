@@ -1123,6 +1123,29 @@ EOF_MC
     _r14=$(grep -c 'if autorun_reload_needed ' "$LIB_DIR/runtime.sh" 2>/dev/null || printf '0')
     _selftest_assert_eq "set_autorun 真的调用了这个判据（调用点恰好 1 处）" "1" "$_r14"
 
+    # 系统代理里"软件自己声明的端口"优先——防止挑中用户看不见的内部端口。
+    #
+    # 为什么这条要单独钉：同一个翻墙软件常常开多个口（对外的那个 + 内核内部用的），
+    # 它们**都过得了握手、都真能翻墙、出口 IP 都一样**，所以三层判据一条都不会报错。
+    # 唯一的区别是"哪个是软件告诉系统的那个"，而那也是唯一与软件身份无关的判据。
+    # 实测过一台 MonoCloud（Windows 侧）：界面公告 10801，内核另开 51081，
+    # 结果注入了后者，用户看到的就是"你搞错了"。两端必须同一套判据。
+    echo "[9c] 系统声明的端口优先"
+    _selftest_assert_eq "回环 127.0.0.1" "0" "$(is_loopback_host '127.0.0.1'; echo $?)"
+    _selftest_assert_eq "回环 127.1.2.3（整段）" "0" "$(is_loopback_host '127.1.2.3'; echo $?)"
+    _selftest_assert_eq "回环 localhost" "0" "$(is_loopback_host 'localhost'; echo $?)"
+    _selftest_assert_eq "回环 ::1" "0" "$(is_loopback_host '::1'; echo $?)"
+    _selftest_assert_eq "非回环 10.0.0.5" "1" "$(is_loopback_host '10.0.0.5'; echo $?)"
+    _selftest_assert_eq "非回环 128.0.0.1" "1" "$(is_loopback_host '128.0.0.1'; echo $?)"
+    _selftest_assert_eq "非回环 域名" "1" "$(is_loopback_host 'proxy.example.com'; echo $?)"
+    # 优先权真的接进了候选发现：源码里必须出现"先读系统声明"这一步。
+    # 只测 is_loopback_host 是不够的——解析对了但没接进流程，行为不会变。
+    if grep -q 'get_system_proxy_loopback_ports' "$SCRIPT_DIR/lib/probe.sh" 2>/dev/null; then _gspp=1; else _gspp=0; fi
+    _selftest_assert_eq "候选发现里接了系统声明这一步" "1" "$_gspp"
+    # 纠错那一步同理：只排优先级不够，已经记错了必须能纠回来。
+    if grep -q '优先权复核' "$SCRIPT_DIR/lib/probe.sh" 2>/dev/null; then _prp=1; else _prp=0; fi
+    _selftest_assert_eq "已记错的端口能被纠回来（优先权复核）" "1" "$_prp"
+
     # 判"断"要同时满足"次数"和"时长"（与 Win 侧 Test-NodeVerdict 同形）。
     # 只数次数时，判据的时长是「次数 × 节流间隔」的乘积：改节流（省流量）会直接变成
     # 判"断"的耗时。拆开后两种失败都要被拦住——次数够时间不够、时间够次数不够。
