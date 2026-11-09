@@ -1046,8 +1046,14 @@ EOF_MC
     # 静默结束整个自检（后面一条都不打印）。拆开之后，哪一步出的问题一目了然。
     _rlock_pid=$(cat "$_rlock" 2>/dev/null || echo 0)
     _selftest_assert_eq "锁里记着持有者的 pid" "$$" "$_rlock_pid"
-    if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r8=0; else _r8=1; fi
+    # 第二次必须拿不到。调用方的 `>/dev/null 2>&1` 会把函数内部的报错一并吞掉
+    # （重定向作用于整个函数调用，连 xtrace 都进 /dev/null），所以这里只挡 stdout、
+    # 把 stderr 收进变量：函数若在 macOS 上异常退出，原因会留在日志里而不是消失。
+    _rlock_err=$(acquire_op_lock "$_rlock" 2>&1 >/dev/null); _r8=$?
     _selftest_assert_eq "持锁者还在时第二个拿不到" "1" "$_r8"
+    if [ -n "$_rlock_err" ]; then
+        echo "    （第二次拿锁的 stderr：$_rlock_err）"
+    fi
     # 陈旧锁（持有者已经不在）必须能被接管——否则一次崩溃就把用户锁死在门外。
     rm -f "$_rlock" 2>/dev/null || true
     printf '999999\n' > "$_rlock" 2>/dev/null || true
