@@ -1041,6 +1041,11 @@ EOF_MC
     _selftest_assert_eq "第一次拿锁成功" "1" "$_r6"
     if [ -f "$_rlock" ]; then _r7=1; else _r7=0; fi
     _selftest_assert_eq "锁文件存在" "1" "$_r7"
+    # 第二次必须拿不到。这里把每一步单独跑、结果存进变量再断言——
+    # 原来写成 `if acquire_op_lock ...; then ...` 一行，CI 的 macOS 上会在这一行
+    # 静默结束整个自检（后面一条都不打印）。拆开之后，哪一步出的问题一目了然。
+    _rlock_pid=$(cat "$_rlock" 2>/dev/null || echo 0)
+    _selftest_assert_eq "锁里记着持有者的 pid" "$$" "$_rlock_pid"
     if acquire_op_lock "$_rlock" >/dev/null 2>&1; then _r8=0; else _r8=1; fi
     _selftest_assert_eq "持锁者还在时第二个拿不到" "1" "$_r8"
     # 陈旧锁（持有者已经不在）必须能被接管——否则一次崩溃就把用户锁死在门外。

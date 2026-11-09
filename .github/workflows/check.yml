@@ -3638,8 +3638,11 @@ jobs:
       - name: mac 侧自检（真实运行）
         run: |
           set +e
-          /bin/bash mac/envproxy.sh self-test > /tmp/st.log 2>&1
+          /bin/bash -x mac/envproxy.sh self-test > /tmp/st.log 2> /tmp/st.err
           rc=$?
+          echo "== rc=$rc =="
+          echo "== stderr（set -u / 语法错误会在这里）=="
+          tail -40 /tmp/st.err
           cat /tmp/st.log
           if [ "$rc" -ne 0 ]; then
             grep -E '^  FAIL|unbound variable|syntax error|command not found' /tmp/st.log > /tmp/st.fail 2>/dev/null || true
