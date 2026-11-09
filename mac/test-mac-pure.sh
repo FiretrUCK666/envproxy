@@ -1341,6 +1341,11 @@ EOF_MC
         _cl_got=$(
             _SEG_COLORED=1
             _SEG_LINE=""
+            # 生产上 _help_render_line 只在 format_help_topic 里被调用，那时 _HELP_BLOCK
+            # 已经装着当前主题的整块正文（列宽是从它算的）。这里单独调也必须给同样的
+            # 前置条件——不给的话，set -u 下算列宽那一步读到未定义变量当场中止，
+            # 症状是"渲染报错"而不是"配色不对"，排查方向会跑偏。
+            _HELP_BLOCK="$_cl_case"
             _help_render_line "$_cl_case"
         )
         # 命令色**从配色表读**，不写死 32：颜色是可调的，写死数字会让"换一个颜色"
