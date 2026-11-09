@@ -3040,8 +3040,11 @@ EOF
         # 产物名必须是「程序基名 + 后缀」。名字里的基名来自 _sba_base；
         # 漏赋值时它静默变空，桌面上的图标于是叫「（翻墙）.app」——
         # 一路正常、没有报错，只是名字里少了程序名。
-        _selftest_assert_eq '壳子名字里带着程序基名' '1' \
-            "$(case "$(basename "$_st_p1")" in app.sh*) echo 1 ;; *) echo 0 ;; esac)"
+        # 用 if 而不是 `$(case ... esac)`：macOS 自带的 bash 3.2 对命令替换里的
+        # case 分支终止符会解析错（库代码里同一条限制有记录），换成 if 才两端都稳。
+        _st_n1=$(basename "$_st_p1")
+        if [ "${_st_n1#app.sh}" != "$_st_n1" ]; then _st_nm=1; else _st_nm=0; fi
+        _selftest_assert_eq '壳子名字里带着程序基名' '1' "$_st_nm"
         # 落点目录带空格：调用链里任何一处漏了引号，路径都会在这里被切成两段。
         # 空串碰巧不暴露（展开成空），带空格的目录才暴露。
         mkdir -p "$_st_t1/my apps" 2>/dev/null || true
