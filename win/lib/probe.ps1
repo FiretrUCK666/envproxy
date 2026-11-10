@@ -68,6 +68,27 @@ $KnownProxyPorts = @($ClientCatalog | ForEach-Object { $_.Ports } | Sort-Object 
 # 从目录表派生：进程名特征。
 $ProxyProcessPatterns = @($ClientCatalog | ForEach-Object { $_.Patterns } | Sort-Object -Unique)
 
+# 系统临时端口段的下界（IANA 建议 49152-65535，Windows 默认也是从这里开始）。
+#
+# 为什么这个数能用来区分"对外端口"与"内部端口"：
+# 翻墙软件对外开放的那个口是**用户配的、或者它默认固定的**，必须稳定可预测——
+# 否则浏览器书签、系统设置里的那串地址隔一次重启就失效了。所以它一律在
+# 49152 以下（Clash 7890、v2ray 10808、Shadowsocks 1080、MonoCloud 10801…）。
+# 而它内部内核进程之间通信用的口，是**向系统要的临时端口**，每次启动都换一个：
+# 实测 MonoCloud 的内核端口先 51081、重启后 56881，而界面公告的 10801 没变过。
+#
+# 所以"落在临时段里"是一个与软件身份无关的强信号：它**不可能是**软件公告给用户的对外口。
+# 这补上了系统代理读不到时的空白——用户开 TUN 之后系统代理会被关掉
+# （屏幕上是"Paused while TUN is handling traffic"），那时原来的判据失效，
+# 就只剩这条能区分"对外的"与"内核的"。
+$EphemeralPortMin = 49152
+
+# 这个端口是不是系统临时分配的（因而基本不可能是对外代理口）。
+function Test-EphemeralPort([int]$Port) {
+    return ($Port -ge $EphemeralPortMin -and $Port -le 65535)
+}
+
+
 # 这个端口在目录表里对应哪个客户端？查不到返回 $null。
 # 只用于**解释**（"7890 大概是 Clash 系的"），绝不用于授权。
 function Get-ClientByPort([int]$Port) {
@@ -726,15 +747,11 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
         #
         # 只是提到队首，不是跳过验证：它照样要过握手与节点两道门（下面的循环里做）。
         #
-        # 读不出来时（系统代理没设、是公司代理、或用户开了 TUN 后把系统代理关了）
-        # 就当没有这一条，退回下面两个来源。**这个降级是有意的，不是漏洞**：
-        #   · 系统代理关掉是用户自己做的选择，他知道自己在用什么；
-        #   · 想在此刻再找一条"更该用哪个"的判据，只能靠进程名匹配或端口属主——
-        #     那是项目的**贵信号**（会因权限、自研客户端、服务化部署而不定地失效），
-        #     而项目铁律写明"贵信号只许进解释，绝不许进授权"。
-        #     拿它排序等于让它参与决定用哪个端口，失效时会安静地选错。
-        #   · 宁可用"常见端口表的顺序"这种确定但可能不最优的判据，
-        #     也不用"进程名匹配"这种看起来更聪明、但会随环境失效的判据。
+        # 读不出来时（系统代理没设、是公司代理、或用户开了 TUN 后系统代理被自动关掉）
+        # 就当没有这一条，退回下面的来源。**用户开 TUN 是常见情形**：
+        # MonoCloud 界面上那行会变成 "Paused while TUN is handling traffic"，
+        # 而它的端口其实还在监听、也还能用。这条降级因此必须有个像样的替补判据，
+        # 见下面"来源 1.5"。
         foreach ($p in (Get-SystemProxyLoopbackPorts)) {
             if (($listening -contains $p) -and ($ordered -notcontains $p) -and ($selfPorts -notcontains $p)) {
                 if (Test-HttpProxy $p) { $ordered += $p }
@@ -824,6 +841,25 @@ function Find-CandidatePorts([bool]$FullScan = $true) {
                     if ($ordered.Count -gt 0) { break }
                 }
             }
+        }
+        # 最后一道：把"系统临时端口段里"的候选整体挪到队尾。
+        #
+        # 判据是通用的、不看软件名：翻墙软件对外公告的那个口必须稳定可预测
+        # （否则书签和系统设置里那串地址隔次重启就失效），所以它一律在 49152 以下；
+        # 而它内部内核进程之间通信用的口是向系统要的临时端口，每次启动都换。
+        # 实测 MonoCloud 的内核端口先 51081、重启后 56881，界面公告的 10801 没变过。
+        #
+        # 这条补的正是"系统代理读不到"的空白：用户开 TUN 之后系统代理会被自动关掉
+        # （MonoCloud 界面上写 "Paused while TUN is handling traffic"），那时来源 0
+        # 为空，就只剩这条能区分"对外的"与"内核的"。实测过没它的时候会注入 56881。
+        #
+        # **只是排序，不是排除**：真实用户完全可能把代理手工设到 50000 以上，
+        # 排到队尾仍会被选中（只要没有更靠前的可用端口）。排除就是误杀——
+        # 那会让这些用户的代理完全检测不到，比"选错一个内核端口"严重得多。
+        if ($ordered.Count -gt 1) {
+            $stable = @($ordered | Where-Object { -not (Test-EphemeralPort $_) })
+            $ephem = @($ordered | Where-Object { Test-EphemeralPort $_ })
+            $ordered = @($stable) + @($ephem)
         }
         # 跑到这里说明整段候选发现没有抛异常，结论可以信。
         $discoveryDone = $true

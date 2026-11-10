@@ -84,7 +84,32 @@ if ($loPort -gt 0) {
     } finally { try { $ln.Stop() } catch {} }
     Assert-Eq 'liveness: hostname on a dead port is dead' $false (Test-TcpAlive 'localhost' $loPort 500)
 }
-Assert-Eq 'liveness: an unresolvable host is dead, not an exception' $false (Test-TcpAlive 'no-such-host.invalid' 9 500)
+# "解析不出来就判死、不抛异常"——这条断言必须能区分"代码错了"和"环境不给验"。
+#
+# 开着 TUN 模式的翻墙软件（MonoCloud / Clash 的 FakeDNS / 全局 VPN）会接管所有
+# 出站连接：任何域名都被解析成一个假 IP（实测本机 `.invalid` 也返回 198.18.0.78），
+# 而且**连任何端口都"成功"**——它会先接受连接，等真流量来了再按域名转发。
+# 那种环境下"连不上"这件事压根造不出来，红的是环境不是代码。
+#
+# 所以这里先实地探一次：连不上才验"判死"；连得上就 SKIP 并说明原因。
+# 不硬断言，是因为硬断言的结论会是"把 TUN 关掉再跑"——那等于让使用者为跑测试
+# 改自己的网络环境，比漏验这一条糟糕得多。
+$__canFail = $false
+try {
+    $__probe = New-Object System.Net.Sockets.TcpClient
+    $__ar = $__probe.BeginConnect('no-such-host.invalid', 9, $null, $null)
+    if ($__ar.AsyncWaitHandle.WaitOne(800)) {
+        try { $__probe.EndConnect($__ar) } catch { $__canFail = $true }
+    } else {
+        $__canFail = $true
+    }
+    if ($__probe) { try { $__probe.Close() } catch {} }
+} catch { $__canFail = $true }
+if ($__canFail) {
+    Assert-Eq 'liveness: an unresolvable host is dead, not an exception' $false (Test-TcpAlive 'no-such-host.invalid' 9 500)
+} else {
+    Write-Host '  SKIP liveness: 本机有工具接管了全部出站连接（TUN / FakeDNS），造不出"连不上"'
+}
 # WinHTTP 输出里的 IPv6 必须整段取到，不能被中间冒号切开。
 $whRx = '\[[0-9A-Fa-f:]+\]:\d+|[A-Za-z0-9_\.\-]+:\d+'
 Assert-Eq 'winhttp: bracketed IPv6 is taken whole' '[::1]:7078' ([regex]::Match('Proxy Server(s) : [::1]:7078', $whRx).Value)

@@ -1069,3 +1069,51 @@ try {
     Set-Item -Path Function:Get-ListeningTcpConnections -Value $__savedListen
     Set-Item -Path Function:Get-SelfOwnedPorts -Value $__savedSelf
 }
+# 内核端口 vs 对外端口：靠"是不是系统临时端口"区分。
+#
+# 为什么需要这条：用户开 TUN 之后，翻墙软件会把系统代理关掉
+# （MonoCloud 界面上写 "Paused while TUN is handling traffic"），
+# 于是"软件自己声明的端口"这条判据读回空集，退回常见端口表的顺序。
+# 而内核端口也在监听、也过握手、也能翻墙，就会被选中——
+# 实测那台机器注入了 56881，而界面公告的是 10801。
+#
+# 判据是通用的：对外端口必须稳定可预测（否则书签与系统设置里的地址隔次重启就失效），
+# 所以一律在 49152 以下；内核端口是向系统要的临时端口，每次启动都换
+# （实测 51081 -> 56881，而 10801 没变）。
+Write-Host '[24d] ephemeral ports sort last'
+foreach ($c in @(
+    @{ Port = 10801; Eph = $false },
+    @{ Port = 7890;  Eph = $false },
+    @{ Port = 1080;  Eph = $false },
+    @{ Port = 17099; Eph = $false },
+    @{ Port = 49151; Eph = $false },
+    @{ Port = 49152; Eph = $true },
+    @{ Port = 51081; Eph = $true },
+    @{ Port = 56881; Eph = $true },
+    @{ Port = 65535; Eph = $true },
+    @{ Port = 0;     Eph = $false }
+)) {
+    Assert-Eq ("临时端口判定 " + $c.Port) $c.Eph (Test-EphemeralPort $c.Port)
+}
+# 排序：稳定端口在前，临时端口在后；两者都保留（不是排除）。
+$__saved = ${function:Get-ListeningTcpConnections}
+$__savedSelf = ${function:Get-SelfOwnedPorts}
+try {
+    function Get-SelfOwnedPorts { return @() }
+    function Get-ListeningTcpConnections {
+        return @(@(56881, 10801) | ForEach-Object {
+            [pscustomobject]@{ LocalAddress = '127.0.0.1'; LocalPort = [int]$_; OwningProcess = 0 }
+        })
+    }
+    $got = @(Find-CandidatePorts $true)
+    # 真实机器上 10801 可能不在监听，那时只剩 56881 —— 仍然正确（不能因此不注入）。
+    # 所以判据是"只要两个都在，稳定端口必须在前"，而不是"必须等于某个固定串"。
+    if ($got -contains 10801 -and $got -contains 56881) {
+        Assert-Eq '同时存在时稳定端口排在前' '10801' ([string]$got[0])
+    } else {
+        Write-Host '  SKIP 本机没同时监听这两个端口，跳过排序断言（判定边界已单独验过）'
+    }
+} finally {
+    Set-Item -Path Function:Get-ListeningTcpConnections -Value $__saved
+    Set-Item -Path Function:Get-SelfOwnedPorts -Value $__savedSelf
+}

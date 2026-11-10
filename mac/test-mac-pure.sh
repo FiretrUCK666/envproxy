@@ -1145,6 +1145,18 @@ EOF_MC
     # 纠错那一步同理：只排优先级不够，已经记错了必须能纠回来。
     if grep -q '优先权复核' "$SCRIPT_DIR/lib/probe.sh" 2>/dev/null; then _prp=1; else _prp=0; fi
     _selftest_assert_eq "已记错的端口能被纠回来（优先权复核）" "1" "$_prp"
+    # 内核端口 vs 对外端口：靠"是不是系统临时端口"区分（与 Win 侧同形）。
+    # 用户开 TUN 之后翻墙软件会把系统代理关掉，那时"软件自己声明的端口"读回空集，
+    # 而内核端口也在监听、也过握手、也能翻墙，就会被选中（实测注入了 56881）。
+    _selftest_assert_eq "临时端口 49151 不算" "1" "$(is_ephemeral_port 49151; echo $?)"
+    _selftest_assert_eq "临时端口 49152 算"   "0" "$(is_ephemeral_port 49152; echo $?)"
+    _selftest_assert_eq "临时端口 56881 算"   "0" "$(is_ephemeral_port 56881; echo $?)"
+    _selftest_assert_eq "常见端口 10801 不算" "1" "$(is_ephemeral_port 10801; echo $?)"
+    _selftest_assert_eq "常见端口 7890 不算"  "1" "$(is_ephemeral_port 7890; echo $?)"
+    _selftest_assert_eq "常见端口 1080 不算"  "1" "$(is_ephemeral_port 1080; echo $?)"
+    # 排序真的接进了候选发现（只测判定函数不够：判对了但没接进流程，行为不会变）。
+    if grep -q 'is_ephemeral_port "\$_p"' "$SCRIPT_DIR/lib/probe.sh" 2>/dev/null; then _ephw=1; else _ephw=0; fi
+    _selftest_assert_eq "候选发现里接了临时端口排序" "1" "$_ephw"
 
     # 判"断"要同时满足"次数"和"时长"（与 Win 侧 Test-NodeVerdict 同形）。
     # 只数次数时，判据的时长是「次数 × 节流间隔」的乘积：改节流（省流量）会直接变成

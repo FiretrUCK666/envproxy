@@ -123,6 +123,28 @@ devtools|调试代理|8888 8889 8080 9090|fiddler charles proxyman mitmproxy mit
 KNOWN_PORTS=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' 'NF>=3 {print $3}' | tr -s ' ' '\n' | grep -v '^$' | sort -un | tr '\n' ' ' | sed 's/ *$//')
 PATTERNS=$(printf '%s\n' "$CLIENT_CATALOG" | awk -F'|' 'NF>=4 {print $4}' | tr -s ' ' '\n' | grep -v '^$' | sort -u | tr '\n' ' ' | sed 's/ *$//')
 
+# 系统临时端口段的下界（IANA 建议 49152-65535；Windows 与 macOS 的默认值都是它）。
+#
+# 为什么这个数能区分"对外端口"与"内部端口"：
+# 翻墙软件对外开放的那个口是**用户配的、或它默认固定的**，必须稳定可预测——
+# 否则浏览器书签、系统设置里的那串地址隔次重启就失效了。所以它一律在 49152 以下
+# （Clash 7890、v2ray 10808、Shadowsocks 1080、MonoCloud 10801…）。
+# 而它内部内核进程之间通信用的口，是**向系统要的临时端口**，每次启动都换一个：
+# 实测 MonoCloud 的内核端口先 51081、重启后 56881，而界面公告的 10801 没变过。
+#
+# 两侧必须用**同一个常量**，不去读各自系统的动态范围：Windows 的能被 netsh 改、
+# macOS 的能被 sysctl 改，读系统值会让两端在同一台机器上算出不同结论，
+# 而门禁 6 要求两侧同形。这个数的语义是"这段是给临时连接用的"，
+# 两边的默认值本来就一样，写死它反而是稳定的那个选择。
+EPHEMERAL_PORT_MIN=49152
+
+# 这个端口是不是系统临时分配的（因而基本不可能是对外代理口）。
+is_ephemeral_port() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; esac
+    [ "$1" -ge "$EPHEMERAL_PORT_MIN" ] && [ "$1" -le 65535 ]
+}
+
+
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。
 # 不认品牌、不认版本：mihomo-party/flclash 已被 mihomo/clash 命中；Stash/Quantumult X 默认 Network Extension 模式、不产生本地口，故不单列。
 
@@ -1026,6 +1048,27 @@ find_candidate_ports() {
             _tail=$(test_http_proxy_batch $_rest || true)
             if [ -n "$_tail" ] && ! _in_list "$_tail" "$_cands"; then _cands="$_cands $_tail"; fi
         fi
+    fi
+    # 最后一道：把"系统临时端口段里"的候选整体挪到队尾。
+    #
+    # 判据是通用的、不看软件名：翻墙软件对外公告的那个口必须稳定可预测
+    # （否则书签和系统设置里那串地址隔次重启就失效），所以它一律在 49152 以下；
+    # 而它内部内核进程之间通信用的口是向系统要的临时端口，每次启动都换。
+    # 实测 MonoCloud 的内核端口先 51081、重启后 56881，界面公告的 10801 没变过。
+    #
+    # 这条补的正是"系统代理读不到"的空白：用户开 TUN 之后系统代理会被自动关掉
+    # （MonoCloud 界面上写 "Paused while TUN is handling traffic"），那时来源 0
+    # 为空，就只剩这条能区分"对外的"与"内核的"。实测过没它的时候会注入 56881。
+    #
+    # **只是排序，不是排除**：真实用户完全可能把代理手工设到 50000 以上，
+    # 排到队尾仍会被选中（只要没有更靠前的可用端口）。排除就是误杀——
+    # 那会让这些用户的代理完全检测不到，比"选错一个内核端口"严重得多。
+    if [ -n "$_cands" ]; then
+        _stable=""; _eph=""
+        for _p in $_cands; do
+            if is_ephemeral_port "$_p"; then _eph="$_eph $_p"; else _stable="$_stable $_p"; fi
+        done
+        _cands="$_stable$_eph"
     fi
     printf '%s' "$_cands" | sed 's/^ //'
 }
