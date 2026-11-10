@@ -392,7 +392,7 @@ t 银行、政务、公司内网这类，一翻墙就登不上，或者慢到没
 t 它们要的是「无论如何都直连」，哪怕别的程序都在翻墙。
 h 解决办法：给它建一个固定直连的图标
 t 打开菜单，选 5（高级功能），再选 2。挑程序（或输入路径），选放哪，确认。
-t 它会生成一个新程序壳子，名字后面带「直连」。点那个就一定不翻墙。
+t 它会生成一个新程序壳子，名字后面带「直连」。点那个就照常上网，不经过翻墙线路。
 t 同一个程序可以两个壳子都有：一个带「翻墙」、一个带「直连」，互不干扰。
 h 它是怎么做到的
 t 双击壳子启动程序时，会先把代理设置从那个程序的环境里拿掉，再启动它。
@@ -936,7 +936,7 @@ show_menu() {
 # @explain 「走代理」「固定直连」是菜单项的名字，用户按这两个词找菜单；不是解释机制
 ADVANCED_ITEMS=(
     '1|NewProxyIcon|_shortcut_new_flow_proxy|icon|do|给程序建固定走代理的快捷方式|挑一个已装的程序'
-    '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不想翻墙的软件，双击它一定不翻墙'
+    '2|NewDirectIcon|_shortcut_new_flow_direct|icon|do|给程序建固定直连的快捷方式|适合不该连翻墙线路的软件；开着 TUN 时无效'
     '3|ManageIcons|_shortcut_manage_page|icon|do|管理已建的|看状态、删掉不要的'
     '4|Rescue|show_rescue_page|rescue|do|网络与代理修复|网页或终端工具连不上网时，先来这里查'
     '5|DockerGuide|show_docker_guide_page|guide|read|Docker 里也想翻墙|要改 Docker 自己的设置，这里只讲怎么改'

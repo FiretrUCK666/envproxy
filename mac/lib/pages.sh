@@ -680,6 +680,20 @@ show_status() {
         echo ""
         _status_row "$STATUS_LABEL_TERMSYNC" "已生效（已开着的窗口敲回车即跟上）" ok
     fi
+    # 网络层接管（TUN / 全局 VPN）的一句话说明。
+    #
+    # 为什么要有这一行：那种模式下"直连"规矩做了等于没做（判据与理由见
+    # probe 层的 is_network_layer_takeover）。用户此刻在状态页上看着一切正常，
+    # 而他桌面上的直连壳子其实是失效的——不在这里说一句，他要等实际用错才发现。
+    #
+    # 措辞是"说明"不是"报错"：TUN 本身完全正常，开了它反而是好事（全局生效）。
+    # 所以用 dim 而不是 warn，也不进问题清单——那是"我现在正常吗"的答案，
+    # 这个是"有个前提你需要知道"。与 Windows 侧逐字相同。
+    is_network_layer_takeover 2>/dev/null || true
+    if [ "${NET_TAKEOVER_ACTIVE:-0}" = "1" ]; then
+        echo ""
+        _status_row "$STATUS_LABEL_TAKEOVER" '检测到 TUN / 全局 VPN 已接管全部流量（「直连」图标对它无效，其余照常）' dim
+    fi
     echo ""
 
     # 版本那三行：正常时压成一行。原来"本地版本/最新版本/更新状态"各占一行、

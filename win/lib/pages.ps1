@@ -195,6 +195,21 @@ function Format-StatusLines($st, [switch]$NoLog) {
             & $row $StatusLabels.Advanced ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
     }
+    # 网络层接管（TUN / 全局 VPN）的一句话说明。
+    #
+    # 为什么要有这一行：那种模式下"直连"图标做了等于没做（判据与理由见
+    # probe 层的 Get-NetworkTakeoverState）。用户此刻在状态页上看着一切正常，
+    # 而他桌面上的直连图标其实是失效的——不在这里说一句，他要等实际用错才发现。
+    #
+    # 措辞是"说明"不是"报错"：TUN 本身完全正常，开了它反而是好事（全局生效）。
+    # 所以用 dim 而不是 warn，也不进 Get-StatusProblems 的问题清单——
+    # 那是"我现在正常吗"的答案，而这个是"有个前提你需要知道"。
+    # 两版渲染器说同一句话：措辞与 Show-StatusSnapshot 里那一段逐字相同。
+    $takeoverText = Get-NetworkTakeoverNote
+    if ($takeoverText) {
+        & $line '' 'text'
+        & $row $StatusLabels.Takeover $takeoverText 'dim'
+    }
     # 版本（与上面的状态分组分开：那是当前状态，这是软件版本）
     # 文案从 Get-VersionText 取——与静态页**同一份判断**。
     # 这里原来自己写了一小套（只认"相等=最新 / 否则=新版可用"），
@@ -742,6 +757,18 @@ function Get-StatusSnapshot {
     return $st
 }
 
+# 网络层接管（TUN / 全局 VPN）的一句话说明。**两个渲染器共用这一份措辞**：
+# 实时刷新版与静态快照版各写一遍的话，早晚一边改了另一边没改，
+# 而"两版说出不同的话"是本项目反复出过的那类缺陷。
+#
+# 返回空串表示不需要说话（没有接管 / 读不出来）。读不出来时**不提示**：
+# 没有证据就不许给用户加一行他看不懂的警告。
+function Get-NetworkTakeoverNote {
+    $tk = $null
+    try { $tk = Get-NetworkTakeoverState } catch { return '' }
+    if (-not $tk -or -not $tk.Active) { return '' }
+    return '检测到 TUN / 全局 VPN 已接管全部流量（「直连」图标对它无效，其余照常）'
+}
 # 状态页的一行：左列标签固定一种颜色，右侧内容按状态取角色。
 #
 # 为什么不一整行一个颜色：标签（"监控进程"、"翻墙代理"）是**固定的名词**，
@@ -943,6 +970,13 @@ function Show-StatusSnapshot($st) {
         } else {
             Write-StatusRow $StatusLabels.Advanced ("{0} 个图标，但固定入口没在工作（它们会退回直读当前代理，不影响使用）" -f $relayIconCount) 'dim'
         }
+    }
+    # 网络层接管（TUN / 全局 VPN）的说明。措辞取自 Get-NetworkTakeoverNote，
+    # 与实时刷新版**同一份**——两版各写一遍早晚会漂移。
+    $takeoverText = Get-NetworkTakeoverNote
+    if ($takeoverText) {
+        Write-Host ''
+        Write-StatusRow $StatusLabels.Takeover $takeoverText 'dim'
     }
 
     Write-Host ''

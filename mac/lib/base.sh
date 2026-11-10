@@ -1084,6 +1084,9 @@ STATUS_LABEL_VARS="代理变量"
 STATUS_LABEL_LASTUPDATE="上次更新"
 STATUS_LABEL_SYSPROXY="系统代理"
 STATUS_LABEL_TERMSYNC="终端同步"
+# 网络层接管（TUN / 全局 VPN）那一行。**两侧都有**：mac 虽然没有启动器，
+# 但"直连"规矩同样存在（造独立 wrapper .app），同样会被 TUN 架空。
+STATUS_LABEL_TAKEOVER="流量走向"
 STATUS_LABEL_VERSION="版本"
 
 # 菜单表与它的纯查询函数

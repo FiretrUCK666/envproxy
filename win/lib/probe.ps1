@@ -209,6 +209,149 @@ function ConvertFrom-NetstatOutput([string[]]$Raw) {
 #
 # PID 不是必需项：只有"按进程名提速"那一步要用它，而那一步只是加速（见 Find-CandidatePorts
 # 里的两轮来源）。所以 ① 不带 PID 完全够用；需要 PID 时再单独取一次（只在候选端口不空时）。
+# ------------------------------------------------------------------------------
+# 网络层接管（TUN / 透明代理 / 全局 VPN）的判定
+# ------------------------------------------------------------------------------
+#
+# 要回答的问题只有一个：**"程序看不到代理变量" 还等不等于 "这个程序不翻墙"？**
+#
+# 本项目所有"让某个程序不走代理"的能力（固定直连图标、状态提示）都建立在
+# 那个等式成立之上——它们唯一的机制就是把代理变量从子进程环境里删掉。
+# 而一旦有东西在网络层接管了流量，等式就不成立了：程序读不到任何代理地址，
+# 以为自己在上直连，实际数据包在网卡那一层被抓走送进了隧道。
+# 实测：清空全部代理变量、curl --noproxy '*' 访问 google 仍 200，出口仍是节点 IP。
+# 也就是固定直连在那种环境下**做了等于没做**，而屏幕还告诉他"一定不翻墙"。
+#
+# 这不针对任何具体软件：TUN 模式的 Clash / mihomo / sing-box / MonoCloud、
+# 全局 VPN、企业透明代理，表现都是同一个，所以判据不能写在某个软件名下。
+#
+# **判据：本机有足够多"覆盖公网"的宽路由。**
+#
+# 为什么不看"有没有隧道网卡"：Tailscale 也是隧道网卡，但它只挂几条精确的 /32
+# （自己那几台机器），不接管公网，那种情况下固定直连照样有效。
+# 实测对照（本机同时装着 MonoCloud 与 Tailscale）：
+#   MonoCloud（Meta Tunnel）     公网宽路由 186 条，含 208.0.0.0/4、200.0.0.0/5
+#   Tailscale（Tailscale Tunnel）公网路由 3 条，全是 100.x 的 /32
+# 所以真正的信号是"路由把公网地址空间大面积收进来了"，不是"有隧道"。
+#
+# 为什么不看默认路由：Smart（规则）模式**不动默认路由**——它往隧道网卡上加
+# 一堆网段路由做分流（实测 189 条），默认路由仍指向物理网卡。
+# 只看默认路由会把最常见的规则模式整个漏掉。
+#
+# 阈值 20：物理网卡通常 0-3 条，规则模式的隧道几十到几百条，两边都远。
+
+# 把 route print 的 Active Routes 段解析成路由条目。纯函数：喂文本，不打外部命令的桩。
+# 只认 5 列且前三列是 IPv4 形状的行；Interface List、表头、IPv6 段、持久路由段
+# 都会因为不匹配而被跳过。
+function ConvertFrom-RoutePrint([string[]]$Raw) {
+    $out = New-Object System.Collections.ArrayList
+    if (-not $Raw) { return @() }
+    $ipv4 = '^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+(\d{1,3}(?:\.\d{1,3}){3})\s+(\S+)\s+(\S+)\s+(\d+)\s*$'
+    $inActive = $false
+    foreach ($line in $Raw) {
+        if ($line -match '^\s*Active Routes:\s*$') { $inActive = $true; continue }
+        if ($line -match '(Persistent Routes:|IPv6 Route Table)') { $inActive = $false; continue }
+        if (-not $inActive) { continue }
+        $m = [regex]::Match($line, $ipv4)
+        if (-not $m.Success) { continue }
+        [void]$out.Add([pscustomobject]@{
+            Destination = $m.Groups[1].Value
+            Mask        = $m.Groups[2].Value
+            Gateway     = $m.Groups[3].Value
+            Interface   = $m.Groups[4].Value
+            Metric      = [int]$m.Groups[5].Value
+        })
+    }
+    return @($out)
+}
+
+# 掩码换位数（0-32）。掩码不连续（非法）返回 -1。
+function Get-RouteMaskBits([string]$Mask) {
+    if (-not $Mask) { return -1 }
+    $bytes = $Mask -split '\.'
+    if ($bytes.Count -ne 4) { return -1 }
+    $bits = 0
+    $sawZero = $false
+    foreach ($b in $bytes) {
+        $v = 0
+        if (-not [int]::TryParse($b, [ref]$v)) { return -1 }
+        if ($v -lt 0 -or $v -gt 255) { return -1 }
+        for ($i = 7; $i -ge 0; $i--) {
+            if ((($v -shr $i) -band 1) -eq 1) {
+                if ($sawZero) { return -1 }
+                $bits++
+            } else {
+                $sawZero = $true
+            }
+        }
+    }
+    return $bits
+}
+
+# 这个目标网段是不是"公网"。粗筛，只看第一段（足够把内网/保留段排掉）。
+# 误判一条的代价只是阈值多算一条，不影响结论。
+function Test-PublicRouteTarget([string]$Destination) {
+    if (-not $Destination) { return $false }
+    $parts = $Destination -split '\.'
+    if ($parts.Count -ne 4) { return $false }
+    $a = 0; $b = 0
+    if (-not [int]::TryParse($parts[0], [ref]$a)) { return $false }
+    if (-not [int]::TryParse($parts[1], [ref]$b)) { return $false }
+    # 本网络 / 私有 / 回环 / 链路本地 / 组播与保留
+    if ($a -eq 0 -or $a -eq 10 -or $a -eq 127 -or $a -ge 224) { return $false }
+    if ($a -eq 172 -and $b -ge 16 -and $b -le 31) { return $false }
+    if ($a -eq 192 -and $b -eq 168) { return $false }
+    if ($a -eq 169 -and $b -eq 254) { return $false }
+    # 100.64/10：运营商级 NAT 段，Tailscale 用它
+    if ($a -eq 100 -and $b -ge 64 -and $b -le 127) { return $false }
+    return $true
+}
+
+# 本机是否有"网络层接管"在生效。
+#
+# 返回 hashtable 而不是布尔：调用方除了"有没有"，还要能说清"凭什么"——
+# 状态页要显示证据，问题报告要带依据。
+#   Active      是否判定为接管
+#   RouteCount  覆盖公网的宽路由条数
+#   Reason      一句话依据（给人看）
+#   Unknown     读不出来（此时**不当成接管**：没有证据不许吓人）
+$NetworkTakeoverRouteThreshold = 20
+
+function Get-NetworkTakeoverState {
+    $res = @{ Active = $false; RouteCount = 0; Reason = ''; Unknown = $false }
+    $raw = $null
+    try {
+        $routeExe = Join-Path ([string]$env:SystemRoot) 'System32\route.exe'
+        if (-not (Test-Path -LiteralPath $routeExe)) { $routeExe = 'route.exe' }
+        $raw = & $routeExe print -4 2>$null
+    } catch { $raw = $null }
+    if (-not $raw) {
+        # 读不出来就不知道。**不许当成"有接管"**——那会让固定直连在正常机器上
+        # 也提示"不生效"，把罕见情况变成普遍的假警告。
+        $res.Unknown = $true
+        $res.Reason = '读不到本机路由表，无法判断是否有网络层接管'
+        return $res
+    }
+    $wide = 0
+    foreach ($r in @(ConvertFrom-RoutePrint $raw)) {
+        if (-not (Test-PublicRouteTarget $r.Destination)) { continue }
+        $bits = Get-RouteMaskBits $r.Mask
+        # 只数"宽"的：掩码 <= 24 表示至少覆盖一个 C 段以上。
+        # /32 那种精确单机路由（Tailscale 的 100.x、云元数据）不算——
+        # 它们不可能接管"某个程序的全部流量"。
+        if ($bits -lt 0 -or $bits -gt 24) { continue }
+        $wide++
+    }
+    $res.RouteCount = $wide
+    if ($wide -ge $NetworkTakeoverRouteThreshold) {
+        $res.Active = $true
+        $res.Reason = ('本机有 {0} 条覆盖公网的路由，流量被网络层接管（TUN / 透明代理 / 全局 VPN）' -f $wide)
+    } else {
+        $res.Reason = ('本机只有 {0} 条覆盖公网的路由，没有网络层接管' -f $wide)
+    }
+    return $res
+}
+
 function Get-ListeningTcpConnections {
     # ---- ① 进程内 .NET 接口 ----
     $apiWhy = ""

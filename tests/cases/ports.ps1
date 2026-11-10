@@ -1117,3 +1117,75 @@ try {
     Set-Item -Path Function:Get-ListeningTcpConnections -Value $__saved
     Set-Item -Path Function:Get-SelfOwnedPorts -Value $__savedSelf
 }
+# 网络层接管（TUN / 全局 VPN）的判定——"固定直连还成不成立"的那个前提。
+#
+# 为什么必须钉：固定直连的全部机制就是"让子进程看不到代理变量"，它假定
+# "看不到代理 = 不翻墙"。一旦有东西在网络层接管流量，这个假定就错了
+# （实测：清空代理变量 + curl --noproxy 访问 google 仍 200，出口仍是节点 IP）。
+# 判错两个方向都有代价：漏报 = 我们向用户承诺的事做不到；误报 = 正常机器上
+# 天天提示"你那个图标没用"，把一个罕见情况变成普遍噪音。
+Write-Host '[24e] network-layer takeover detection'
+# 纯函数：掩码换算
+foreach ($c in @(
+    @{ Mask = '255.0.0.0';       Bits = 8 },
+    @{ Mask = '255.255.0.0';     Bits = 16 },
+    @{ Mask = '255.255.255.0';   Bits = 24 },
+    @{ Mask = '255.255.255.255'; Bits = 32 },
+    @{ Mask = '0.0.0.0';         Bits = 0 },
+    @{ Mask = '254.0.0.0';       Bits = 7 },
+    @{ Mask = '255.0.255.0';     Bits = -1 }   # 不连续 -> 非法
+)) {
+    Assert-Eq ("掩码位数 " + $c.Mask) $c.Bits (Get-RouteMaskBits $c.Mask)
+}
+# 纯函数：公网粗筛
+foreach ($c in @(
+    @{ Dest = '8.0.0.0';       Public = $true },
+    @{ Dest = '208.0.0.0';     Public = $true },
+    @{ Dest = '10.0.0.0';      Public = $false },
+    @{ Dest = '172.16.0.0';    Public = $false },
+    @{ Dest = '172.32.0.0';    Public = $true },   # 172.32 不在私有段
+    @{ Dest = '192.168.0.0';   Public = $false },
+    @{ Dest = '127.0.0.0';     Public = $false },
+    @{ Dest = '169.254.0.0';   Public = $false },
+    @{ Dest = '100.64.0.0';    Public = $false },  # CGNAT / Tailscale
+    @{ Dest = '100.100.100.100'; Public = $false },
+    @{ Dest = '224.0.0.0';     Public = $false },
+    @{ Dest = '0.0.0.0';       Public = $false }
+)) {
+    Assert-Eq ("公网判定 " + $c.Dest) $c.Public (Test-PublicRouteTarget $c.Dest)
+}
+# 纯函数：解析 route print 样本
+$__sampleRoutes = @(
+    '===========================================================================',
+    'Interface List',
+    ' 46...........................Meta Tunnel',
+    '===========================================================================',
+    '',
+    'IPv4 Route Table',
+    '===========================================================================',
+    'Active Routes:',
+    'Network Destination        Netmask          Gateway       Interface  Metric',
+    '          0.0.0.0          0.0.0.0     192.168.30.1   192.168.30.199     35',
+    '          8.0.0.0        254.0.0.0       198.18.0.2       198.18.0.1      0',
+    '        208.0.0.0        240.0.0.0       198.18.0.2       198.18.0.1      0',
+    '    100.107.10.84  255.255.255.255         On-link     100.107.10.84      5',
+    '        127.0.0.0        255.0.0.0         On-link         127.0.0.1    331',
+    '===========================================================================',
+    'Persistent Routes:',
+    '  Network Address          Netmask  Gateway Address  Metric',
+    '          0.0.0.0          0.0.0.0      192.168.1.1  Default',
+    '==========================================================================='
+)
+$__rows = @(ConvertFrom-RoutePrint $__sampleRoutes)
+Assert-Eq 'route print: 只取 Active Routes 段' 5 $__rows.Count
+Assert-Eq 'route print: 首条目标正确' '0.0.0.0' $__rows[0].Destination
+Assert-Eq 'route print: 首条掩码正确' '0.0.0.0' $__rows[0].Mask
+Assert-Eq 'route print: 首条跃点正确' '35' ([string]$__rows[0].Metric)
+# 持久路由段不能被算进来（否则会多出两条，且"Default"那栏解析不了）
+Assert-Eq 'route print: 持久路由段被跳过' $false (@($__rows | Where-Object { $_.Metric -eq 0 -and $_.Destination -eq '0.0.0.0' -and $_.Mask -eq '0.0.0.0' }).Count -gt 1)
+# 端到端：样本里 2 条宽公网路由 < 阈值 -> 不算接管
+$__wide = @($__rows | Where-Object {
+    (Test-PublicRouteTarget $_.Destination) -and ((Get-RouteMaskBits $_.Mask) -ge 0) -and ((Get-RouteMaskBits $_.Mask) -le 24)
+})
+Assert-Eq '样本里只有 2 条宽公网路由' 2 $__wide.Count
+Assert-Eq '阈值常量是 20' 20 $NetworkTakeoverRouteThreshold

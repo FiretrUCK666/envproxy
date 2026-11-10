@@ -472,6 +472,9 @@ $StatusLabels = [ordered]@{
     SysProxy  = '系统代理'
     TermSync  = '终端同步'
     Advanced  = '高级功能'
+    # 网络层接管（TUN / 全局 VPN）那一行。与 Advanced 分开：那行说的是图标，
+    # 这行说的是"流量去了哪"，两个不同的事实共用一个标签会让屏幕读起来自相矛盾。
+    Takeover  = '流量走向'
     Version   = '版本'
 }
 

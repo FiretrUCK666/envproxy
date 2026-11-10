@@ -66,7 +66,7 @@ $ShortcutModes = @(
     @{ Id = 'direct'; Action = 'direct'
        Suffix = '（直连）';   Label = '直连'
        AliasSuffixes = @('（固定直连）')
-       Note = '双击它启动的程序一定不翻墙，哪怕别的程序都在翻墙。'
+       Note = '双击它启动的程序照常上网，不经过翻墙线路。开着 TUN 时这条不成立。'
        Desc = '通过 EnvProxy 直连启动：'; Role = 'dim' }
 )
 
@@ -1052,7 +1052,7 @@ $AdvancedItems = @(
        Name='给程序建固定走代理的快捷方式'; Hint='挑一个已装的程序，或手动输入路径'
        Handler='Invoke-NewProxyShortcutFlow' }
     @{ Key='2'; Action='NewDirectIcon'; Module='icon';   Kind='do'
-       Name='给程序建固定直连的快捷方式'; Hint='适合不想翻墙的软件，双击它一定不翻墙'
+       Name='给程序建固定直连的快捷方式'; Hint='适合不该连翻墙线路的软件；开着 TUN 时无效'
        Handler='Invoke-DirectShortcutFlow' }
     @{ Key='3'; Action='ManageIcons';   Module='icon';   Kind='do'
        Name='管理已建的';               Hint='看状态、删掉不要的'
@@ -1627,6 +1627,25 @@ function Invoke-NewProxyShortcutFlow([string]$ModeId = $DefaultShortcutMode) {
     # 措辞只讲"对他有什么影响"，不讲内核、参数这些他不需要知道的东西。
     if ($isChromium) {
         Write-Styled 'text' ('  适配    ' + '这个程序需要单独指定，已自动带上')
+    }
+    # 直连模式在"网络层被接管"的环境下做不到它承诺的事，必须在按 y 之前说清。
+    #
+    # 为什么不能等建完再提示、或只在管理页里写一句：这一屏是他唯一的决策点，
+    # 而这件事直接改变"这个图标值不值得建"的判断。等建完才说，他会先建、
+    # 用、发现没用、再回来删——三步都白做。
+    #
+    # 判据是通用的（见 probe 层 Get-NetworkTakeoverState）：不看是不是 TUN、
+    # 哪家软件，只看"本机路由是否把公网大面积收走了"。所以这段话对任何
+    # 翻墙软件都成立，不需要为新的软件再写一遍。
+    if ($mode.Action -eq 'direct') {
+        $takeover = Get-NetworkTakeoverState
+        if ($takeover.Active) {
+            Write-Host ''
+            Write-Styled 'warn' '  注意：这台机器现在有 TUN / 全局 VPN 在接管全部流量。'
+            Write-Styled 'dim'  '        那种模式下所有程序都走翻墙线路，「直连」图标管不了它——'
+            Write-Styled 'dim'  '        双击出来的程序照样翻墙。'
+            Write-Styled 'dim'  '        真要它直连：在翻墙软件里把这个程序加进直连规则，或关掉 TUN。'
+        }
     }
 
     Write-Host ''

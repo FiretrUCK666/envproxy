@@ -1158,6 +1158,84 @@ EOF_MC
     if grep -q 'is_ephemeral_port "\$_p"' "$SCRIPT_DIR/lib/probe.sh" 2>/dev/null; then _ephw=1; else _ephw=0; fi
     _selftest_assert_eq "候选发现里接了临时端口排序" "1" "$_ephw"
 
+    # 网络层接管（TUN / 全局 VPN）的判定——"固定直连还成不成立"的那个前提。
+    #
+    # 为什么必须钉：固定直连的全部机制就是"让子进程看不到代理变量"，它假定
+    # "看不到代理 = 不翻墙"。一旦有东西在网络层接管流量，这个假定就错了
+    # （Windows 实测：清空代理变量 + curl --noproxy 访问 google 仍 200，出口仍是节点 IP）。
+    # 判错两个方向都有代价：漏报 = 我们向用户承诺的事做不到；
+    # 误报 = 正常机器上天天提示"你那个图标没用"，把罕见情况变成普遍噪音。
+    # 用桩喂固定的路由表样本，不依赖本机真实网络（跑在 CI 的 Mac 上也要有确定结论）。
+    echo "[9d] 网络层接管的判定"
+    _netstat_saved=$(declare -f netstat 2>/dev/null || true)
+    _ntk_run() {
+        # $1 = 样本文件
+        #
+        # **先把参数存进变量，再在桩里用它**：`netstat() { cat "$1"; }` 里的 $1
+        # 取的是 netstat 自己被调用时的第一个参数（这里是 `-rn`），不是 _ntk_run 的。
+        # 实测踩过：那样写出来样本压根没被读，三条用例全变成 0|0，
+        # 而"干净机器"那条恰好也是 0|0 —— 于是看起来只有 TUN 那条红，
+        # 像判据错了，实际是测试自己的作用域写错了。
+        _ntk_sample="$1"
+        netstat() { cat "$_ntk_sample"; }
+        is_network_layer_takeover
+        echo "$NET_TAKEOVER_ACTIVE|$NET_TAKEOVER_ROUTES"
+    }
+    _ntk_clean="$_sandbox/routes_clean.txt"
+    printf '%s\n' \
+        'Routing tables' '' 'Internet:' \
+        'Destination        Gateway            Flags        Netif Expire' \
+        'default            192.168.1.1        UGScg          en0' \
+        '127                127.0.0.1          UCS            lo0' \
+        '192.168.1          link#5             UCS            en0' \
+        '224.0.0/4          link#5             UmCS           en0' > "$_ntk_clean"
+    _selftest_assert_eq "干净机器（只有默认路由与私有段）不算接管" "0|0" "$(_ntk_run "$_ntk_clean")"
+
+    _ntk_tun="$_sandbox/routes_tun.txt"
+    {
+        printf '%s\n' 'Routing tables' '' 'Internet:' \
+            'Destination        Gateway            Flags        Netif Expire' \
+            'default            192.168.1.1        UGScg          en0'
+        # 规则模式的 TUN 会往隧道网卡上加几十条网段路由
+        _ntk_i=8
+        while [ "$_ntk_i" -le 38 ]; do
+            printf '%s\n' "$_ntk_i                 198.18.0.1         UGSc          utun3"
+            _ntk_i=$((_ntk_i + 1))
+        done
+        printf '%s\n' '100.64/10          link#23            UCS            utun3' \
+            '127                127.0.0.1          UCS            lo0'
+    } > "$_ntk_tun"
+    _ntk_r=$(_ntk_run "$_ntk_tun")
+        # 样本从 8 数到 38 共 31 个数，其中 10 落在私有段（10.0.0.0/8）被正确排除，
+    # 所以命中 30 条。断言的数字要跟着样本走——写 31 会让人以为少算了一条。
+    _selftest_assert_eq "规则模式 TUN（30 条公网网段路由）判为接管" "1" "$(printf '%s' "$_ntk_r" | cut -d'|' -f1)"
+    _selftest_assert_eq "接管的条数统计正确（10 那条被私有段规则排除）" "30" "$(printf '%s' "$_ntk_r" | cut -d'|' -f2)"
+
+    # 只挂几条精确 /32 的隧道（Tailscale 那种）不该判成接管——
+    # 它接管的是自己那几台机器，不接管公网，固定直连照样有效。
+    _ntk_ts="$_sandbox/routes_ts.txt"
+    printf '%s\n' \
+        'Routing tables' '' 'Internet:' \
+        'Destination        Gateway            Flags        Netif Expire' \
+        'default            192.168.1.1        UGScg          en0' \
+        '100.107.10.84      100.107.10.84      UH             utun3' \
+        '100.100.100.100    100.100.100.100    UH             utun3' \
+        '100.102.148.66     100.102.148.66     UH             utun3' \
+        '127                127.0.0.1          UCS            lo0' > "$_ntk_ts"
+    _selftest_assert_eq "只有 /32 的隧道（Tailscale 那种）不算接管" "0|0" "$(_ntk_run "$_ntk_ts")"
+
+    # 读不到路由表时不许当成接管（没有证据不许吓人）
+    netstat() { return 1; }
+    is_network_layer_takeover
+    _selftest_assert_eq "读不到路由表时不判接管" "0" "$NET_TAKEOVER_ACTIVE"
+    # 恢复 netstat（它在生产里是外部命令，测试里不要留下函数桩）
+    if [ -n "$_netstat_saved" ]; then eval "$_netstat_saved"; else unset -f netstat 2>/dev/null || true; fi
+    # 接线检查：状态页与建图标确认页真的用了这个判据
+    if grep -q 'NET_TAKEOVER_ACTIVE' "$SCRIPT_DIR/lib/pages.sh" 2>/dev/null; then _nkw=1; else _nkw=0; fi
+    _selftest_assert_eq "状态页接了网络层接管的提示" "1" "$_nkw"
+    if grep -q 'is_network_layer_takeover' "$SCRIPT_DIR/lib/shortcut.sh" 2>/dev/null; then _nks=1; else _nks=0; fi
+    _selftest_assert_eq "建直连图标的确认页接了这条判据" "1" "$_nks"
+
     # 判"断"要同时满足"次数"和"时长"（与 Win 侧 Test-NodeVerdict 同形）。
     # 只数次数时，判据的时长是「次数 × 节流间隔」的乘积：改节流（省流量）会直接变成
     # 判"断"的耗时。拆开后两种失败都要被拦住——次数够时间不够、时间够次数不够。

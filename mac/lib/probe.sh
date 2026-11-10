@@ -143,6 +143,96 @@ is_ephemeral_port() {
     case "$1" in ''|*[!0-9]*) return 1 ;; esac
     [ "$1" -ge "$EPHEMERAL_PORT_MIN" ] && [ "$1" -le 65535 ]
 }
+# ------------------------------------------------------------------------------
+# 网络层接管（TUN / 透明代理 / 全局 VPN）的判定
+# ------------------------------------------------------------------------------
+#
+# 要回答的问题只有一个：**"程序看不到代理变量" 还等不等于 "这个程序不翻墙"？**
+#
+# 本项目所有"让某个程序不走代理"的能力（固定直连图标、状态提示）都建立在
+# 那个等式成立之上——它们唯一的机制就是把代理变量从子进程环境里删掉。
+# 而一旦有东西在网络层接管了流量，等式就不成立了：程序读不到任何代理地址，
+# 以为自己在上直连，实际数据包在网卡那一层被抓走送进了隧道。
+# 也就是固定直连在那种环境下**做了等于没做**，而屏幕还告诉他"一定不翻墙"。
+#
+# 这不针对任何具体软件：TUN 模式的 Clash / mihomo / sing-box / Surge、
+# 全局 VPN、企业透明代理，表现都是同一个，所以判据不能写在某个软件名下。
+#
+# **判据：本机有足够多"覆盖公网"的宽路由。**
+#
+# 为什么不看"有没有 utun 网卡"：Tailscale 也是 utun，但它只挂几条精确的 /32
+# （自己那几台机器），不接管公网，那种情况下固定直连照样有效。
+# 真正的信号是"路由把公网地址空间大面积收进来了"，不是"有隧道"。
+#
+# 为什么不看默认路由：Smart（规则）模式**不动默认路由**——它往隧道网卡上加
+# 一堆网段路由做分流（Windows 实测 189 条），默认路由仍指向物理网卡。
+# 只看默认路由会把最常见的规则模式整个漏掉。
+#
+# 阈值 20：物理网卡通常 0-3 条，规则模式的隧道几十到几百条，两边都远。
+NETWORK_TAKEOVER_ROUTE_THRESHOLD=20
+
+# 本机是否有"网络层接管"在生效。
+# 设三个全局变量（bash 3.2 没有引用参数，与项目其余部分同一手法）：
+#   NET_TAKEOVER_ACTIVE  1 = 有接管，0 = 没有
+#   NET_TAKEOVER_ROUTES  覆盖公网的宽路由条数
+#   NET_TAKEOVER_REASON  一句话依据（给人看）
+# 读不出来时 ACTIVE=0 且 REASON 说明"读不到"——**没有证据不许吓人**：
+# 判成"有接管"会让固定直连在正常机器上普遍假警告，比漏报更糟。
+is_network_layer_takeover() {
+    NET_TAKEOVER_ACTIVE=0
+    NET_TAKEOVER_ROUTES=0
+    NET_TAKEOVER_REASON=""
+    _ntk_raw=$(netstat -rn -f inet 2>/dev/null)
+    if [ -z "$_ntk_raw" ]; then
+        NET_TAKEOVER_REASON="读不到本机路由表，无法判断是否有网络层接管"
+        return 0
+    fi
+    # 只数"宽"的公网路由：掩码 <= 24（至少覆盖一个 C 段以上）。
+    # macOS 的目标列有三形状：default / a.b.c.d / a.b.c.d/NN / 省略末尾零的纯数字。
+    # 掩码来自 "/NN" 后缀；没有后缀时按默认路由规则推（见下）。
+    _ntk_wide=$(printf '%s\n' "$_ntk_raw" | awk '
+        # 跳过表头
+        /^Destination[ \t]+Gateway/ { next }
+        {
+            dest = $1
+            if (dest == "" || dest ~ /^Internet/ || dest ~ /^Destination/) next
+            if (dest == "default") { next }
+            # 取掩码：优先 "/NN" 后缀
+            bits = -1
+            if (dest ~ /\//) { split(dest, a, "/"); dest = a[1]; bits = a[2] + 0 }
+            # 没写后缀时：全是四段的按 /32（主机路由），少于四段的是省略末尾零
+            # （BSD netstat 的写法：8 = 8.0.0.0/8，100.64 = 100.64.0.0/16）
+            if (bits < 0) {
+                n = split(dest, p, ".")
+                if (n == 4) { bits = 32 }
+                else if (n == 3) { bits = 24 }
+                else if (n == 2) { bits = 16 }
+                else if (n == 1) { bits = 8 }
+                else { next }
+            }
+            if (bits > 24) next
+            # 公网粗筛：按第一段排掉私有/回环/链路本地/CGNAT/组播
+            split(dest, q, ".")
+            a1 = q[1] + 0; a2 = q[2] + 0
+            if (a1 == 0 || a1 == 10 || a1 == 127 || a1 >= 224) next
+            if (a1 == 172 && a2 >= 16 && a2 <= 31) next
+            if (a1 == 192 && a2 == 168) next
+            if (a1 == 169 && a2 == 254) next
+            if (a1 == 100 && a2 >= 64 && a2 <= 127) next
+            print dest "/" bits
+        }
+    ' | wc -l | tr -d ' ')
+    case "$_ntk_wide" in ''|*[!0-9]*) _ntk_wide=0 ;; esac
+    NET_TAKEOVER_ROUTES=$_ntk_wide
+    if [ "$_ntk_wide" -ge "$NETWORK_TAKEOVER_ROUTE_THRESHOLD" ]; then
+        NET_TAKEOVER_ACTIVE=1
+        NET_TAKEOVER_REASON="本机有 $_ntk_wide 条覆盖公网的路由，流量被网络层接管（TUN / 透明代理 / 全局 VPN）"
+    else
+        NET_TAKEOVER_REASON="本机只有 $_ntk_wide 条覆盖公网的路由，没有网络层接管"
+    fi
+    return 0
+}
+
 
 
 # 翻墙软件进程名特征（只影响速度不影响覆盖面）。可自行扩展。

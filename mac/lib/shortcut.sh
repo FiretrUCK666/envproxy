@@ -674,7 +674,7 @@ _shortcut_confirm_and_build() {
     # 后果说明按行为类别取，与图标名、短名同一个来源，不会各说一套。
     # @explain 下面两行说的「不走代理 / 带上代理」是给用户看的后果说明，不是解释机制
     case "$(proxy_mode_action "$_scb_mode")" in
-        direct) style_out dim "          双击它启动的程序一定不翻墙，哪怕别的程序都在翻墙。" ;;
+        direct) style_out dim "          双击它启动的程序照常上网，不经过翻墙线路。开着 TUN 时这条不成立。" ;;
         *)      style_out dim "          双击它启动的程序会翻墙，跟着翻墙软件走。" ;;
     esac
     echo ""
@@ -682,6 +682,25 @@ _shortcut_confirm_and_build() {
     # 所以这里说「基名 + 后缀」与实际产物一致。
     style_out text "  图标名  ${_scb_name}${_scb_suffix}"
     style_out text "  放在    $(_shortcut_default_dest)"
+    # 直连模式在"网络层被接管"的环境下做不到它承诺的事，必须在按 y 之前说清。
+    #
+    # 为什么不能等建完再提示、或只在管理页里写一句：这一屏是他唯一的决策点，
+    # 而这件事直接改变"这个图标值不值得建"的判断。等建完才说，他会先建、
+    # 用、发现没用、再回来删——三步都白做。
+    #
+    # 判据是通用的（见 probe 层 is_network_layer_takeover）：不看是不是 TUN、
+    # 哪家软件，只看"本机路由是否把公网大面积收走了"。所以这段话对任何
+    # 翻墙软件都成立，不需要为新的软件再写一遍。
+    if [ "$(proxy_mode_action "$_scb_mode")" = "direct" ]; then
+        is_network_layer_takeover 2>/dev/null || true
+        if [ "${NET_TAKEOVER_ACTIVE:-0}" = "1" ]; then
+            echo ""
+            style_out warn "  注意：这台机器现在有 TUN / 全局 VPN 在接管全部流量。"
+            style_out dim  "        那种模式下所有程序都走翻墙线路，「直连」图标管不了它——"
+            style_out dim  "        双击出来的程序照样翻墙。"
+            style_out dim  "        真要它直连：在翻墙软件里把这个程序加进直连规则，或关掉 TUN。"
+        fi
+    fi
     echo ""
     style_out dim "  输 y 回车确认，直接回车 = 取消"
     _scb_c=""
