@@ -3132,6 +3132,19 @@ EOF
     # 那会把"名字传错"变成"按默认做了"，而用户以为它生效了。
     _selftest_assert_eq '未知规矩取不到' '' "$(proxy_mode_suffix 'no-such-mode' 2>/dev/null)"
 
+    # 壳子目录与落点记录必须**同一个根**。
+    #
+    # 两者各从各的地方派生（一个写 ${HOME}/.envproxy、一个写 ${ENVPROXY_HOME}）时，
+    # 只要使用者设了 ENVPROXY_HOME 就会分家：壳子建在一处，卸载去删另一处，
+    # 于是删不到、目录非空、最后那句 rmdir 静默失败，留下清不掉的残留。
+    # Windows 侧两个目录都从 Get-InstallDir() 派生，本来就是同根。
+    _st_root_apps=$(dirname "$(_shortcut_apps_dir)")
+    _st_root_dirs=$(dirname "$(_shortcut_extra_dirs_file)")
+    _selftest_assert_eq '壳子目录与落点记录同根' '1' \
+        "$([ "$_st_root_apps" = "$_st_root_dirs" ] && echo 1 || echo 0)"
+    # 而且根必须就是 ENVPROXY_HOME 本身（不是它的子目录、也不是 $HOME/.envproxy）。
+    _selftest_assert_eq '壳子目录挂在 ENVPROXY_HOME 下' "$ENVPROXY_HOME" "$_st_root_apps"
+
     # 身份 = 路径 + 规矩。少这一维就会互相覆盖。
     _st_t1=$(mktemp -d "${TMPDIR:-/tmp}/envproxy_st1.XXXXXX" 2>/dev/null)
     if [ -n "$_st_t1" ]; then

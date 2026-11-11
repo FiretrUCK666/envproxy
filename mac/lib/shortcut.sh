@@ -26,9 +26,15 @@
 # ==============================================================================
 
 # 壳子放哪。与 Windows 的 launchers 目录同理：集中一处，好找好删。
-# 用 ~/.envproxy 是因为它已经是本工具的家目录，卸载时会被整份带走。
+#
+# **必须从 $ENVPROXY_HOME 派生，不能写 $HOME/.envproxy**：本工具的家目录由
+# ENVPROXY_HOME 决定（见 base.sh 第一行，它允许被环境变量改写），卸载时删的是
+# 那个目录。两处各派各的，一旦使用者设了 ENVPROXY_HOME，壳子会建在
+# $HOME/.envproxy/apps 而卸载去删 $ENVPROXY_HOME/apps——删不到，目录非空，
+# 最后那句 rmdir 静默失败，留下一个清不掉的残留。
+# Windows 侧两个目录都从 Get-InstallDir() 派生，同一个根，没有这个问题。
 _shortcut_apps_dir() {
-    printf '%s\n' "$HOME/.envproxy/apps"
+    printf '%s\n' "$ENVPROXY_HOME/apps"
 }
 
 # 图标放哪（默认桌面）。放在桌面而不是"应用程序"文件夹：
